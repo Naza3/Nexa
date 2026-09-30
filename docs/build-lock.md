@@ -14,7 +14,7 @@
 | 开发机 | Linux x86_64，kernel 6.18.44；INTEL XEON PLATINUM 8573C；容器可见 9 CPU、约 9.7 GiB 内存 |
 | CPU 选项 | Release、静态库、`GGML_NATIVE=OFF`、OpenMP/CUDA/Vulkan/Metal 关闭 |
 | x64 指令集 | 上游固定配置实际启用 SSE4.2、AVX、AVX2、F16C、FMA、BMI2；不宣称兼容所有 x64 CPU |
-| Windows 编译器/SDK | unavailable；预置 MSVC DLL CRT 和 UTF-8 编译参数尚待实际构建 |
+| Windows 编译器/SDK | MSVC 19.44.35229.0 / SDK 10.0.26100.0；Windows Server 2022 10.0.20348；原生Release与CTest已在首跑通过，Rust整体链接待补Advapi32复验 |
 | Android NDK/Flutter | unavailable；尚未加入工程依赖 |
 
 没有升级跟随 master 的构建脚本。CMake 检查 submodule HEAD，不匹配直接失败。原生模型默认日志被抑制，以避免上游输出完整用户路径；开发基线用合成输入，原始上游日志只留在忽略目录。
@@ -54,3 +54,5 @@ ctest --test-dir build/native-release --output-on-failure
 `.github/workflows/native-windows.yml` 在已授权的 `codex/nexa-native-baseline` 分支运行。使用 Windows Server 2022 / Visual Studio 2022 runner，输出上游生成、五次 bench 和原生 suite 报告，状态必须以对应提交的实际 Actions 结果为准。工作流文件存在不表示已经执行或通过。
 
 上游固定合成输入：`tests/fixtures/upstream-prompt-zh.txt`，SHA-256 `7720850391d3ad1d502c58fa078a430a045464757c67feac9b812cdceda82a67`。这是锁定模型原始 Jinja 模板在关闭思考模式下的渲染结果；运行前先核对模型/模板 hash。
+
+首个Windows运行[36738163612](https://github.com/Naza3/Nexa/actions/runs/36738163612)的原生构建及CTest成功；Rust静态链接未继承CMake系统依赖，ggml-cpu读取CPU名称使用的Reg*符号需要显式Advapi32。模型下载/推理阶段均被跳过，不能记为失败推理或通过验收。

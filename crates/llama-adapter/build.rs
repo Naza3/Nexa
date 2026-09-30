@@ -115,7 +115,13 @@ fn main() {
         println!("cargo:rustc-link-lib=static={name}");
     }
     if target_os == "windows" {
-        println!("cargo:rustc-link-lib=ws2_32");
+        // Cargo links the archives directly, so CMake's Windows system-library
+        // defaults do not propagate. ggml-cpu's CPU-name lookup calls Reg* APIs
+        // (Advapi32); llama-common/arg.cpp uses CommandLineToArgvW (Shell32);
+        // cpp-httplib uses Winsock. TLS and LLGuidance are disabled in this build.
+        for name in ["advapi32", "shell32", "ws2_32"] {
+            println!("cargo:rustc-link-lib={name}");
+        }
     } else {
         for name in ["stdc++", "pthread", "dl", "m"] {
             println!("cargo:rustc-link-lib={name}");

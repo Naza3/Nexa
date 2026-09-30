@@ -15,8 +15,8 @@
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
-- Linux CPU 已完成真实上游中文非思考生成及 native suite；没有 Windows/Android 真机结果
-- 已准备 `.github/workflows/native-windows.yml`；对应授权分支为 `codex/nexa-native-baseline`。工作流尚需父任务提交、推送并检查实际 CI 结果，不能以文件存在宣称通过
+- Linux CPU 已完成真实上游中文非思考生成、native suite及A02真实system/多轮模板与请求间隔离；没有 Windows/Android 真机结果
+- 已准备 `.github/workflows/native-windows.yml`；对应授权分支为 `codex/nexa-native-baseline`。首个工程提交 `79f5362821080add23a5359620911e77a4c85d42` 已推送并触发 [Windows CI](https://github.com/Naza3/Nexa/actions/runs/36738163612)，首跑原生构建/CTest通过，Rust链接缺Advapi32而失败；模型阶段跳过。A02后续用例尚未包含于该提交
 
 构建参数见 [构建锁](docs/build-lock.md)；当前可执行命令见 [xtask](xtask/README.md)；验证见 [本轮记录](docs/verification/2026-09-30-native-baseline.md)。
 
@@ -45,7 +45,7 @@
 
 ## 下一步
 
-1. 父任务复核本轮最终验证、中文提交，推送已授权的新开发分支并跟踪Windows Actions
+1. 跟踪首个工程提交的Windows Actions；父任务审查并提交后续A02测试，确保最终验证对应最新代码
 2. 若Windows编译或真实suite失败，修复同一范围并重验，不跳过检查；WindowsCI通过也不替代i5-8400和独立无开发工具验收机
 3. 补T00/T01目标平台证据后按路线进入T02；Android交叉编译探针需实际工具链，不编造APK或真机结果
 4. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不依赖自行选择Telegram产品方案

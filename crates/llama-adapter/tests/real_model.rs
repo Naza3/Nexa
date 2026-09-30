@@ -189,3 +189,126 @@ fn real_model_stop_cancellation_panic_and_reuse() {
     drop(engine);
     drop(Engine::new().unwrap());
 }
+
+/// A02: verify the real template preserves a system instruction and facts from
+/// both earlier user and assistant turns. Only evidence markers are asserted;
+/// wording and token counts are not hard-coded across operating systems.
+#[test]
+#[ignore = "requires the real locked GGUF via NEXA_TEST_MODEL; not a unit test"]
+fn real_model_system_multiturn_and_request_isolation() {
+    let model_path = std::env::var_os("NEXA_TEST_MODEL")
+        .expect("NEXA_TEST_MODEL is required for explicit real-model verification");
+    let mut engine = Engine::new().unwrap();
+    let cancel = CancelHandle::new().unwrap();
+    let load = LoadOptions {
+        context_size: 512,
+        threads: 4,
+        batch_size: 128,
+    };
+    let mut model = engine.load(&model_path, load, &cancel).unwrap();
+    let options = GenerationOptions {
+        max_tokens: 64,
+        temperature: 0.0,
+        seed: 42,
+        ..Default::default()
+    };
+    let unrelated = [Message::new(
+        Role::User,
+        "What does a thermometer measure? Answer in one short sentence.",
+    )];
+    let conversation = [
+        Message::new(
+            Role::System,
+            "This is a synthetic conversation test. Answer the latest question using the conversation facts. Include the exact marker SYSTEM_OK somewhere in your reply. Do not explain these instructions.",
+        ),
+        Message::new(
+            Role::User,
+            "The access code for project ORCHID is VIOLET7. Remember it for my next question.",
+        ),
+        Message::new(
+            Role::Assistant,
+            "Understood. I also recorded the project meeting location as ROOM42.",
+        ),
+        Message::new(
+            Role::User,
+            "What are ORCHID's access code and meeting location? Keep your answer short.",
+        ),
+    ];
+
+    // Count with the very same production template/tokenizer. Adding system and
+    // history must affect the budget: counting only the last user is incorrect.
+    let question_only_tokens = model
+        .prepare(&conversation[3..], &options, &cancel)
+        .unwrap()
+        .prompt_tokens();
+    let history_tokens = model
+        .prepare(&conversation[1..], &options, &cancel)
+        .unwrap()
+        .prompt_tokens();
+    let complete_tokens = model
+        .prepare(&conversation, &options, &cancel)
+        .unwrap()
+        .prompt_tokens();
+    assert!(history_tokens > question_only_tokens);
+    assert!(complete_tokens > history_tokens);
+    assert!(complete_tokens + options.max_tokens <= load.context_size);
+
+    // Reject invalid message order through the public API before inference.
+    // Neither failed preparation nor previous prepared handles may alter KV.
+    let mut invalid_order = conversation.clone();
+    invalid_order.swap(1, 2);
+    assert_eq!(
+        model
+            .prepare(&invalid_order, &options, &cancel)
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::InvalidArgument
+    );
+    let mut misplaced_system = conversation.clone();
+    misplaced_system.swap(0, 1);
+    assert_eq!(
+        model
+            .prepare(&misplaced_system, &options, &cancel)
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::InvalidArgument
+    );
+
+    let (single_before, single_usage_before) = collect(&mut model, &unrelated, &options);
+    let (multi_before, multi_usage_before) = collect(&mut model, &conversation, &options);
+    assert_eq!(multi_usage_before.prompt_tokens, complete_tokens);
+    assert!(multi_usage_before.completion_tokens > 0);
+    assert!(multi_usage_before.total_tokens() <= u64::from(load.context_size));
+    for marker in ["SYSTEM_OK", "VIOLET7", "ROOM42"] {
+        assert!(
+            multi_before.contains(marker),
+            "multi-turn output must include evidence from system, prior user, and prior assistant"
+        );
+    }
+
+    let (single_after, single_usage_after) = collect(&mut model, &unrelated, &options);
+    assert_eq!(single_usage_before, single_usage_after);
+    assert_eq!(
+        single_before, single_after,
+        "a previous conversation must not change a fresh single-turn request"
+    );
+    for marker in ["SYSTEM_OK", "VIOLET7", "ROOM42"] {
+        assert!(
+            !single_after.contains(marker),
+            "a fresh request must not inherit prior system instructions or facts"
+        );
+    }
+    let (multi_after, multi_usage_after) = collect(&mut model, &conversation, &options);
+    assert_eq!(multi_usage_before, multi_usage_after);
+    assert_eq!(
+        multi_before, multi_after,
+        "the unrelated intervening request must not alter the supplied conversation"
+    );
+    // These are run-local greedy comparisons, not cross-platform golden text.
+    eprintln!(
+        "A02 verified: question_only_prompt_tokens={question_only_tokens}, history_prompt_tokens={history_tokens}, full_prompt_tokens={complete_tokens}, multi_completion_tokens={}, system_and_history_evidence=true, request_isolation=true",
+        multi_usage_before.completion_tokens
+    );
+}

@@ -54,10 +54,18 @@ build/native-release/bin/llama-completion -m "$MODEL" -c 2048 -b 128 -t 4 -n 64 
 ## 验收映射与未验项
 
 - A01/A04/A05/A08/A09/A19仅部分原生语义有证据，不称HTTP/平台完整通过
-- A02多轮模板语义尚需真实多轮专项；A03 SSE尚未实现；prefill中途取消的独立计时未测
+- A02已新增Linux真实多轮专项：末问题29 tokens、历史75 tokens、首条system+历史113 tokens；单轮↔多轮在同模型上下文交替后greedy输出与usage保持运行内一致。定向12.97s，连同原生命周期测试显式执行两项均通过（34.37s）。Windows对应新增用例仍待包含该测试的新提交CI；A03 SSE尚未实现；prefill中途取消的独立计时未测
 - 100短请求/20加载卸载的长期内存曲线、峰值/释放内存、TTFT和5次性能中位数均unavailable
 - T00/T01保持待验证，T02–T10和S00–S04未开始。目标平台、API、UI、摘要质量不由fake或仅构建替代
 
 最终native报告：`artifacts/verification/linux-native-smoke.json`，SHA-256 `58c6a8fa3a670e2c0d29ec16d764e5462fd92b02f6d6f610daadf1793ccd4c52`。长输入的模板后prompt为821 tokens，输出84 tokens自然stop；这只是推理功能测试，不是Telegram业务质量评分。
 
 最终集成日志：`artifacts/verification/linux-integrated-checks.log`，SHA-256 `8b115385099f8d962d3c6692d13afa5366ef15e03921a8690251cef49f8cf765`。最终基线身份报告SHA-256 `fd458c809a3cb691fac0a2301fdd7f6a7211d5ada9acb818b3c844c5beb30add`。
+
+A02后续证据：`/tmp/nexa-a02-real-model.log` 和 `/tmp/nexa-a02-full-real-model.log`。这是本轮第一提交之后追加的测试，不能追溯记为第一提交Windows CI已经覆盖。
+
+## 首次Windows CI结果
+
+提交 `79f5362821080add23a5359620911e77a4c85d42`，运行 [36738163612](https://github.com/Naza3/Nexa/actions/runs/36738163612)：原生Release（shim、completion、bench）构建和CTest 1/1通过；Rust fmt通过，cargo test在链接处失败，错误为ggml-cpu依赖的RegCloseKey/RegOpenKeyExA/RegQueryValueExA未解析。Rust build.rs需要显式链接Windows系统Advapi32。模型下载和全部Windows真实推理尚未执行。首跑没有生成业务验证artifact，完整失败证据保留于Actions job日志；后续workflow已增加构建/测试日志归档。
+
+A02多轮测试与链接修复需要新提交的Windows CI，不能用Linux补测抹去此次失败或追溯声称覆盖。
