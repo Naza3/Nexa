@@ -15,8 +15,9 @@
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
-- Linux CPU 已完成真实上游中文非思考生成、native suite及A02真实system/多轮模板与请求间隔离；没有 Windows/Android 真机结果
-- 已准备 `.github/workflows/native-windows.yml`；对应授权分支为 `codex/nexa-native-baseline`。首个工程提交 `79f5362821080add23a5359620911e77a4c85d42` 已推送并触发 [Windows CI](https://github.com/Naza3/Nexa/actions/runs/36738163612)，首跑原生构建/CTest通过，Rust链接缺Advapi32而失败；模型阶段跳过。后续提交 `1d26ae89365472612e57c674df57c04767f42a40` 已包含链接修复和A02，[第二次Windows CI](https://github.com/Naza3/Nexa/actions/runs/36740216058)完成Rust检查与模型身份核对，但上游步骤持续超过12分钟；当前日志API不可获取，不能断言具体阻塞进程。第三跑脚本cp1252编码错误已修。第四跑 [36745129865](https://github.com/Naza3/Nexa/actions/runs/36745129865) 确认completion在300秒超时：4线程/2逻辑CPU的warmup已耗152秒。现按明确线程1/4短对照、按可用CPU的正常基线和独立native suite诊断，尚不宣称根因已修复
+- Linux CPU 与 Windows x64 CPU CI 已完成真实中英文流式、重复加载、stop/预算/取消/恢复和 A02 system/多轮模板与请求间隔离
+- 提交 `d3d7cf2d9f0d2ce7aa03ca7d27787a2f423f3144` 的 [Windows CI](https://github.com/Naza3/Nexa/actions/runs/36791679663) 全部通过：固定模型/模板身份、上游生成及五次 bench、自有九场景/十轮 suite、两项真实恢复/多轮测试
+- 本次支持证据限 Windows Server 2022 x64 / EPYC CI / 2 逻辑 CPU、2 推理线程、固定 Qwen3-0.6B Q8_0 / context 2048。1 线程短探针通过，4 线程超配短探针仍在 60 秒超时，不能泛化为任意线程配置；原始失败完整保留于报告
 
 构建参数见 [构建锁](docs/build-lock.md)；当前可执行命令见 [xtask](xtask/README.md)；验证见 [本轮记录](docs/verification/2026-09-30-native-baseline.md)。
 
@@ -25,9 +26,9 @@
 | 任务 | 状态 | 当前边界 |
 | --- | --- | --- |
 | D00 文档与总体设计 | 已完成 | 原文档基线保持；当前工程事实已同步 |
-| T00 工程与基线 | 待验证 | workspace/锁/真实模型/Linux上游已落地；Windows上游基线与构建组合待CI实测 |
-| T01 原生链路 | 待验证 | 原生和Rust封装、真实中英文/长输入/取消/stop/恢复均有Linux证据；T00目标平台门槛尚未补齐，不算完整阶段完成 |
-| T02–T04 调度、存储、worker、API | 未开始 | 待前置门槛；未预建空模块冒充实现 |
+| T00 工程与基线 | 已完成 | 固定组合已在 Windows CPU 完成真实上游生成和五次 bench；输入、统计与构建证据已归档 |
+| T01 原生链路 | 已完成 | 最小阶段门槛通过 Windows 真实中英文流式、重复加载释放、模板/特殊 token、取消和恢复；A08 prefill 独立计时仍待 T02 闭环 |
+| T02–T04 调度、存储、worker、API | 未开始 | T02 前置门槛已满足；待实施 model-store 与原生无关的调度 actor |
 | T05–T06 Windows发行与UI | 未开始 | 仍需PC全链路及独立验收机 |
 | T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
@@ -45,7 +46,7 @@
 
 ## 下一步
 
-1. 父任务发布统一测试线程参数与有界对照，取得Windows上游和自有核心的独立结果；不跳过错误或把超配假设当成结论
-2. 若Windows编译或真实suite失败，修复同一范围并重验，不跳过检查；WindowsCI通过也不替代i5-8400和独立无开发工具验收机
-3. 补T00/T01目标平台证据后按路线进入T02；Android交叉编译探针需实际工具链，不编造APK或真机结果
-4. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不依赖自行选择Telegram产品方案
+1. 按 T02 实现 model-store 导入/manifest 与单一调度 actor：有限 FIFO、状态机、deadline、空闲卸载和资源回收，公共接口先冻结
+2. 在 T02 执行器集成中补 A08 prefill 中途取消的可观测证据和耗时，与 decode 取消分别报告；不把已有预取消或 decode 取消冒充 prefill
+3. 完成 T02 A05–A12 后推进 T03；Windows CI 不替代 i5-8400、T05 独立无开发工具验收机或 Android 真机
+4. 摘要来源/触发/评估基线保持独立待决；基础 runtime 推进不依赖自行选择 Telegram 产品方案

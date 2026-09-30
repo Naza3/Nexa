@@ -93,3 +93,21 @@ artifact `11112772308` 的ZIP SHA-256为 `f50d169ca97890ad356ad38270b2d527b944eb
 线程配置修复的Linux本地复验：真实Rust生命周期/A02分别在1线程和2线程完整通过（40.41s / 56.77s）；2线程xtask九场景/十轮全通过，报告 `artifacts/verification/linux-native-smoke-threads2.json`，SHA-256 `b89ddd7ac17e63aa25201b197901639662d7d53df08eab55aaed6abc414624d5`，每轮实际threads=2、available_parallelism=9、oversubscribed=false。上游1/4线程短对照分别3.13s / 5.74s，正常2线程生成3.43s、5次bench45.68s，均退出0；这些是9逻辑CPU的Linux开发环境结果，不证明Windows2逻辑CPU已恢复。
 
 执行器严格编码及判定测试共6项：探索性诊断失败仍逐项保留；正常基线失败必定非零；正常基线成功不被额外超配探针误标为发布失败。所有诊断均在报告单列，不扩大4线程支持声明。Windows新结果仍待CI产生。
+
+
+## 第五次 Windows 运行：T00/T01 最小阶段门槛通过
+
+提交 `d3d7cf2d9f0d2ce7aa03ca7d27787a2f423f3144` 的 [运行 36791679663](https://github.com/Naza3/Nexa/actions/runs/36791679663) 于 2026-09-30 23:45 UTC 全部成功。原生 Release/CTest、Rust fmt/test/clippy、脚本编码回归、真实模型/模板身份校验及推理检查均通过。设备为 Windows Server 2022 10.0.20348.5622、AMD EPYC 7763 runner，实际仅 2 逻辑 CPU。
+
+- 1 线程短探针：16-token 上限，退出 0，2.187 秒
+- 4 线程超配短探针：60.406 秒超时，stdout 为空；保留 `diagnostic_result=failed`，不能宣称此组合通过
+- 选定 2 线程正常中文生成：退出 0，2.156 秒；有真实中文、无思考标签
+- 选定 2 线程上游 bench：退出 0，17.313 秒；pp128 和 tg32 各 5 个样本。中位分别 68.1968 和 32.6147 tokens/s，只代表此 CI 配置，不是包装开销或目标 PC 保证
+- 自有 native suite：九场景、十轮均通过，实际线程为 2 且无超配；中英文、长输入、精确预算、三类预取消、生成中跨线程取消、消费者停止和重复加载均通过
+- 显式真实集成测试：2 项通过，14.82 秒；stop/取消/panic 后恢复、context 33 逻辑边界与 A02 system/历史/请求隔离均覆盖。日志中的 intentional consumer panic 是被捕获的预期测试路径，测试最终成功
+
+同一 runner 的 1/2 线程成功与 4 线程超时加强了超配与异常的关联；没有改变 llama commit。保留配置限制，不声明所有 Windows CPU/线程组合均可用，也不把生产默认参数视为已调整。
+
+验证 artifact `11132296863`，ZIP SHA-256 `4ca62c5f4ddc32492a915df69c3e4b79ab91f1cf81f1be2e87dc1e9628b8d74d`，已下载核对并安全解压至 `artifacts/verification/windows-run5/`。原始 `upstream-processes.json` 分别保存正常基线与探索诊断状态；native JSON 中平台验收字段是自动工具的保守占位，阶段结论在此按实际设备证据人工确认。编译工具 artifact `11132291996`，ZIP SHA-256 `4fad0b2fb4a9ee666cd71de722ae69bb2ff116b162df040744e8e9f9363083d7`，本轮仅核对远程 metadata，未下载或复用。
+
+T00 已满足固定 Windows CPU 上游真实输入/统计门槛；T01 已满足真实中英文流式、模板/特殊 token、重复加载释放和取消的最小交付。允许进入 T02。A08 的独立 prefill 中途取消耗时仍未测，须在 T02 A05–A12 集成验收补齐；100 请求/20 加载长期内存趋势、完整性能、无开发工具 Windows 发行与 Android 真机仍属于后续任务。以上结论更新此前各历史小节的“待验证”状态，不抹去旧失败。
