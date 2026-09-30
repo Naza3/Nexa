@@ -23,7 +23,7 @@ class RunnerTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "pass")
         self.assertTrue(validate_completion(self.out))
-        self.assertEqual(self.err.read_text().strip(), "log")
+        self.assertEqual(self.err.read_text(encoding="utf-8").strip(), "log")
 
     def test_timeout_is_failure_and_preserves_partial_output(self):
         result = run_process(
@@ -33,7 +33,7 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(result["timed_out"])
         self.assertEqual(result["status"], "failed")
         self.assertIsNone(result["exit_code"])
-        self.assertEqual(self.out.read_text().strip(), "started")
+        self.assertEqual(self.out.read_text(encoding="utf-8").strip(), "started")
         self.assertLess(result["elapsed_ms"], 10000)
 
     def test_nonzero_and_spawn_failure(self):
@@ -46,12 +46,12 @@ class RunnerTests(unittest.TestCase):
     def test_benchmark_requires_actual_five_samples(self):
         rows = [{"n_prompt": 128, "n_gen": 0, "samples_ns": [10] * 5},
                 {"n_prompt": 0, "n_gen": 32, "samples_ns": [20] * 5}]
-        self.out.write_text(json.dumps(rows))
+        self.out.write_text(json.dumps(rows), encoding="utf-8")
         self.assertTrue(validate_benchmark(self.out))
         rows[0]["samples_ns"] = []
-        self.out.write_text(json.dumps(rows))
+        self.out.write_text(json.dumps(rows), encoding="utf-8")
         self.assertFalse(validate_benchmark(self.out))
-        self.out.write_text("<think>中文</think>")
+        self.out.write_text("<think>中文</think>", encoding="utf-8")
         self.assertFalse(validate_completion(self.out))
 
 

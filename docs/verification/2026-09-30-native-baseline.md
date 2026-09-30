@@ -77,3 +77,5 @@ A02多轮测试与链接修复需要新提交的Windows CI，不能用Linux补�
 修复使用 `scripts/run_upstream_baseline.py`：每个上游进程分别300秒期限，stdin直接EOF，completion明确simple-io，stdout/stderr直接落文件，保存退出码/超时/耗时与SHA。超时自动kill并reap；未运行bench明确skipped。外层step12分钟，保留always-upload收集证据的余量。不绕过非思考、真实中文或5次benchmark采样检查。4项执行器测试通过，真实Linuxcompletion/bench均通过；Windows行为等待新提交重验。
 
 阶段判断：Windows真实上游固定模型基线尚未建立，所以T00不能完成。T01已经有Linux真实流式、停止、模板/预算和重复加载证据；Windowsnative suite与独立prefill取消观测仍待补。Android真机、独立无开发工具Windows机、100请求/20加载长期趋势与全性能矩阵属于T05/T07/T09，不能把它们误当作开始T02的全部前提；也不把这些缺项写成通过。下一有界步骤是结束Windows基线和native suite，补最小prefill取消观测，再依路线评估T02。
+
+第三次Windows运行 [36743342648](https://github.com/Naza3/Nexa/actions/runs/36743342648) 再次通过原生/Rust/模型hash，但执行器测试在Windows默认cp1252写中文时暴露未指定编码（UnicodeEncodeError）。上游进程未启动。修复为测试全部文本读写显式UTF-8，并启用EncodingWarning-as-error回归；纯脚本测试前移工具准备阶段，以尽早发现平台脚本错误，不跳过验证。

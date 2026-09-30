@@ -35,6 +35,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
           python -m pip install cmake==4.4.3 ninja==1.13.2 2>&1 | Tee-Object -FilePath artifacts/verification/windows-cmake-setup.log
           if ($LASTEXITCODE -ne 0) { throw 'CMake setup failed' }
+          python -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_*.py' 2>&1 | Tee-Object -FilePath artifacts/verification/windows-upstream-runner-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream process harness tests failed' }
           rustc --version
           cargo --version
           cmake --version
@@ -75,8 +77,6 @@ jobs:
         timeout-minutes: 12
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m unittest discover -s scripts -p 'test_*.py' 2>&1 | Tee-Object -FilePath artifacts/verification/windows-upstream-runner-tests.log
-          if ($LASTEXITCODE -ne 0) { throw 'Upstream process harness tests failed' }
           $completion = (Get-ChildItem build/native-release -Recurse -Filter llama-completion.exe | Select-Object -First 1).FullName
           $bench = (Get-ChildItem build/native-release -Recurse -Filter llama-bench.exe | Select-Object -First 1).FullName
           if (!$completion -or !$bench) { throw 'Upstream executable missing' }
