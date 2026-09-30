@@ -6,10 +6,12 @@
 cargo test --locked -p xtask
 cargo run --locked -p xtask -- baseline-verify --model /path/to/Qwen3-0.6B-Q8_0.gguf --out artifacts/verification/baseline.json
 cargo build --locked -p llama-adapter --example native-smoke
-cargo run --locked -p xtask -- native-smoke --model /path/to/Qwen3-0.6B-Q8_0.gguf --bin target/debug/examples/native-smoke --out artifacts/verification/native-smoke.json
+cargo run --locked -p xtask -- native-smoke --model /path/to/Qwen3-0.6B-Q8_0.gguf --bin target/debug/examples/native-smoke --threads 2 --out artifacts/verification/native-smoke-threads2.json
 ```
 
 Windows 的 example 文件名为 `native-smoke.exe`。原生库构建配置以 `docs/build-lock.md` 为准，不通过 xtask 隐式下载或重建依赖。可用 `--device` 补充设备标签、`--manifest` 选择锁定清单；native-smoke 的 `--timeout-seconds` 为每个独立进程的时限，默认 180 秒。
+
+线程数仅影响测试/诊断工具，生产 `LoadOptions` 默认值不变。优先级为 `--threads N`、`NEXA_TEST_THREADS` 环境变量、`min(4, available_parallelism)`；无法查询并行度时保守取 1。显式值必须在 1–256 内；显式超出可用并行度不会被静默改小，报告会标记 `oversubscribed=true`，可用于受控对照。xtask 始终把解析出的值显式传给 example，并检查它报告的实际线程数一致。每次报告记录 actual threads、available parallelism、是否超配及选择来源。基线身份/模型 hash 不因线程数调整而改变；应使用独立报告路径保留此前线程配置的失败证据，不能以新配置通过覆盖或解释为旧配置已修复。
 
 `baseline-verify` 校验精确 Rust/llama 版本、llama 已跟踪源码无修改、真实 GGUF 文件 hash、架构、量化类型、原始模板 hash 和上下文边界。它仅验证基线身份，不能证明推理成功。
 

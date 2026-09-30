@@ -8,13 +8,16 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fs::File, io::Read, path::PathBuf, process::ExitCode, sync::mpsc};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const HELP: &str = "native-smoke --model PATH --prompt-file PATH [--max-tokens 64] [--context-size 2048] [--repeat 1] [--mode generate|budget|cancel-before-load|cancel-before-prepare|cancel-before-generate|cancel-during|consumer-stop] [--stop TEXT]";
+const HELP: &str = "native-smoke --model PATH --prompt-file PATH [--max-tokens 64] [--context-size 2048] [--repeat 1] [--threads N] [--mode generate|budget|cancel-before-load|cancel-before-prepare|cancel-before-generate|cancel-during|consumer-stop] [--stop TEXT]\nThreads: --threads overrides NEXA_TEST_THREADS; otherwise min(4, available_parallelism). Explicit values must be in 1..=256 and are reported even when oversubscribed.";
 
 struct Options {
     model: PathBuf,
     prompt: String,
     max_tokens: u32,
     context_size: u32,
+    threads: u32,
+    available_parallelism: usize,
+    thread_source: &'static str,
     repeat: u32,
     mode: String,
     stops: Vec<String>,
@@ -32,6 +35,7 @@ fn parse() -> Result<Options> {
             "--prompt-file",
             "--max-tokens",
             "--context-size",
+            "--threads",
             "--repeat",
             "--mode",
             "--stop",
@@ -63,6 +67,16 @@ fn parse() -> Result<Options> {
     }
     let max_tokens = number(&mut values, "--max-tokens", 64)?;
     let context_size = number(&mut values, "--context-size", 2048)?;
+    let available_parallelism = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let cli_threads = values.remove("--threads");
+    let env_threads = std::env::var_os("NEXA_TEST_THREADS");
+    let (threads, thread_source) = select_threads(
+        cli_threads.as_deref(),
+        env_threads.as_deref(),
+        available_parallelism,
+    )?;
     let repeat = number(&mut values, "--repeat", 1)?;
     if !(1..=100).contains(&repeat) {
         return Err("repeat must be in 1..=100".into());
@@ -96,11 +110,43 @@ fn parse() -> Result<Options> {
         prompt,
         max_tokens,
         context_size,
+        threads,
+        available_parallelism,
+        thread_source,
         repeat,
         mode,
         stops,
     })
 }
+/// A test/diagnostic setting only. Explicit oversubscription is possible but is
+/// never selected by default or described as a supported performance profile.
+fn select_threads(
+    cli: Option<&std::ffi::OsStr>,
+    environment: Option<&std::ffi::OsStr>,
+    available: usize,
+) -> Result<(u32, &'static str)> {
+    let (raw, source) = if let Some(value) = cli {
+        (Some(value), "cli")
+    } else if let Some(value) = environment {
+        (Some(value), "NEXA_TEST_THREADS")
+    } else {
+        (None, "available_parallelism")
+    };
+    let threads = match raw {
+        Some(value) => value
+            .to_str()
+            .ok_or("test threads must be UTF-8")?
+            .parse::<u32>()
+            .map_err(|_| "test threads must be an integer in 1..=256")?,
+        None => available.clamp(1, 4) as u32,
+    };
+    require(
+        (1..=256).contains(&threads),
+        "test threads must be in 1..=256",
+    )?;
+    Ok((threads, source))
+}
+
 fn number(
     values: &mut HashMap<String, std::ffi::OsString>,
     key: &str,
@@ -139,7 +185,7 @@ fn run(options: Options) -> Result<()> {
     let load = LoadOptions {
         context_size: options.context_size,
         batch_size: 512.min(options.context_size),
-        threads: 4,
+        threads: options.threads,
     };
     load.validate()?;
     let sampling = GenerationOptions {
@@ -342,6 +388,9 @@ fn run(options: Options) -> Result<()> {
         json!({"result":"pass","runs":options.repeat,"build_info":info,
         "template_sha256":template_sha256,
         "load_options":{"context_size":load.context_size,"threads":load.threads,"batch_size":load.batch_size},
+        "thread_options":{"available_parallelism":options.available_parallelism,
+            "oversubscribed":u64::from(load.threads) > options.available_parallelism as u64,
+            "source":options.thread_source},
         "generation_options":{"max_tokens":sampling.max_tokens,"temperature":sampling.temperature,
             "top_p":sampling.top_p,"seed":sampling.seed,"stop_count":sampling.stops.len()}})
     );
@@ -362,6 +411,50 @@ fn main() -> ExitCode {
                 eprintln!("native-smoke failed: {error}");
             }
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn default_threads_are_bounded_by_available_parallelism() {
+        for (available, expected) in [(0, 1), (1, 1), (2, 2), (3, 3), (4, 4), (64, 4)] {
+            assert_eq!(
+                select_threads(None, None, available).unwrap(),
+                (expected, "available_parallelism")
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_threads_override_environment_and_are_not_silently_clamped() {
+        assert_eq!(
+            select_threads(Some(OsStr::new("1")), Some(OsStr::new("2")), 2).unwrap(),
+            (1, "cli")
+        );
+        assert_eq!(
+            select_threads(None, Some(OsStr::new("2")), 8).unwrap(),
+            (2, "NEXA_TEST_THREADS")
+        );
+        assert_eq!(
+            select_threads(Some(OsStr::new("4")), None, 2).unwrap(),
+            (4, "cli")
+        );
+        assert_eq!(
+            select_threads(Some(OsStr::new("1")), Some(OsStr::new("invalid")), 2).unwrap(),
+            (1, "cli")
+        );
+    }
+
+    #[test]
+    fn invalid_thread_counts_fail_instead_of_falling_back() {
+        for raw in ["0", "257", "-1", "1.5", "abc", "", "4294967296"] {
+            assert!(select_threads(Some(OsStr::new(raw)), None, 2).is_err());
+            assert!(select_threads(None, Some(OsStr::new(raw)), 2).is_err());
         }
     }
 }

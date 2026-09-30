@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -18,7 +18,8 @@ const HELP: &str = "Nexa verification tools (run from any directory)\n\
   cargo run --locked -p xtask -- baseline-verify --model PATH --out REPORT.json\n\
   cargo run --locked -p xtask -- native-smoke --model PATH --bin PATH --out REPORT.json\n\
 Options: --manifest PATH (default tests/fixtures/baseline.json), --device LABEL\n\
-Native smoke only: --timeout-seconds N (per case, default 180)\n\
+Native smoke only: --timeout-seconds N (per case, default 180), --threads N (1..=256)\n\
+Threads: --threads > NEXA_TEST_THREADS > min(4, available_parallelism)\n\
 Exit codes: 0 verified requested scope; 1 verification failed; 2 invalid command/input.\n\
 Baseline verification checks metadata and hashes, not inference or platform acceptance.\n\
 check, test --suite contract, build, api-smoke are not implemented at T00/T01.";
@@ -57,6 +58,46 @@ struct Options {
     binary: Option<PathBuf>,
     device: String,
     timeout_seconds: u64,
+    threads: Option<ThreadSelection>,
+}
+
+#[derive(Debug, Serialize)]
+struct ThreadSelection {
+    threads: u32,
+    available_parallelism: usize,
+    oversubscribed: bool,
+    source: &'static str,
+}
+
+fn select_threads(
+    cli: Option<&OsStr>,
+    environment: Option<&OsStr>,
+    available: usize,
+) -> Result<ThreadSelection> {
+    let (raw, source) = if let Some(value) = cli {
+        (Some(value), "cli")
+    } else if let Some(value) = environment {
+        (Some(value), "NEXA_TEST_THREADS")
+    } else {
+        (None, "available_parallelism")
+    };
+    let threads = match raw {
+        Some(value) => value
+            .to_str()
+            .ok_or("test threads must be UTF-8")?
+            .parse::<u32>()
+            .map_err(|_| "test threads must be an integer in 1..=256")?,
+        None => available.clamp(1, 4) as u32,
+    };
+    if !(1..=256).contains(&threads) {
+        return Err("test threads must be in 1..=256".into());
+    }
+    Ok(ThreadSelection {
+        threads,
+        available_parallelism: available,
+        oversubscribed: threads as usize > available,
+        source,
+    })
 }
 
 fn main() -> ExitCode {
@@ -104,7 +145,13 @@ fn parse(args: Vec<OsString>) -> Result<Options> {
         let key = pair[0].to_str().ok_or("option must be UTF-8")?;
         if !matches!(
             key,
-            "--model" | "--manifest" | "--out" | "--bin" | "--device" | "--timeout-seconds"
+            "--model"
+                | "--manifest"
+                | "--out"
+                | "--bin"
+                | "--device"
+                | "--timeout-seconds"
+                | "--threads"
         ) {
             return Err(format!("unknown option: {key}").into());
         }
@@ -113,9 +160,11 @@ fn parse(args: Vec<OsString>) -> Result<Options> {
         }
     }
     if command == "baseline-verify"
-        && (pairs.contains_key("--bin") || pairs.contains_key("--timeout-seconds"))
+        && (pairs.contains_key("--bin")
+            || pairs.contains_key("--timeout-seconds")
+            || pairs.contains_key("--threads"))
     {
-        return Err("--bin and --timeout-seconds require native-smoke".into());
+        return Err("--bin, --threads, and --timeout-seconds require native-smoke".into());
     }
     let model = pairs.remove("--model").ok_or("--model is required")?;
     let output = pairs.remove("--out").ok_or("--out is required")?;
@@ -132,6 +181,20 @@ fn parse(args: Vec<OsString>) -> Result<Options> {
     if !(1..=3600).contains(&timeout_seconds) {
         return Err("timeout must be between 1 and 3600 seconds".into());
     }
+    let threads = if command == "native-smoke" {
+        let cli_threads = pairs.remove("--threads");
+        let environment = std::env::var_os("NEXA_TEST_THREADS");
+        let available = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1);
+        Some(select_threads(
+            cli_threads.as_deref(),
+            environment.as_deref(),
+            available,
+        )?)
+    } else {
+        None
+    };
     Ok(Options {
         command: command.to_owned(),
         model: model.into(),
@@ -147,6 +210,7 @@ fn parse(args: Vec<OsString>) -> Result<Options> {
             .transpose()?
             .unwrap_or_else(|| "unavailable".into()),
         timeout_seconds,
+        threads,
     })
 }
 
@@ -250,7 +314,7 @@ fn execute(options: &Options) -> Result<bool> {
         "schema_version":1,
         "command":{"program":"cargo run --locked -p xtask --","subcommand":options.command,
             "model":"baseline.model (local path omitted)","manifest_sha256":hash_file(&options.manifest)?,
-            "output":"local report path omitted"},
+            "output":"local report path omitted", "threads":options.threads.as_ref().map(|s| s.threads)},
         "exit_code":if successful {0} else {1},
         "scope":options.command,
         "result":if successful {"pass"} else {"fail"},
@@ -267,6 +331,7 @@ fn execute(options: &Options) -> Result<bool> {
         "fixture_sha256":fixtures,
         "checks":checks,
         "native_smoke":smoke,
+        "thread_options":options.threads,
         "inference":if options.command == "native-smoke" && prerequisites_passed {"attempted"} else {"skipped"},
         "performance":{"peak_memory_bytes":"unavailable","release_memory_bytes":"unavailable",
             "ttft_ms":"unavailable","decode_tokens_per_second":"unavailable"},
@@ -455,6 +520,85 @@ mod tests {
             ]))
             .is_err()
         );
+    }
+    #[test]
+    fn thread_defaults_follow_available_cpu_limit() {
+        for (available, expected) in [(1, 1), (2, 2), (4, 4), (16, 4)] {
+            let selection = select_threads(None, None, available).unwrap();
+            assert_eq!(selection.threads, expected);
+            assert_eq!(selection.available_parallelism, available);
+            assert!(!selection.oversubscribed);
+            assert_eq!(selection.source, "available_parallelism");
+        }
+    }
+    #[test]
+    fn thread_precedence_preserves_explicit_oversubscription() {
+        let cli = select_threads(Some(OsStr::new("4")), Some(OsStr::new("invalid")), 2).unwrap();
+        assert_eq!(cli.threads, 4);
+        assert!(cli.oversubscribed);
+        assert_eq!(cli.source, "cli");
+        let environment = select_threads(None, Some(OsStr::new("2")), 4).unwrap();
+        assert_eq!(environment.threads, 2);
+        assert_eq!(environment.source, "NEXA_TEST_THREADS");
+        assert!(!environment.oversubscribed);
+        assert_eq!(
+            select_threads(Some(OsStr::new("256")), None, 2)
+                .unwrap()
+                .threads,
+            256
+        );
+    }
+    #[test]
+    fn thread_options_reject_out_of_range_and_non_integer_values() {
+        for value in ["0", "257", "-1", "1.5", "", "no", "4294967296"] {
+            assert!(
+                select_threads(Some(OsStr::new(value)), None, 2).is_err(),
+                "{value}"
+            );
+            assert!(
+                select_threads(None, Some(OsStr::new(value)), 2).is_err(),
+                "{value}"
+            );
+        }
+        assert!(
+            parse(args(&[
+                "baseline-verify",
+                "--model",
+                "x",
+                "--out",
+                "y",
+                "--threads",
+                "2"
+            ]))
+            .is_err()
+        );
+        assert!(
+            parse(args(&[
+                "native-smoke",
+                "--model",
+                "x",
+                "--out",
+                "y",
+                "--bin",
+                "z",
+                "--threads",
+                "0"
+            ]))
+            .is_err()
+        );
+        let options = parse(args(&[
+            "native-smoke",
+            "--model",
+            "x",
+            "--out",
+            "y",
+            "--bin",
+            "z",
+            "--threads",
+            "2",
+        ]))
+        .unwrap();
+        assert_eq!(options.threads.unwrap().threads, 2);
     }
     #[test]
     fn strict_manifest_and_hash_validation() {

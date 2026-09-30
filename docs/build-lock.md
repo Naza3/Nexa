@@ -58,3 +58,5 @@ ctest --test-dir build/native-release --output-on-failure
 首个Windows运行[36738163612](https://github.com/Naza3/Nexa/actions/runs/36738163612)的原生构建及CTest成功；Rust静态链接未继承CMake系统依赖，ggml-cpu读取CPU名称使用的Reg*符号需要显式Advapi32。模型下载/推理阶段均被跳过，不能记为失败推理或通过验收。
 
 上游自动基线执行改由 `python scripts/run_upstream_baseline.py --completion <exe> --bench <exe> --model <gguf> --prompt-file tests/fixtures/upstream-prompt-zh.txt --out-dir artifacts/verification --timeout-seconds 300` 承担；每个进程有明确终态与独立日志，不以整个CI job期限代替原生工具时限。脚本测试命令 `python -m unittest discover -s scripts -p 'test_*.py'`。
+
+诊断阶段测试线程显式受控：CI通过NEXA_TEST_THREADS传递min(4,runner可用逻辑CPU)，Python上游与Rust example/集成测试采用同值；可用--threads作明确对照，超过可用CPU会在报告标识，不静默夹紧。此变更只调整验证配置，不修改生产LoadOptions默认值。上游额外1/4线程短诊断仍保留失败状态并单列diagnostic_result，所选线程的正常基线决定验收退出码；不通过延长总超时掩盖异常。

@@ -1,10 +1,63 @@
 //! Opt-in real GGUF verification. No fake inference is used by these tests.
 //! Set NEXA_TEST_MODEL to the locked GGUF and pass --ignored --test-threads=1.
+//! NEXA_TEST_THREADS selects 1..=256 inference threads explicitly; otherwise use
+//! min(4, available_parallelism). Rust's --test-threads is a separate setting.
 use llama_adapter::{CancelHandle, Engine, Model, StreamControl};
 use runtime_types::{
     ErrorCode, FinishReason, GenerationOptions, LoadOptions, Message, Role, Usage,
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
+
+fn select_test_threads(
+    raw: Option<&std::ffi::OsStr>,
+    available: usize,
+) -> Result<u32, &'static str> {
+    let threads = match raw {
+        Some(value) => value
+            .to_str()
+            .ok_or("NEXA_TEST_THREADS must be UTF-8")?
+            .parse::<u32>()
+            .map_err(|_| "NEXA_TEST_THREADS must be an integer in 1..=256")?,
+        None => available.clamp(1, 4) as u32,
+    };
+    if !(1..=256).contains(&threads) {
+        return Err("NEXA_TEST_THREADS must be in 1..=256");
+    }
+    Ok(threads)
+}
+
+fn test_threads(test: &str) -> u32 {
+    let available = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let raw = std::env::var_os("NEXA_TEST_THREADS");
+    let threads = select_test_threads(raw.as_deref(), available)
+        .expect("invalid inference thread configuration");
+    eprintln!(
+        "{}",
+        serde_json::json!({"test":test,"inference_threads":threads,
+        "available_parallelism":available,"oversubscribed":threads as usize > available,
+        "source":if raw.is_some() { "NEXA_TEST_THREADS" } else { "available_parallelism" }})
+    );
+    threads
+}
+
+#[test]
+fn test_thread_configuration_is_bounded_and_explicit() {
+    use std::ffi::OsStr;
+    for (available, expected) in [(0, 1), (1, 1), (2, 2), (3, 3), (4, 4), (64, 4)] {
+        assert_eq!(select_test_threads(None, available).unwrap(), expected);
+    }
+    for threads in [1, 2, 4, 256] {
+        assert_eq!(
+            select_test_threads(Some(OsStr::new(&threads.to_string())), 2).unwrap(),
+            threads
+        );
+    }
+    for raw in ["0", "257", "-1", "1.5", "abc", "", "4294967296"] {
+        assert!(select_test_threads(Some(OsStr::new(raw)), 2).is_err());
+    }
+}
 
 fn collect(
     model: &mut Model<'_>,
@@ -40,7 +93,7 @@ fn real_model_stop_cancellation_panic_and_reuse() {
     assert!(Engine::new().is_err(), "only one process engine may exist");
     let load = LoadOptions {
         context_size: 512,
-        threads: 4,
+        threads: test_threads("real_model_stop_cancellation_panic_and_reuse"),
         batch_size: 128,
     };
     let load_cancel = CancelHandle::new().unwrap();
@@ -202,7 +255,7 @@ fn real_model_system_multiturn_and_request_isolation() {
     let cancel = CancelHandle::new().unwrap();
     let load = LoadOptions {
         context_size: 512,
-        threads: 4,
+        threads: test_threads("real_model_system_multiturn_and_request_isolation"),
         batch_size: 128,
     };
     let mut model = engine.load(&model_path, load, &cancel).unwrap();

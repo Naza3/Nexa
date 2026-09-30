@@ -9,6 +9,11 @@ use std::time::{Duration, Instant};
 const OUTPUT_LIMIT: usize = 64 * 1024;
 
 pub fn run(options: &Options, baseline: &Baseline) -> Result<Vec<Value>> {
+    let threads = options
+        .threads
+        .as_ref()
+        .ok_or("missing thread selection")?
+        .threads;
     let binary = options.binary.as_ref().ok_or("missing smoke binary")?;
     let binary = binary
         .canonicalize()
@@ -58,6 +63,8 @@ pub fn run(options: &Options, baseline: &Baseline) -> Result<Vec<Value>> {
             baseline.model.context_size.to_string(),
             "--repeat".into(),
             repeat.to_string(),
+            "--threads".into(),
+            threads.to_string(),
         ];
         let mut command = Command::new(&binary);
         command
@@ -116,7 +123,7 @@ pub fn run(options: &Options, baseline: &Baseline) -> Result<Vec<Value>> {
             mode,
             repeat,
             max_tokens,
-            baseline.model.context_size,
+            (baseline.model.context_size, threads),
         );
         let binary_unchanged = hash_file(&binary).ok().as_ref() == Some(&binary_hash);
         let valid = status.success()
@@ -139,7 +146,7 @@ pub fn run(options: &Options, baseline: &Baseline) -> Result<Vec<Value>> {
             "stdout_sha256":stdout.sha256,"stderr_sha256":stderr.sha256,
             "stdout_truncated":stdout.truncated,"stderr_truncated":stderr.truncated,
             "observations":summary["observations"],"load_options":summary["load_options"],
-            "generation_options":summary["generation_options"],"binary_unchanged":binary_unchanged,"error":error
+            "generation_options":summary["generation_options"],"thread_options":summary["thread_options"],"binary_unchanged":binary_unchanged,"error":error
         })));
     }
     Ok(results)
@@ -181,8 +188,9 @@ fn validate_output(
     mode: &str,
     repeat: u32,
     max_tokens: u32,
-    context_size: u32,
+    load_settings: (u32, u32),
 ) -> Result<Value> {
+    let (context_size, threads) = load_settings;
     let text = std::str::from_utf8(bytes).map_err(|_| "smoke stdout is not UTF-8")?;
     let mut records: Vec<Value> = text
         .lines()
@@ -257,7 +265,7 @@ fn validate_output(
     let load = &summary["load_options"];
     let generation = &summary["generation_options"];
     if load["context_size"] != context_size
-        || load["threads"] != 4
+        || load["threads"] != threads
         || load["batch_size"] != 512_u32.min(context_size)
         || generation["max_tokens"] != max_tokens
         || generation["seed"] != 42
@@ -269,8 +277,22 @@ fn validate_output(
     {
         return Err("smoke load or sampling parameters differ from fixed test settings".into());
     }
+    let thread_options = &summary["thread_options"];
+    let available = thread_options["available_parallelism"]
+        .as_u64()
+        .filter(|&value| value > 0)
+        .ok_or("missing available parallelism")?;
+    let oversubscribed = u64::from(threads) > available;
+    if thread_options["source"] != "cli"
+        || thread_options["oversubscribed"].as_bool() != Some(oversubscribed)
+    {
+        return Err(
+            "smoke thread diagnostics are inconsistent with explicit thread selection".into(),
+        );
+    }
     Ok(json!({"observations":safe_records,
-        "load_options":{"context_size":context_size,"threads":4,"batch_size":512_u32.min(context_size)},
+        "thread_options":{"actual_threads":threads,"available_parallelism":available,"oversubscribed":oversubscribed,"source":"cli"},
+        "load_options":{"context_size":context_size,"threads":threads,"batch_size":512_u32.min(context_size)},
         "generation_options":{"max_tokens":max_tokens,"seed":42,"stop_count":0,
             "temperature":generation["temperature"].as_f64(),"top_p":generation["top_p"].as_f64()}
     }))
@@ -284,13 +306,24 @@ mod tests {
             "completion_tokens":5,"text_bytes":10,"callbacks":3,"finish_reason":reason});
         let summary = json!({"result":"pass","runs":1,
             "build_info":{"llama_commit":"abc","backend":"cpu","shim_version":1},
-            "template_sha256":"template","load_options":{"context_size":64,"threads":4,"batch_size":64},
+            "template_sha256":"template","thread_options":{"available_parallelism":2,"oversubscribed":true,"source":"cli"},"load_options":{"context_size":64,"threads":4,"batch_size":64},
             "generation_options":{"max_tokens":8,"seed":42,"stop_count":0,"temperature":0.0,"top_p":0.9}});
         format!("{observation}\n{summary}\n").into_bytes()
     }
     #[test]
     fn checks_observations_instead_of_trusting_exit_or_pass_label() {
-        assert!(validate_output(&report("stop"), "abc", "template", "generate", 1, 8, 64).is_ok());
+        assert!(
+            validate_output(
+                &report("stop"),
+                "abc",
+                "template",
+                "generate",
+                1,
+                8,
+                (64, 4)
+            )
+            .is_ok()
+        );
         assert!(
             validate_output(
                 &report("cancelled"),
@@ -299,7 +332,7 @@ mod tests {
                 "generate",
                 1,
                 8,
-                64
+                (64, 4)
             )
             .is_err()
         );
@@ -311,13 +344,94 @@ mod tests {
                 "generate",
                 1,
                 8,
-                64
+                (64, 4)
             )
             .is_err()
         );
-        assert!(validate_output(&report("stop"), "abc", "template", "generate", 1, 4, 64).is_err());
-        assert!(validate_output(&report("stop"), "abc", "template", "generate", 2, 8, 64).is_err());
-        assert!(validate_output(b"", "abc", "template", "generate", 1, 8, 64).is_err());
+        assert!(
+            validate_output(
+                &report("stop"),
+                "abc",
+                "template",
+                "generate",
+                1,
+                4,
+                (64, 4)
+            )
+            .is_err()
+        );
+        assert!(
+            validate_output(
+                &report("stop"),
+                "abc",
+                "template",
+                "generate",
+                2,
+                8,
+                (64, 4)
+            )
+            .is_err()
+        );
+        assert!(validate_output(b"", "abc", "template", "generate", 1, 8, (64, 4)).is_err());
+    }
+    #[test]
+    fn validates_exact_requested_threads_and_diagnostics() {
+        let text = String::from_utf8(report("stop"))
+            .unwrap()
+            .replace("\"threads\":4", "\"threads\":2")
+            .replace("\"oversubscribed\":true", "\"oversubscribed\":false");
+        let parsed = validate_output(
+            text.as_bytes(),
+            "abc",
+            "template",
+            "generate",
+            1,
+            8,
+            (64, 2),
+        )
+        .unwrap();
+        assert_eq!(parsed["load_options"]["threads"], 2);
+        assert_eq!(parsed["thread_options"]["actual_threads"], 2);
+        assert_eq!(parsed["thread_options"]["available_parallelism"], 2);
+        assert_eq!(parsed["thread_options"]["oversubscribed"], false);
+        assert!(
+            validate_output(
+                text.as_bytes(),
+                "abc",
+                "template",
+                "generate",
+                1,
+                8,
+                (64, 4)
+            )
+            .is_err()
+        );
+        let inconsistent = text.replace("\"oversubscribed\":false", "\"oversubscribed\":true");
+        assert!(
+            validate_output(
+                inconsistent.as_bytes(),
+                "abc",
+                "template",
+                "generate",
+                1,
+                8,
+                (64, 2)
+            )
+            .is_err()
+        );
+        let missing = text.replace("\"available_parallelism\":2", "\"available_parallelism\":0");
+        assert!(
+            validate_output(
+                missing.as_bytes(),
+                "abc",
+                "template",
+                "generate",
+                1,
+                8,
+                (64, 2)
+            )
+            .is_err()
+        );
     }
     #[test]
     fn rejects_unbounded_counts_without_overflow() {
@@ -325,7 +439,18 @@ mod tests {
             "\"prompt_tokens\":20",
             "\"prompt_tokens\":18446744073709551615",
         );
-        assert!(validate_output(text.as_bytes(), "abc", "template", "generate", 1, 8, 64).is_err());
+        assert!(
+            validate_output(
+                text.as_bytes(),
+                "abc",
+                "template",
+                "generate",
+                1,
+                8,
+                (64, 4)
+            )
+            .is_err()
+        );
     }
     #[test]
     fn report_whitelists_fields_instead_of_copying_child_text() {
@@ -333,8 +458,16 @@ mod tests {
             "\"callbacks\":3",
             "\"prompt\":\"private input sentinel\",\"callbacks\":3",
         );
-        let safe =
-            validate_output(text.as_bytes(), "abc", "template", "generate", 1, 8, 64).unwrap();
+        let safe = validate_output(
+            text.as_bytes(),
+            "abc",
+            "template",
+            "generate",
+            1,
+            8,
+            (64, 4),
+        )
+        .unwrap();
         assert!(!safe.to_string().contains("private input sentinel"));
     }
     #[test]

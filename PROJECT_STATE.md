@@ -16,7 +16,7 @@
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
 - Linux CPU 已完成真实上游中文非思考生成、native suite及A02真实system/多轮模板与请求间隔离；没有 Windows/Android 真机结果
-- 已准备 `.github/workflows/native-windows.yml`；对应授权分支为 `codex/nexa-native-baseline`。首个工程提交 `79f5362821080add23a5359620911e77a4c85d42` 已推送并触发 [Windows CI](https://github.com/Naza3/Nexa/actions/runs/36738163612)，首跑原生构建/CTest通过，Rust链接缺Advapi32而失败；模型阶段跳过。后续提交 `1d26ae89365472612e57c674df57c04767f42a40` 已包含链接修复和A02，[第二次Windows CI](https://github.com/Naza3/Nexa/actions/runs/36740216058)完成Rust检查与模型身份核对，但上游步骤持续超过12分钟；当前日志API不可获取，不能断言具体阻塞进程。已准备各进程300秒超时、EOF stdin与分段证据的工作流修复
+- 已准备 `.github/workflows/native-windows.yml`；对应授权分支为 `codex/nexa-native-baseline`。首个工程提交 `79f5362821080add23a5359620911e77a4c85d42` 已推送并触发 [Windows CI](https://github.com/Naza3/Nexa/actions/runs/36738163612)，首跑原生构建/CTest通过，Rust链接缺Advapi32而失败；模型阶段跳过。后续提交 `1d26ae89365472612e57c674df57c04767f42a40` 已包含链接修复和A02，[第二次Windows CI](https://github.com/Naza3/Nexa/actions/runs/36740216058)完成Rust检查与模型身份核对，但上游步骤持续超过12分钟；当前日志API不可获取，不能断言具体阻塞进程。第三跑脚本cp1252编码错误已修。第四跑 [36745129865](https://github.com/Naza3/Nexa/actions/runs/36745129865) 确认completion在300秒超时：4线程/2逻辑CPU的warmup已耗152秒。现按明确线程1/4短对照、按可用CPU的正常基线和独立native suite诊断，尚不宣称根因已修复
 
 构建参数见 [构建锁](docs/build-lock.md)；当前可执行命令见 [xtask](xtask/README.md)；验证见 [本轮记录](docs/verification/2026-09-30-native-baseline.md)。
 
@@ -45,7 +45,7 @@
 
 ## 下一步
 
-1. 父任务发布有界上游执行修复，取得Windows completion/bench各自结果与日志；不要继续无日志等待整个45分钟job超时
+1. 父任务发布统一测试线程参数与有界对照，取得Windows上游和自有核心的独立结果；不跳过错误或把超配假设当成结论
 2. 若Windows编译或真实suite失败，修复同一范围并重验，不跳过检查；WindowsCI通过也不替代i5-8400和独立无开发工具验收机
 3. 补T00/T01目标平台证据后按路线进入T02；Android交叉编译探针需实际工具链，不编造APK或真机结果
 4. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不依赖自行选择Telegram产品方案
