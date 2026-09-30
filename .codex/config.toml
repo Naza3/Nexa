@@ -1,0 +1,36 @@
+# Nexa 默认角色路由；仅影响本项目的新会话。
+model = "gpt-6-astra"
+model_reasoning_effort = "max"
+
+[features]
+multi_agent = true
+
+[agents]
+enabled = true
+default_subagent_model = "gpt-6-astra"
+default_subagent_reasoning_effort = "low"
+max_concurrent_threads_per_session = 3
+
+[agents.architect]
+description = "独立架构与跨模块方案分析，仅返回决策依据和接口建议；主代理最终裁决。"
+config_file = "agents/architect.toml"
+
+[agents.coding]
+description = "按确定的接口与文件边界实现功能，补充相关回归；架构疑问返回主代理。"
+config_file = "agents/coding.toml"
+
+[agents.debug]
+description = "复杂错误根因、并发或恢复问题分析；基于复现和排除证据提出最小修复。"
+config_file = "agents/debug.toml"
+
+[agents.search]
+description = "只读定位文件、定义、调用关系和引用，返回精确路径及结论。"
+config_file = "agents/search.toml"
+
+[agents.test]
+description = "运行指定检查、收集退出码和失败摘要；不扩展测试矩阵或修改实现。"
+config_file = "agents/test.toml"
+
+[agents.worker]
+description = "兼容简单、接口明确的执行任务；复杂实现交 coding，复杂排错交 debug。"
+config_file = "agents/worker.toml"
