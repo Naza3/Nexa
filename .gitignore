@@ -4,3 +4,5 @@
 /artifacts/
 *.gguf
 *.partial
+__pycache__/
+*.pyc

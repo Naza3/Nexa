@@ -56,3 +56,5 @@ ctest --test-dir build/native-release --output-on-failure
 上游固定合成输入：`tests/fixtures/upstream-prompt-zh.txt`，SHA-256 `7720850391d3ad1d502c58fa078a430a045464757c67feac9b812cdceda82a67`。这是锁定模型原始 Jinja 模板在关闭思考模式下的渲染结果；运行前先核对模型/模板 hash。
 
 首个Windows运行[36738163612](https://github.com/Naza3/Nexa/actions/runs/36738163612)的原生构建及CTest成功；Rust静态链接未继承CMake系统依赖，ggml-cpu读取CPU名称使用的Reg*符号需要显式Advapi32。模型下载/推理阶段均被跳过，不能记为失败推理或通过验收。
+
+上游自动基线执行改由 `python scripts/run_upstream_baseline.py --completion <exe> --bench <exe> --model <gguf> --prompt-file tests/fixtures/upstream-prompt-zh.txt --out-dir artifacts/verification --timeout-seconds 300` 承担；每个进程有明确终态与独立日志，不以整个CI job期限代替原生工具时限。脚本测试命令 `python -m unittest discover -s scripts -p 'test_*.py'`。

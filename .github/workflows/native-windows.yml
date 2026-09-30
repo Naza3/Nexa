@@ -72,17 +72,16 @@ jobs:
           cargo run --locked -p xtask -- baseline-verify --model models/qa-small.gguf --device github-actions-windows-2022 --out artifacts/verification/windows-baseline.json
           if ($LASTEXITCODE -ne 0) { throw 'Baseline identity failed' }
       - name: Run upstream Windows CPU baseline
+        timeout-minutes: 12
         run: |
           $ErrorActionPreference = 'Stop'
+          python -m unittest discover -s scripts -p 'test_*.py' 2>&1 | Tee-Object -FilePath artifacts/verification/windows-upstream-runner-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream process harness tests failed' }
           $completion = (Get-ChildItem build/native-release -Recurse -Filter llama-completion.exe | Select-Object -First 1).FullName
           $bench = (Get-ChildItem build/native-release -Recurse -Filter llama-bench.exe | Select-Object -First 1).FullName
           if (!$completion -or !$bench) { throw 'Upstream executable missing' }
-          & $completion -m models/qa-small.gguf -c 2048 -b 128 -t 4 -n 64 --temp 0 --seed 42 --no-conversation --no-display-prompt -f tests/fixtures/upstream-prompt-zh.txt 1> artifacts/verification/upstream-zh.txt 2> artifacts/verification/upstream-zh.log
-          if ($LASTEXITCODE -ne 0) { throw 'Upstream generation failed' }
-          $text = Get-Content -Raw artifacts/verification/upstream-zh.txt
-          if ([string]::IsNullOrWhiteSpace($text) -or $text -notmatch '[\u4e00-\u9fff]' -or $text.Contains('<think>') -or $text.Contains('</think>')) { throw 'Empty output or thinking-mode regression' }
-          & $bench -m models/qa-small.gguf -p 128 -n 32 -b 128 -ub 128 -t 4 -ngl 0 -r 5 -o json 1> artifacts/verification/upstream-bench.json 2> artifacts/verification/upstream-bench.log
-          if ($LASTEXITCODE -ne 0) { throw 'Upstream benchmark failed' }
+          python scripts/run_upstream_baseline.py --completion $completion --bench $bench --model models/qa-small.gguf --prompt-file tests/fixtures/upstream-prompt-zh.txt --out-dir artifacts/verification --timeout-seconds 300
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream bounded baseline failed; inspect upstream-processes.json and logs' }
       - name: Run real-model native suite
         run: |
           cargo run --locked -p xtask -- native-smoke --model models/qa-small.gguf --bin target/debug/examples/native-smoke.exe --device github-actions-windows-2022 --out artifacts/verification/windows-native-smoke.json

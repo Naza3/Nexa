@@ -40,7 +40,7 @@
 build/native-release/bin/llama-completion -m "$MODEL" -c 2048 -b 128 -t 4 -n 64 --temp 0 --seed 42 --no-conversation --no-display-prompt -f tests/fixtures/upstream-prompt-zh.txt
 ```
 
-退出0；返回非空中文且无思考标签。原始输出/统计留在 `artifacts/verification/upstream-zh.*`。该次运行与开发编译共享机器，只有功能意义，不据此声明吞吐门槛、10%包装开销或硬件性能。五次bench尚未本地执行；已列入Windows CI，结果待实际产生。
+退出0；返回非空中文且无思考标签。原始输出/统计留在 `artifacts/verification/upstream-zh.*`。该次运行与开发编译共享机器，只有功能意义，不据此声明吞吐门槛、10%包装开销或硬件性能。后续有界执行器在Linux真实复验：completion退出0、5.66s；bench退出0、23.70s，含默认warmup及两个测试各5次采样。pp128中位67.262 tokens/s（56.2325–112.938），tg32中位15.5463 tokens/s（9.1496–17.4001）；共享Xeon开发机波动明显，不作目标设备或包装开销承诺。原始JSON在artifacts/verification/bounded-linux/。
 
 ## 发现并修复的问题
 
@@ -55,7 +55,7 @@ build/native-release/bin/llama-completion -m "$MODEL" -c 2048 -b 128 -t 4 -n 64 
 
 - A01/A04/A05/A08/A09/A19仅部分原生语义有证据，不称HTTP/平台完整通过
 - A02已新增Linux真实多轮专项：末问题29 tokens、历史75 tokens、首条system+历史113 tokens；单轮↔多轮在同模型上下文交替后greedy输出与usage保持运行内一致。定向12.97s，连同原生命周期测试显式执行两项均通过（34.37s）。Windows对应新增用例仍待包含该测试的新提交CI；A03 SSE尚未实现；prefill中途取消的独立计时未测
-- 100短请求/20加载卸载的长期内存曲线、峰值/释放内存、TTFT和5次性能中位数均unavailable
+- 100短请求/20加载卸载的长期内存曲线、峰值/释放内存和TTFT均unavailable；仅Linux上游bench的5次统计已有独立报告
 - T00/T01保持待验证，T02–T10和S00–S04未开始。目标平台、API、UI、摘要质量不由fake或仅构建替代
 
 最终native报告：`artifacts/verification/linux-native-smoke.json`，SHA-256 `58c6a8fa3a670e2c0d29ec16d764e5462fd92b02f6d6f610daadf1793ccd4c52`。长输入的模板后prompt为821 tokens，输出84 tokens自然stop；这只是推理功能测试，不是Telegram业务质量评分。
@@ -69,3 +69,11 @@ A02后续证据：`/tmp/nexa-a02-real-model.log` 和 `/tmp/nexa-a02-full-real-mo
 提交 `79f5362821080add23a5359620911e77a4c85d42`，运行 [36738163612](https://github.com/Naza3/Nexa/actions/runs/36738163612)：原生Release（shim、completion、bench）构建和CTest 1/1通过；Rust fmt通过，cargo test在链接处失败，错误为ggml-cpu依赖的RegCloseKey/RegOpenKeyExA/RegQueryValueExA未解析。Rust build.rs需要显式链接Windows系统Advapi32。模型下载和全部Windows真实推理尚未执行。首跑没有生成业务验证artifact，完整失败证据保留于Actions job日志；后续workflow已增加构建/测试日志归档。
 
 A02多轮测试与链接修复需要新提交的Windows CI，不能用Linux补测抹去此次失败或追溯声称覆盖。
+
+## 第二次Windows CI与有界诊断
+
+提交 `1d26ae89365472612e57c674df57c04767f42a40` 的 [运行36740216058](https://github.com/Naza3/Nexa/actions/runs/36740216058)已经通过原生构建、Rust fmt/test/clippy和真实模型身份核对。上游步骤自16:01:22 UTC运行，截至16:13仍未结束；运行中的job日志接口返回404 BlobNotFound，尚不能确定completion还是bench耗时，也不能断言控制台交互就是根因。
+
+修复使用 `scripts/run_upstream_baseline.py`：每个上游进程分别300秒期限，stdin直接EOF，completion明确simple-io，stdout/stderr直接落文件，保存退出码/超时/耗时与SHA。超时自动kill并reap；未运行bench明确skipped。外层step12分钟，保留always-upload收集证据的余量。不绕过非思考、真实中文或5次benchmark采样检查。4项执行器测试通过，真实Linuxcompletion/bench均通过；Windows行为等待新提交重验。
+
+阶段判断：Windows真实上游固定模型基线尚未建立，所以T00不能完成。T01已经有Linux真实流式、停止、模板/预算和重复加载证据；Windowsnative suite与独立prefill取消观测仍待补。Android真机、独立无开发工具Windows机、100请求/20加载长期趋势与全性能矩阵属于T05/T07/T09，不能把它们误当作开始T02的全部前提；也不把这些缺项写成通过。下一有界步骤是结束Windows基线和native suite，补最小prefill取消观测，再依路线评估T02。
