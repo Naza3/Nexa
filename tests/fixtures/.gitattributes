@@ -1,0 +1,5 @@
+# Keep fixed-input hashes and token counts independent of checkout OS.
+*.txt text eol=lf
+*.json text eol=lf
+# Exact chat-template output intentionally ends with a blank line.
+upstream-prompt-zh.txt whitespace=-blank-at-eof

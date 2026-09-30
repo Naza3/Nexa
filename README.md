@@ -2,7 +2,7 @@
 
 为自己的 Windows / Android 应用提供统一的本地大模型推理核心。首个业务验证场景是 Telegram 群消息摘要。
 
-当前处于总体设计与文档基线阶段：没有可运行程序、已验收模型或性能结果。当前进度以 [PROJECT_STATE.md](PROJECT_STATE.md) 为准。
+当前已开始 T00/T01 工程：最小 Rust workspace、自有 C++ ABI、真实模型原生探针及验证命令已落地。Windows/Android 产品、HTTP、调度和 UI 尚未完成；当前验证边界以 [PROJECT_STATE.md](PROJECT_STATE.md) 为准。
 
 ## 交付形态
 
@@ -26,7 +26,9 @@
 
 ## 开发起点
 
-下一项工程任务为 T00：建立最小工程、锁定实际可构建的依赖和模型、取得上游真实推理基线。执行规格中的构建及 CLI 命令是待实现的交付契约，当前不能直接运行。
+先按 [构建锁](docs/build-lock.md) 准备原生依赖，再使用 [当前验证命令](xtask/README.md) 运行单测与真实模型 smoke。精确模型来源及 hash 见 [模型矩阵](docs/model-matrix.md)。
+
+`cargo test --locked --workspace` 和 `xtask baseline-verify/native-smoke` 已有实现；执行规格中的 `ai-runtime`、HTTP、移动与发行命令仍属于后续阶段，不能视为可用产品。
 
 Telegram 消息来源和摘要触发方式尚未确定。消息获取、账号和摘要产物由应用层管理，模型推理可以离线完成；离线推理不表示 Telegram 数据获取无需联网。
 

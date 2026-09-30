@@ -1,0 +1,101 @@
+name: Windows CPU native baseline
+
+on:
+  push:
+    branches: ['codex/nexa-native-baseline']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      AIR_NATIVE_DIR: ${{ github.workspace }}/build/native-release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install fixed development tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
+          python -m pip install cmake==4.4.3 ninja==1.13.2
+          if ($LASTEXITCODE -ne 0) { throw 'CMake setup failed' }
+          rustc --version
+          cargo --version
+          cmake --version
+          New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+      - name: Build pinned upstream and shim
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S native/llama-shim -B build/native-release -G 'Visual Studio 17 2022' -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
+          cmake --build build/native-release --config Release --target air_llama air-stream-test llama-completion llama-bench --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
+          ctest --test-dir build/native-release -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'Native stream test failed' }
+      - name: Check Rust and build real-model verifier
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
+          cargo test --locked --workspace
+          if ($LASTEXITCODE -ne 0) { throw 'Unit or documentation tests failed' }
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
+          cargo build --locked -p llama-adapter --example native-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'Smoke build failed' }
+      - name: Download exact public test model and verify identity
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $baseline = Get-Content -Raw tests/fixtures/baseline.json | ConvertFrom-Json
+          New-Item -ItemType Directory -Force models | Out-Null
+          $uri = "$($baseline.model.source)/resolve/$($baseline.model.revision)/$($baseline.model.filename)"
+          curl.exe --fail --location --retry 3 $uri --output models/qa-small.gguf
+          if ($LASTEXITCODE -ne 0) { throw 'Model download failed' }
+          $actual = (Get-FileHash models/qa-small.gguf -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $baseline.model.sha256) { throw 'Model SHA256 mismatch' }
+          cargo run --locked -p xtask -- baseline-verify --model models/qa-small.gguf --device github-actions-windows-2022 --out artifacts/verification/windows-baseline.json
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline identity failed' }
+      - name: Run upstream Windows CPU baseline
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $completion = (Get-ChildItem build/native-release -Recurse -Filter llama-completion.exe | Select-Object -First 1).FullName
+          $bench = (Get-ChildItem build/native-release -Recurse -Filter llama-bench.exe | Select-Object -First 1).FullName
+          if (!$completion -or !$bench) { throw 'Upstream executable missing' }
+          & $completion -m models/qa-small.gguf -c 2048 -b 128 -t 4 -n 64 --temp 0 --seed 42 --no-conversation --no-display-prompt -f tests/fixtures/upstream-prompt-zh.txt 1> artifacts/verification/upstream-zh.txt 2> artifacts/verification/upstream-zh.log
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream generation failed' }
+          $text = Get-Content -Raw artifacts/verification/upstream-zh.txt
+          if ([string]::IsNullOrWhiteSpace($text) -or $text -notmatch '[\u4e00-\u9fff]' -or $text.Contains('<think>') -or $text.Contains('</think>')) { throw 'Empty output or thinking-mode regression' }
+          & $bench -m models/qa-small.gguf -p 128 -n 32 -b 128 -ub 128 -t 4 -ngl 0 -r 5 -o json 1> artifacts/verification/upstream-bench.json 2> artifacts/verification/upstream-bench.log
+          if ($LASTEXITCODE -ne 0) { throw 'Upstream benchmark failed' }
+      - name: Run real-model native suite
+        run: |
+          cargo run --locked -p xtask -- native-smoke --model models/qa-small.gguf --bin target/debug/examples/native-smoke.exe --device github-actions-windows-2022 --out artifacts/verification/windows-native-smoke.json
+          if ($LASTEXITCODE -ne 0) { throw 'Real-model native suite failed' }
+      - name: Verify real-model stop and lifecycle recovery
+        run: |
+          $env:NEXA_TEST_MODEL = Join-Path $PWD 'models/qa-small.gguf'
+          cargo test --locked -p llama-adapter --test real_model -- --ignored --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-real-model.log
+          if ($LASTEXITCODE -ne 0) { throw 'Real-model recovery tests failed' }
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-cpu-native-${{ github.sha }}
+          path: artifacts/verification/
+          if-no-files-found: warn
+          retention-days: 14

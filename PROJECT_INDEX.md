@@ -19,9 +19,19 @@
 
 `.codex/config.toml` 和 `.codex/agents/*.toml` 是现有开发代理配置，不属于 Nexa 产品运行时，也不是产品依赖锁。
 
-## 规划的 runtime 入口
+## 当前工程入口
 
-以下路径在工程任务中逐步创建，当前不可当作现有代码或可运行命令。
+已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
+
+- [构建锁](docs/build-lock.md)：固定上游/工具链、实际编译参数与限制
+- [模型矩阵](docs/model-matrix.md)：真实模型与模板 hash
+- [可执行验证](xtask/README.md)：当前已实现命令，不混同后续 CLI
+- [开发探针决策](docs/decisions/0002-development-native-probe.md)：Linux 工程验证不替代目标平台门槛
+- `.github/workflows/native-windows.yml`：授权开发分支的 Windows CPU 构建与真实模型 CI
+
+## runtime 全量路径与规划
+
+以下路径按任务逐步创建；仅上节明确列出的入口已存在，其余仍是规划。
 
 | 规划路径 | 职责 | 对应任务 / 规格 |
 | --- | --- | --- |
@@ -68,7 +78,7 @@
 
 ## 验证入口的真实性
 
-当前没有 Cargo、前端或 Flutter 构建入口。执行规格第 12 节中的 `cargo run -p xtask ...`、CLI 和 `adb install` 是未来命令契约，先检查实现和前置条件，再执行。
+当前已有 Cargo 与原生构建入口，尚无前端或 Flutter 工程。执行规格第 12 节的 check/build/api-smoke、产品 CLI 和 adb install 仍是未来命令契约；已实现的验证命令见 xtask/README.md。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。

@@ -1,0 +1,7 @@
+<|im_start|>user
+用一句话说明本地模型的作用。<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
