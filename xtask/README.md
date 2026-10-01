@@ -89,3 +89,29 @@ python scripts/stage_ci_evidence.py
 Windows独立identity测试程序后缀为`.exe`。证据stage只接受闭合已审查报告，保留状态、参数、身份与脱敏前后hash；上游合成正文只留hash/字节数/fixture关联。拒绝内容产生安全失败report并exit1，不上传原始整个目录。真正Windows/目标机结果见[T05记录](../docs/verification/2026-10-01-t05-windows-package.md)。
 
 2026-10-01，源码6a7e9d0的[Windows Release CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)已完成上述打包与解压后的真实独立验收：包检查16pass/2范围skip，HTTP89pass/9skip，50次断流全部实际执行并恢复。四类路径含中文/空格，受限PATH/空CWD、服务回收与自有data清理通过；用户Windows10 build19044 / i5-8400短验随后通过：16项包检查、HTTP44pass/9skip、5/5/5断流；产品EXE/源模型含中文但无空格，临时CWD/data含中文与空格。用户声明已有开发工具且测试联网，用户批准将A20无开发工具/离线与长期稳定性留作后期验证，T05按当前范围收口并继续T06。
+
+
+## T06 桌面构建与分层验收
+
+根workspace新增`desktop-bridge`，其真实验收器是独立native-free宿主（不是原生窗口自动化）：
+
+```sh
+cargo build --locked --release -p desktop-bridge --bin nexa-desktop-harness
+target/release/nexa-desktop-harness --runtime <绝对CLI路径> --model <绝对固定GGUF路径>
+```
+
+前端在`apps/desktop/`执行`npm ci`、`npm run typecheck`、`npm run lint`、`npm run test`、`npm run build`；模拟仅`npm run dev:preview`。原生壳有自己的Cargo.lock与target，不能复用根锁。Windows开发机从repo根执行，先按T05构建同源码runtime包：
+
+```powershell
+$env:CARGO_TARGET_DIR = Join-Path $PWD 'build/desktop/cargo'
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+Push-Location apps/desktop
+npm run tauri -- build --ci --no-bundle --target x86_64-pc-windows-msvc -- --locked
+Pop-Location
+python scripts/package_desktop_windows.py
+```
+
+真实构建输出位于`build/desktop/cargo/x86_64-pc-windows-msvc/release/`。独立packager只拼合已构建Tauri EXE与完整匹配T05包；无签名、公网发布、安装器、WebView2自动下载或模型捆绑。`scripts/run_desktop_smoke.py --model <GGUF> --harness <真实bridge验收器>`从中文空格临时路径解压桌面ZIP，校验完整性、实际WebView2版本并运行真实bridge；失败保留本次目录，避免未确认清理时删除使用中的data。
+
+壳`--diagnose`和bridge报告明确不证明原生窗口UI已操作。实际Windows10原生选择、真实聊天、取消、剪贴板与两种关闭语义按[桌面README](../packaging/desktop-windows/README.md)手工验收；当前[验证记录](../docs/verification/2026-10-01-t06-desktop.md)区分Linux、WindowsCI及用户UI结果。

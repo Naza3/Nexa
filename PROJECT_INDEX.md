@@ -21,7 +21,7 @@
 
 ## 当前工程入口
 
-已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/runtime-api/`、`crates/runtime-cli/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
+已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/runtime-api/`、`crates/runtime-cli/`、`crates/desktop-bridge/`、`apps/desktop/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
 
 - [构建锁](docs/build-lock.md)：固定上游/工具链、实际编译参数与限制
 - [模型矩阵](docs/model-matrix.md)：真实模型与模板 hash
@@ -49,6 +49,12 @@
 - `xtask/src/windows_package.rs` / `scripts/package_windows.py`：Windows原生x64 Release构建、PE闭包/许可/hash/ZIP
 - `crates/llama-adapter/native_identity.rs`：精确配置/架构/CRT/source/archive身份边界，独立rustc测试
 - `scripts/stage_ci_evidence.py` / `scripts/test_stage_ci_evidence.py`：闭合允许列表脱敏证据，保留失败及合成输出hash链
+
+- [T06契约](docs/t06-desktop-contract.md)、[T06壳决策](docs/decisions/0007-t06-desktop-shell-boundary.md)、[T06验证](docs/verification/2026-10-01-t06-desktop.md)：固定IPC、界面与真实验收分层
+- `crates/desktop-bridge/`：native-free安全客户端、bounded SSE、实例/偏好/取消/关闭；`nexa-desktop-harness`验证真实模型与独立进程生命周期
+- `apps/desktop/`：React/TypeScript/Vite前端与npm锁；`apps/desktop/src-tauri/`独立Rust workspace、锁、ACL和原生Windows壳
+- [桌面包使用/手工UI验收](packaging/desktop-windows/README.md)：与CLI包分开的完整桌面ZIP、WebView2先决条件
+- `scripts/package_desktop_windows.py`、`scripts/run_desktop_smoke.py`、`scripts/test_desktop_package.py`：桌面PE/许可/hash闭包与中文空格解压真实bridge检查
 
 ## runtime 全量路径与规划
 
@@ -93,6 +99,7 @@
 | 原生 / 模板 / 取消 | 架构执行流程、执行规格第 4、6 节、锁定版本上游头文件 |
 | 调度 / 存储 / IPC | 执行规格第 5–6 节、架构资源归属 |
 | API / SDK | 执行规格第 7–8 节、架构接入契约及未冻结扩展 |
+| Windows UI | T06契约、ADR0007、T06验证、apps/desktop与desktop-bridge |
 | Android | 架构移动生命周期、执行规格第 8.3、9.2、12.3 节 |
 | 摘要 | 摘要方案、路线 S00–S04；无需全文读原生实现 |
 | 依赖 / 后端扩展 | build-lock、model-matrix（创建后）、相关验证与决策 |
@@ -100,7 +107,7 @@
 
 ## 验证入口的真实性
 
-当前已有 Cargo 与原生构建入口，尚无前端或 Flutter 工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及用户Win10 build19044 / i5-8400短验已通过，T05按用户缩定范围完成，A20无开发工具/离线与长期稳定性延后验证、T06进入开发；执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
+当前已有 Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及用户Win10 build19044 / i5-8400短验已通过，T05按用户缩定范围完成，A20无开发工具/离线与长期稳定性延后验证、T06实现与Linux检查就绪、Windows CI与用户原生UI待验；执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。

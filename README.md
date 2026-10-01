@@ -2,7 +2,7 @@
 
 为自己的 Windows / Android 应用提供统一的本地大模型推理核心。首个业务验证场景是 Telegram 群消息摘要。
 
-当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；T05私有CPU便携包与独立验收工具已通过固定Windows Server2022 CI及用户Windows10 build19044 / i5-8400短验；用户批准将无开发工具、离线运行和长期稳定性延后验证，T05按当前范围已完成，T06 Windows UI开始开发；Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
+当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；T05私有CPU便携包与独立验收工具已通过固定Windows Server2022 CI及用户Windows10 build19044 / i5-8400短验；用户批准将无开发工具、离线运行和长期稳定性延后验证，T05按当前范围已完成，T06最小Windows UI/安全bridge/独立桌面包已实现，Windows原生CI与用户UI操作待验；Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
 
 ## 交付形态
 
@@ -35,3 +35,10 @@
 Telegram 消息来源和摘要触发方式尚未确定。消息获取、账号和摘要产物由应用层管理，模型推理可以离线完成；离线推理不表示 Telegram 数据获取无需联网。
 
 产品名统一使用 Nexa。为保持已有规格一致，命令 `ai-runtime`、`ai-runtime-worker` 与 `air_*` ABI 暂沿用；实际包名及重命名通过决策记录管理。
+
+
+## T06 桌面开发入口
+
+`apps/desktop/`已有React/TypeScript/Vite模型、聊天和设置三页，`src-tauri/`为独立Rust workspace。Linux前端36测试/构建、纯Rust bridge真实模型与进程生命周期已通过；这不代表Windows窗口已验。原生Tauri构建、桌面ZIP与用户Win10操作门槛见[T06记录](docs/verification/2026-10-01-t06-desktop.md)。
+
+桌面开发产物为另一个`desktop-windows.zip`，内含嵌入前端EXE与完整匹配的`runtime/`子目录，模型继续外置。需要已安装WebView2 Evergreen，缺失时原生提示官方入口，不自动安装或修改系统权限。默认关窗口保留runtime；同时退出会影响所有客户端，须实际确认清理。使用与手工验收见[桌面说明](packaging/desktop-windows/README.md)，构建命令见[验证入口](xtask/README.md#t06-桌面构建与分层验收)。

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/runtime-types", "crates/runtime-api", "crates/runtime-cli", "crates/runtime-ipc", "crates/process-host", "crates/runtime-worker", "crates/runtime-core", "crates/model-store", "crates/engine-host", "crates/llama-adapter", "xtask"]
+exclude = ["apps/desktop/src-tauri"]
+members = ["crates/desktop-bridge", "crates/runtime-types", "crates/runtime-api", "crates/runtime-cli", "crates/runtime-ipc", "crates/process-host", "crates/runtime-worker", "crates/runtime-core", "crates/model-store", "crates/engine-host", "crates/llama-adapter", "xtask"]
 
 [workspace.package]
 version = "0.1.0"

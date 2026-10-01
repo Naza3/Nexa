@@ -23,12 +23,16 @@ JSON_REPORTS = (
     "windows-api-cli/cli-init.json", "windows-api-cli/cli-import.json",
     "windows-package/build-result.json", "windows-package/pe-inspection.json",
     "windows-package/package-acceptance.json",
+    "windows-desktop/build-result.json", "windows-desktop/pe-inspection.json",
+    "windows-desktop/diagnostics.json", "windows-desktop/bridge-real.json",
+    "windows-desktop/acceptance.json",
 )
 LOG_REPORTS = tuple(f"windows-{name}.log" for name in (
     "rust-setup", "cmake-setup", "upstream-runner-tests", "process-host-dependencies",
     "management-build", "api-cli-dependencies", "api-cli-independent-build", "configure",
     "native-build", "native-identity-tests", "ctest", "rustfmt", "rust-tests", "clippy", "real-model",
     "real-runtime", "worker-real-credit", "real-process-runtime",
+    "desktop-dependencies", "desktop-rust-tests", "desktop-clippy", "desktop-build",
 ))
 # These files are never copied, but their byte identities keep synthetic baseline
 # validation auditable when generated text and raw upstream stderr are omitted.
@@ -156,7 +160,7 @@ def stage(source, destination, repo, environment=None):
                 raw = read_regular(path)
                 fixtures.append({"path": name, "sha256": sha256(raw), "size_bytes": len(raw)})
         outcomes = {key.removeprefix("NEXA_CI_").lower(): value for key, value in env.items()
-                    if key in ("NEXA_CI_NATIVE_BUILD", "NEXA_CI_MODEL_IDENTITY", "NEXA_CI_PORTABLE_PACKAGE", "NEXA_CI_PACKAGE_ACCEPTANCE")
+                    if key in ("NEXA_CI_NATIVE_BUILD", "NEXA_CI_MODEL_IDENTITY", "NEXA_CI_PORTABLE_PACKAGE", "NEXA_CI_PACKAGE_ACCEPTANCE", "NEXA_CI_DESKTOP_BUILD", "NEXA_CI_DESKTOP_PACKAGE", "NEXA_CI_DESKTOP_ACCEPTANCE")
                     and value in ("success", "failure", "cancelled", "skipped")}
         index = {"schema_version": 1, "project_commit": env.get("GITHUB_SHA"), "sanitized": True,
                  "result": "failed" if rejected else "pass", "ci_step_outcomes": outcomes, "rejected_reports": rejected,

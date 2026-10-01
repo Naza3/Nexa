@@ -1,0 +1,44 @@
+# Desktop bridge（T06）
+
+纯 Rust 的桌面边界。无 Tauri、engine-host、llama-adapter 或原生推理链接；根 workspace 可在没有 WebView 开发库时独立检查。完整 UI 命令与数据字段以 `docs/t06-desktop-contract.md` 和本 crate 的 `dto.rs` 为准。
+
+## 宿主接入
+
+原生壳以固定、已检查的产品布局构造 `Arc<DesktopBridge>`：
+
+- `DesktopBridge::new(data_dir: PathBuf, runtime_executable: PathBuf) -> Result<Self>`
+- `default_data_dir() -> Result<PathBuf>` 复用 CLI 默认数据目录解析
+- `snapshot()`、`start(initialize_if_missing)`、`models_page(after)`、`import_model(path, model_id)`、`load_model(request)`、`unload_model()` 均为 async
+- `settings_save(DesktopPreferences)` 仅写 `desktop-settings.json`；`save_idle(seconds)` 仅在停止且持实例锁时写 `config.toml`，范围 1–86400 秒。两项独立显式保存，各自单文件原子发布
+- `chat_start(self: &Arc<Self>, ChatStartRequest)` 同步登记唯一 ID 并原子占位；随后后台启动，实际 `started` 只能来自合法 SSE 角色事件
+- `chat_next(Uuid)`、`chat_cancel(Uuid)` 为 async；批次 `terminal` 是 bool，终态来自 `events`；重复终态读取无重复文本
+- `stop()` 要求 HTTP shutdown 成功且 `wait_stopped` 确认实例释放；`close()` 读取关闭设置；`close_ui_only()` 明确只关 UI，失败不放行关闭
+
+壳只把原生选择器得到的路径传给 `import_model`，前端只持一次性选择 ID；路径、Token 不通过 bridge DTO 暴露。Windows 原始普通盘符路径在 canonicalize 后受控移除 `\\?\` 盘符前缀，再交现有 API，UNC/URL/最终 symlink 不支持。真实导入 API 返回包装对象，bridge 核对外层与 `model` 内层的 ID、大小和 SHA-256。
+
+Token 复制属于原生壳按钮：调用现有私有 Token 读取校验，直接写系统剪贴板；本 crate 没有 Token getter。
+
+## 安全与关闭边界
+
+所有请求通过 `runtime_cli::client::VerifiedConnection` 的同一 TCP endpoint-bound proof 后发送 Bearer。每项控制请求独立连接，不代理、重定向、自动重连、重放或用失败的 proof 接管既有实例。`start(false)` 永不隐式初始化。启动仅固定原生 Command/参数/路径，stdio 均为 null；Windows 显式 detached/new-process-group/breakaway，不允许 breakaway 时安全失败，并仅暴露 OS 数字错误码用于定位。
+
+默认关闭停止接收操作、取消本 UI chat，关闭其 HTTP 流并有限等待终态。关闭与 Import 竞争时丢弃本次导入的连接，触发现有 API `ImportGuard`，随后有限观察 registry 空闲；不取消其他客户端的 registry 操作，也不假装知道其归属。Load/Unload 没有独立操作取消 ID，关闭最多等工作锁 10 秒；未完成返回错误、保留窗口，用户待操作结束后重试。此边界不能报告为所有原生窗口路径已经验收。
+
+SSE 缓冲 ≤64 KiB、事件 ≤32 KiB；传输 frame 按 16 KiB 切片、逐事件解码，因此单个合并 HTTP frame 不是事件大小。队列文本 ≤64 KiB，元事件 ≤32；每批文本 ≤16 KiB；无前端消费进展 10 秒后断流并取消。单回复 ≤256 KiB，会话正文（含当前回复）≤512 KiB、消息（含当前回复）≤128，完整发送 JSON ≤512 KiB。所有上限保留可展示的已有部分并报告未完成，不截断后伪报成功。
+
+完成只来自合法 finish +真实 usage + `[DONE]`；坏 proof、redirect、错误身份、坏 UTF-8/JSON、缺 usage/DONE、突然 EOF 和 SSE error 都不是成功。取消意图先登记，独立 cancel 的 404/202 不是成功或远端已回收证明；本地取消终态发生在本 UI 流关闭后。显式 runtime stop 的远端回收要求仍然更强。
+
+## 验证命令
+
+```sh
+source /workspace/shared/nexa-tools/env.sh
+cargo test -p desktop-bridge --locked
+cargo clippy -p desktop-bridge --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build -p desktop-bridge --release --locked --bin nexa-desktop-harness
+nexa-desktop-harness --runtime ABS_AI_RUNTIME --model ABS_GGUF
+```
+
+Harness 仅新建唯一临时目录、临时凭据与 listen=0 配置，使用真实 GGUF；输出只有脱敏数值、布尔与路径形状（是否中文/空格），没有正文、Token 或完整目录。覆盖 import/list/load/中文流/取消/再生成/unload、实例复用、两种关闭、设置与显式 stop。它还启动固定内部 `--lifecycle-child` 子进程：子进程创建 runtime、关闭 bridge 并真正退出后，父进程重新证明 API；载入 worker 后另子进程按设置 shutdown，父进程核对锁/记录释放。此证据证明 bridge 进程生命周期，不代替 Tauri 原生窗口 close 事件、WebView2、Windows 用户操作验收。
+
+失败不放宽产品界限。检查日志存 `artifacts/verification/`，不提交临时数据、模型或凭据；证据目录保留首次失败及修复后重跑结果。

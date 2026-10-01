@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Only the bundled main UI may invoke these fifteen fixed desktop operations",
+  "local": true,
+  "windows": ["main"],
+  "webviews": ["main"],
+  "permissions": [
+    "allow-desktop-snapshot", "allow-runtime-start", "allow-model-pick", "allow-model-import",
+    "allow-models-page", "allow-model-load", "allow-model-unload", "allow-chat-start",
+    "allow-chat-next", "allow-chat-cancel", "allow-settings-save", "allow-runtime-idle-save", "allow-token-copy",
+    "allow-runtime-stop", "allow-desktop-close"
+  ]
+}

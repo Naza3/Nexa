@@ -1,0 +1,3 @@
+# Preserve upstream license/metadata evidence byte-for-byte on Windows checkouts.
+# Original trailing spaces and CRLF are intentional and bound by recorded hashes.
+packaging/desktop-windows/third-party/** -text -whitespace

@@ -13,7 +13,7 @@
 ## 已有工程事实
 
 - 原始远程提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168` 已通过 GitHub 原始对象精确重建本地 Git；初始 tree/commit SHA 一致，未创建替代历史
-- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收，仍无UI或移动工程
+- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建与UI操作待验证；仍无移动工程
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
@@ -41,7 +41,7 @@
 | T03 PC worker | 已完成 | a8930494在Windows CI36801681068通过：Job父子/后代回收、五秒强杀、单账本IPC、144项Rust+5项真实模型及独立无native父端链；范围见T03记录 |
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；用户Win10 build19044 / i5-8400短验已通过且包identity一致；按用户最新范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
-| T06 Windows UI | 进行中 | 用户已要求继续开发，进入最小桌面UI实现准备；T05按缩定范围收口，尚无UI验收结果 |
+| T06 Windows UI | 进行中 | 纯Rust bridge、React三页、Tauri安全壳和独立桌面打包/CI已实现；Linux根263测试、前端36测试、真实bridge独立进程生命周期通过；Windows原生构建/桌面包与用户UI验收待执行，不能称已完成 |
 | T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | 本轮Linux仅开发探针，不是扩展平台发布 |
@@ -60,7 +60,7 @@
 
 1. T00–T04阶段证据已收口，继续授权开发分支，不合并或部署
 2. T05源码6a7e9d0的Windows CI36829233039已通过，产品/工具ZIP已独立复核并供用户本地验收；用户Windows10 / i5-8400报告已回，产品与验收器identity匹配该交付包
-3. T05按用户批准的当前范围已完成；继续T06最小桌面模型管理/聊天验证UI，发现、启动、停止及退出仍须真实验收
+3. T06代码与Linux检查已就绪，运行新增Windows CI核对真实Tauri构建/PE/许可/中文空格解压bridge，再供用户Win10原生UI导入/聊天/停止/两种关闭语义验收；不把bridge harness当窗口已验
 4. 无开发工具、实际离线和长期稳定性列为后期验证；VC预装与RAM未知，Windows11/Android另行实测，不泛化当前支持证据
 5. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
 
@@ -69,3 +69,10 @@
 [ADR0006](docs/decisions/0006-t05-windows-portable-package.md)冻结产品与验收器分离、既有VS Release CRT app-local依赖闭包、严格文件/许可/hash以及失败保留；[T05验证](docs/verification/2026-10-01-t05-windows-package.md)分层记录真实结果。只在开发Actions上传私有验收产物，不创建公开Release、不合并部署、不远控或初始化长期真实token。项目root LICENSE未选是后续外部分发决策，不阻塞本轮内部开发包。
 
 最新实际结果：2026-10-01 07:39:43 UTC，[Windows CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)全部必需步骤成功。产品ZIP4,936,580bytes，工具ZIP1,516,822bytes；解压Release包16项检查通过，HTTP89pass/9skip、50次断流恢复、四类中文空格路径和退出清理均实测。前四轮失败及修复保留在[T05记录](docs/verification/2026-10-01-t05-windows-package.md)，用户随后返回Win10 build19044 / i5-8400报告：16项包检查、HTTP44pass/9skip、5/5/5断流、退出清理与产品未修改均通过；产品EXE/源模型路径含中文但无空格，临时CWD/data含中文与空格。该机器有开发工具且测试联网，A20仍未完成。
+
+
+## T06 当前实现与待验边界
+
+[契约](docs/t06-desktop-contract.md)、[ADR0007](docs/decisions/0007-t06-desktop-shell-boundary.md)、[T06验证](docs/verification/2026-10-01-t06-desktop.md)记录当前范围。`apps/desktop/`前端独立npm锁，`src-tauri/`独立Cargo锁，根新增`desktop-bridge`；15个固定IPC命令、main本地ACL/CSP、一次性原生选模与原生写剪贴板、已安装WebView2检测、异步统一关闭均已有源码。
+
+已实际完成：Linux根workspace263pass/0fail/6ignored、bridge26测试、真实模型bridge独立进程默认关闭仍可proof/同时退出清理；前端锁重装、typecheck/lint/build、36测试和npm audit 0；壳共享模块5测试/clippy、Python44测试（2Windows-only skip）、Windows目标无native推理依赖和原许可闭包预检。Linux交叉构建因缺llvm-rc停在资源阶段，未通过完整原生构建；云浏览器127.0.0.1预览被客户端阻止，未完成视觉交互。首次新增Windows CI及用户Win10 UI结果尚待取得。T05旧发行范围和后期验证决定不变。
