@@ -31,6 +31,48 @@ class PackageTests(unittest.TestCase):
         env = pack.windows_environment({"PATH": "first", "Path": "second", "VCToolsRedistDir": "first", "vctoolsredistdir": "second"}, "pAtH=selected\nvCtOoLsReDiStDiR=selected CRT")
         self.assertEqual(env, {"PATH": "selected", "VCTOOLSREDISTDIR": "selected CRT"})
 
+    def test_devcmd_uses_raw_cmd_quoting_instead_of_crt_argument_escaping(self):
+        cmd = r"C:\Windows\System32\cmd.exe"
+        dev = r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
+        line = pack.devcmd_command_line(cmd, dev)
+        self.assertEqual(line, f'"{cmd}" /d /s /u /v:off /c ""{dev}" -no_logo -arch=x64 -host_arch=x64 >nul && set"')
+        legacy = pack.subprocess.list2cmdline(["cmd.exe", "/d", "/s", "/c", f'""{dev}" -no_logo -arch=x64 -host_arch=x64 >nul && set"'])
+        self.assertIn('\\"', legacy)
+        self.assertNotIn('\\"', line)
+        result = mock.Mock(returncode=0, stdout="Path=selected compiler path\r\nVCToolsRedistDir=selected redist\r\n")
+        env = {"SYSTEMROOT": r"C:\Windows", "PATH": "old path"}
+        with mock.patch.object(pack, "regular", side_effect=lambda path: path), mock.patch.object(pack.subprocess, "run", return_value=result) as run:
+            actual = pack.devcmd_environment(dev, env)
+        self.assertIsInstance(run.call_args.args[0], str)
+        self.assertFalse(run.call_args.kwargs["shell"])
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-16-le")
+        self.assertEqual(actual["PATH"], "selected compiler path")
+        self.assertEqual(actual["VCTOOLSREDISTDIR"], "selected redist")
+
+    def test_devcmd_failure_cannot_reuse_inherited_redist_environment(self):
+        result = mock.Mock(returncode=7, stdout="fixture initialization failed")
+        env = {"SYSTEMROOT": r"C:\Windows", "VCTOOLSREDISTDIR": "inherited stale redist"}
+        with mock.patch.object(pack, "regular", side_effect=lambda path: path), mock.patch.object(pack.subprocess, "run", return_value=result), self.assertRaisesRegex(ValueError, r"initialization failed \(7\)"):
+            pack.devcmd_environment("VsDevCmd.bat", env)
+        for path in ('C:/bad"path/VsDevCmd.bat', 'C:/%UNEXPECTED%/VsDevCmd.bat', 'C:/bad\npath/VsDevCmd.bat'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                pack.devcmd_command_line(r"C:\Windows\System32\cmd.exe", path)
+
+    @unittest.skipUnless(os.name == "nt", "requires the real Windows cmd.exe parser")
+    def test_real_windows_devcmd_with_spaces_unicode_and_failure(self):
+        with tempfile.TemporaryDirectory(prefix="nexa-devcmd-") as folder:
+            directory = Path(folder) / "VS 中文 开发 (Tools) & literal!"
+            directory.mkdir()
+            dev = directory / "VsDevCmd.bat"
+            dev.write_bytes(b'@echo off\r\nif not "%1"=="-no_logo" exit /b 21\r\nif not "%2"=="-arch=x64" exit /b 22\r\nif not "%3"=="-host_arch=x64" exit /b 23\r\nset "Path=%~dp0compiler"\r\nset "VCToolsRedistDir=%~dp0Redist"\r\nexit /b 0\r\n')
+            env = pack.windows_environment(os.environ, "")
+            actual = pack.devcmd_environment(dev, env)
+            self.assertEqual(actual["PATH"], str(directory / "compiler"))
+            self.assertEqual(actual["VCTOOLSREDISTDIR"], str(directory / "Redist"))
+            dev.write_bytes(b'@echo off\r\nexit /b 7\r\n')
+            with self.assertRaisesRegex(ValueError, r"initialization failed \(7\)"):
+                pack.devcmd_environment(dev, env)
+
     def test_relative_paths_are_strict(self):
         for name in ("../escape", "/absolute", "C:/absolute", "a\\b", "a//b", "a/./b", "a/../b", "bad.", "bad ", "a\x00b", "", "\ud800"):
             with self.subTest(name=repr(name)), self.assertRaises((ValueError, UnicodeError)):

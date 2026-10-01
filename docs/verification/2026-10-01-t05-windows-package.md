@@ -13,7 +13,7 @@
 | T00–T04 已有固定 Windows 基线 | 已通过既有阶段 | [T04 记录](2026-10-01-t04-http-cli.md)，CI36816604494；不是本轮 Release 包 |
 | 包/验收代码与 Linux 逻辑回归 | 最终开发聚合通过 | Rust236pass/6ignored、native identity3pass；Python父级30pass后边界修补全32pass，真实模型另行分层记录 |
 | CI 证据 staging 安全回归 | 通过局部验证 | 下节实际命令与结果；不证明 Windows 产品可运行 |
-| Windows Release 构建、PE/许可/manifest/hash/ZIP | 未执行 | 等待精确源提交的 Actions；工作流已写不等于已运行 |
+| Windows Release 构建、PE/许可/manifest/hash/ZIP | 进行中，CI打包初始化失败 | run36823563860在VsDevCmd调用失败，尚未生成Release产品；具体原始错误见第二轮记录 |
 | 中文空格新解压目录、空 CWD、受限 PATH 真实 CLI/API | 未执行 | 必须跑解压产品与解压独立工具，不能用 debug/仓库二进制替代 |
 | Windows 10 i5-8400 /16GB 本地短验 | 未执行 | 需本地实际 OS build 与包/工具/report identity |
 | 无开发工具独立机器、VC预装状态、实际离线 | 未验证 | PATH 清理、Server2022 或机器角色声明不足以证明 |
@@ -106,3 +106,43 @@ cargo test --locked --offline -p xtask --bin nexa-acceptance \
 受控回归红转绿；API 24+4+11=39项通过；20轮定向重复通过，包含160个FIN/RST子场景和20次gate回归。strict clippy、MSVC all-targets check、fmt及diff检查均exit0。修后诊断仅记录rst/mode/stream/phase与状态数值。证据为`artifacts/verification/t05-disconnect-*.log`，包括原始fixture编译/前置断言失败、oracle-red/oracle-green/api-linux/focused-repeat-linux/clippy-linux/msvc-check/format；此处不是Windows重跑通过证明。
 
 首轮证据ZIP SHA-256为`2041e3d8196b14285711b511be0200f697cd9042eb16878520ca78c9b2909d2e`（17,457 bytes）；failure-only原生工具ZIP SHA-256为`7b127b305333adcfb0b1a024601cb58f3708da8d3932cec6fdedee91852d81a6`（29,211,224 bytes），14项工具manifest大小/hash均核对。原件保留于`artifacts/verification/t05-windows-36821525300*`，不删除或把原失败改成通过。
+
+## 第二轮 Windows CI：前置真实回归通过，打包环境初始化失败
+
+取消oracle定向修复提交 `732bf75e3f30ab2b549a6569fa8ebda791685629`（tree `b4ff2d45ecaaeb3e3543b0e39c70edb2fb8a9730`）的 [run 36823563860](https://github.com/Naza3/Nexa/actions/runs/36823563860)，attempt1 / job `110244165275`，06:12:36 UTC启动，06:30:31 UTC终态failure。只读取证后保持原失败，没有在该run盲重跑或跳过检查。
+
+### 实际通过的前置检查
+
+- Windows Server2022 x64，实际OS build `10.0.20348.5622`，runner image `20260920.314.1`；不是Windows10目标机
+- 缺native目录的管理harness/CLI/xtask独立构建、VS2022原生Release/CTest、native identity3项通过；Windows junction路径边界确有实际执行
+- Rustfmt、workspace测试与all-targets strict clippy通过。按`windows-rust-tests.log`逐测试binary/文档测试求和：**234 passed / 0 failed / 6 ignored**；取消FIN/RST原失败及新增gate回归在本轮真实Windows已通过。Windows条件编译数量不能直接替换Linux计数
+- Python **32 passed**；固定模型/模板身份、上游生成/五次bench、native真实suite、既有5项独立真实模型回归、独立管理/worker真实链路全部通过。第6项ignored为独立验收器开发生命周期，本轮未把它在普通suite中执行
+- T04真实HTTP/CLI仍用debug产品，**89 pass / 0 fail / 9 skipped**，断流requested/attempted/passed=**50/50/50**；wrapper56.657秒，initialize/online_import/api_smoke/service_exit均0，forced_cleanup=false
+- 上游2线程必需baseline=pass；4线程超配诊断仍failed，原状态保留，不因CI前置绿色改称所有配置通过
+
+### 第16步明确失败
+
+`cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu`在06:30:16.361启动，06:30:16.502报告：
+
+```text
+Windows package failed: command failed (1): cmd.exe
+The network path was not found.
+```
+
+失败处为`scripts/package_windows.py::selected_visual_studio`调用既有`VsDevCmd.bat`取开发环境，早于Rust Release产品构建。源码通过Python argv列表向`cmd.exe /d /s /c`传递已经嵌套引号的整段batch命令；`subprocess.list2cmdline`会再做CRT式反斜杠引号转义，而cmd解析语法不同，这是限定排查/修复范围。该日志没有记录最终packager commandline或所选dev路径，不能把推测参数冒充实际输出，也不能仅凭错误文本宣称远程网络失效。
+
+已把精确失败与完整日志交由打包工位修复引号/调用契约并补回归；不得削弱VS/CRT来源校验或绕过初始化。产品/独立工具ZIP、PE闭包/CRT签名与中文空格解压Release验收均未执行或未生成，不能用此前debug真实HTTP50代替。T05仍进行中，A20/T06门槛未完成。
+
+### 下载证据完整性
+
+- 脱敏证据artifact `11145211337`：ZIP37,847 bytes，SHA-256 `9f9638bec24ec36f232e8f282caac2102a28f9c9e62ff63fb9def549bca1e5eb`；下载后与GitHub digest一致，26份报告的stage输出hash逐项匹配，index明确portable_package=failure/package_acceptance=skipped
+- failure-only原生诊断artifact `11145106358`：ZIP29,186,727 bytes，SHA-256 `917a94880fad9a8bb3ea6b4e4b460d8b0ffd5d2602df8a4caa4ab3242512d02e`；下载后核对archive、精确source commit及各项工具manifest大小/hash。这是诊断工具，不是产品包
+- 原件/解包/完整job日志/run及artifact元数据位于`artifacts/verification/t05-windows-36823563860*`。下载服务首次503后受控重取成功，与CI本身故障分开记录；未删改前次run36821525300的失败证据
+
+### VsDevCmd 窄修与发布前回归
+
+本次修复只涉及打包脚本调用边界及专属测试，不改变VS选择、x64/Release、CRT来源、许可、PE闭包或用户安全设置。`VsDevCmd.bat`使用完整原始CreateProcess命令行，明确可执行文件为`SystemRoot/System32/cmd.exe`，`shell=False`，不再让Python对cmd程序文本套用CRT argv转义；显式`/d /s /u /v:off`，通过UTF-16LE解码`set`输出保留中文环境值，并关闭延迟扩展。batch失败仍必须返回失败，不能退回继承的Redist环境伪装初始化成功。
+
+跨平台回归验证精确调用参数/引号规则与错误传播；新增真实Windows用例以受控临时batch模拟开发环境，路径包含中文、空格、括号、`&`与`!`，检查三个参数、PATH/Redist取值和exit/b7失败传播。该用例在非Windows明确skip；在原有CI的`Install fixed development tools`步骤由`unittest discover -s scripts -p 'test_*.py'`自动执行，早于原生编译和第16步打包，不用等完整CI结束才发现cmd解析错误。
+
+父级实际运行Python全套：**35项收集，34 passed / 1 Windows专用 skipped**，exit0；`git diff --check`通过。这只证明当前主机的回归，真实Windows cmd用例和最终Release包仍等待新提交的CI。没有将skip称为通过，也没有改写run36823563860的原始失败。

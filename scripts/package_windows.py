@@ -219,6 +219,30 @@ def windows_environment(base, devcmd_output):
     return env
 
 
+def devcmd_command_line(cmd, dev):
+    # cmd.exe does not parse the MS C runtime quoting used by list2cmdline.
+    # This one shell command is deliberately a raw CreateProcess command line.
+    for path in (str(cmd), str(dev)):
+        if any(character in path for character in '\0\r\n"%'):
+            fail("unsupported character in Windows command interpreter or VS script path")
+    return f'"{cmd}" /d /s /u /v:off /c ""{dev}" -no_logo -arch=x64 -host_arch=x64 >nul && set"'
+
+
+def devcmd_environment(dev, env):
+    system_root = env.get("SYSTEMROOT")
+    if not system_root:
+        fail("SYSTEMROOT is required to locate the Windows command interpreter")
+    cmd = regular(Path(system_root) / "System32/cmd.exe")
+    # /u makes the built-in `set` output UTF-16LE, including non-ASCII paths.
+    result = subprocess.run(devcmd_command_line(cmd, dev), executable=str(cmd),
+                            shell=False, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            encoding="utf-16-le", errors="replace", check=False)
+    if result.returncode != 0:
+        fail(f"Visual Studio environment initialization failed ({result.returncode}): cmd.exe\n{result.stdout[-6000:]}")
+    return windows_environment(env, result.stdout)
+
+
 def selected_visual_studio():
     env = windows_environment(os.environ, "")
     base = Path(env.get("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
@@ -231,8 +255,7 @@ def selected_visual_studio():
         fail("pre-release or incomplete Visual Studio instances are not distribution sources")
     vs = Path(selected["installationPath"]).resolve()
     dev = regular(vs / "Common7/Tools/VsDevCmd.bat")
-    output = command(["cmd.exe", "/d", "/s", "/c", f'""{dev}" -no_logo -arch=x64 -host_arch=x64 >nul && set"'], env)
-    env = windows_environment(env, output)
+    env = devcmd_environment(dev, env)
     folded = env.copy()
     value = folded.get("VCTOOLSREDISTDIR")
     if not value:
