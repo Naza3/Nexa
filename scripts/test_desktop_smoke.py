@@ -15,7 +15,8 @@ class DesktopSmokeFailureTests(unittest.TestCase):
         for name, expected in (("STAGES", smoke.FAILURE_STAGES), ("CODES", smoke.FAILURE_CODES), ("BRIDGE_CODES", smoke.BRIDGE_CODES),
                                ("CLEANUP_STATUSES", smoke.CLEANUP_STATUSES), ("LOCK_STATES", smoke.LOCK_STATES),
                                ("DISCOVERY_STATES", smoke.DISCOVERY_STATES), ("PROBE_CODES", smoke.PROBE_CODES),
-                               ("SIGNAL_STATES", smoke.SIGNAL_STATES), ("FAILURE_KEYS", smoke.FAILURE_KEYS), ("CLEANUP_KEYS", smoke.CLEANUP_KEYS)):
+                               ("SIGNAL_STATES", smoke.SIGNAL_STATES), ("FAILURE_KEYS", smoke.FAILURE_KEYS), ("CLEANUP_KEYS", smoke.CLEANUP_KEYS),
+                               ("PROBE_KEYS", smoke.PROBE_KEYS), ("LAUNCH_STRATEGIES", smoke.LAUNCH_STRATEGIES)):
             block = re.search(r"pub const " + name + r": &\[&str\] = &\[(.*?)\];", source, re.DOTALL)
             self.assertIsNotNone(block, name)
             self.assertEqual(set(re.findall(r'"([a-z_]+)"', block[1])), expected)
@@ -141,16 +142,17 @@ class DesktopSmokeFailureTests(unittest.TestCase):
                 self.call(subprocess.CompletedProcess([], 0, raw, ""), None, "desktop_diagnose")
 
     def probe(self):
-        return {"schema_version": 1, "kind": "nexa-desktop-launch-probe", "success": False,
+        return {"schema_version": 2, "kind": "nexa-desktop-launch-probe", "success": False,
                 "code": "spawn_failed", "os_error": None, "spawn_os_error": 5,
                 "child_exit_code": None, "signal_state": "not_observed", "signal_os_error": None,
-                "cleanup_confirmed": True}
+                "cleanup_confirmed": True, "strategy": "breakaway", "parent_in_job": True,
+                "child_in_job": None, "parent_job_os_error": None, "child_job_os_error": None}
 
     def test_launch_negative_observation_is_saved_without_claiming_product_pass(self):
         report = self.probe()
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(smoke.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(report), "")):
             smoke.run_launch_probe(Path("fixed-harness"), Path(temporary))
-            saved = json.loads((Path(temporary) / "launch-probe.json").read_text(encoding="utf-8"))
+            saved = json.loads((Path(temporary) / "launch-probe-breakaway.json").read_text(encoding="utf-8"))
             self.assertEqual(saved, report)
             self.assertFalse(saved["success"])
             self.assertFalse((Path(temporary) / "acceptance.json").exists())
@@ -160,7 +162,9 @@ class DesktopSmokeFailureTests(unittest.TestCase):
                              ("signal_state", []), ("success", True), ("success", 1),
                              ("os_error", True), ("spawn_os_error", 2 ** 31),
                              ("child_exit_code", -2 ** 31 - 1), ("signal_os_error", 0.5),
-                             ("cleanup_confirmed", "true")]:
+                             ("cleanup_confirmed", "true"), ("schema_version", 1), ("strategy", "unknown"),
+                             ("parent_in_job", 1), ("child_in_job", "true"), ("parent_job_os_error", 5),
+                             ("child_job_os_error", 2 ** 31)]:
             report = self.probe()
             report[field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -172,18 +176,27 @@ class DesktopSmokeFailureTests(unittest.TestCase):
 
     def test_launch_pending_observation_requires_confirmed_clean_child_exit(self):
         report = self.probe()
-        report.update(success=True, code="observed_pending", spawn_os_error=None, child_exit_code=0, signal_state="pending")
+        report.update(success=True, code="observed_pending", spawn_os_error=None, child_exit_code=0, signal_state="pending", child_in_job=False)
         self.assertEqual(smoke.launch_probe_report(json.dumps(report)), report)
         report["cleanup_confirmed"] = False
         with self.assertRaises(ValueError):
             smoke.launch_probe_report(json.dumps(report))
+
+    def test_launch_strategy_cannot_be_mixed_or_silently_fallback(self):
+        report = self.probe()
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(smoke.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(report), "")) as run:
+            with self.assertRaisesRegex(ValueError, "schema rejected"):
+                smoke.run_launch_probe(Path("fixed-harness"), Path(temporary), "inherit_job")
+            self.assertEqual(run.call_args.args[0], ["fixed-harness", "--probe-launch", "inherit_job"])
+            self.assertEqual(list(Path(temporary).iterdir()), [])
 
     def test_launch_artifact_precedes_tauri_without_replacing_final_gate(self):
         workflow = (smoke.desktop.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
         self.assertLess(workflow.index("name: Preserve early private desktop launch observation"),
                         workflow.index("name: Check independent desktop Rust graph and build actual Tauri Release"))
         self.assertIn("name: nexa-desktop-launch-probe-${{ github.sha }}", workflow)
-        self.assertIn("path: artifacts/verification/windows-desktop/launch-probe.json", workflow)
+        self.assertIn("artifacts/verification/windows-desktop/launch-probe-breakaway.json", workflow)
+        self.assertIn("artifacts/verification/windows-desktop/launch-probe-inherit-job.json", workflow)
         self.assertIn("success() && steps.desktop_acceptance.outcome == 'success'", workflow)
 
 

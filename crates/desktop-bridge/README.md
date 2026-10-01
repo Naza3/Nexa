@@ -47,6 +47,8 @@ Harness 仅新建唯一临时目录、临时凭据与 listen=0 配置，使用�
 
 正常验收失败仍以 exit 1 结束，但 stdout 现在是 ≤4096 字节的闭集 JSON：固定阶段、固定错误类别、白名单 bridge code、可空 i32 OS/进程退出码，以及独立 cleanup 结果。没有任意 message/stderr/路径字段；内部生命周期 child 也必须给出有界、完整且无重复/额外字段的报告。最初失败不会被 cleanup 失败覆盖。`StartupDiagnostics` 是仅 Rust 的数字观测，不属于 invoke 或前端 DTO；每个已接纳 start 尝试先重置它，退出 0 与没有退出观测不同。
 
-`nexa-desktop-harness --probe-launch` 是独立的 Windows 启动观察模式，无模型、无 Token、无 runtime 行为更改。它用与 bridge 相同的三个 Windows creation flags 启动同一可执行文件的固定内部子模式，在 250ms 窗口内观察 `tokio::signal::ctrl_c()` 是 pending、收到事件还是返回真实 OS 错误。父端观察至多 10 秒，异常后额外至多 1 秒确认自己的探针子进程退出；未确认回收时保留私有目录并报告 cleanup_confirmed=false。已无子进程或退出已确认，才清理有界私有报告。输出 kind 为 `nexa-desktop-launch-probe`；合法观察报告就 exit 0，错误观察不会被改成 success。非 Windows 仅报告 `unsupported_platform`。此探针不证明 runtime/worker 生命周期，更不替代 Windows UI 或真实推理验收。
+`nexa-desktop-harness --probe-launch breakaway` 与 `nexa-desktop-harness --probe-launch inherit_job` 是 Windows 受控对照观察，无模型、无 Token、无 runtime 行为更改。两次调用使用同一 exe、各自唯一私有临时目录。`breakaway` 保持与产品相同的三个 Windows creation flags；`inherit_job` 只移除 `CREATE_BREAKAWAY_FROM_JOB`，保留 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`。省略策略仍默认 `breakaway`，未知策略拒绝。Job 观测只读调用 `IsProcessInJob` 获取父/子当前是否在任意 Job；两策略都不更改外部 Job 限制或安全设置。
+
+输出 kind 为 `nexa-desktop-launch-probe`、`schema_version=2`，明确记录 `strategy`、父/子 `in_job`（bool/null）和各自查询的 OS 数值错误，绝不输出 Job 句柄或名称。在 250ms 窗口内观察 `tokio::signal::ctrl_c()` 是 pending、收到事件还是返回真实 OS 错误。父端观察至多 10 秒，异常后额外至多 1 秒确认自己的探针子进程退出；未确认回收时保留私有目录并报告 `cleanup_confirmed=false`。已无子进程或退出已确认，才清理有界私有报告。合法观察报告就 exit 0；`success=true` 仅限 pending、child exit 0、所有 OS 错误空、父/子 Job 查询已确认且清理已确认。非 Windows 对两个策略分别报告 `unsupported_platform`。此探针不证明 runtime/worker 生命周期，更不替代 Windows UI 或真实推理验收。继承外部 Job 的子进程仍受其生命周期限制，不能声称超过外部宿主寿命。
 
 所有协议 key、stage/code 和枚举在 `src/bin/harness/report.rs`；Python wrapper 通过源码一致性测试防止白名单漂移。启动 flags 和 CLI `ctrl_c` 逻辑在此次诊断改动中保持不变，Windows 根因必须根据真实探针和分阶段报告确认。

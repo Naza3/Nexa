@@ -412,6 +412,55 @@ mod tests {
     }
 }
 
+pub const PROBE_KEYS: &[&str] = &[
+    "schema_version",
+    "kind",
+    "strategy",
+    "success",
+    "code",
+    "os_error",
+    "spawn_os_error",
+    "child_exit_code",
+    "signal_state",
+    "signal_os_error",
+    "parent_in_job",
+    "parent_job_os_error",
+    "child_in_job",
+    "child_job_os_error",
+    "cleanup_confirmed",
+];
+pub const LAUNCH_STRATEGIES: &[&str] = &["breakaway", "inherit_job"];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchStrategy {
+    Breakaway,
+    InheritJob,
+}
+impl LaunchStrategy {
+    pub fn parse(value: &std::ffi::OsStr) -> Option<Self> {
+        match value.to_str()? {
+            "breakaway" => Some(Self::Breakaway),
+            "inherit_job" => Some(Self::InheritJob),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Breakaway => "breakaway",
+            Self::InheritJob => "inherit_job",
+        }
+    }
+    #[cfg(windows)]
+    pub fn creation_flags(self) -> u32 {
+        use windows_sys::Win32::System::Threading::{
+            CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        };
+        let flags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS;
+        match self {
+            Self::Breakaway => flags | CREATE_BREAKAWAY_FROM_JOB,
+            Self::InheritJob => flags,
+        }
+    }
+}
 pub const PROBE_CODES: &[&str] = &[
     "observed_pending",
     "observed_signal",
@@ -429,6 +478,7 @@ pub const SIGNAL_STATES: &[&str] = &["pending", "received", "error", "not_observ
 pub struct LaunchProbeReport {
     pub schema_version: u32,
     pub kind: String,
+    pub strategy: String,
     pub success: bool,
     pub code: String,
     pub os_error: Option<i32>,
@@ -436,13 +486,18 @@ pub struct LaunchProbeReport {
     pub child_exit_code: Option<i32>,
     pub signal_state: String,
     pub signal_os_error: Option<i32>,
+    pub parent_in_job: Option<bool>,
+    pub parent_job_os_error: Option<i32>,
+    pub child_in_job: Option<bool>,
+    pub child_job_os_error: Option<i32>,
     pub cleanup_confirmed: bool,
 }
 impl LaunchProbeReport {
-    pub fn empty(code: &str) -> Self {
+    pub fn empty(code: &str, strategy: LaunchStrategy) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             kind: "nexa-desktop-launch-probe".into(),
+            strategy: strategy.as_str().into(),
             success: false,
             code: code.into(),
             os_error: None,
@@ -450,21 +505,48 @@ impl LaunchProbeReport {
             child_exit_code: None,
             signal_state: "not_observed".into(),
             signal_os_error: None,
+            parent_in_job: None,
+            parent_job_os_error: None,
+            child_in_job: None,
+            child_job_os_error: None,
             cleanup_confirmed: false,
         }
     }
+    pub fn pending_confirmed(&self) -> bool {
+        self.code == "observed_pending"
+            && self.signal_state == "pending"
+            && self.signal_os_error.is_none()
+            && self.spawn_os_error.is_none()
+            && self.os_error.is_none()
+            && self.child_exit_code == Some(0)
+            && self.parent_in_job.is_some()
+            && self.parent_job_os_error.is_none()
+            && self.child_in_job.is_some()
+            && self.child_job_os_error.is_none()
+            && self.cleanup_confirmed
+    }
     pub fn validate(&self) -> bool {
-        self.schema_version == 1
+        self.schema_version == 2
             && self.kind == "nexa-desktop-launch-probe"
+            && LAUNCH_STRATEGIES.contains(&self.strategy.as_str())
             && PROBE_CODES.contains(&self.code.as_str())
             && SIGNAL_STATES.contains(&self.signal_state.as_str())
-            && (!self.success
-                || (self.code == "observed_pending"
-                    && self.signal_state == "pending"
-                    && self.signal_os_error.is_none()
-                    && self.spawn_os_error.is_none()
-                    && self.os_error.is_none()
-                    && self.child_exit_code == Some(0)
-                    && self.cleanup_confirmed))
+            && !(self.parent_in_job.is_some() && self.parent_job_os_error.is_some())
+            && !(self.child_in_job.is_some() && self.child_job_os_error.is_some())
+            && (!self.success || self.pending_confirmed())
+    }
+    pub fn encode(&self) -> Option<Vec<u8>> {
+        if !self.validate() {
+            return None;
+        }
+        let value = serde_json::to_value(self).ok()?;
+        let object = value.as_object()?;
+        if object.len() != PROBE_KEYS.len()
+            || !object.keys().all(|key| PROBE_KEYS.contains(&key.as_str()))
+        {
+            return None;
+        }
+        let bytes = serde_json::to_vec(&value).ok()?;
+        (bytes.len() <= MAX_REPORT_BYTES).then_some(bytes)
     }
 }

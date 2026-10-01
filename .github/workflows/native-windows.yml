@@ -55,14 +55,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Independent launch-observation harness build failed' }
           # This records platform observations only. It neither starts the
           # product runtime nor substitutes for the real Release/UI gates.
-          python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --probe-launch --harness target/debug/nexa-desktop-harness.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Launch observation did not produce a valid bounded report' }
+          python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --probe-launch breakaway --harness target/debug/nexa-desktop-harness.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Breakaway launch observation did not produce a valid bounded report' }
+          python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --probe-launch inherit_job --harness target/debug/nexa-desktop-harness.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Inherited-Job launch observation did not produce a valid bounded report' }
       - name: Preserve early private desktop launch observation
         if: ${{ !cancelled() && steps.desktop_launch_probe.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nexa-desktop-launch-probe-${{ github.sha }}
-          path: artifacts/verification/windows-desktop/launch-probe.json
+          path: |
+            artifacts/verification/windows-desktop/launch-probe-breakaway.json
+            artifacts/verification/windows-desktop/launch-probe-inherit-job.json
           if-no-files-found: error
           retention-days: 7
       - name: Install fixed desktop Node toolchain

@@ -58,6 +58,11 @@ DISCOVERY_STATES = frozenset({"absent", "present", "unavailable", "not_checked"}
 PROBE_CODES = frozenset({"observed_pending", "observed_signal", "signal_registration_failed", "spawn_failed", "child_failed",
                          "timeout", "probe_io_failed", "invalid_report", "unsupported_platform"})
 SIGNAL_STATES = frozenset({"pending", "received", "error", "not_observed"})
+LAUNCH_STRATEGIES = frozenset({"breakaway", "inherit_job"})
+PROBE_KEYS = frozenset({"schema_version", "kind", "success", "code", "os_error", "spawn_os_error", "child_exit_code",
+                        "signal_state", "signal_os_error", "cleanup_confirmed", "strategy", "parent_in_job", "child_in_job",
+                        "parent_job_os_error", "child_job_os_error"})
+PROBE_REPORTS = {"breakaway": "launch-probe-breakaway.json", "inherit_job": "launch-probe-inherit-job.json"}
 
 
 def unique_object(pairs):
@@ -110,23 +115,28 @@ def bridge_failure(raw):
     return report
 
 
-def launch_probe_report(raw):
+def launch_probe_report(raw, expected_strategy=None):
     report = json_report(raw, MAX_FAILURE_BYTES)
-    fields = {"schema_version", "kind", "success", "code", "os_error", "spawn_os_error", "child_exit_code",
-              "signal_state", "signal_os_error", "cleanup_confirmed"}
-    if (set(report) != fields or type(report["schema_version"]) is not int or report["schema_version"] != 1
+    if (set(report) != PROBE_KEYS or type(report["schema_version"]) is not int or report["schema_version"] != 2
             or report["kind"] != "nexa-desktop-launch-probe" or type(report["success"]) is not bool
             or type(report["cleanup_confirmed"]) is not bool
             or type(report["code"]) is not str or report["code"] not in PROBE_CODES
-            or type(report["signal_state"]) is not str or report["signal_state"] not in SIGNAL_STATES):
+            or type(report["signal_state"]) is not str or report["signal_state"] not in SIGNAL_STATES
+            or type(report["strategy"]) is not str or report["strategy"] not in LAUNCH_STRATEGIES
+            or (expected_strategy is not None and report["strategy"] != expected_strategy)):
         raise ValueError("launch probe report schema rejected")
-    for name in ("os_error", "spawn_os_error", "child_exit_code", "signal_os_error"):
+    for name in ("os_error", "spawn_os_error", "child_exit_code", "signal_os_error", "parent_job_os_error", "child_job_os_error"):
         value = report[name]
         if value is not None and (type(value) is not int or not -(2 ** 31) <= value < 2 ** 31):
             raise ValueError("launch probe numeric field rejected")
+    for role in ("parent", "child"):
+        value = report[role + "_in_job"]
+        if value is not None and (type(value) is not bool or report[role + "_job_os_error"] is not None):
+            raise ValueError("launch probe job observation rejected")
     if report["success"] and (report["code"] != "observed_pending" or report["signal_state"] != "pending"
                               or report["child_exit_code"] != 0 or not report["cleanup_confirmed"]
-                              or any(report[name] is not None for name in ("os_error", "spawn_os_error", "signal_os_error"))):
+                              or any(report[name] is not None for name in ("os_error", "spawn_os_error", "signal_os_error", "parent_job_os_error", "child_job_os_error"))
+                              or report["parent_in_job"] is None or report["child_in_job"] is None):
         raise ValueError("launch probe success declaration rejected")
     return report
 
@@ -173,15 +183,18 @@ def checked_json(command, cwd, env, timeout, *, phase, failure_file=None):
         raise ValueError(f"{phase} success report rejected") from None
 
 
-def run_launch_probe(harness, evidence):
+def run_launch_probe(harness, evidence, strategy="breakaway"):
     # A valid observation is useful even if it records a platform failure. It
     # does not start the product, use credentials, or replace Release acceptance.
+    if strategy not in LAUNCH_STRATEGIES:
+        raise ValueError("unknown launch probe strategy")
     env = desktop.base.windows_environment(os.environ, "")
     if os.name == "nt":
         env["PATH"] = env["SYSTEMROOT"] + r"\System32;" + env["SYSTEMROOT"]
-    report = checked_json([harness, "--probe-launch"], desktop.ROOT, env, 20, phase="launch_probe")
+    report = checked_json([harness, "--probe-launch", strategy], desktop.ROOT, env, 20, phase="launch_probe")
+    launch_probe_report(json.dumps(report), expected_strategy=strategy)
     evidence.mkdir(parents=True, exist_ok=True)
-    desktop.base.write_json(evidence / "launch-probe.json", report)
+    desktop.base.write_json(evidence / PROBE_REPORTS[strategy], report)
 
 
 def run(archive, model, harness, evidence):
@@ -255,14 +268,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, default=desktop.ROOT / "dist/desktop-windows.zip")
     parser.add_argument("--model", type=Path)
-    parser.add_argument("--probe-launch", action="store_true", help="record bounded launch observations only; no product runtime or model")
+    parser.add_argument("--probe-launch", nargs="?", const="breakaway", choices=sorted(LAUNCH_STRATEGIES), help="record bounded launch observations only; no product runtime or model")
     parser.add_argument("--harness", type=Path, required=True)
     parser.add_argument("--out", type=Path, default=desktop.ROOT / "artifacts/verification/windows-desktop")
     args = parser.parse_args()
     if args.probe_launch:
         if args.model is not None:
             parser.error("launch probe does not accept a model")
-        run_launch_probe(args.harness.absolute(), args.out.absolute())
+        run_launch_probe(args.harness.absolute(), args.out.absolute(), args.probe_launch)
         return
     if args.model is None:
         parser.error("desktop package acceptance requires --model")

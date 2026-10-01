@@ -372,15 +372,25 @@ fn emit_failure(report: &FailureReport) {
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() == 1 && args[0] == "--probe-launch" {
-        let report = probe::run().await;
-        if !report.validate() {
+    if args.first().is_some_and(|arg| arg == "--probe-launch") {
+        let strategy = match args.as_slice() {
+            [_] => Some(report::LaunchStrategy::Breakaway),
+            [_, value] => report::LaunchStrategy::parse(value),
+            _ => None,
+        };
+        let Some(strategy) = strategy else {
+            emit_failure(&FailureReport::new(
+                "arguments",
+                Fault::new("invalid_arguments"),
+                Cleanup::not_needed(false),
+            ));
             std::process::exit(1);
-        }
-        println!(
-            "{}",
-            serde_json::to_string(&report).expect("primitive probe report")
-        );
+        };
+        let report = probe::run(strategy).await;
+        let Some(bytes) = report.encode() else {
+            std::process::exit(1);
+        };
+        println!("{}", std::str::from_utf8(&bytes).expect("JSON is UTF-8"));
         // A valid bounded observation is a successful probe execution, even
         // when the observed Windows registration or spawn failed.
         return;

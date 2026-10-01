@@ -111,12 +111,14 @@ class EvidenceStagingTests(unittest.TestCase):
         self.assert_rejected("windows-desktop/bridge-failure.json")
 
     def test_launch_probe_negative_observation_is_preserved(self):
-        report = {"schema_version": 1, "kind": "nexa-desktop-launch-probe", "success": False,
+        report = {"schema_version": 2, "kind": "nexa-desktop-launch-probe", "success": False,
                   "code": "signal_registration_failed", "os_error": None, "spawn_os_error": None,
-                  "child_exit_code": 0, "signal_state": "error", "signal_os_error": 6, "cleanup_confirmed": True}
-        self.put("windows-desktop/launch-probe.json", json.dumps(report))
+                  "child_exit_code": 0, "signal_state": "error", "signal_os_error": 6, "cleanup_confirmed": True,
+                  "strategy": "inherit_job", "parent_in_job": True, "child_in_job": True,
+                  "parent_job_os_error": None, "child_job_os_error": None}
+        self.put("windows-desktop/launch-probe-inherit-job.json", json.dumps(report))
         self.assertEqual(self.run_stage()["result"], "pass")
-        self.assertEqual(json.loads((self.out / "windows-desktop/launch-probe.json").read_text(encoding="utf-8")), report)
+        self.assertEqual(json.loads((self.out / "windows-desktop/launch-probe-inherit-job.json").read_text(encoding="utf-8")), report)
 
     def test_oversized_report_rejected_before_open(self):
         path = self.source / "windows-rust-tests.log"
