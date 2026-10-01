@@ -48,7 +48,7 @@ Telegram 消息获取、来源快照、分块、摘要任务与产物属于调�
 
 架构从第一天保留 Linux、macOS 和 iOS 适配边界；首个正式验收集中在 Windows 与 Android。没有设备实测的平台只能标注“构建通过”或“待验证”。
 
-首批目标设备为用户提供的 Windows Intel i5-8400 / 16GB，以及 Android 骁龙 8E5 / 12GB；准确系统、手机型号和设备参数在 T00/T07 记录。这些信息不是模型容量或性能实测结论。
+首批目标设备为用户提供的 Windows Intel i5-8400 / 16GB，以及 Android 骁龙 8E5 / 12GB。2026-10-01用户明确Windows 10优先、后续增加Windows 11，并可在构建完成后用本地电脑验收；Windows具体build、是否无开发工具及手机型号/设备参数仍须实测记录。这些信息不是模型容量或性能实测结论。
 
 ### 1.2 暂不实现
 
@@ -664,6 +664,8 @@ xtask check 要执行对应目标的编译检查与 Clippy；contract 套件验�
 网络依赖首次准备完成后，CI 使用锁文件构建。没有完整依赖缓存时不误用 offline 参数并把失败算作代码错误。
 
 ### 12.2 Windows 真实模型验证
+
+T04实现`ccb2053fe514f582f6161f9fc87ee25346aa55e4`已通过固定Windows Server 2022 CPU CI，包括临时凭据真实CLI在线导入、HTTP/SSE、50次断连恢复与关停。证据见[T04验证](docs/verification/2026-10-01-t04-http-cli.md)。以下dist路径仍属于T05发行交付；该CI不替代Windows 10本地电脑或无开发工具验收。
 
 终端 A，在项目根目录运行。`C:\models\qa-small.gguf` 要替换成 model-matrix 已记录的实际文件。
 

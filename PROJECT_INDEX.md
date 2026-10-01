@@ -40,7 +40,7 @@
 - [T03决策](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md)：独立worker、单一账本与消费lease
 - [T03验证](docs/verification/2026-10-01-t03-worker.md)：逐项记录逻辑/进程/真实模型/Windows边界
 - [T04决策](docs/decisions/0005-t04-loopback-http-and-management.md)：HTTP/CLI、分页、原子导入、服务端proof、输出预算与关停
-- [T04验证](docs/verification/2026-10-01-t04-http-cli.md)：开发逻辑/实际socket/真实模型与Windows验收分开记录
+- [T04验证](docs/verification/2026-10-01-t04-http-cli.md)：Linux开发验证、固定Windows CI212项测试/真实DACL与Job、HTTP50及平台边界分开记录
 - [T04 API](crates/runtime-api/README.md)：本机HTTP/严格文本兼容子集；[CLI](crates/runtime-cli/README.md)提供受控命令（实现/验收分别记录）
 
 ## runtime 全量路径与规划

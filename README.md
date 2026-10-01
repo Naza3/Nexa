@@ -2,7 +2,7 @@
 
 为自己的 Windows / Android 应用提供统一的本地大模型推理核心。首个业务验证场景是 Telegram 群消息摘要。
 
-当前T00–T03已完成固定Windows CPU阶段验收：Rust核心、模型存储、原生ABI、独立worker与进程隔离已落地。T04 HTTP/CLI正在独立验收；Windows发行/UI和Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
+当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；本地验收、Windows发行/UI和Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
 
 ## 交付形态
 
