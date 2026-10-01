@@ -21,6 +21,8 @@ struct Budget {
 }
 struct BudgetState {
     reserved: usize,
+    // Progress is completed lease consumption, not each partial socket write.
+    // One delta taking longer than timeout can be conservatively cancelled.
     last_progress: Instant,
     blocked_since: Option<Instant>,
     closed: bool,
@@ -49,6 +51,22 @@ impl TextPermit {
     pub fn charged_bytes(&self) -> usize {
         self.charge
     }
+    /// Reduce a live reservation after its covered transient allocations are
+    /// destroyed. Never expands, changes ledgers/operations, or reports progress.
+    pub fn shrink_to(&mut self, bytes: usize) -> bool {
+        if bytes > self.charge {
+            return false;
+        }
+        let released = self.charge - bytes;
+        self.charge = bytes;
+        let mut state = self.budget.state.lock().unwrap();
+        state.reserved = state
+            .reserved
+            .checked_sub(released)
+            .expect("permit ledger underflow");
+        self.budget.changed.notify_all();
+        true
+    }
 }
 impl Drop for TextPermit {
     fn drop(&mut self) {
@@ -69,6 +87,22 @@ pub struct EventLease {
 impl EventLease {
     pub fn event(&self) -> &RequestEvent {
         self.event.as_ref().unwrap()
+    }
+    /// Transfer the original affine reservation to a transport-owned aggregate.
+    /// The original event/text is destroyed BEFORE reducing the reservation.
+    /// A transfer is not consumer progress. No reservation can be manufactured,
+    /// expanded, rebound to another operation, or released twice by this API.
+    pub fn retain_permit(mut self, bytes: usize) -> Result<TextPermit, Self> {
+        if !self.permit.as_ref().is_some_and(|p| p.charge >= bytes) {
+            return Err(self);
+        }
+        drop(self.event.take());
+        let mut permit = self.permit.take().unwrap();
+        assert!(permit.shrink_to(bytes));
+        Ok(permit)
+    }
+    pub fn charged_bytes(&self) -> usize {
+        self.permit.as_ref().map_or(0, TextPermit::charged_bytes)
     }
     /// Compatibility boundary: taking the owned event counts as consumption.
     /// Transports should retain the lease instead, until their write completes.
@@ -189,7 +223,35 @@ impl Output {
         self.changed.notify_all();
     }
 }
+/// A non-blocking cancellation signal for transports whose receiver is owned
+/// by a blocking pump. It never calls Runtime::cancel or waits for the actor.
+#[derive(Clone)]
+pub struct DisconnectHandle {
+    output: Arc<Output>,
+}
+impl DisconnectHandle {
+    pub fn disconnect(&self) {
+        let queued = {
+            let mut state = self.output.state.lock().unwrap();
+            state.disconnected = true;
+            std::mem::take(&mut state.events)
+        };
+        {
+            let mut state = self.output.budget.state.lock().unwrap();
+            state.disconnected = true;
+            state.cancel.get_or_insert(ErrorCode::ConsumerStopped);
+            self.output.budget.changed.notify_all();
+        }
+        drop(queued);
+        self.output.changed.notify_all();
+    }
+}
 impl EventReceiver {
+    pub fn disconnect_handle(&self) -> DisconnectHandle {
+        DisconnectHandle {
+            output: self.output.clone(),
+        }
+    }
     pub fn recv_leased(&self) -> Option<EventLease> {
         let mut s = self.output.state.lock().unwrap();
         loop {
@@ -233,21 +295,8 @@ impl EventReceiver {
 }
 impl Drop for EventReceiver {
     fn drop(&mut self) {
-        let queued = {
-            let mut s = self.output.state.lock().unwrap();
-            s.disconnected = true;
-            std::mem::take(&mut s.events)
-        };
-        {
-            let mut s = self.output.budget.state.lock().unwrap();
-            s.disconnected = true;
-            s.cancel.get_or_insert(ErrorCode::ConsumerStopped);
-            self.output.budget.changed.notify_all();
-        }
-        // Never zero the aggregate ledger: external leases and in-flight permits
-        // still own their charges and release exactly once when dropped.
-        drop(queued);
-        self.output.changed.notify_all();
+        // External leases/in-flight permits retain and release their own charge.
+        self.disconnect_handle().disconnect();
     }
 }
 impl ExecutionEvents {
@@ -486,6 +535,63 @@ mod tests {
         assert_eq!(sink.cancellation_reason(), Some(ErrorCode::SlowConsumer));
         drop(permit);
         assert_eq!(receiver.buffered_bytes(), 0);
+    }
+    #[test]
+    fn disconnect_handle_wakes_transferred_receiver_and_preserves_live_lease() {
+        let (sink, receiver, rx) = stream(1);
+        let control = receiver.disconnect_handle();
+        assert!(sink.emit_reserved_text("held".into(), sink.try_reserve_text(120 * 1024).unwrap()));
+        publish(&receiver, rx.recv().unwrap());
+        let lease = receiver.recv_leased().unwrap();
+        let worker = std::thread::spawn(move || receiver.recv_leased());
+        control.disconnect();
+        assert!(worker.join().unwrap().is_none());
+        assert_eq!(sink.cancellation_reason(), Some(ErrorCode::ConsumerStopped));
+        assert_eq!(sink.buffered_bytes(), 120 * 1024);
+        drop(lease);
+        assert_eq!(sink.buffered_bytes(), 0);
+    }
+    #[test]
+    fn retained_permit_is_affine_shrink_only_and_not_fake_progress() {
+        let (sink, receiver, rx) = stream(1);
+        let scratch = sink.try_reserve_text(16 * 1024).unwrap();
+        assert!(
+            sink.emit_reserved_text("first".into(), sink.try_reserve_text(120 * 1024).unwrap())
+        );
+        let transit = sink.try_reserve_text(120 * 1024).unwrap();
+        publish(&receiver, rx.recv().unwrap());
+        let before = sink.last_consumer_progress().unwrap();
+        let lease = receiver.recv_leased().unwrap();
+        let mut retained = lease
+            .retain_permit(96 * 1024)
+            .unwrap_or_else(|_| panic!("valid transfer"));
+        assert_eq!(sink.buffered_bytes(), 232 * 1024);
+        assert_eq!(sink.last_consumer_progress().unwrap(), before);
+        assert!(!retained.shrink_to(120 * 1024));
+        assert_eq!(retained.charged_bytes(), 96 * 1024);
+        drop(transit);
+        assert_eq!(sink.buffered_bytes(), 112 * 1024);
+        assert!(retained.shrink_to(32));
+        assert_eq!(sink.buffered_bytes(), 16 * 1024 + 32);
+        drop((scratch, retained));
+        assert_eq!(sink.buffered_bytes(), 0);
+    }
+    #[test]
+    fn retained_whole_delta_counts_as_unconsumed_even_if_transport_partially_writes() {
+        let (sink, receiver, rx) = stream(1);
+        assert!(sink.emit_reserved_text(
+            "pending".into(),
+            sink.try_reserve_text(MAX_BUFFERED_TEXT_BYTES).unwrap()
+        ));
+        publish(&receiver, rx.recv().unwrap());
+        let lease = receiver.recv_leased().unwrap();
+        assert!(sink.try_reserve_text(1).is_none());
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(sink.try_reserve_text(1).is_none());
+        assert_eq!(sink.cancellation_reason(), Some(ErrorCode::SlowConsumer));
+        assert_eq!(sink.buffered_bytes(), MAX_BUFFERED_TEXT_BYTES);
+        drop(lease);
+        assert_eq!(sink.buffered_bytes(), 0);
     }
     #[test]
     fn sink_splits_utf8_without_creating_a_second_budget() {

@@ -21,7 +21,7 @@
 
 ## 当前工程入口
 
-已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
+已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/runtime-api/`、`crates/runtime-cli/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
 
 - [构建锁](docs/build-lock.md)：固定上游/工具链、实际编译参数与限制
 - [模型矩阵](docs/model-matrix.md)：真实模型与模板 hash
@@ -39,6 +39,9 @@
 - [T03 worker](crates/runtime-worker/README.md)：独立控制/写入/原生线程、信用与真实模型验证
 - [T03决策](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md)：独立worker、单一账本与消费lease
 - [T03验证](docs/verification/2026-10-01-t03-worker.md)：逐项记录逻辑/进程/真实模型/Windows边界
+- [T04决策](docs/decisions/0005-t04-loopback-http-and-management.md)：HTTP/CLI、分页、原子导入、服务端proof、输出预算与关停
+- [T04验证](docs/verification/2026-10-01-t04-http-cli.md)：开发逻辑/实际socket/真实模型与Windows验收分开记录
+- [T04 API](crates/runtime-api/README.md)：本机HTTP/严格文本兼容子集；[CLI](crates/runtime-cli/README.md)提供受控命令（实现/验收分别记录）
 
 ## runtime 全量路径与规划
 
@@ -90,7 +93,7 @@
 
 ## 验证入口的真实性
 
-当前已有 Cargo 与原生构建入口，尚无前端或 Flutter 工程。执行规格第 12 节的 check/build/api-smoke、产品 CLI 和 adb install 仍是未来命令契约；已实现的验证命令见 xtask/README.md。
+当前已有 Cargo 与原生构建入口，尚无前端或 Flutter 工程。T04已新增产品CLI和xtask api-smoke；执行规格第12节的通用check/build与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。

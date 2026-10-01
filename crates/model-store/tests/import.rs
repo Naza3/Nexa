@@ -583,3 +583,57 @@ fn failed_file_import_keeps_user_source_unchanged() {
     assert_eq!(fs::read(path).unwrap(), b"GGUFcorrupt but user-owned");
     assert_clean(&root);
 }
+
+#[cfg(unix)]
+#[test]
+fn source_symlinks_and_special_files_are_refused_without_modifying_source() {
+    use std::os::unix::fs::symlink;
+    let (root, store) = store();
+    let sources = tempfile::tempdir().unwrap();
+    let regular = sources.path().join("source.gguf");
+    let bytes = fixture(64);
+    fs::write(&regular, &bytes).unwrap();
+    let alias = sources.path().join("alias.gguf");
+    symlink(&regular, &alias).unwrap();
+    assert!(
+        store
+            .import_file(&alias, request("alias"), &ImportCancellation::default())
+            .is_err()
+    );
+    let fifo = sources.path().join("input.pipe");
+    let cpath = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: cpath is NUL-terminated and owned for this synchronous syscall.
+    assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+    let before = std::time::Instant::now();
+    assert!(
+        store
+            .import_file(&fifo, request("pipe"), &ImportCancellation::default())
+            .is_err()
+    );
+    assert!(before.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(fs::read(&regular).unwrap(), bytes);
+    assert_clean(&root);
+}
+
+#[cfg(windows)]
+#[test]
+fn dos_device_and_network_source_names_are_rejected_before_open_or_read() {
+    let (root, store) = store();
+    for source in [
+        r"NUL",
+        r"C:\NUL",
+        r"C:\NUL.gguf",
+        r"C:\COM1",
+        r"C:\CONIN$",
+        r"\\.\pipe\nexa-unopened-fixture",
+        r"\\?\GLOBALROOT\Device\Null",
+        r"\\server\share\model.gguf",
+    ] {
+        let error = store
+            .import_file(source, request("device"), &ImportCancellation::default())
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+    }
+    assert!(store.list().unwrap().is_empty());
+    assert_clean(&root);
+}

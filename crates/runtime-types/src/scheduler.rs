@@ -175,6 +175,8 @@ pub struct RuntimeStatus {
     pub active_request: Option<RequestId>,
     pub queued_jobs: usize,
     pub stopping: bool,
+    /// A registry transaction owns an actor-granted exclusive reservation.
+    pub registry_busy: bool,
     pub last_error: Option<RuntimeError>,
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

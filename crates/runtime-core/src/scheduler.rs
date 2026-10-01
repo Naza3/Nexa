@@ -7,6 +7,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
@@ -24,12 +25,33 @@ pub struct Runtime {
     handle: RuntimeHandle,
     thread: Option<JoinHandle<()>>,
 }
+/// Exclusive registry mutation reservation granted atomically by the scheduler.
+/// Keep this lease until copy/hash/registration AND partial-file cleanup finish.
+/// Dropping it is nonblocking, so cancellation cannot deadlock on the mailbox.
+pub struct RegistryLease {
+    state: Arc<RegistryLeaseState>,
+}
+struct RegistryLeaseState {
+    active: AtomicBool,
+    cancelled: AtomicBool,
+}
+impl RegistryLease {
+    pub fn cancellation_requested(&self) -> bool {
+        self.state.cancelled.load(Ordering::Acquire)
+    }
+}
+impl Drop for RegistryLease {
+    fn drop(&mut self) {
+        self.state.active.store(false, Ordering::Release);
+    }
+}
 enum Command {
     Submit(GenerationRequest, Reply<EventReceiver>),
     Load(ModelId, LoadOptions, Reply<()>),
     Unload(Reply<()>),
     Cancel(RequestId, Reply<()>),
     Status(Reply<RuntimeStatus>),
+    ReserveRegistry(Reply<RegistryLease>),
     Shutdown(Option<Reply<()>>),
 }
 impl Runtime {
@@ -101,6 +123,10 @@ impl RuntimeHandle {
     }
     pub fn status(&self) -> Result<RuntimeStatus, RuntimeError> {
         self.ask(Command::Status)
+    }
+    /// Reserve an idle registry transaction without running I/O in the actor.
+    pub fn reserve_registry(&self) -> Result<RegistryLease, RuntimeError> {
+        self.ask(Command::ReserveRegistry)
     }
     pub fn shutdown(&self) -> Result<(), RuntimeError> {
         self.ask(|reply| Command::Shutdown(Some(reply)))
@@ -231,6 +257,7 @@ struct Actor {
     cleanup_error: Option<RuntimeError>,
     idle_since: Instant,
     stopping: bool,
+    registry: Option<Arc<RegistryLeaseState>>,
     shutdown_replies: Vec<Reply<()>>,
 }
 impl Actor {
@@ -261,6 +288,7 @@ impl Actor {
             cleanup_error: None,
             idle_since: Instant::now(),
             stopping: false,
+            registry: None,
             shutdown_replies: Vec::new(),
         }
     }
@@ -284,6 +312,7 @@ impl Actor {
             }
             self.tick();
             if self.stopping
+                && !self.registry_busy()
                 && self.operation.is_none()
                 && self.active.is_none()
                 && matches!(self.state, ModelState::Unloaded | ModelState::Faulted)
@@ -310,11 +339,25 @@ impl Actor {
             active_request: self.active.as_ref().map(|j| j.request.request_id),
             queued_jobs: self.queue.len(),
             stopping: self.stopping,
+            registry_busy: self.registry_busy(),
             last_error: self.last_error.clone(),
         }
     }
     fn command(&mut self, command: Command) {
         match command {
+            Command::ReserveRegistry(reply) => {
+                let result = if let Some(err) = self.busy_error() {
+                    Err(err)
+                } else {
+                    let state = Arc::new(RegistryLeaseState {
+                        active: AtomicBool::new(true),
+                        cancelled: AtomicBool::new(false),
+                    });
+                    self.registry = Some(state.clone());
+                    Ok(RegistryLease { state })
+                };
+                let _ = reply.send(result);
+            }
             Command::Status(reply) => {
                 let _ = reply.send(Ok(self.status()));
             }
@@ -341,10 +384,19 @@ impl Actor {
             Command::Shutdown(reply) => self.begin_shutdown(reply),
         }
     }
+    fn registry_busy(&self) -> bool {
+        self.registry
+            .as_ref()
+            .is_some_and(|lease| lease.active.load(Ordering::Acquire))
+    }
     fn busy_error(&self) -> Option<RuntimeError> {
         if self.stopping {
             Some(stopped())
-        } else if self.active.is_some() || !self.queue.is_empty() || self.operation.is_some() {
+        } else if self.active.is_some()
+            || !self.queue.is_empty()
+            || self.operation.is_some()
+            || self.registry_busy()
+        {
             Some(error(ErrorCode::RuntimeBusy))
         } else {
             None
@@ -367,10 +419,12 @@ impl Actor {
         if self.stopping {
             return Err(stopped());
         }
-        if matches!(
-            self.operation,
-            Some(Operation::Unload { next: Some(_), .. })
-        ) {
+        if self.registry_busy()
+            || matches!(
+                self.operation,
+                Some(Operation::Unload { next: Some(_), .. })
+            )
+        {
             return Err(error(ErrorCode::RuntimeBusy));
         }
         if self.state == ModelState::Faulted
@@ -1001,6 +1055,9 @@ impl Actor {
             return;
         }
         self.stopping = true;
+        if let Some(lease) = &self.registry {
+            lease.cancelled.store(true, Ordering::Release);
+        }
         for job in self.queue.drain(..) {
             job.output.cancel(ErrorCode::RuntimeShutdown);
             job.terminate(Err(stopped()));
@@ -1014,6 +1071,9 @@ impl Actor {
         }
     }
     fn tick(&mut self) {
+        if !self.registry_busy() {
+            self.registry = None;
+        }
         let mut retained = VecDeque::new();
         while let Some(job) = self.queue.pop_front() {
             if let Some(reason) = job.output.reason() {
@@ -1053,6 +1113,7 @@ impl Actor {
             _ => {}
         }
         if self.operation.is_none()
+            && !self.registry_busy()
             && self.active.is_none()
             && self.queue.is_empty()
             && self.state == ModelState::Ready
@@ -1075,6 +1136,26 @@ mod ledger_tests {
         ) -> Result<CancellationHandle, RuntimeError> {
             Ok(CancellationHandle::noop())
         }
+    }
+    #[test]
+    fn vanished_reservation_receiver_releases_its_grant() {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let (events, event_receiver) = mpsc::sync_channel(32);
+        let resolver = |_id: &ModelId| Err(error(ErrorCode::ModelNotFound));
+        let mut actor = Actor::new(
+            RuntimeConfig::default(),
+            Box::new(resolver),
+            Box::new(Noop),
+            rx,
+            events,
+            event_receiver,
+        );
+        let (reply, receiver) = mpsc::channel();
+        drop(receiver);
+        actor.command(Command::ReserveRegistry(reply));
+        assert!(!actor.registry_busy());
+        actor.tick();
+        assert!(actor.registry.is_none());
     }
     #[test]
     fn stale_delta_releases_its_own_ledger_not_new_request() {

@@ -69,3 +69,10 @@ ctest --test-dir build/native-release --output-on-failure
 
 
 2026-10-01 01:47:46 UTC，T03实现`a8930494f62909cccb11876011a650d9713bc74c`的[Windows CI36801681068](https://github.com/Naza3/Nexa/actions/runs/36801681068)全部通过。新增纯Rust process-host/runtime-ipc及native runtime-worker；Windows FFI使用锁定windows-sys0.61.2。在native构建前以不存在AIR_NATIVE_DIR独立构建父端，实际Job/父退出/强杀、信用和真实双进程链路通过；仅固定Server2022/2逻辑CPU/2推理线程/context2048组合，4线程超配诊断仍60秒超时。ZIP摘要、测试数量、CRLF锁文件摘要等精确证据见[T03报告](verification/2026-10-01-t03-worker.md)。
+
+
+## T04 HTTP 依赖锁（Linux收口，Windows实际验证待执行）
+
+新增依赖已实际在Linux构建，并通过Windows MSVC all-targets交叉check；Windows实际运行仍在T04记录单独追踪。Cargo.lock固定：Axum0.8.9、Tokio1.53.1、Hyper1.11.1、hyper-util0.1.21、bytes1.12.1、http-body-util0.1.5、tower0.5.3、hmac0.12.1、subtle2.6.1、getrandom0.4.3、toml0.9.12+spec-1.1.0；Windows直接FFI使用windows-sys0.61.2（旧间接依赖另保留0.59.0）。Hyper在workspace manifest也精确锁1.11.1，Queue/writev与Bytes owner源码假设不能无验证升级。
+
+当前LF Cargo.lock SHA-256为`5df74f8dae12b0e546551fa20e087e9c0595eb3cbe6811fb2f9d18f07cfe94da`；Windows checkout换行与artifact摘要另记，不混为同一字节文件。管理CLI/API正常依赖不含engine-host/llama-adapter/runtime-worker；实际缺失native目录的独立构建结果见[T04记录](verification/2026-10-01-t04-http-cli.md)。

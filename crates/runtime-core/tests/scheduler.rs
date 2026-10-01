@@ -1002,3 +1002,75 @@ fn every_actual_load_rechecks_model_identity_validation_and_context_without_nati
         }
     }
 }
+
+#[test]
+fn registry_reservation_is_atomic_and_does_not_block_control() {
+    let h = Harness::new(config(), true);
+    let lease = h.handle.reserve_registry().unwrap();
+    assert!(h.handle.status().unwrap().registry_busy);
+    assert_eq!(
+        h.handle.reserve_registry().err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    assert_eq!(
+        h.handle.submit(request()).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    assert_eq!(
+        h.handle
+            .load(ModelId::new("other").unwrap(), LoadOptions::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    assert_eq!(h.handle.unload().unwrap_err().code, ErrorCode::RuntimeBusy);
+    assert_eq!(
+        h.handle.cancel(RequestId::new()).unwrap_err().code,
+        ErrorCode::RequestNotFound
+    );
+    assert!(!lease.cancellation_requested());
+    drop(lease);
+    assert!(!h.handle.status().unwrap().registry_busy);
+    h.finish();
+}
+
+#[test]
+fn shutdown_requests_import_cancel_and_waits_for_actual_lease_cleanup() {
+    let mut h = Harness::new(config(), true);
+    let lease = h.handle.reserve_registry().unwrap();
+    let runtime = h.runtime.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        tx.send(runtime.shutdown()).unwrap();
+    });
+    let until = Instant::now() + Duration::from_secs(2);
+    while !lease.cancellation_requested() {
+        assert!(Instant::now() < until);
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(h.handle.status().unwrap().stopping);
+    assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+    drop(lease);
+    rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+fn idle_unload_cannot_cross_registry_reservation() {
+    let mut cfg = config();
+    cfg.idle_unload = Duration::from_millis(40);
+    let h = Harness::new(cfg, true);
+    h.handle
+        .load(ModelId::new("qa-small").unwrap(), LoadOptions::default())
+        .unwrap();
+    let lease = h.handle.reserve_registry().unwrap();
+    thread::sleep(Duration::from_millis(80));
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Ready);
+    drop(lease);
+    let until = Instant::now() + Duration::from_secs(2);
+    while h.handle.status().unwrap().state != ModelState::Unloaded {
+        assert!(Instant::now() < until);
+        thread::sleep(Duration::from_millis(2));
+    }
+    h.finish();
+}

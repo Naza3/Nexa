@@ -21,6 +21,7 @@ jobs:
         shell: pwsh
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      CARGO_INCREMENTAL: '0'
       AIR_NATIVE_DIR: ${{ github.workspace }}/build/native-release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -53,6 +54,11 @@ jobs:
           if (Select-String -Path artifacts/verification/windows-process-host-dependencies.log -Pattern 'engine-host|llama-adapter|runtime-worker') { throw 'Management process links native inference dependency' }
           cargo build --locked -p process-host --bin nexa-process-harness 2>&1 | Tee-Object -FilePath artifacts/verification/windows-management-build.log
           if ($LASTEXITCODE -ne 0) { throw 'Independent management build failed' }
+          cargo tree --locked -p runtime-cli --edges normal 2>&1 | Tee-Object -FilePath artifacts/verification/windows-api-cli-dependencies.log
+          if ($LASTEXITCODE -ne 0) { throw 'HTTP management dependency graph failed' }
+          if (Select-String -Path artifacts/verification/windows-api-cli-dependencies.log -Pattern 'engine-host|llama-adapter|runtime-worker') { throw 'HTTP management links native inference dependency' }
+          cargo build --locked -p runtime-cli -p xtask 2>&1 | Tee-Object -FilePath artifacts/verification/windows-api-cli-independent-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Independent HTTP management build failed' }
       - name: Build pinned upstream and shim
         id: native_build
         run: |
@@ -135,6 +141,15 @@ jobs:
           $model = Join-Path $PWD 'models/qa-small.gguf'
           & (Join-Path $PWD 'target/debug/nexa-process-harness.exe') real $worker $model 2>&1 | Tee-Object -FilePath artifacts/verification/windows-real-process-runtime.log
           if ($LASTEXITCODE -ne 0) { throw 'Isolated management/worker real-model integration failed' }
+      - name: Verify real HTTP and CLI lifecycle with temporary credentials
+        if: ${{ !cancelled() && steps.model_identity.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --locked -p runtime-cli -p xtask
+          if ($LASTEXITCODE -ne 0) { throw 'HTTP CLI smoke tools build failed' }
+          python -X warn_default_encoding -W error::EncodingWarning scripts/run_api_smoke.py --cli target/debug/ai-runtime.exe --xtask target/debug/xtask.exe --model models/qa-small.gguf --out-dir artifacts/verification/windows-api-cli --timeout-seconds 600 --disconnect-cycles 50
+          if ($LASTEXITCODE -ne 0) { throw 'Real HTTP/CLI smoke failed; inspect its sanitized per-case report' }
       - name: Record reusable compiled-tool hashes
         id: native_manifest
         if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}

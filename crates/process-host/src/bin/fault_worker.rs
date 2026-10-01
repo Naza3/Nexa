@@ -8,10 +8,58 @@ use runtime_types::{ErrorCode, FinishReason, RuntimeError, Usage};
 use std::{
     fs,
     io::{self, BufReader, Write},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::Duration,
 };
+/// The startup-death fixture can be killed between any two syscalls. A visible
+/// final marker must therefore always contain a complete PID, never an empty
+/// file created by fs::write before its subsequent write.
+struct StagedPidMarker {
+    temporary: PathBuf,
+    destination: PathBuf,
+}
+impl StagedPidMarker {
+    fn prepare(destination: &Path, pid: u32) -> io::Result<Self> {
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let temporary = parent.join(format!(
+            ".nexa-pid-{}-{}.partial",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        // Arm cleanup only after create_new proves this fixture owns the file.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        let staged = Self {
+            temporary,
+            destination: destination.to_owned(),
+        };
+        let result = (|| {
+            file.write_all(pid.to_string().as_bytes())?;
+            file.sync_all()
+        })();
+        drop(file); // Windows publication/cleanup must not retain a writer.
+        result?;
+        Ok(staged)
+    }
+    fn publish(self) -> io::Result<()> {
+        fs::rename(&self.temporary, &self.destination)
+    }
+}
+impl Drop for StagedPidMarker {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.temporary);
+    }
+}
+fn publish_pid(destination: &Path, pid: u32) -> io::Result<()> {
+    StagedPidMarker::prepare(destination, pid)?.publish()
+}
 fn sleep_forever() -> ! {
     loop {
         thread::sleep(Duration::from_secs(60));
@@ -43,7 +91,7 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|s| s == "descendant") {
         if let Some(path) = args.get(1) {
-            fs::write(path, std::process::id().to_string()).unwrap();
+            publish_pid(Path::new(path), std::process::id()).unwrap();
         }
         sleep_forever();
     }
@@ -62,7 +110,7 @@ fn main() {
         requested_case
     };
     if let Some(path) = args.get(1) {
-        fs::write(path, std::process::id().to_string()).unwrap();
+        publish_pid(Path::new(path), std::process::id()).unwrap();
     }
     let mut input = BufReader::new(io::stdin());
     let mut output = io::stdout();
@@ -322,5 +370,38 @@ fn main() {
             }
             _ => std::process::exit(48),
         }
+    }
+}
+
+#[cfg(test)]
+mod pid_marker_tests {
+    use super::*;
+    #[test]
+    fn final_pid_marker_is_never_created_empty_or_partially_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("worker.pid");
+        let first = StagedPidMarker::prepare(&destination, 12345).unwrap();
+        assert!(!destination.exists());
+        assert_eq!(fs::read_to_string(&first.temporary).unwrap(), "12345");
+        first.publish().unwrap();
+        let replacement = StagedPidMarker::prepare(&destination, 67890).unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "12345");
+        replacement.publish().unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "67890");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn concurrent_staging_names_do_not_collide_and_abandonment_is_not_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("same-final-marker");
+        let first = StagedPidMarker::prepare(&destination, 1).unwrap();
+        let second = StagedPidMarker::prepare(&destination, 2).unwrap();
+        assert_ne!(first.temporary, second.temporary);
+        assert!(!destination.exists());
+        drop(first);
+        assert!(!destination.exists());
+        second.publish().unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "2");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
     }
 }

@@ -19,7 +19,7 @@ Windows 的 example 文件名为 `native-smoke.exe`。原生库构建配置以 `
 
 退出码：0 表示当前请求的验证范围通过；1 表示已执行的验证失败；2 表示参数/前置文件错误。读取不到文件时不会写一份伪成功报告。默认设备标签和无法测量的性能值为 `unavailable`。目标 Windows/Android 验收单独标记 `skipped`；即便在对应 OS 执行，也不能代替指定设备的完整验收。
 
-执行规格中后续阶段的 `check`、`test --suite contract`、`build`、`api-smoke` 尚未实现，调用会明确失败。现在不能用它们宣布 T02–T09 完成。
+执行规格中后续阶段的`check`、`test --suite contract`、`build`尚未实现，调用会明确失败。T04已新增api-smoke，范围与关停副作用见下节；每阶段实际验收分别记录，不能凭一条命令宣布T02–T09全完成。
 
 
 ## T02 存储与调度验证
@@ -31,3 +31,18 @@ NEXA_TEST_MODEL=/path/to/Qwen3-0.6B-Q8_0.gguf NEXA_TEST_THREADS=2 cargo test --l
 ```
 
 先重建shim版本2，`AIR_NATIVE_DIR`指向最新构建。`native-smoke`兼容校验现要求shim_version=2；新air_generate_observed保留v1生成入口。adapter真实测试分别记录至少一批prefill成功后及decode阶段取消；host真实测试把原模型复制到临时model-store并验证调度端到端。逻辑fake不能代替这些真实GGUF命令，Windows/Android状态分别记录。
+
+
+## T04 实际 HTTP/CLI smoke
+
+`cargo run --locked -p xtask -- api-smoke --base-url http://127.0.0.1:PORT --data-dir TEST_DATA --model qa-small --out artifacts/verification/api-smoke.json`
+
+必须指向本机匹配发现记录的短命测试服务。工具先验证同连接HMAC proof，再发送Bearer；独立解析JSON/SSE，报告每项pass/fail/skipped，不调用服务端DTO/编码器作测试oracle。该命令末尾执行真实shutdown并等待原实例释放，不能用于希望继续保留的生产服务。可选`--disconnect-cycles N`默认5，允许1..50，用于有限断连后恢复压力验证；任何首次失败立即停止循环且保留已记录结果。
+
+跨平台真实短命服务编排：
+
+```
+python scripts/run_api_smoke.py --cli target/debug/ai-runtime.exe --xtask target/debug/xtask.exe --model models/qa-small.gguf --out-dir artifacts/verification/windows-api-cli
+```
+
+Linux去掉.exe并使用实际Cargo target路径。先构建runtime-cli、xtask及runtime-worker；wrapper只创建临时私有data/credentials，端口0，由实际CLI在线导入固定模型，smoke显式cpu/context2048/threads2/batch128，最后确认服务退出。模型hash事先由baseline-verify/固定fixture核验；报告继续记录sha256。shared开发环境将TMPDIR设到空间充足的专用临时根，避免/tmp tmpfs容量污染测试。

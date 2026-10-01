@@ -107,15 +107,57 @@ impl ModelStore {
     ) -> Result<ModelManifest> {
         request.validate()?;
         cancel.check()?;
+        #[cfg(windows)]
+        validate_local_source_path(source.as_ref())?;
         let metadata = fs::symlink_metadata(source.as_ref()).map_err(io_error)?;
         if !metadata.file_type().is_file() {
             return Err(RuntimeError::invalid("model source must be a regular file"));
         }
-        let source = fs::File::open(source.as_ref()).map_err(io_error)?;
-        if !source.metadata().map_err(io_error)?.is_file() {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        // The preflight metadata check alone is insufficient: a source can be
+        // replaced by a symlink/FIFO between metadata and open. Never block on
+        // opening a special file or follow a final-component reparse point.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
+        let source = options.open(source.as_ref()).map_err(io_error)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
+            // SAFETY: the owned File keeps this valid handle alive during the
+            // query. Do not read a DOS character device or named pipe.
+            if unsafe { GetFileType(source.as_raw_handle().cast()) } != FILE_TYPE_DISK {
+                return Err(RuntimeError::invalid("model source must be a disk file"));
+            }
+        }
+        let opened = source.metadata().map_err(io_error)?;
+        if !opened.is_file() {
             return Err(RuntimeError::invalid("model source must be a regular file"));
         }
-        self.import_reader(source, metadata.len(), request, cancel)
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if opened.file_attributes()
+                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+                != 0
+            {
+                return Err(RuntimeError::invalid(
+                    "model source must not be a reparse point",
+                ));
+            }
+        }
+        self.import_reader(source, opened.len(), request, cancel)
     }
 
     /// Imports a stream whose exact byte length is known. This keeps URI/Android
@@ -703,6 +745,49 @@ fn cache_error() -> RuntimeError {
         ErrorCode::RuntimeFaulted,
         "model verification cache was poisoned",
     )
+}
+
+#[cfg(windows)]
+fn validate_local_source_path(path: &Path) -> Result<()> {
+    use std::path::Prefix;
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix)
+                if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) =>
+            {
+                return Err(RuntimeError::invalid(
+                    "model source must be a local disk path",
+                ));
+            }
+            Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                let stem = name
+                    .split(['.', ':'])
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches(' ')
+                    .to_ascii_uppercase();
+                let device = matches!(
+                    stem.as_str(),
+                    "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+                ) || ["COM", "LPT"].iter().any(|prefix| {
+                    stem.strip_prefix(prefix).is_some_and(|suffix| {
+                        matches!(
+                            suffix,
+                            "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                        )
+                    })
+                });
+                if device {
+                    return Err(RuntimeError::invalid(
+                        "model source must not be a DOS device path",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

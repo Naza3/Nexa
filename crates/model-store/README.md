@@ -30,7 +30,7 @@ Unix 同步文件与可 fsync 的目录；Windows 文件在 rename 前同步，�
 - 共享 ID 语法为 `[a-z0-9][a-z0-9._-]{0,63}`；存储额外拒绝尾点与 Windows 设备名（含扩展名），避免跨平台路径歧义
 - 数据根目录及受控子目录/文件拒绝符号链接；内部文件系统操作使用 cap-std 目录能力约束，拒绝 `relative_file` 偏离 `model.gguf`
 - 数据目录必须是应用私有目录。进程锁协调正常客户端；不是隔离同 UID 恶意写入者的安全边界，fingerprint 不是抵御伪造时间戳的认证机制，也不宣称跨本地恶意并发替换不存在 TOCTOU
-- 原始来源只读复制，不移动、不覆盖、不删除；默认错误文本不暴露完整用户路径
+- 原始来源只读复制，不移动、不覆盖、不删除；默认错误文本不暴露完整用户路径。T04对源打开采用Unix O_NOFOLLOW|O_NONBLOCK或Windows OPEN_REPARSE_POINT并后验拒绝reparse/非普通文件，避免特殊文件打开竞态阻塞；HTTP仅显式本地普通文件
 - 解析限制：64 MiB header、单字符串 ≤ 1 MiB、metadata/tensors 各 ≤ 100,000、数组 ≤ 1,000,000；拒绝嵌套数组、重复键/张量名、非法 UTF-8、超界/溢出/重叠/截断张量
 - 当前结构解析支持 F32/F16/BF16、常用 Q4/Q5/Q8 与 K-quants、整数和 F64 tensor 布局；未知 GGML tensor 布局保守拒绝，不随意推断字节长度
 - GGUF 结构通过仅表示可安全登记，不表示可推理。只有固定模型矩阵的 hash、大小、qwen3、Q8_0、模板 hash、40960 原生 context 和 2048 默认 context 全部匹配，才记录当前精确 llama commit 与验收证据

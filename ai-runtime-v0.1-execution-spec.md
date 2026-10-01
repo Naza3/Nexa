@@ -360,7 +360,8 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 | 路由 | 行为 |
 |---|---|
 | `GET /healthz` | 无鉴权，仅返回 API 进程是否存活；不暴露模型/路径 |
-| `GET /v1/models` | 已注册且可供使用的模型，标准 list/data 结构 |
+| `GET /v1/models` | 可供使用的模型，标准 list/data 结构；有界 limit/after 分页 |
+| `GET /runtime/models` | 鉴权安全管理摘要，包含未验证模型；有界 limit/after 分页 |
 | `POST /v1/chat/completions` | 文本 messages，流式或非流式 |
 | `GET /runtime/status` | 模型状态、队列数、活动 ID、后端、错误与内存指标 |
 | `GET /runtime/devices` | 本构建后端与设备探测结果 |
@@ -370,7 +371,11 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 | `POST /runtime/requests/{id}/cancel` | 标记取消；存在活动请求返回 202，未知 ID 返回 404 |
 | `POST /runtime/shutdown` | 停止接收新请求、取消任务、回收 worker、退出 |
 
+T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。`/v1/models`不返回未验证模型；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
+
 所有 `/v1/*` 和 `/runtime/*` 使用 `Authorization: Bearer <token>`。只接受本机回环连接；v0.1 不提供 `0.0.0.0` 监听开关。令牌由 init 生成，日志不得输出，读取权限限当前用户。
+
+healthz可选HMAC-SHA256 challenge/proof headers用于CLI在发送Bearer前认证服务端；MAC绑定版本域、实际instance UUID、随机32字节nonce及accept socket实际client/server端点，CLI必须在同一固定HTTP/1连接恒时验证，不能依赖公开nonce、重连或重定向。health正文仍仅表存活。详见[T04决策](docs/decisions/0005-t04-loopback-http-and-management.md)。
 
 HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确配置的可信来源，并验证 Host。桌面 UI 通过 Tauri Rust 命令代理调用本机 API，令牌不进入前端脚本。不要用允许任意 origin 的 CORS 设置解决 UI 接入问题。
 
@@ -425,6 +430,8 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 }
 ```
 
+非流式完整JSON（含转义和封套）上限96KiB，使用同一输出预算的紧凑permit转移；超限取消并返回400 `invalid_request_error` / `response_too_large` / param=`stream`，建议流式或减小输出，不截断、落盘或重放。
+
 示例时间戳、token 数和回复仅示范格式；实现必须使用实际统计。prompt_tokens 包括模板 token；completion_tokens 包括生成过程中采样的终止/stop token，文本字符数不能代替 token 数。
 
 ### 7.4 SSE
@@ -469,7 +476,7 @@ stop 检测必须保留可能跨 chunk 匹配的尾部，命中的 stop 文本�
 | 504 | queue_timeout、load_timeout、execution_timeout |
 | 500 | internal_error；不向客户端暴露原始文件路径与栈 |
 
-runtime/models/import 的成功结果至少包括 id、size_bytes、sha256。runtime/load 请求至少包括 model、backend、context_size、gpu_layers；未提供的加载参数来自配置。管理操作的忙碌判断与调度器在同一处完成。
+runtime/models/import 的成功结果至少包括 id、size_bytes、sha256。runtime/load 请求至少包括 model、backend、context_size、gpu_layers；未提供的加载参数来自配置。管理操作的忙碌判断与调度器在同一处完成。导入须获得actor原子排他RegistryLease，复制/hash在有界blocking任务中，实际提交或失败清理结束后才释放；期间status/cancel保持响应，shutdown取消并等待lease。API普通同步调用、控制和存储采用独立有界blocking容量，不能堵塞Tokio reactor或把取消排在长导入之后。状态与devices未知指标为null/unavailable。导入若已提交但最后持久性确认失败，核对注册事实、更新安全摘要并返回500 `import_committed_durability_unconfirmed`，提示先查询列表；不能冒充未注册或自动重试。
 
 ## 8. CLI 与两端 UI
 
@@ -674,7 +681,7 @@ $aiData = Join-Path $env:LOCALAPPDATA 'ai-runtime-test'
 $aiExe = Join-Path $PWD 'dist/windows-x64-cpu/ai-runtime.exe'
 $aiData = Join-Path $env:LOCALAPPDATA 'ai-runtime-test'
 $apiToken = (Get-Content -Raw (Join-Path $aiData 'secrets/api-token')).Trim()
-& $aiExe --data-dir $aiData load qa-small --backend cpu --context 4096
+& $aiExe --data-dir $aiData load qa-small --backend cpu --context 2048 --threads 2 --batch 128
 & $aiExe --data-dir $aiData status
 curl.exe -sS -f 'http://127.0.0.1:18080/healthz'
 curl.exe -sS -f -H "Authorization: Bearer $apiToken" 'http://127.0.0.1:18080/v1/models'
@@ -702,12 +709,13 @@ curl.exe -sS -N -f -H "Authorization: Bearer $apiToken" -H 'Content-Type: applic
 
 预期看到多个 SSE 事件、一个 finish chunk 和 `[DONE]`。只看到 HTTP 200 或一个完整回复不能证明流式实现正确。
 
-运行自动 API 验收，工具从指定数据目录读取令牌，不把令牌写入报告：
+当前固定矩阵真实smoke使用context2048、两线程、batch128；core按每个模型的执行上限校验，允许已覆盖的较小逻辑context。通用配置默认4096不变，直接使用默认值会明确返回context错误，不自动降级。API未设置threads时取min(4,available_parallelism)，查询失败1，显式用户值保持；来源与超配见状态/决策。
+
+运行自动 API 验收，工具从指定数据目录读取令牌，不把令牌写入报告；套件最后关停该短命测试服务并验证实例退出：
 
 ```powershell
 cargo run --locked -p xtask -- api-smoke --base-url 'http://127.0.0.1:18080' --data-dir $aiData --model qa-small --out 'artifacts/verification/windows-cpu.json'
-& $aiExe --data-dir $aiData unload
-& $aiExe --data-dir $aiData stop
+# api-smoke 已包含卸载、最终关停和确认实例退出
 Remove-Item -LiteralPath $requestFile
 ```
 

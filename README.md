@@ -2,7 +2,7 @@
 
 为自己的 Windows / Android 应用提供统一的本地大模型推理核心。首个业务验证场景是 Telegram 群消息摘要。
 
-当前已开始 T00/T01 工程：最小 Rust workspace、自有 C++ ABI、真实模型原生探针及验证命令已落地。Windows/Android 产品、HTTP、调度和 UI 尚未完成；当前验证边界以 [PROJECT_STATE.md](PROJECT_STATE.md) 为准。
+当前T00–T03已完成固定Windows CPU阶段验收：Rust核心、模型存储、原生ABI、独立worker与进程隔离已落地。T04 HTTP/CLI正在独立验收；Windows发行/UI和Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
 
 ## 交付形态
 

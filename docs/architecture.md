@@ -117,6 +117,8 @@ queue、load、execution 分别计时。模板 token 计入输入；不得静默
 - 两端：错误码、usage、请求终态和模型状态语义一致；HTTP 使用其兼容映射，原生桥可订阅公共事件。
 - 接入产物：Windows runtime 包与最小 HTTP 示例；Android 原生库、Flutter 桥及独立接入示例。Rust crate 的版本与分发方式在工程阶段确定。
 
+T04 本机鉴权、原子注册预约、同连接服务端proof和96KiB非流式上限见[ADR0005](decisions/0005-t04-loopback-http-and-management.md)。HTTP/CLI管理进程仅依赖Store/core/ProcessHost，不链接native。
+
 HTTP 正常 SSE 在 Started 后才开始；Accepted/Queued/Loading 是内部/原生事件，不意味着当前 HTTP 已提供全量任务事件流。调用方先生成 request_id，以便响应头返回前取消；当前 runtime/status 仅提供聚合状态与活动 ID。
 
 ### 5.2 摘要需要的契约扩展

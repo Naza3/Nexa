@@ -1,4 +1,5 @@
 //! Developer verification only. Never claims Windows/Android acceptance on a Linux host.
+mod api_smoke;
 mod gguf;
 mod smoke;
 
@@ -22,7 +23,8 @@ Native smoke only: --timeout-seconds N (per case, default 180), --threads N (1..
 Threads: --threads > NEXA_TEST_THREADS > min(4, available_parallelism)\n\
 Exit codes: 0 verified requested scope; 1 verification failed; 2 invalid command/input.\n\
 Baseline verification checks metadata and hashes, not inference or platform acceptance.\n\
-check, test --suite contract, build, api-smoke are not implemented at T00/T01.";
+api-smoke --base-url URL --data-dir PATH --model ID --out REPORT [--disconnect-cycles 1..50] (T04; ends by shutting down the test instance).\n\
+check, test --suite contract and build are not implemented yet.";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -105,6 +107,9 @@ fn main() -> ExitCode {
     if args.is_empty() || args == ["--help"] || args == ["-h"] || args == ["help"] {
         println!("{HELP}");
         return ExitCode::SUCCESS;
+    }
+    if args.first().is_some_and(|value| value == "api-smoke") {
+        return api_smoke::main(&args[1..]);
     }
     let options = match parse(args) {
         Ok(options) => options,

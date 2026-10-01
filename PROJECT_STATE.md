@@ -11,7 +11,7 @@
 ## 已有工程事实
 
 - 原始远程提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168` 已通过 GitHub 原始对象精确重建本地 Git；初始 tree/commit SHA 一致，未创建替代历史
-- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过，无HTTP、UI或移动工程
+- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并正在独立验收，仍无UI或移动工程
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
@@ -35,7 +35,7 @@
 | T01 原生链路 | 已完成 | 最小阶段门槛通过 Windows 真实中英文流式、重复加载释放、模板/特殊 token、取消和恢复；A08独立prefill已补Linux/Windows观测 |
 | T02 调度与存储 | 已完成 | 代码bc316da6及固定Windows 2线程/context2048组合通过；A05–A12按逻辑测试/真实链路分别留证，不代表HTTP或进程隔离 |
 | T03 PC worker | 已完成 | a8930494在Windows CI36801681068通过：Job父子/后代回收、五秒强杀、单账本IPC、144项Rust+5项真实模型及独立无native父端链；范围见T03记录 |
-| T04 HTTP/CLI | 未开始 | T03门槛已满足；下一步HTTP/SSE、鉴权与CLI，当前harness不是HTTP服务 |
+| T04 HTTP/CLI | 待验证 | Linux源码冻结：214测试/fmt/clippy、38API分层测试、5旧真实回归、无native CLI及真实HTTP50全部通过（89pass/9skip）；MSVC交叉check通过，Windows实际CI待执行；见T04记录 |
 | T05–T06 Windows发行与UI | 未开始 | 仍需PC全链路及独立验收机 |
 | T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
@@ -54,6 +54,6 @@
 ## 下一步
 
 1. 保持T02已通过的固定Windows证据，T03改动继续开发分支，不合并或部署
-2. T03 Windows门槛已通过，推进T04 HTTP/SSE、鉴权、CLI；保留[T03记录](docs/verification/2026-10-01-t03-worker.md)中的平台/线程/内存和异常清理边界
+2. 发布T04开发分支并执行Windows CPU CI；Linux最终证据见[T04记录](docs/verification/2026-10-01-t04-http-cli.md)，保留[T03记录](docs/verification/2026-10-01-t03-worker.md)的平台/线程/内存和异常清理边界
 3. Windows CI仍不替代i5-8400、T05独立无开发工具验收机或Android真机；平台/支持矩阵不能泛化
 4. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案

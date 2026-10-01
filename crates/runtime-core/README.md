@@ -1,13 +1,13 @@
 # runtime-core
 
-T02 的单一调度 actor，不链接 llama.cpp，也不依赖 HTTP、Tokio 或 Flutter 类型。`Runtime::spawn(config, resolver, executor)` 启动一个控制线程；`RuntimeHandle` 提供同步的 submit/load/unload/cancel/status/shutdown。将来 Tokio API 应在 blocking 边界调用，不能在异步 reactor 上等待同步 load。T03子进程执行器由独立process-host组装；T04 HTTP尚未实现。
+T02 的单一调度 actor，不链接 llama.cpp，也不依赖 HTTP、Tokio 或 Flutter 类型。`Runtime::spawn(config, resolver, executor)` 启动一个控制线程；`RuntimeHandle` 提供同步的 submit/load/unload/cancel/status/shutdown。T04 Tokio API在有界blocking边界调用，控制与存储容量独立，不能在异步reactor等待同步load。T03子进程执行器由独立process-host组装。
 
 ## 不变量
 
 - 只有 actor 修改 selected_model、状态、活动槽和 FIFO。默认一个活动请求 + 八个等待请求；Android配置一个等待请求
 - 首次有效请求选择模型；其他模型返回 ModelConflict，不自动置换。显式切换只在没有请求时按 Unload ACK → Load 串行执行
 - 每次真正Load（含idle重载和显式恢复Unload后）重新调用ModelResolver，不能把selected里的旧validated/path当永久许可。模型指纹/验证/ID/context变化时不向native投递Load，保留选择和原context参数，外部重新验证后由显式Load恢复
-- ModelResolver 只做有界元数据/路径查找。导入、完整 SHA-256 校验和缓存刷新在进入 actor 前执行；未知或超过已验证上下文的模型不能加载
+- ModelResolver 只做有界元数据/路径查找。导入、完整SHA-256校验和缓存刷新在启动前或actor原子RegistryLease预约下的blocking任务执行；未知或超过已验证上下文的模型不能加载
 - Executor::start 必须快速返回，调用方不能在其中同步推理。只有独立 CancellationHandle 可跨线程；所有原生创建和释放归执行器线程
 - queue/load/execution 分开计时，execution 包括 prepare/prefill/decode。取消和超时只设置控制意图；活动生成槽一直保留到 executor 清理后的终态 ACK
 - 公共事件有逐请求递增 seq，且只有一个终态。精确 prepare 通过后发布 Started；消费者断开后仍在内部终结，但不强行交付
@@ -23,6 +23,10 @@ T02 的单一调度 actor，不链接 llama.cpp，也不依赖 HTTP、Tokio 或 
 - Output与预算分别持有，permit只持预算，避免队列中的permit形成Arc环。断开只清队列，外部lease与在途permit继续持账直到各自释放
 
 GenerationRequest 的 options 全部显式传入；`GenerationOptions::default()` 仍是通用512 token。`RuntimeConfig::android()` 覆盖调度/加载参数，移动桥在T07应用未提供请求预算时的256默认值；当前没有移动HTTP/UI默认值实现。
+
+T04注册预约：`RuntimeHandle::reserve_registry`只在actor判定无活动/队列/操作/关停时授予排他lease；持有期间拒绝submit/load/unload并推迟idle unload，status/cancel保持响应。lease Drop非阻塞，shutdown通知取消且等待真实存储清理完成。Faulted下导入不会改变执行器故障或恢复它。
+
+T04输出适配：`DisconnectHandle`允许HTTP在receiver被移动到blocking事件泵后仍非阻塞取消；`EventLease::retain_permit`销毁事件后仅收缩旧预算，不创建新账本或伪报socket消费。core消费进展仍以完整delta/lease释放为粒度。
 
 ## 测试
 
