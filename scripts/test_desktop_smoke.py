@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 import subprocess
+import sys
+import time
 import re
 import tempfile
 import unittest
@@ -42,13 +44,9 @@ class DesktopSmokeFailureTests(unittest.TestCase):
         }
 
     def call(self, result, failure_file, phase="bridge_harness"):
-        with mock.patch.object(smoke.subprocess, "run", return_value=result) as run:
-            try:
-                return smoke.checked_json(["fixed-executable"], Path("."), {}, 10,
-                                          phase=phase, failure_file=failure_file)
-            finally:
-                self.assertEqual(run.call_args.kwargs["stderr"], subprocess.DEVNULL)
-                self.assertFalse(run.call_args.kwargs["check"])
+        with mock.patch.object(smoke, "bounded_process", return_value=result):
+            return smoke.checked_json(["fixed-executable"], Path("."), {}, 10,
+                                      phase=phase, failure_file=failure_file)
 
     def test_nonzero_valid_failure_is_saved_and_remains_failure(self):
         report = self.failure()
@@ -122,10 +120,60 @@ class DesktopSmokeFailureTests(unittest.TestCase):
                     OSError("private path"), UnicodeDecodeError("utf-8", b"\xff", 0, 1, "private output")]
         for phase in ("desktop_diagnose", "bridge_harness"):
             for failure in failures:
-                with self.subTest(phase=phase, error_type=type(failure).__name__), mock.patch.object(smoke.subprocess, "run", side_effect=failure):
+                with self.subTest(phase=phase, error_type=type(failure).__name__), mock.patch.object(smoke, "bounded_process", side_effect=failure):
                     with self.assertRaisesRegex(ValueError, phase) as error:
                         smoke.checked_json(["fixed-executable"], Path("."), {}, 10, phase=phase)
                     self.assertNotIn("private", str(error.exception))
+
+    def test_real_child_exit_does_not_wait_for_descendant_stdout_writer(self):
+        # The grandchild intentionally inherits the regular stdout handle and
+        # exits by itself after this assertion's bound. It creates no runtime.
+        script = ("import subprocess,sys; "
+                  "subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)'], "
+                  "stdin=subprocess.DEVNULL,stdout=sys.stdout,stderr=subprocess.DEVNULL,close_fds=True); "
+                  "print('{\"success\":true}',flush=True)")
+        started = time.monotonic()
+        observed = smoke.checked_json([sys.executable, "-c", script], Path.cwd(), None, 5, phase="desktop_diagnose")
+        self.assertEqual(observed, {"success": True})
+        self.assertLess(time.monotonic() - started, 2.5)
+
+    def test_real_timeout_does_not_drain_descendant_stdout_writer(self):
+        script = ("import subprocess,sys,time; "
+                  "subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)'], "
+                  "stdin=subprocess.DEVNULL,stdout=sys.stdout,stderr=subprocess.DEVNULL,close_fds=True); "
+                  "print('{\"success\":true}',flush=True);time.sleep(10)")
+        started = time.monotonic()
+        with self.assertRaisesRegex(ValueError, "desktop_diagnose timed out; cleanup not confirmed"):
+            smoke.checked_json([sys.executable, "-c", script], Path.cwd(), None, 0.5, phase="desktop_diagnose")
+        self.assertLess(time.monotonic() - started, 2.5)
+
+    def test_timeout_targets_owned_child_and_has_finite_reap_wait(self):
+        process = mock.Mock()
+        process.wait.side_effect = [subprocess.TimeoutExpired("private", 2), subprocess.TimeoutExpired("private", 1)]
+        with mock.patch.object(smoke.subprocess, "Popen", return_value=process) as popen:
+            with self.assertRaisesRegex(ValueError, "owned child exit unconfirmed; cleanup not confirmed"):
+                smoke.checked_json(["fixed-harness"], Path("."), {}, 2, phase="bridge_harness")
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_args_list, [mock.call(timeout=2), mock.call(timeout=1)])
+        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.DEVNULL)
+        self.assertTrue(popen.call_args.kwargs["close_fds"])
+        self.assertNotEqual(popen.call_args.kwargs["stdout"], subprocess.PIPE)
+
+    def test_regular_file_capture_rejects_oversize_without_unbounded_read(self):
+        class FakeProcess:
+            returncode = 0
+
+            def wait(self, timeout):
+                return self.returncode
+
+        def spawn(*args, **kwargs):
+            kwargs["stdout"].write(b"x" * 65)
+            return FakeProcess()
+
+        with mock.patch.object(smoke, "MAX_JSON_BYTES", 64), mock.patch.object(smoke.subprocess, "Popen", side_effect=spawn):
+            with self.assertRaisesRegex(ValueError, "desktop_diagnose report exceeded bounded size"):
+                smoke.checked_json(["fixed-harness"], Path("."), {}, 1, phase="desktop_diagnose")
 
     def test_numeric_limits_and_known_optional_values_are_preserved(self):
         report = self.failure()
@@ -150,7 +198,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
 
     def test_launch_negative_observation_is_saved_without_claiming_product_pass(self):
         report = self.probe()
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(smoke.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(report), "")):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], 0, json.dumps(report), "")):
             smoke.run_launch_probe(Path("fixed-harness"), Path(temporary))
             saved = json.loads((Path(temporary) / "launch-probe-breakaway.json").read_text(encoding="utf-8"))
             self.assertEqual(saved, report)
@@ -184,7 +232,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
 
     def test_launch_strategy_cannot_be_mixed_or_silently_fallback(self):
         report = self.probe()
-        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(smoke.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(report), "")) as run:
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], 0, json.dumps(report), "")) as run:
             with self.assertRaisesRegex(ValueError, "schema rejected"):
                 smoke.run_launch_probe(Path("fixed-harness"), Path(temporary), "inherit_job")
             self.assertEqual(run.call_args.args[0], ["fixed-harness", "--probe-launch", "inherit_job"])

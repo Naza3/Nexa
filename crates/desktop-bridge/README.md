@@ -45,7 +45,7 @@ Harness 仅新建唯一临时目录、临时凭据与 listen=0 配置，使用�
 
 ## 启动失败诊断（T06 CI 第二轮后）
 
-正常验收失败仍以 exit 1 结束，但 stdout 现在是 ≤4096 字节的闭集 JSON：固定阶段、固定错误类别、白名单 bridge code、可空 i32 OS/进程退出码，以及独立 cleanup 结果。没有任意 message/stderr/路径字段；内部生命周期 child 也必须给出有界、完整且无重复/额外字段的报告。最初失败不会被 cleanup 失败覆盖。`StartupDiagnostics` 是仅 Rust 的数字观测，不属于 invoke 或前端 DTO；每个已接纳 start 尝试先重置它，退出 0 与没有退出观测不同。
+正常验收失败仍以 exit 1 结束，但 stdout 现在是 ≤4096 字节的闭集 JSON：固定阶段、固定错误类别、白名单 bridge code、可空 i32 OS/进程退出码，以及独立 cleanup 结果。没有任意 message/stderr/路径字段；内部生命周期 child 也必须给出有界、完整且无重复/额外字段的报告。内部 child 的 stdio 全部为 null，在私有数据根下的一次性 UUID 目录原子发布单次报告；父端确认自己拥有的 child 已退出后只读有界 regular file，不等待 stdout EOF 或 reader thread join。child deadline 保持 90 秒，异常后仅额外至多 1 秒确认回收；kill 失败数值单独保留，无法确认 child 退出时强制 cleanup=unconfirmed 并保留私有目录。内部报告和临时凭据不会进入产品或上传目录。最初失败不会被 cleanup 失败覆盖。`StartupDiagnostics` 是仅 Rust 的数字观测，不属于 invoke 或前端 DTO；每个已接纳 start 尝试先重置它，退出 0 与没有退出观测不同。
 
 `nexa-desktop-harness --probe-launch breakaway` 与 `nexa-desktop-harness --probe-launch inherit_job` 是 Windows 受控对照观察，无模型、无 Token、无 runtime 行为更改。两次调用使用同一 exe、各自唯一私有临时目录。`breakaway` 保留历史失败的三个 Windows creation flags 对照；`inherit_job` 只移除 `CREATE_BREAKAWAY_FROM_JOB`，保留 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，与当前产品策略一致。省略策略仍默认 `breakaway`，未知策略拒绝。Job 观测只读调用 `IsProcessInJob` 获取父/子当前是否在任意 Job；两策略都不更改外部 Job 限制或安全设置。
 

@@ -154,16 +154,53 @@ def extraction_root():
         shutil.rmtree(root)
 
 
+class ChildExitUnconfirmed(Exception):
+    """Only the verifier-owned direct child was targeted; reap was not proven."""
+
+
+def bounded_process(command, cwd, env, timeout):
+    # A descendant may keep an inherited stdout writer after the direct child
+    # exits. A pipe/communicate (including run's Windows timeout cleanup) can
+    # therefore wait forever for EOF. Regular-file reads never await pipe EOF.
+    with tempfile.TemporaryFile(mode="w+b") as output:
+        process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                   stdout=output, stderr=subprocess.DEVNULL, close_fds=True)
+        try:
+            process.wait(timeout=timeout)
+        except (subprocess.TimeoutExpired, OSError):
+            # Terminate only this owned verifier child, never a discovered PID
+            # or its runtime. Never use Popen's context-manager unbounded wait.
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=1)
+            except (subprocess.TimeoutExpired, OSError):
+                raise ChildExitUnconfirmed() from None
+            raise
+        output.seek(0)
+        # Success reports may be larger than failures. The caller applies the
+        # stricter 4 KiB failure/probe policy before parsing or saving them.
+        raw = output.read(MAX_JSON_BYTES + 1)
+    if len(raw) > MAX_JSON_BYTES:
+        raise ValueError("process report exceeds bounded size")
+    return subprocess.CompletedProcess(command, process.returncode, raw.decode("utf-8", errors="strict"))
+
+
 def checked_json(command, cwd, env, timeout, *, phase, failure_file=None):
     if phase not in {"desktop_diagnose", "bridge_harness", "launch_probe"}:
         raise ValueError("unknown desktop acceptance phase")
     try:
-        result = subprocess.run([str(arg) for arg in command], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8", errors="strict", timeout=timeout, check=False)
+        result = bounded_process([str(arg) for arg in command], cwd, env, timeout)
+    except ChildExitUnconfirmed:
+        raise ValueError(f"{phase} owned child exit unconfirmed; cleanup not confirmed") from None
     except subprocess.TimeoutExpired:
         raise ValueError(f"{phase} timed out; cleanup not confirmed") from None
     except (OSError, UnicodeError):
         raise ValueError(f"{phase} launch or output decoding failed") from None
+    except ValueError:
+        raise ValueError(f"{phase} report exceeded bounded size") from None
     if result.returncode:
         # Never echo stderr, raw JSON or arbitrary messages. A nonzero harness
         # result remains a failure even when its structured evidence is valid.

@@ -107,7 +107,7 @@
 
 ## 验证入口的真实性
 
-当前已有 Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及用户Win10 build19044 / i5-8400短验已通过，T05按用户缩定范围完成，A20无开发工具/离线与长期稳定性延后验证、T06实现与Linux检查就绪、Windows CI与用户原生UI待验；执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
+当前已有 Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及用户Win10 build19044 / i5-8400短验已通过，T05按用户缩定范围完成，A20无开发工具/离线与长期稳定性延后验证、T06实现与Windows原生构建/桌面诊断已过、完整Release bridge及用户原生UI仍待验；执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。

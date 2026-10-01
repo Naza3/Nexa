@@ -53,6 +53,8 @@ jobs:
           $env:AIR_NATIVE_DIR = Join-Path $PWD 'deliberately-absent-native-libraries'
           cargo build --locked -p desktop-bridge --bin nexa-desktop-harness
           if ($LASTEXITCODE -ne 0) { throw 'Independent launch-observation harness build failed' }
+          cargo test --locked -p desktop-bridge --bin nexa-desktop-harness lifecycle::tests:: -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-transport-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Bounded desktop harness report transport tests failed' }
           # This records platform observations only. It neither starts the
           # product runtime nor substitutes for the real Release/UI gates.
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --probe-launch breakaway --harness target/debug/nexa-desktop-harness.exe

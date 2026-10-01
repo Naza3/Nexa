@@ -13,7 +13,7 @@
 ## 已有工程事实
 
 - 原始远程提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168` 已通过 GitHub 原始对象精确重建本地 Git；初始 tree/commit SHA 一致，未创建替代历史
-- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建与UI操作待验证；仍无移动工程
+- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建/桌面诊断已通过，完整Release bridge与UI操作尚未通过；仍无移动工程
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
@@ -41,7 +41,7 @@
 | T03 PC worker | 已完成 | a8930494在Windows CI36801681068通过：Job父子/后代回收、五秒强杀、单账本IPC、144项Rust+5项真实模型及独立无native父端链；范围见T03记录 |
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；用户Win10 build19044 / i5-8400短验已通过且包identity一致；按用户最新范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
-| T06 Windows UI | 进行中 | 纯Rust bridge、React三页、Tauri安全壳和独立桌面打包/CI已实现；Linux根263测试、前端36测试、真实bridge独立进程生命周期通过；Windows原生构建/桌面包与用户UI验收待执行，不能称已完成 |
+| T06 Windows UI | 进行中 | bridge/React/Tauri/桌面包已实现；真实Windows原生构建、PE/许可、源码clean、桌面诊断与旧T05完整验收通过；c8dff8的CI36855675437最终bridge步骤15分钟超时，未产出完整生命周期报告；仅修验收工具的继承stdout/EOF有界等待，完整Windows复验及用户UI仍待完成 |
 | T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | 本轮Linux仅开发探针，不是扩展平台发布 |
@@ -60,7 +60,7 @@
 
 1. T00–T04阶段证据已收口，继续授权开发分支，不合并或部署
 2. T05源码6a7e9d0的Windows CI36829233039已通过，产品/工具ZIP已独立复核并供用户本地验收；用户Windows10 / i5-8400报告已回，产品与验收器identity匹配该交付包
-3. T06代码与Linux检查已就绪，运行新增Windows CI核对真实Tauri构建/PE/许可/中文空格解压bridge，再供用户Win10原生UI导入/聊天/停止/两种关闭语义验收；不把bridge harness当窗口已验
+3. T06真实Windows Tauri构建/PE/许可/中文空格桌面诊断已通过；修复验收工具等待后代继承stdout造成的无界EOF依赖，重跑完整Release bridge确认两种关闭语义后，再供用户Win10原生UI导入/聊天/停止/关闭验收；不把探针或bridge harness当窗口已验
 4. 无开发工具、实际离线和长期稳定性列为后期验证；VC预装与RAM未知，Windows11/Android另行实测，不泛化当前支持证据
 5. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
 
@@ -75,4 +75,8 @@
 
 [契约](docs/t06-desktop-contract.md)、[ADR0007](docs/decisions/0007-t06-desktop-shell-boundary.md)、[T06验证](docs/verification/2026-10-01-t06-desktop.md)记录当前范围。`apps/desktop/`前端独立npm锁，`src-tauri/`独立Cargo锁，根新增`desktop-bridge`；15个固定IPC命令、main本地ACL/CSP、一次性原生选模与原生写剪贴板、已安装WebView2检测、异步统一关闭均已有源码。
 
-已实际完成：Linux根workspace263pass/0fail/6ignored、bridge26测试、真实模型bridge独立进程默认关闭仍可proof/同时退出清理；前端锁重装、typecheck/lint/build、36测试和npm audit 0；壳共享模块5测试/clippy、Python44测试（2Windows-only skip）、Windows目标无native推理依赖和原许可闭包预检。Linux交叉构建因缺llvm-rc停在资源阶段，未通过完整原生构建；云浏览器127.0.0.1预览被客户端阻止，未完成视觉交互。首次新增Windows CI及用户Win10 UI结果尚待取得。T05旧发行范围和后期验证决定不变。
+已实际完成：前端锁重装、typecheck/lint/build、36测试和npm audit 0；Linux真实模型bridge两种独立进程退出语义通过。Windows已多次完成真正Tauri Release、源码clean、PE/原许可闭包、完整T05包16项及HTTP89pass/9skip、50/50/50断流；实际桌面诊断包验证通过，已装WebView2为131.0.2903.86。早期同EXE对照观察宿主Job下BREAKAWAY返回OS5、继承Job则正常启动/退出且Ctrl+C pending；生产仅移除BREAKAWAY，保留DETACHED/NEWGROUP，不改Job/权限或CLI信号。
+
+最新源码c8dff8a8992f714ee2b121f6a134da47a0d03537的CI36855675437在2026-10-01 12:30:05 UTC最终桌面bridge步骤被15分钟平台时限终止；前23步骤通过，但bridge-real、bridge-failure与acceptance三份报告均缺失，没有产品包发布。独立合成复现发现验收harness的reader.join/EOF与Python Windows communicate在后代持writer时可无界等待；现只修测试工具为私有有界文件报告/直接子进程有限wait和reap，原时限/生产flags/最终gate不变。修复后Linux根283测试通过、包装Python66测试（2Windows-only skip）通过；仍须新源码完整Windows Release bridge复验。
+
+云浏览器127.0.0.1预览曾被客户端阻止，未完成视觉交互；用户Win10原生选模/剪贴板/关闭事件仍待实际操作。Nexa不创建kill-on-UI-close的runtime Job，尊重外部宿主Job/会话整体终止，不承诺脱离其生命周期。T05旧发行范围及用户延后无开发工具、离线、长期稳定性的决定不变。

@@ -145,7 +145,15 @@ pub const LOCK_STATES: &[&str] = &["free", "held", "unavailable", "not_checked"]
 pub const DISCOVERY_STATES: &[&str] = &["absent", "present", "unavailable", "not_checked"];
 
 #[derive(Clone, Debug)]
+pub struct ReapObservation {
+    pub confirmed: bool,
+    pub kill_failed: bool,
+    pub os_error: Option<i32>,
+}
+#[derive(Clone, Debug)]
 pub struct Fault {
+    // Internal only. Never part of the external failure protocol.
+    pub child_reap: Option<ReapObservation>,
     pub code: &'static str,
     pub bridge_code: Option<String>,
     pub os_error: Option<i32>,
@@ -157,6 +165,7 @@ impl Fault {
     pub fn new(code: &'static str) -> Self {
         debug_assert!(CODES.contains(&code));
         Self {
+            child_reap: None,
             code,
             bridge_code: None,
             os_error: None,
@@ -321,6 +330,7 @@ impl FailureReport {
             .find(|code| *code == self.code)
             .unwrap_or("child_report_invalid");
         Fault {
+            child_reap: None,
             code,
             bridge_code: self.bridge_code,
             os_error: self.os_error,

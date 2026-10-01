@@ -1,5 +1,8 @@
 //! Explicit acceptance executable: uniquely-created temporary credentials only.
 //! Both success and failure stdout are closed, sanitized JSON protocols.
+#[path = "harness/lifecycle.rs"]
+mod lifecycle;
+use lifecycle::lifecycle_child;
 #[path = "harness/probe.rs"]
 mod probe;
 #[path = "harness/report.rs"]
@@ -17,9 +20,7 @@ use runtime_cli::instance::{Discovery, InstanceLock};
 use runtime_types::{Message, Role};
 use serde_json::{Value, json};
 use std::{
-    io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::Arc,
     time::Duration,
 };
@@ -59,94 +60,15 @@ async fn start(bridge: &DesktopBridge) -> Result<desktop_bridge::DesktopSnapshot
         .await
         .map_err(|error| Fault::startup(error, bridge.startup_diagnostics()))
 }
-/// Only launches this executable's fixed internal mode. The pipe is drained by
-/// a bounded reader, never copied to a report. Runtime stdio stays detached.
-async fn lifecycle_child(runtime: &Path, root: &Path, stop: bool) -> Result<()> {
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg("--lifecycle-child")
-        .arg("--runtime")
-        .arg(runtime)
-        .arg("--data-dir")
-        .arg(root)
-        .arg(if stop { "stop" } else { "keep" })
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| Fault {
-            code: "child_spawn_failed",
-            ..Fault::io(error)
-        })?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Fault::new("child_report_invalid"))?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .take((report::MAX_REPORT_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) => (),
-            Err(error) => break Err(Fault::io(error)),
-        }
-        if tokio::time::Instant::now() >= deadline {
-            break Err(Fault::new("timeout"));
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    };
-    if status.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-    } // owned test UI child only, never runtime PID
-    let bytes = reader
-        .join()
-        .map_err(|_| Fault::new("child_report_invalid"))?
-        .map_err(Fault::io)?;
-    let status = status?;
-    if bytes.len() > report::MAX_REPORT_BYTES {
-        return Err(Fault {
-            child_exit_code: status.code(),
-            ..Fault::new("child_report_invalid")
-        });
-    }
-    if status.success() {
-        if std::str::from_utf8(&bytes).ok().map(str::trim) != Some(report::CHILD_SUCCESS) {
-            return Err(Fault {
-                child_exit_code: status.code(),
-                ..Fault::new("child_report_invalid")
-            });
-        }
-        return Ok(());
-    }
-    let report = FailureReport::parse(&bytes).map_err(|error| Fault {
-        child_exit_code: status.code(),
-        ..error
-    })?;
-    if !report.stage.starts_with("child_")
-        || report.child_stage.is_some()
-        || report.cleanup.status != "not_needed"
-    {
-        return Err(Fault {
-            child_exit_code: status.code(),
-            ..Fault::new("child_report_invalid")
-        });
-    }
-    Err(report.into_child_fault(status.code()))
-}
 async fn child_main(args: Vec<std::ffi::OsString>) -> std::result::Result<(), Box<FailureReport>> {
     let mut stage = "child_arguments";
     let result: Result<()> = async {
-        if args.len() != 6
+        if args.len() != 8
             || args[0] != "--lifecycle-child"
             || args[1] != "--runtime"
             || args[3] != "--data-dir"
             || !(args[5] == "keep" || args[5] == "stop")
+            || lifecycle::report_directory(&args).is_none()
         {
             return Err(Fault::new("invalid_arguments"));
         }
@@ -343,7 +265,10 @@ async fn run(
     };
     let value = match outcome {
         Ok(value) => value,
-        Err(fault) => return Err(Box::new(FailureReport::new(stage, fault, cleanup))),
+        Err(fault) => {
+            lifecycle::apply_reap_observation(&fault, &mut cleanup);
+            return Err(Box::new(FailureReport::new(stage, fault, cleanup)));
+        }
     };
     if cleanup.status != "confirmed" {
         return Err(Box::new(FailureReport::new(
@@ -402,12 +327,15 @@ async fn main() {
         return;
     }
     if args.first().is_some_and(|s| s == "--lifecycle-child") {
-        match child_main(args).await {
-            Ok(()) => println!("{}", report::CHILD_SUCCESS),
-            Err(report) => {
-                emit_failure(&report);
-                std::process::exit(1);
-            }
+        let Some(directory) = lifecycle::report_directory(&args) else {
+            std::process::exit(2);
+        };
+        let outcome = child_main(args).await;
+        if lifecycle::publish_report(&directory, &outcome).is_err() {
+            std::process::exit(2);
+        }
+        if outcome.is_err() {
+            std::process::exit(1);
         }
         return;
     }
