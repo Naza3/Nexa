@@ -2,7 +2,7 @@
 
 为自己的 Windows / Android 应用提供统一的本地大模型推理核心。首个业务验证场景是 Telegram 群消息摘要。
 
-当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；T05正在实现私有CPU便携包与独立验收工具；本地验收、Windows发行阶段门槛/UI和Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
+当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；T05私有CPU便携包与独立验收工具已通过固定Windows Server2022 CI及用户Windows10 build19044 / i5-8400短验；用户批准将无开发工具、离线运行和长期稳定性延后验证，T05按当前范围已完成，T06 Windows UI开始开发；Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
 
 ## 交付形态
 
@@ -14,7 +14,7 @@
 | 验证 UI | Tauri 桌面 / Flutter 移动最小界面 | 导入模型、生成、取消和检查状态 |
 | 摘要参考接入 | 来源标准化、分块、证据引用与任务编排 | 调用 Nexa；不侵入推理核心 |
 
-首版引擎采用固定 commit 的 llama.cpp；支持范围由模型、量化、模板、后端和设备实测组合决定。Windows i5-8400 / 16GB 与 Android 骁龙 8E5 / 12GB 是目标设备，不是已验收结果。
+首版引擎采用固定 commit 的 llama.cpp；支持范围由模型、量化、模板、后端和设备实测组合决定。Windows i5-8400 / 16GB 与 Android 骁龙 8E5 / 12GB 是目标设备。用户i5-8400的Windows10短验已通过，本次RAM未核实；其机器有开发工具且测试联网，Android仍未实测。
 
 ## 阅读入口
 
@@ -28,7 +28,7 @@
 
 先按 [构建锁](docs/build-lock.md) 准备原生依赖，再使用 [当前验证命令](xtask/README.md) 运行单测与真实模型 smoke。精确模型来源及 hash 见 [模型矩阵](docs/model-matrix.md)。
 
-`cargo test --locked --workspace`、`xtask baseline-verify/native-smoke/api-smoke` 和 `ai-runtime` HTTP/管理CLI已有实现。T05新增Windows原生开发机上的 `cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu` 与独立 `nexa-acceptance.exe`；构建/运行状态见[T05验证](docs/verification/2026-10-01-t05-windows-package.md)，不能把命令存在当成Windows10目标机验收通过。
+`cargo test --locked --workspace`、`xtask baseline-verify/native-smoke/api-smoke` 和 `ai-runtime` HTTP/管理CLI已有实现。T05新增Windows原生开发机上的 `cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu` 与独立 `nexa-acceptance.exe`；构建/运行状态见[T05验证](docs/verification/2026-10-01-t05-windows-package.md)，用户Windows10短验与CI结果分别留证，A20无开发工具/离线与长期稳定性按用户要求留作后期验证，不阻塞当前UI开发。
 
 产品包为 `windows-x64-cpu.zip`，独立验收工具为 `acceptance-tools.zip`，各自附SHA-256。解压后可用工具的 `--model <现有固定GGUF> --out <报告.json>` 做短验；产品路径变化时显式 `--package <目录>`。不要求用户安装开发工具，不包含模型、UI、用户数据或长期凭据。详见[便携包说明](packaging/windows-x64-cpu/README.md)和[独立验收工具](xtask/PACKAGE_ACCEPTANCE.md)。
 

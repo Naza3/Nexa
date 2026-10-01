@@ -47,7 +47,7 @@ ctest --test-dir build/native-release --output-on-failure
 - 原生回调是同步借用，允许decode步骤间共享256KiB预算内可取消、有时限等待；T02已实现4KiB分片、10秒慢消费者和三类deadline。T03已实现独立worker、单一信用账本与消费lease，固定Windows Job/强杀验收通过；详见ADR0004和T03报告
 - 目前仅接入 Qwen3 架构及能明确关闭思考的模板；验收支持以精确模型矩阵为准
 - seed `UINT32_MAX` 沿用锁定上游的随机哨兵，其他 seed 在相同环境尽力复现；不承诺跨设备逐字相同
-- 原生GGUF的非ASCII路径由上游`ggml_fopen`转为宽字符；该模型路径场景尚未单独Windows实测。T03已实际验证worker可执行文件及参数的空格/Unicode路径，二者不混同
+- 原生GGUF的非ASCII路径由上游`ggml_fopen`转为宽字符；T05 Release CI已用中文/空格源模型及受控导入目录实际加载，用户Win10另实测含中文但无空格的源路径与中文/空格导入目录。T03的worker可执行文件及参数路径验证仍单独留证
 
 ## Windows CI
 
@@ -78,7 +78,7 @@ ctest --test-dir build/native-release --output-on-failure
 T04基线LF Cargo.lock SHA-256为`5df74f8dae12b0e546551fa20e087e9c0595eb3cbe6811fb2f9d18f07cfe94da`；Windows checkout换行与artifact摘要另记，不混为同一字节文件。管理CLI/API正常依赖不含engine-host/llama-adapter/runtime-worker；实际缺失native目录的独立构建结果见[T04记录](verification/2026-10-01-t04-http-cli.md)。
 
 
-## T05 Windows Release 便携构建（实际 CI 待验证）
+## T05 Windows Release 便携构建（固定 Server2022 CI 与Win10短验通过，A20待验）
 
 T05保留同一锁定源码/CPU范围和既有`build/native-release`，不并排重做另一套native workflow。CMake显式VS2022/x64/Release/`MultiThreadedDLL`（/MD），关闭`GGML_BACKEND_DL`及CUDA/Vulkan/Metal/OpenMP/隐式native优化。每个配置生成`air-native-Release.txt`，验证精确source/build/架构/CRT/选项/archive路径；原始绝对身份只留build，不进入分发manifest。Rust首次缺失native目录独立构建CLI，worker再链接该已核验Release树。
 
@@ -86,4 +86,6 @@ T05保留同一锁定源码/CPU范围和既有`build/native-release`，不并排
 
 manifest/SHA256SUMS、许可原文/清单、ZIP/hash分别核对。包内不包含模型、数据、测试凭据、PDB或验收程序；验收器为独立ZIP且自带所需CRT。CI要求产品与工具manifest均为GITHUB_SHA且project_dirty=false；解压后重新校验identity与字节hash。精确交付与法律边界见[ADR0006](decisions/0006-t05-windows-portable-package.md)，结果见[T05报告](verification/2026-10-01-t05-windows-package.md)。
 
-T05新增Windows FFI/工具依赖与最终Cargo.lock的精确摘要待父级整合后按实际值记录；以上T04的锁hash只指其历史基线，不表示工作树锁文件未变。CI证据通过`scripts/stage_ci_evidence.py`闭合允许列表输出，保留模型/模板/fixture/工具/失败身份，不再上传任意artifacts目录正文。
+T05源码6a7e9d0的Cargo.lock LF SHA-256为`4c7533fa5c496faafc6c74bf4b222120d6dd7331dcfe80ec230337e02a8ecf20`；Windows checkout的CRLF hash为`826a1be2f952d934a85c525c240780f0223755f8390e64e58da9fa506f2883cb`，已从同一LF源换行转换精确复算。以上T04的锁hash只指其历史基线。CI证据通过`scripts/stage_ci_evidence.py`闭合允许列表输出，保留模型/模板/fixture/工具/失败身份，不再上传任意artifacts目录正文。
+
+第五轮[CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)实际成功组合：Server2022 build10.0.20348.5622 / image20260927.320.1 / AMD EPYC7763 / 2逻辑CPU；VS2022 Enterprise17.14.37710.0、MSVC19.44.35229.0、VCTools14.44.35207、SDK10.0.26100.0。CRT来自所选实例Redist14.44.35112，DLL文件版14.44.35211.0，产品3个/工具1个app-local DLL均由固定系统PowerShell5.1验证Valid/Microsoft。产品/工具源manifest均6a7e9d0、tree498d0a9、dirty=false；详细hash/体积/真实Release验收见T05报告。此CI安装环境不代表用户拥有相同VS edition，也不代替Win10无开发工具/离线验收。

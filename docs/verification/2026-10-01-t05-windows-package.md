@@ -1,6 +1,6 @@
 # T05 Windows x64 CPU 便携包验证
 
-日期：2026-10-01。状态：实现进行中，Windows Release 包/目标机尚待实际证据。T04 已验收源为 `ccb2053fe514f582f6161f9fc87ee25346aa55e4`，文档基线为 `15c5d33d5005de8563f074a342291ac6331d1c73`。本记录不把已有 T04 CI 当成 T05 结果。
+日期：2026-10-01。状态：T05按用户最新缩定范围已完成；源码6a7e9d0的Windows Server2022 Release包及独立验收已通过，用户Windows10 build19044 / i5-8400短验报告已回且通过；A20无开发工具/离线与长期稳定性经用户批准移至后期验证，仍无通过证据，T06开始。T04 已验收源为 `ccb2053fe514f582f6161f9fc87ee25346aa55e4`，文档基线为 `15c5d33d5005de8563f074a342291ac6331d1c73`。本记录不把已有 T04 CI 当成 T05 结果。
 
 ## 范围与固定输入
 
@@ -13,10 +13,10 @@
 | T00–T04 已有固定 Windows 基线 | 已通过既有阶段 | [T04 记录](2026-10-01-t04-http-cli.md)，CI36816604494；不是本轮 Release 包 |
 | 包/验收代码与 Linux 逻辑回归 | 最终开发聚合通过 | Rust236pass/6ignored、native identity3pass；Python父级30pass后边界修补全32pass，真实模型另行分层记录 |
 | CI 证据 staging 安全回归 | 通过局部验证 | 下节实际命令与结果；不证明 Windows 产品可运行 |
-| Windows Release 构建、PE/许可/manifest/hash/ZIP | 进行中，CI打包初始化失败 | 前序VsDevCmd/fixture问题已有后续验证；最新run36826425239在CRT签名cmdlet模块加载失败，未有可交付Release ZIP |
-| 中文空格新解压目录、空 CWD、受限 PATH 真实 CLI/API | 未执行 | 必须跑解压产品与解压独立工具，不能用 debug/仓库二进制替代 |
-| Windows 10 i5-8400 /16GB 本地短验 | 未执行 | 需本地实际 OS build 与包/工具/report identity |
-| 无开发工具独立机器、VC预装状态、实际离线 | 未验证 | PATH 清理、Server2022 或机器角色声明不足以证明 |
+| Windows Release 构建、PE/许可/manifest/hash/ZIP | 固定CI通过 | 6a7e9d0 / run36829233039；产品/工具ZIP已下载并独立逐文件/hash/PE复核，前四轮失败保留 |
+| 中文空格新解压目录、空 CWD、受限 PATH 真实 CLI/API | 固定CI通过 | 解压Release产品16项包检查通过、HTTP89pass/9skip、断流50/50/50，实际回收/清理与包未修改通过 |
+| Windows 10 i5-8400 本地短验 | 已通过短验 | workstation build19044 / 6逻辑CPU；16包pass/2skip、HTTP44pass/9skip、断流5/5/5；identity匹配交付包，RAM未核实 |
+| 无开发工具独立机器、VC预装状态、实际离线 | 未验证 | 用户声明安装过大部分开发工具且测试联网；VC预装未知，PATH清理不证明A20 |
 | Windows 11 / Android /长期内存与性能 | 未执行 | 不在本轮短包 CI 结论内 |
 
 ## 已执行的证据工具验证
@@ -29,7 +29,7 @@
 
 实际留存 `artifacts/verification/t05-staging-compatibility/evidence-index.json`；这是局部工具回归，不是 T05 Windows CI 产物。
 
-## Windows CI 执行契约（结果待填）
+## Windows CI 执行契约（第五轮实际结果见末节）
 
 原有 T00–T04 所有检查保留。新增：
 
@@ -39,13 +39,13 @@
 4. 要求两个产品/工具manifest在打包目录与解压目录均project_commit=GITHUB_SHA、project_dirty=false，解压manifest与原始hash一致，全部SHA256SUMS与实际文件数一致；验收exit0、short_package_checks_passed=true、product.project_commit=GITHUB_SHA、machine_role_user_declared=ci、HTTP断流requested/attempted/passed均50，产品/模型/CWD/导入模型data目录的路径观测均有非ASCII及空格；A20 必须仍明确 unverified
 5. 精确上传产品ZIP/hash、独立工具ZIP/hash、存在的独立PDB和脱敏允许列表证据；失败也保留安全报告。无 GitHub Release
 
-待获得实际 run 后补：精确 commit/tree/run/job、OS build/CPU/工具链、测试数量/exit、native复用证据、产品/工具ZIP大小及SHA、manifest/hash、PE闭包、许可清单、真实短验结果与所有skip/unverified。未经实际日志不得填入通过或零失败。
+下面保留每轮原始结果，第五轮记录已补齐精确commit/tree/run/job、OS/CPU/工具链、实际测试与产品身份/闭包/许可/报告。用户Windows10短验已回，另见末节；A20无开发工具/离线继续保持未验证。
 
 ## 本地验收与结束条件
 
 用户已表示包构建好后可在本地验收，未授权远控。取得同一源提交的两个ZIP与各自hash，解压为相邻 `windows-x64-cpu` / `acceptance-tools`；只需执行独立验收器并提供现有固定模型和报告路径，不需 Cargo/Python/VS。默认产品目录可自动定位，移到别处时显式 `--package`。工具只创建自有临时data/测试token，并在结束时关停清理；不初始化长期真实凭据。
 
-系统实际 build 由工具观测；开发工具/VC预装/离线条件需实际观察或明确用户声明分别记录，不能根据 PATH 或OS名称推断。短检查过后T05保持待验证，直到独立机器/目标设备门槛有对应真实证据；T06不提前开始。异常不要求修改安全设置或从任意DLL站补文件。
+系统实际 build 由工具观测；开发工具/VC预装/离线条件需实际观察或明确用户声明分别记录，不能根据 PATH 或OS名称推断。原门槛要求独立无开发工具/离线证据；2026-10-01用户在目标机短验通过后明确批准将这两项和长期稳定性延后，当前T05据缩定范围收口并继续T06，未验证项保留不改写。异常不要求修改安全设置或从任意DLL站补文件。
 
 ## Linux 实现层回归（不是 Windows 包结论）
 
@@ -192,3 +192,75 @@ T05保持进行中。Windows10目标机/A20/独立离线无开发工具条件仍
 新增前置真实Windows测试先在原继承环境显式导入模块，记录实际底层错误的脱敏诊断，不输出完整环境。随后用固定系统host验证系统PowerShell可执行文件的有效Microsoft签名，同时要求未签名临时ps1被拒绝；该ps1不会被执行。测试由现有早期Python发现步骤收集，仍先于完整native/Release编译。
 
 父级实际执行Python全套：**38项收集，36 passed / 2 Windows专用 skipped**，exit0；diff检查通过。PS7模块搜索路径污染继续仅列为候选，待下一Windows实际诊断确认；不能将本次Linuxskip、新代码存在或旧日志到达签名检查解释为Windows签名验证/Release包已通过。
+
+## 第五轮 Windows CI：固定Release包与独立验收通过
+
+源码 `6a7e9d0f0bb851e38306089905d9368865bf3fd4`，tree `498d0a9235245f352bdcc738f9cfb9a364b1a9b4`，[run 36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)，attempt1 / job `110261790429`，07:14:57 UTC启动，07:39:43 UTC终态success。全部必需步骤成功；failure-only原生诊断上传按设计skip，实际存在的三个PDB另行上传。没有创建GitHub Release、合并或部署。
+
+### 继承环境诊断与完整回归
+
+前置Python **38 passed，无skip**，真实Windows cmd与签名正/负用例已执行。原继承环境在系统PowerShell5.1.20348.5622显式Import Security实际失败：`System.Management.Automation.RuntimeException`，ID `FormatXmlUpdateException,Microsoft.PowerShell.Commands.ImportModuleCommand`；扩展类型`System.Security.AccessControl.ObjectSecurity`的`AuditToString`、`AccessToString`、`Sddl`成员重复。固定系统宿主、隔离子PSMODULEPATH并绝对加载系统模块后，系统文件Valid/Microsoft和未签名拒绝通过。旧失败的具体模块来源路径仍未记录，不把“PS7路径污染”升格为已确定根因。
+
+实际环境：Windows Server2022 build10.0.20348.5622，image20260927.320.1，AMD EPYC7763 /2逻辑CPU；Rust1.98.1，CMake4.4.3，VS2022 Enterprise17.14.37710.0，MSVC19.44.35229.0，VCTools14.44.35207，SDK10.0.26100.0。原生Release/CTest、identity3项、无native管理构建、fmt、strict clippy、**234 Rust passed /0 failed /6 ignored**、五项独立旧真实GGUF及进程链路均通过。debug HTTP保持89pass/9skip、50/50/50，wrapper56.297秒、所有退出0且无强清理。上游2线程基线通过，4线程超配诊断仍failed原样保存。
+
+### 实际交付包身份与体积
+
+两份manifest均记录上述精确commit/tree，`project_dirty=false`、空diff hash；项目版本0.1.0、Windows x64/CPU/Release、HTTP/worker协议1、shim2、固定llama commit。模型不入包，通用context4096默认未改。
+
+| 产物 | ZIP bytes | 解压 bytes | 内层ZIP SHA-256 |
+| --- | ---: | ---: | --- |
+| windows-x64-cpu.zip | 4,936,580 | 14,203,784 | `e1ee3051d06dde4a27ee722fa43911ae37657cfa55df99f7666935ede47603c1` |
+| acceptance-tools.zip | 1,516,822 | 5,314,002 | `982ae4265a999cc65455f7e6590a2731a87d6d865da8cbc1e5b281dcc87e35ce` |
+
+产品EXE分别4,456,448和6,370,816bytes，合计10,827,264bytes；产品app-local CRT共732,064bytes，UI/model为0、PDB不在包。产品manifest SHA为`ff6f560a8cbee87a022c3da0c65d1427161bf81909f9af025e46dcd942b5dce4`；工具manifest为`a9dff28d4f27f9299335401031b5b4ca94deb71f8cc7fd9b5c96a1811fed9359`。验收器EXE2,531,328bytes、SHA`5e3639a42eab3893f9ad430bfeb9b8050185158df48a37adb84b6a22cfe8a169`，与报告verifier一致。
+
+下载后独立核对ZIP外部hash、全部manifest文件大小/hash与完整清单、SUMS映射（产品196项，工具195项）。Linux直接调用打包器最后的SUMS文本重排会遇到Windows/Linux Path排序大小写规则差异；本轮以规范化记录映射逐项复核，全部字节相同，未修改原包或重写校验文件。
+
+产品含195项payload和186项许可原文索引；工具194项payload和190项许可原文索引。没有模型、用户data/token、测试脚本或PDB混入；已检查已知私人路径/凭据标记，不宣称这是通用未知秘密检测。项目自有许可仍仅限已授权内部开发分发边界。
+
+### PE闭包、CRT来源与签名
+
+产品需要`vcruntime140.dll`、`msvcp140.dll`、`vcruntime140_1.dll`；工具独立需要`vcruntime140.dll`。均来自所选VS实例`VC/Redist/MSVC/14.44.35112/x64/Microsoft.VC143.CRT/`，文件/产品版14.44.35211.0；真实系统PowerShell5.1记录`signature_status=Valid`，签名者Microsoft Windows Software Compatibility Publisher / Microsoft Corporation。没有从System32复制运行库。
+
+| DLL | bytes | SHA-256 |
+| --- | ---: | --- |
+| vcruntime140.dll | 124,544 | `d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066` |
+| msvcp140.dll | 557,728 | `0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9` |
+| vcruntime140_1.dll | 49,792 | `1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f` |
+
+下载后用独立GNU objdump重读两包共7份PE，每份AMD64、实际import集合与manifest完全相同，delay import目录均为0；app-local闭包分别完整，无工具替产品补DLL。签名Valid来自Windows实际验证记录并以对应文件hash绑定；Linux复核没有冒称独立执行Windows信任链验证。
+
+### 真正解压Release验收
+
+`package-acceptance.json`明确short_package_checks_passed=true，product匹配上述manifest hash，verifier匹配工具EXE hash。**16项包检查pass /0fail /2范围skipped**，嵌套HTTP **89pass /0fail /9skipped**；断流requested/attempted/passed=**50/50/50**。真实CLI初始化/重复init不轮换、启动、在线导入、列表、固定CPU/context2048/threads2/batch128/gpu0加载、worker session、卸载、生成/SSE/usage/FIFO/取消/stop均通过。
+
+路径布尔观测确认产品EXE、源模型、自有空CWD、自有data/导入模型目录四类全部包含非ASCII和空格。源模型未修改/未hardlink，产品进程清理环境且不借工具目录DLL。服务实际退出、实例标记消失/锁释放、自有临时data清理和运行后产品完整性复验均pass。报告实际OS为RtlGetVersion build20348/product_type3/windows-server，machine-role声明ci；PATH工具不可见、开发工具/VC预装/离线字段仍unknown，A20明确unverified。
+
+### Artifact与证据归档
+
+| GitHub artifact | ID | 外层ZIP bytes | GitHub/下载复算SHA-256 |
+| --- | --- | ---: | --- |
+| 产品 | 11147880158 | 4,684,001 | `d0a20f483d785e97c4940e35134b9c78e37d3f0a74695c1048c93f674edcea39` |
+| 独立工具 | 11147455846 | 1,264,785 | `71c7492f5850a32808d336806a7e45c5ce74c328a80bb33a3a04d4363a1235ea` |
+| 符号 | 11147326502 | 2,907,640 | `57f31f5404c01232339002e94f611f6244225584610b82ad6d664c3ca16e7b9e` |
+| 脱敏证据 | 11147735361 | 49,965 | `83b4d80fd79b062ecfefd5578df4d847f4a770e9f098bb1936a67af37b600974` |
+
+PDB为ai_runtime3,321,856、ai_runtime_worker5,738,496、nexa_acceptance2,560,000bytes，独立保存。29份stage报告逐hash核对，真实Release验收报告SHA`be1eca1564deeb33e202e66172676a8eb9c88b61a2bb8f8d378a5d0792e22a1c`；build-result SHA`83cb216502fe24fd6f8ce49f40d8397c59811bc884f5967e9b968e8863b87216`。归档前缀`artifacts/verification/t05-windows-36829233039*`，其中`-delivery-inputs.json`列内层原包/hash/manifest/report位置，`-independent-audit.json`保存Linux逐文件/SUMS映射与独立PE import复核。
+
+07:45 UTC，主代理独立复核后把两包文件与指南/来源组合为共395项文件的原生附件交付用户，组合ZIP SHA`d4e626d17fb4432c96c62e40dcc45add4f066a22fa13804fcf9b42e77649ae6b`；该交付记录来自主代理，不是额外一次Windows运行。交付时T05状态转为**待验证**；随后用户Windows10短验结果见下节，独立无开发工具/离线证据仍待补；Windows11、完整A01–A26、长期内存/目标性能和T06均未提前完成。
+
+## 用户 Windows 10 / i5-8400 本地短验通过
+
+2026-10-01，用户返回`验收报告.json`，主代理完整读取458行并核对身份；本节只记录脱敏汇总，用户原报告、完整路径与聊天不纳入Git。用户明确CPU为Intel i5-8400，报告实际观测Windows10 workstation build19044、6逻辑CPU。本次RAM未报告，不能将目标16GB写成已实测；用户明确安装过大部分开发工具、测试时有网络，VC运行库预装状态仍未知。
+
+报告产品commit为`6a7e9d0f0bb851e38306089905d9368865bf3fd4`，manifest SHA-256为`ff6f560a8cbee87a022c3da0c65d1427161bf81909f9af025e46dcd942b5dce4`；验收器SHA-256为`5e3639a42eab3893f9ad430bfeb9b8050185158df48a37adb84b6a22cfe8a169`，均与上述交付包一致。源模型SHA-256与本记录固定Qwen3-0.6B Q8_0相同。
+
+结果为`short_package_checks_passed=true`：**16项包检查pass /0fail /2范围skipped**，HTTP **44pass /0fail /9skipped**，断流requested/attempted/passed=**5/5/5**；退出回收、自有临时data清理和运行后产品未修改检查均pass。用户本轮执行5次，不能写成CI的50次；未记录的命令行、独立shell退出码或耗时不补造。
+
+路径实际观测：产品EXE与源模型均含非ASCII，但**无空格**；自有CWD及data/导入模型目录均含非ASCII与空格。CI的四类中文/空格覆盖与本次目标机覆盖分别记录，不能概括为目标机四类路径均含空格。
+
+这补齐了同一交付包在用户Win10 / i5-8400上的真实短程运行证据；A20所需无开发工具独立机器和实际离线运行仍未验证。用户随后批准延后相关验证，当前T05按缩定范围**已完成**，T06**进行中**；Windows11、长期内存/性能及完整A01–A26不由本报告推定通过。
+
+### 用户批准延后项与阶段收口
+
+2026-10-01 07:52–07:53 UTC，用户明确目前没有相应机器，将无开发工具、离线运行和长期稳定性作为后期验证，并要求继续开发。当前T05收口范围为已核验的Release便携包、依赖/许可/字节完整性、真实CI及用户Win10短验；这些均有对应证据，故按调整后的范围记为已完成，T06开始。A20与长期稳定性保持未验证，VC预装/RAM保持未知，不补写或修改原始报告的结果。上述各轮状态只描述当时情况，当前状态以本节及PROJECT_STATE为准。

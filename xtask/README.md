@@ -75,7 +75,7 @@ cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
 
 默认产品在工具目录旁`../windows-x64-cpu`，可显式`--package DIR`；模型与报告必须提供。CI显式传解压产品目录，验收器核对后将包内真实CLI传给共用api-smoke，不依赖xtask位置猜测。发行必测CLI缺失直接失败。`api-smoke`开发入口新增`--cli ABS_PATH --release-acceptance true`供这一严格路径使用；一般T04入口保留其已有范围。独立验收默认五次断流恢复，`--disconnect-cycles 1..50`可显式指定；T05 Release CI明确传50，原有T04 debug CI也保留50次。
 
-所有产品进程在自有空临时CWD和仅系统目录PATH启动，不能借验收器自身DLL补产品依赖；工具也仅持有短命测试凭据。退出0只表示短程包检查过，A20/Win10实际build/无开发工具/VC预装/实际离线证据分别记录，不提前打开T06门槛。
+所有产品进程在自有空临时CWD和仅系统目录PATH启动，不能借验收器自身DLL补产品依赖；工具也仅持有短命测试凭据。退出0只表示短程包检查过，A20/Win10实际build/无开发工具/VC预装/实际离线证据分别记录，skipped/unverified不视为通过；当前T05/T06门槛以用户批准的范围调整和状态记录为准。
 
 独立开发检查（不要求目标机执行）：
 
@@ -87,3 +87,5 @@ python scripts/stage_ci_evidence.py
 ```
 
 Windows独立identity测试程序后缀为`.exe`。证据stage只接受闭合已审查报告，保留状态、参数、身份与脱敏前后hash；上游合成正文只留hash/字节数/fixture关联。拒绝内容产生安全失败report并exit1，不上传原始整个目录。真正Windows/目标机结果见[T05记录](../docs/verification/2026-10-01-t05-windows-package.md)。
+
+2026-10-01，源码6a7e9d0的[Windows Release CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)已完成上述打包与解压后的真实独立验收：包检查16pass/2范围skip，HTTP89pass/9skip，50次断流全部实际执行并恢复。四类路径含中文/空格，受限PATH/空CWD、服务回收与自有data清理通过；用户Windows10 build19044 / i5-8400短验随后通过：16项包检查、HTTP44pass/9skip、5/5/5断流；产品EXE/源模型含中文但无空格，临时CWD/data含中文与空格。用户声明已有开发工具且测试联网，用户批准将A20无开发工具/离线与长期稳定性留作后期验证，T05按当前范围收口并继续T06。

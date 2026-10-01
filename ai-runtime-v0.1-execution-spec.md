@@ -48,7 +48,7 @@ Telegram 消息获取、来源快照、分块、摘要任务与产物属于调�
 
 架构从第一天保留 Linux、macOS 和 iOS 适配边界；首个正式验收集中在 Windows 与 Android。没有设备实测的平台只能标注“构建通过”或“待验证”。
 
-首批目标设备为用户提供的 Windows Intel i5-8400 / 16GB，以及 Android 骁龙 8E5 / 12GB。2026-10-01用户明确Windows 10优先、后续增加Windows 11，并可在构建完成后用本地电脑验收；Windows具体build、是否无开发工具及手机型号/设备参数仍须实测记录。这些信息不是模型容量或性能实测结论。
+首批目标设备为用户提供的 Windows Intel i5-8400 / 16GB，以及 Android 骁龙 8E5 / 12GB。2026-10-01用户明确Windows 10优先、后续增加Windows 11，并可在构建完成后用本地电脑验收；本次用户报告已实测Windows10 workstation build19044 / 6逻辑CPU，CPU由用户确认为i5-8400，短验通过；用户声明有开发工具且测试联网，RAM/VC预装仍未知，手机型号/设备参数仍须实测记录。这些信息不是模型容量或性能实测结论。
 
 ### 1.2 暂不实现
 
@@ -582,7 +582,7 @@ T05当前实现以[ADR0006](docs/decisions/0006-t05-windows-portable-package.md)
 | T02 存储与调度 | T01 | 导入、manifest、队列、状态机、deadline、空闲卸载 | 并发、切换模型、队列超限、取消和资源回收通过 A05–A12 |
 | T03 PC worker | T02 | 进程执行器、NDJSON、握手、崩溃与退出处理 | 杀掉 worker 时 API 存活且所有受影响请求终结；无遗留进程 |
 | T04 HTTP/CLI | T03 | 第 7/8 节接口、SSE、令牌、CLI；xtask api-smoke | curl 非流式/流式和错误用例通过；两客户端串行执行 |
-| T05 Windows 发行 | T04 | CPU 便携包、依赖清单、安装说明 | 无开发工具的验收机可启动并运行已导入模型 |
+| T05 Windows 发行 | T04 | CPU 便携包、依赖清单、安装说明 | 当前范围：Release包/依赖完整性、真实CI及用户Win10短验通过；A20无开发工具/离线按2026-10-01用户决定延后 |
 | T06 PC UI | T05 | 模型、聊天、设置；runtime 发现/启动/退出 | UI 可完成导入、聊天、停止；UI 关闭后 API 按设置继续服务 |
 | T07 Android 核心 | T02 | 移动构建、Rust 桥、生命周期、原生线程 | Android 真机运行真实模型；复用 core/adapter，无重复调度实现 |
 | T08 Android UI | T07 | 文件导入、流式聊天、取消、状态、APK | 飞行模式运行；后台取消；恢复前台不重放旧任务 |
@@ -606,6 +606,8 @@ T00 的上游基线用该固定版本附带的 CLI/server/bench 工具，命令�
 允许在调度/协议单元测试中使用 fake backend；fake 必须仅在测试或显式开发构建启用，不能替代发行验收。没有 Android 真机时可以完成交叉编译，但 T07/T08 真机验收保持未完成。
 
 改变接口、默认行为、数据目录或目标平台时写入 docs/decisions，说明原因和迁移方式。依赖升级和功能开发分开验证，不能为解决编译报错悄悄追随上游 master。
+
+2026-10-01用户在Win10短验通过后明确无相应独立机器，批准将无开发工具、离线运行和长期稳定性作为后期验证并继续开发。T05按缩定范围收口，T06可推进；A19长期稳定性与A20保留未验证，当前阶段完成不等于完整v0.1发布验收完成。
 
 ## 11. 验收矩阵
 
@@ -670,6 +672,8 @@ cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
 ### 12.2 Windows 真实模型验证
 
 T04实现`ccb2053fe514f582f6161f9fc87ee25346aa55e4`已通过固定Windows Server 2022 CPU CI，包括临时凭据真实CLI在线导入、HTTP/SSE、50次断连恢复与关停。证据见[T04验证](docs/verification/2026-10-01-t04-http-cli.md)。T05发行交付按下一节独立工具执行并单列证据；该CI不替代Windows 10本地电脑或无开发工具验收。
+
+源码6a7e9d0已在[Windows CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)完成真正Release包、实际CRT闭包/签名、中文空格新解压路径和独立HTTP50验收。结果见[T05记录](docs/verification/2026-10-01-t05-windows-package.md)；用户Windows10 build19044 / i5-8400短验报告已回且交付identity匹配，16项包检查与HTTP44pass/9skip、5次断流恢复通过；机器有开发工具且测试联网，A20与长期稳定性仍未验证；用户已批准延后这三项，T05按当前范围收口并开始T06。
 
 T05产品与独立工具ZIP完整解压为相邻目录后，推荐无需开发工具的短验入口：
 

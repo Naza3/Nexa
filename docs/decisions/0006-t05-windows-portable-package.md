@@ -1,7 +1,7 @@
 # ADR 0006：T05 Windows CPU 便携包与独立验收
 
 - 日期：2026-10-01
-- 状态：实现进行中；构建、CI 和 Windows 10 目标机证据逐项记入 [T05 验证](../verification/2026-10-01-t05-windows-package.md)
+- 状态：已实现并通过6a7e9d0的固定Windows Server2022 Release CI；用户Windows10 build19044 / i5-8400短验也已通过；用户批准延后无开发工具、离线与长期稳定性验证，T05按当前缩定范围已完成；A20仍未验证，T06进入开发。证据逐项记入 [T05 验证](../verification/2026-10-01-t05-windows-package.md)
 - 范围：已授权开发分支上的私有内部包、独立验收工具和现有 Windows CI；无 GitHub Release、合并、部署、远控、系统服务或长期真实凭据初始化
 
 ## 1. 产物与构建边界
@@ -39,4 +39,4 @@ Exit 0 仅表示报告范围内短程包检查通过；1 为失败并尽量写�
 
 证据 staging 保留失败状态、执行参数、退出码/耗时、模型/模板/fixture 身份、版本与脱敏前后文件 hash。上游固定合成 stdout/stderr 正文不上传，但记录其 hash/字节数及源 fixture 关联。未知文件、模型、数据/令牌、原始服务日志与二进制不进入证据 artifact；拒绝项生成安全 staging failure，不能吞掉此前 CI 结论。它不是通用秘密清洗器，增加新报告必须审查允许列表。
 
-Windows 10 x64 优先，Windows 11 后续。Server 2022 CI 绿色仍不等于 Windows 10 用户 i5-8400/16GB 或独立无开发工具、离线机器通过。T05 可到“待验证”，最终完成仍需与该包 identity 匹配的实际本地报告/环境声明；T06 前置门槛不提前勾选。验收不更改 ExecutionPolicy、Defender、网络或系统权限，不要求用户安装开发工具。
+Windows 10 x64 优先，Windows 11 后续。Server 2022 CI 绿色仍不等于 Windows 10 用户 i5-8400/16GB 或独立无开发工具、离线机器通过。用户已返回匹配该包identity的Win10 build19044 / i5-8400短验报告，并声明安装过大部分开发工具且测试联网；RAM/VC预装不能推断。2026-10-01 07:52–07:53 UTC用户明确无相应机器，批准把无开发工具、离线运行和长期稳定性列为后期验证并继续开发。因此T05按当前缩定范围（Release包完整性/依赖闭包、CI真实运行和用户Win10短验）收口已完成，T06开始；原A20和长期稳定性要求保留为后期验证项，报告中的unverified/skipped不改成pass。验收不更改 ExecutionPolicy、Defender、网络或系统权限，不要求用户安装开发工具。
