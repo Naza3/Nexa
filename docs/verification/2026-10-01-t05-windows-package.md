@@ -95,3 +95,14 @@ cargo test --locked --offline -p xtask --bin nexa-acceptance \
 ## 最终真实回归补充
 
 2026-10-01 05:40 UTC，在同一冻结工作树上显式执行 `cargo test --locked --workspace -- --ignored --test-threads=1`，六项真实模型测试全部通过，exit0；固定模型与推理线程仍为本记录的Qwen3 SHA及2线程。日志为 `artifacts/verification/t05-final/real-workspace.log`。其中独立验收器开发链再次通过13项生命周期检查、HTTP 89 pass / 0 fail / 9 skipped，断流 requested / attempted / passed = 50 / 50 / 50；报告 `artifacts/verification/t05-final/real-package-lifecycle.json` 的SHA-256为 `92a43c3336e1c9db8d23a7f6094335878f3688b19dfb4ec0cb1efff4f7c249bc`。该结果仍是Linux开发链路，不能替代Windows Release包或Win10目标机验收。
+
+
+## 首轮 Windows CI 与加载取消测试等待修复
+
+实现提交 `f07cb337cb5e118c8cc2dda0dae602846d384b65` 的 [run 36821525300](https://github.com/Naza3/Nexa/actions/runs/36821525300) 于2026-10-01 05:57:54 UTC失败。job `110237927560` 第7步Rust测试在 `secure_transport_contract::fin_and_rst_cancel_load_prepare_stream_and_nonstream_without_stranded_pumps` 读取`cancelled=false`，该测试binary为9 pass / 1 fail。原生构建、CTest、native identity边界已通过；模型与Release打包/验收未执行，没有可交付产品包。原始日志没有FIN/RST子场景，不能事后补造具体case。
+
+确定性fixture证实旧等待条件存在窗口：core处理取消时先移除active job，Load executor仍待完成；此时Loading + active=None + 无generation账本会使旧`clean()`提前返回。保持连接打开时active实际为Some，初次错误前置假设已通过失败日志保留并纠正。新的fake取消完成gate固定了真实窗口，旧oracle红测exit101；只修改测试文件，断连专用等待保留原3秒总deadline，联合检查取消确认、active/queue为空、输出预算为0及离开Loading/Generating/Unloading。普通成功路径clean未变，生产HTTP/core/worker均未修改。gate通过RAII在panic/timeout时释放。
+
+受控回归红转绿；API 24+4+11=39项通过；20轮定向重复通过，包含160个FIN/RST子场景和20次gate回归。strict clippy、MSVC all-targets check、fmt及diff检查均exit0。修后诊断仅记录rst/mode/stream/phase与状态数值。证据为`artifacts/verification/t05-disconnect-*.log`，包括原始fixture编译/前置断言失败、oracle-red/oracle-green/api-linux/focused-repeat-linux/clippy-linux/msvc-check/format；此处不是Windows重跑通过证明。
+
+首轮证据ZIP SHA-256为`2041e3d8196b14285711b511be0200f697cd9042eb16878520ca78c9b2909d2e`（17,457 bytes）；failure-only原生工具ZIP SHA-256为`7b127b305333adcfb0b1a024601cb58f3708da8d3932cec6fdedee91852d81a6`（29,211,224 bytes），14项工具manifest大小/hash均核对。原件保留于`artifacts/verification/t05-windows-36821525300*`，不删除或把原失败改成通过。

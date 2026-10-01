@@ -7,7 +7,9 @@ use runtime_api::{
 use runtime_core::{
     CancellationHandle, ExecutionEvents, Executor, ExecutorCommand, ExecutorEvent, Runtime,
 };
-use runtime_types::{ErrorCode, FinishReason, ModelId, ResolvedModel, RuntimeError, Usage};
+use runtime_types::{
+    ErrorCode, FinishReason, ModelId, ModelState, ResolvedModel, RuntimeError, Usage,
+};
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
@@ -21,7 +23,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Mode {
     Success,
     BeforeError,
@@ -32,12 +34,44 @@ enum Mode {
     Long,
     Overflow,
 }
+#[derive(Clone, Copy, Debug)]
+struct DisconnectCase {
+    rst: bool,
+    mode: Mode,
+    stream: bool,
+    phase: usize,
+}
+impl std::fmt::Display for DisconnectCase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "rst={}, mode={:?}, stream={}, phase={}",
+            self.rst, self.mode, self.stream, self.phase
+        )
+    }
+}
 #[derive(Default)]
 struct Observed {
     phase: AtomicUsize,
+    cancel_received: AtomicBool,
+    hold_cancel_completion: AtomicBool,
     cancelled: AtomicBool,
     events: Mutex<Option<ExecutionEvents>>,
     peak: AtomicUsize,
+}
+struct CancelCompletionGate(Arc<Observed>);
+impl CancelCompletionGate {
+    fn new(observed: Arc<Observed>) -> Self {
+        observed
+            .hold_cancel_completion
+            .store(true, Ordering::SeqCst);
+        Self(observed)
+    }
+}
+impl Drop for CancelCompletionGate {
+    fn drop(&mut self) {
+        self.0.hold_cancel_completion.store(false, Ordering::SeqCst);
+    }
 }
 struct ProtocolExecutor {
     mode: Mode,
@@ -61,6 +95,10 @@ impl Executor for ProtocolExecutor {
             let wait = |phase| {
                 observed.phase.store(phase, Ordering::SeqCst);
                 while !cancelled.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                observed.cancel_received.store(true, Ordering::SeqCst);
+                while observed.hold_cancel_completion.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(2));
                 }
                 observed.cancelled.store(true, Ordering::SeqCst);
@@ -279,6 +317,48 @@ impl Harness {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
+    async fn disconnected(&self, case: DisconnectCase) {
+        let mut last = None;
+        let completed = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let status = self.state.control(|r| r.status()).await.unwrap();
+                let bytes = self
+                    .observed
+                    .events
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map_or(0, ExecutionEvents::buffered_bytes);
+                let cancelled = self.observed.cancelled.load(Ordering::SeqCst);
+                last = Some((
+                    status.state,
+                    status.active_request.is_some(),
+                    status.queued_jobs,
+                    bytes,
+                    cancelled,
+                    self.observed.phase.load(Ordering::SeqCst),
+                ));
+                if cancelled
+                    && status.active_request.is_none()
+                    && status.queued_jobs == 0
+                    && bytes == 0
+                    && !matches!(
+                        status.state,
+                        ModelState::Loading | ModelState::Generating | ModelState::Unloading
+                    )
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .is_ok();
+        assert!(
+            completed,
+            "disconnect cleanup exceeded 3s: {case}, last(state,active,queued,bytes,cancelled,phase)={last:?}"
+        );
+    }
     async fn close(self) {
         self.state.shutdown.begin();
         self.state.shutdown.wait().await.unwrap();
@@ -288,6 +368,51 @@ impl Harness {
             .unwrap()
             .unwrap();
     }
+}
+#[tokio::test]
+async fn disconnect_wait_does_not_accept_a_still_loading_request() {
+    let h = Harness::new(Mode::LoadWait).await;
+    let gate = CancelCompletionGate::new(h.observed.clone());
+    let socket = h.send_with_policy(true, false).await;
+    h.phase(1).await;
+    drop(socket);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !h.observed.cancel_received.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("load executor must receive disconnect cancellation");
+    let status = h.state.control(|r| r.status()).await.unwrap();
+    assert_eq!(status.state, ModelState::Loading);
+    assert!(status.active_request.is_none());
+    assert!(h.observed.events.lock().unwrap().is_none());
+    assert!(!h.observed.cancelled.load(Ordering::SeqCst));
+
+    let completed_while_loading = {
+        let wait = h.disconnected(DisconnectCase {
+            rst: false,
+            mode: Mode::LoadWait,
+            stream: true,
+            phase: 1,
+        });
+        tokio::pin!(wait);
+        // Core has removed the active job, but the executor cannot finish Load
+        // until the gate opens. Empty request/budget fields are not cleanup.
+        let early = tokio::time::timeout(Duration::from_millis(100), &mut wait)
+            .await
+            .is_ok();
+        drop(gate);
+        if !early {
+            wait.await;
+        }
+        early
+    };
+    h.close().await;
+    assert!(
+        !completed_while_loading,
+        "disconnect wait accepted Loading with active_request=None, no generation events, and cancelled=false"
+    );
 }
 fn decode(wire: &[u8]) -> (u16, String, String) {
     let split = wire
@@ -401,6 +526,13 @@ async fn fin_and_rst_cancel_load_prepare_stream_and_nonstream_without_stranded_p
             (Mode::StartedWait, true, 4),
             (Mode::StartedWait, false, 4),
         ] {
+            let case = DisconnectCase {
+                rst,
+                mode,
+                stream,
+                phase,
+            };
+            eprintln!("disconnect case: {case}");
             let h = Harness::new(mode).await;
             let mut socket = h.send_with_policy(stream, false).await;
             h.phase(phase).await;
@@ -410,7 +542,7 @@ async fn fin_and_rst_cancel_load_prepare_stream_and_nonstream_without_stranded_p
                     .await
                     .unwrap()
                     .unwrap();
-                assert!(n > 0);
+                assert!(n > 0, "stream response headers missing: {case}");
             }
             if rst {
                 socket2::SockRef::from(&socket)
@@ -421,10 +553,9 @@ async fn fin_and_rst_cancel_load_prepare_stream_and_nonstream_without_stranded_p
                 socket.shutdown().await.unwrap();
                 drop(socket);
             }
-            h.clean().await;
-            assert!(h.observed.cancelled.load(Ordering::SeqCst));
+            h.disconnected(case).await;
             let (status, _, body) = h.reply(false).await;
-            assert_eq!(status, 200, "next request after disconnect must recover");
+            assert_eq!(status, 200, "next request must recover: {case}");
             let value: Value = serde_json::from_str(&body).unwrap();
             assert_eq!(value["object"], "chat.completion");
             h.clean().await;
