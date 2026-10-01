@@ -1,4 +1,4 @@
-//! Private ABI v1 bindings. Keep layout synchronized with air_llama.h.
+//! Private ABI v2 bindings. Keep layout synchronized with air_llama.h.
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -78,6 +78,8 @@ pub struct AirUsage {
     pub finish_reason: i32,
 }
 
+pub type ProgressCallback = unsafe extern "C" fn(*mut c_void, u32, u32, u32) -> i32;
+
 pub type TextCallback = unsafe extern "C" fn(*mut c_void, AirString) -> i32;
 
 unsafe extern "C" {
@@ -105,11 +107,13 @@ unsafe extern "C" {
         error: *mut AirError,
     ) -> i32;
     pub fn air_prepared_free(prepared: *mut AirPrepared);
-    pub fn air_generate(
+    pub fn air_generate_observed(
         prepared: *mut AirPrepared,
         cancel: *const AirCancel,
         callback: TextCallback,
         user: *mut c_void,
+        progress: ProgressCallback,
+        progress_user: *mut c_void,
         usage: *mut AirUsage,
         error: *mut AirError,
     ) -> i32;

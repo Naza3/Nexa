@@ -1,0 +1,585 @@
+//! Synthetic files verify storage and structural checks, never model inference.
+use std::collections::BTreeMap;
+use std::fs;
+use std::io::{self, Cursor, Read};
+use std::sync::{Arc, Barrier, mpsc};
+
+use model_store::{ImportCancellation, ImportRequest, ModelSource, ModelStore};
+use runtime_types::{ErrorCode, ModelId};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use tempfile::TempDir;
+
+fn string(bytes: &mut Vec<u8>, value: &str) {
+    bytes.extend((value.len() as u64).to_le_bytes());
+    bytes.extend(value.as_bytes());
+}
+fn fixture(payload_bytes: usize) -> Vec<u8> {
+    assert!(payload_bytes > 0 && payload_bytes.is_multiple_of(4));
+    let mut bytes = b"GGUF".to_vec();
+    bytes.extend(3_u32.to_le_bytes());
+    bytes.extend(1_u64.to_le_bytes());
+    bytes.extend(4_u64.to_le_bytes());
+    for (key, value) in [
+        ("general.architecture", "qwen3"),
+        ("tokenizer.chat_template", "synthetic template\n中文"),
+    ] {
+        string(&mut bytes, key);
+        bytes.extend(8_u32.to_le_bytes());
+        string(&mut bytes, value);
+    }
+    for (key, value) in [
+        ("general.file_type", 7_u32),
+        ("qwen3.context_length", 40960),
+    ] {
+        string(&mut bytes, key);
+        bytes.extend(4_u32.to_le_bytes());
+        bytes.extend(value.to_le_bytes());
+    }
+    string(&mut bytes, "synthetic.weight");
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend((payload_bytes as u64 / 4).to_le_bytes());
+    bytes.extend(0_u32.to_le_bytes()); // F32
+    bytes.extend(0_u64.to_le_bytes());
+    bytes.resize(bytes.len().next_multiple_of(32), 0);
+    bytes.resize(bytes.len() + payload_bytes, 0);
+    bytes
+}
+fn id(value: &str) -> ModelId {
+    ModelId::new(value).unwrap()
+}
+fn request(value: &str) -> ImportRequest {
+    ImportRequest::new(
+        id(value),
+        "Synthetic storage fixture",
+        ModelSource::local("test-fixture"),
+    )
+}
+fn store() -> (TempDir, ModelStore) {
+    let temp = tempfile::tempdir().unwrap();
+    let store = ModelStore::open(temp.path()).unwrap();
+    (temp, store)
+}
+fn assert_clean(root: &TempDir) {
+    assert_eq!(
+        fs::read_dir(root.path().join("imports")).unwrap().count(),
+        0
+    );
+}
+fn import(
+    store: &ModelStore,
+    bytes: &[u8],
+    name: &str,
+) -> model_store::Result<model_store::ModelManifest> {
+    store.import_reader(
+        Cursor::new(bytes),
+        bytes.len() as u64,
+        request(name),
+        &ImportCancellation::default(),
+    )
+}
+
+#[test]
+fn copies_hashes_registers_resolves_and_removes_only_managed_copy() {
+    let (root, store) = store();
+    let source_dir = tempfile::tempdir().unwrap();
+    let source = source_dir.path().join("original.gguf");
+    let bytes = fixture(128);
+    fs::write(&source, &bytes).unwrap();
+    let manifest = store
+        .import_file(
+            &source,
+            request("tiny.test-1"),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    assert_eq!(manifest.sha256, format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(manifest.source.uri, "test-fixture");
+    assert_eq!(manifest.relative_file, "model.gguf");
+    assert!(!manifest.validated);
+    assert!(manifest.validated_llama_commit.is_none());
+    assert!(!manifest.capabilities.chat);
+    assert_eq!(store.list().unwrap(), vec![manifest.clone()]);
+    assert_eq!(store.get(&id("tiny.test-1")).unwrap(), manifest);
+    let resolved = store.resolve(&id("tiny.test-1")).unwrap();
+    assert!(!resolved.validated);
+    assert_eq!(fs::read(resolved.path).unwrap(), bytes);
+    assert_eq!(store.remove(&id("tiny.test-1")).unwrap(), manifest);
+    assert!(store.list().unwrap().is_empty());
+    assert_eq!(fs::read(source).unwrap(), bytes);
+    assert_clean(&root);
+}
+
+#[test]
+fn strict_id_and_portable_paths_reject_traversal_and_device_names() {
+    for invalid in [
+        "", ".", "..", "../evil", "a/b", "a\\b", "a:b", "/root", "A", "中文", "a\0b",
+    ] {
+        assert!(ModelId::new(invalid).is_err(), "{invalid:?}");
+    }
+    assert!(ModelId::new("a".repeat(65)).is_err());
+    let (root, store) = store();
+    for name in ["con", "prn.txt", "aux", "nul", "com1", "lpt9.gguf", "end."] {
+        assert_eq!(
+            import(&store, &fixture(4), name).unwrap_err().code,
+            ErrorCode::InvalidArgument
+        );
+    }
+    assert_clean(&root);
+    assert!(ModelStore::open(root.path().join("../uncontrolled")).is_err());
+}
+
+#[test]
+fn corrupt_inputs_and_every_truncation_never_register() {
+    let (root, store) = store();
+    let bytes = fixture(4);
+    for end in 0..bytes.len() {
+        assert!(
+            import(&store, &bytes[..end], "truncated").is_err(),
+            "end={end}"
+        );
+        assert_clean(&root);
+    }
+    for (offset, replacement) in [
+        (0, 0_u64),
+        (4, 9),
+        (8, u64::MAX),
+        (16, u64::MAX),
+        (24, u64::MAX),
+    ] {
+        let mut corrupt = bytes.clone();
+        corrupt[offset..offset + 8].copy_from_slice(&replacement.to_le_bytes());
+        assert!(import(&store, &corrupt, "corrupt").is_err());
+    }
+    assert!(store.list().unwrap().is_empty());
+    assert_clean(&root);
+}
+
+#[test]
+fn verifies_declared_size_expected_hash_and_space_before_registering() {
+    let (root, store) = store();
+    let bytes = fixture(128);
+    for declared in [bytes.len() as u64 - 1, bytes.len() as u64 + 1] {
+        assert!(
+            store
+                .import_reader(
+                    Cursor::new(&bytes),
+                    declared,
+                    request("bad-size"),
+                    &ImportCancellation::default()
+                )
+                .is_err()
+        );
+    }
+    let mut wrong = request("wrong-hash");
+    wrong.expected_sha256 = Some("0".repeat(64));
+    assert_eq!(
+        store
+            .import_reader(
+                Cursor::new(&bytes),
+                bytes.len() as u64,
+                wrong,
+                &ImportCancellation::default()
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::IntegrityFailure
+    );
+    assert_eq!(
+        store
+            .import_reader(
+                Cursor::new(&bytes),
+                u64::MAX,
+                request("no-space"),
+                &ImportCancellation::default()
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::InsufficientSpace
+    );
+    assert!(store.list().unwrap().is_empty());
+    assert_clean(&root);
+}
+
+struct BrokenReader {
+    bytes: Cursor<Vec<u8>>,
+    reads: usize,
+}
+impl Read for BrokenReader {
+    fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+        self.reads += 1;
+        if self.reads > 1 {
+            return Err(io::Error::other("synthetic read failure"));
+        }
+        self.bytes.read(&mut target[..32])
+    }
+}
+struct CancellingReader {
+    bytes: Cursor<Vec<u8>>,
+    cancel: ImportCancellation,
+}
+impl Read for CancellingReader {
+    fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+        let result = self.bytes.read(target);
+        self.cancel.cancel();
+        result
+    }
+}
+#[test]
+fn read_failure_and_cancellation_clean_partial_files() {
+    let (root, store) = store();
+    let bytes = fixture(128 * 1024);
+    let error = store
+        .import_reader(
+            BrokenReader {
+                bytes: Cursor::new(bytes.clone()),
+                reads: 0,
+            },
+            bytes.len() as u64,
+            request("read-fail"),
+            &ImportCancellation::default(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Io);
+    assert_clean(&root);
+    let cancel = ImportCancellation::default();
+    let error = store
+        .import_reader(
+            CancellingReader {
+                bytes: Cursor::new(bytes.clone()),
+                cancel: cancel.clone(),
+            },
+            bytes.len() as u64,
+            request("cancelled"),
+            &cancel,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::RequestCancelled);
+    assert_clean(&root);
+    assert!(store.list().unwrap().is_empty());
+    assert_eq!(
+        store
+            .import_reader(Cursor::new(bytes), 1, request("pre-cancelled"), &cancel)
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+}
+
+#[test]
+fn duplicate_and_concurrent_ids_are_never_overwritten() {
+    let (root, store) = store();
+    let store = Arc::new(store);
+    let barrier = Arc::new(Barrier::new(3));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                import(&store, &fixture(128), "same")
+            })
+        })
+        .collect();
+    barrier.wait();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        results.iter().find_map(|r| r.as_ref().err()).unwrap().code,
+        ErrorCode::AlreadyExists
+    );
+    let original = fs::read(root.path().join("models/same/model.gguf")).unwrap();
+    assert_eq!(
+        import(&store, &fixture(256), "same").unwrap_err().code,
+        ErrorCode::AlreadyExists
+    );
+    assert_eq!(
+        fs::read(root.path().join("models/same/model.gguf")).unwrap(),
+        original
+    );
+    assert_eq!(store.list().unwrap().len(), 1);
+    assert_clean(&root);
+}
+
+struct PausedReader {
+    bytes: Cursor<Vec<u8>>,
+    started: Option<mpsc::Sender<()>>,
+    resume: mpsc::Receiver<()>,
+}
+impl Read for PausedReader {
+    fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+        if let Some(started) = self.started.take() {
+            started.send(()).unwrap();
+            self.resume.recv().unwrap();
+        }
+        self.bytes.read(target)
+    }
+}
+#[test]
+fn registration_is_invisible_until_both_files_are_complete() {
+    let (root, store) = store();
+    let store = Arc::new(store);
+    let (started, waiting) = mpsc::channel();
+    let (resume, resumed) = mpsc::channel();
+    let worker = store.clone();
+    let bytes = fixture(128);
+    let task = std::thread::spawn(move || {
+        worker.import_reader(
+            PausedReader {
+                bytes: Cursor::new(bytes.clone()),
+                started: Some(started),
+                resume: resumed,
+            },
+            bytes.len() as u64,
+            request("atomic"),
+            &ImportCancellation::default(),
+        )
+    });
+    waiting.recv().unwrap();
+    assert_eq!(
+        store.resolve(&id("atomic")).unwrap_err().code,
+        ErrorCode::RuntimeBusy
+    );
+    assert_eq!(fs::read_dir(root.path().join("models")).unwrap().count(), 0);
+    assert_eq!(
+        fs::read_dir(root.path().join("imports")).unwrap().count(),
+        1
+    );
+    resume.send(()).unwrap();
+    task.join().unwrap().unwrap();
+    let manifest = store.get(&id("atomic")).unwrap();
+    assert_eq!(
+        fs::read(root.path().join("models/atomic/model.gguf"))
+            .unwrap()
+            .len() as u64,
+        manifest.size_bytes
+    );
+    assert_clean(&root);
+}
+
+#[test]
+fn a_destination_created_during_copy_is_not_overwritten() {
+    let (root, store) = store();
+    let store = Arc::new(store);
+    let (started, waiting) = mpsc::channel();
+    let (resume, resumed) = mpsc::channel();
+    let worker = store.clone();
+    let bytes = fixture(128);
+    let task = std::thread::spawn(move || {
+        worker.import_reader(
+            PausedReader {
+                bytes: Cursor::new(bytes.clone()),
+                started: Some(started),
+                resume: resumed,
+            },
+            bytes.len() as u64,
+            request("race"),
+            &ImportCancellation::default(),
+        )
+    });
+    waiting.recv().unwrap();
+    let destination = root.path().join("models/race");
+    fs::create_dir(&destination).unwrap();
+    fs::write(destination.join("user-file"), "untouched").unwrap();
+    resume.send(()).unwrap();
+    assert_eq!(
+        task.join().unwrap().unwrap_err().code,
+        ErrorCode::AlreadyExists
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("user-file")).unwrap(),
+        "untouched"
+    );
+    assert_clean(&root);
+}
+
+#[test]
+fn process_lock_is_exclusive_and_reopen_recovers_owned_temporaries_only() {
+    let (root, store) = store();
+    assert!(
+        matches!(ModelStore::open(root.path()), Err(error) if error.code == ErrorCode::RuntimeBusy)
+    );
+    import(&store, &fixture(4), "registered").unwrap();
+    let imports = root.path().join("imports");
+    fs::write(
+        imports.join("import-0123456789abcdef0123456789abcdef.partial"),
+        "half",
+    )
+    .unwrap();
+    let staged = imports.join("import-fedcba9876543210fedcba9876543210.staged");
+    fs::create_dir(&staged).unwrap();
+    fs::write(staged.join("model.gguf"), "half").unwrap();
+    fs::write(imports.join("user.partial"), "preserve").unwrap();
+    drop(store);
+    let reopened = ModelStore::open(root.path()).unwrap();
+    assert_eq!(reopened.list().unwrap().len(), 1);
+    assert_eq!(fs::read_dir(imports).unwrap().count(), 1);
+}
+
+#[test]
+fn missing_and_unregistered_directories_cannot_be_removed() {
+    let (root, store) = store();
+    assert_eq!(
+        store.remove(&id("missing")).unwrap_err().code,
+        ErrorCode::ModelNotFound
+    );
+    fs::create_dir(root.path().join("models/unregistered")).unwrap();
+    fs::write(root.path().join("models/unregistered/precious"), "preserve").unwrap();
+    assert!(store.remove(&id("unregistered")).is_err());
+    assert!(root.path().join("models/unregistered/precious").is_file());
+}
+
+#[test]
+fn unknown_manifest_fields_survive_but_claims_paths_and_tampering_fail_closed() {
+    let (root, store) = store();
+    let bytes = fixture(128);
+    let mut request = request("extended");
+    request.extra = BTreeMap::from([("application".into(), json!({"unknown": [1, 2, 3]}))]);
+    let original = store
+        .import_reader(
+            Cursor::new(&bytes),
+            bytes.len() as u64,
+            request,
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    assert_eq!(store.get(&id("extended")).unwrap().extra, original.extra);
+    let manifest_path = root.path().join("models/extended/manifest.json");
+    let original_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    for (key, value) in [
+        ("relative_file", json!("../../user.gguf")),
+        ("validated", json!(true)),
+        (
+            "validated_llama_commit",
+            json!("2149c00f4442dc59302e134a02e4c99d5f7ed9fc"),
+        ),
+        (
+            "capabilities",
+            json!({"chat":true,"streaming":false,"cancellation":false}),
+        ),
+    ] {
+        let mut hostile = original_json.clone();
+        hostile[key] = value;
+        fs::write(&manifest_path, serde_json::to_vec(&hostile).unwrap()).unwrap();
+        assert!(store.resolve(&id("extended")).is_err());
+    }
+    fs::write(&manifest_path, serde_json::to_vec(&original_json).unwrap()).unwrap();
+    let mut altered = bytes;
+    let last = altered.len() - 1;
+    altered[last] ^= 1;
+    fs::write(root.path().join("models/extended/model.gguf"), altered).unwrap();
+    assert_eq!(
+        store.resolve(&id("extended")).unwrap_err().code,
+        ErrorCode::IntegrityFailure
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_escapes_are_rejected_and_external_targets_are_preserved() {
+    use std::os::unix::fs::symlink;
+    let (root, store) = store();
+    let external = tempfile::tempdir().unwrap();
+    fs::write(external.path().join("precious"), "preserve").unwrap();
+    symlink(external.path(), root.path().join("models/escape")).unwrap();
+    assert!(store.resolve(&id("escape")).is_err());
+    assert!(store.remove(&id("escape")).is_err());
+    assert_eq!(
+        import(&store, &fixture(4), "escape").unwrap_err().code,
+        ErrorCode::AlreadyExists
+    );
+    assert_eq!(
+        fs::read_to_string(external.path().join("precious")).unwrap(),
+        "preserve"
+    );
+    fs::remove_file(root.path().join("models/escape")).unwrap();
+    import(&store, &fixture(4), "safe").unwrap();
+    fs::remove_file(root.path().join("models/safe/model.gguf")).unwrap();
+    symlink(
+        external.path().join("precious"),
+        root.path().join("models/safe/model.gguf"),
+    )
+    .unwrap();
+    assert!(store.resolve(&id("safe")).is_err());
+    assert!(store.remove(&id("safe")).is_err());
+    let alias = root.path().join("root-alias");
+    symlink(external.path(), &alias).unwrap();
+    assert!(ModelStore::open(alias).is_err());
+}
+
+#[test]
+fn diagnostics_do_not_include_original_paths() {
+    let (_root, store) = store();
+    let private = "/private/user/name/secret.gguf";
+    let error = store
+        .import_file(private, request("absent"), &ImportCancellation::default())
+        .unwrap_err();
+    assert!(!error.to_string().contains(private));
+}
+
+#[test]
+fn lock_probe_child() {
+    let Some(path) = std::env::var_os("NEXA_STORE_LOCK_TEST_DIR") else {
+        return;
+    };
+    assert!(matches!(ModelStore::open(path), Err(error) if error.code == ErrorCode::RuntimeBusy));
+}
+
+#[test]
+fn a_second_process_cannot_open_the_locked_registry() {
+    let (root, _store) = store();
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "lock_probe_child", "--nocapture"])
+        .env("NEXA_STORE_LOCK_TEST_DIR", root.path())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn explicit_reverification_and_reopen_detect_corruption() {
+    let (root, store) = store();
+    let bytes = fixture(128);
+    import(&store, &bytes, "verify").unwrap();
+    assert!(store.verify(&id("verify")).is_ok());
+    let mut corrupt = bytes.clone();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    fs::write(root.path().join("models/verify/model.gguf"), &corrupt).unwrap();
+    assert_eq!(
+        store.verify(&id("verify")).unwrap_err().code,
+        ErrorCode::IntegrityFailure
+    );
+    assert_eq!(
+        store.resolve(&id("verify")).unwrap_err().code,
+        ErrorCode::IntegrityFailure
+    );
+    drop(store);
+    match ModelStore::open(root.path()) {
+        Err(error) => assert_eq!(error.code, ErrorCode::IntegrityFailure, "{error}"),
+        Ok(_) => panic!("corrupted registered model unexpectedly reopened"),
+    }
+    fs::write(root.path().join("models/verify/model.gguf"), bytes).unwrap();
+    let repaired = ModelStore::open(root.path()).unwrap();
+    assert!(repaired.resolve(&id("verify")).is_ok());
+}
+
+#[test]
+fn failed_file_import_keeps_user_source_unchanged() {
+    let (root, store) = store();
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("invalid.gguf");
+    fs::write(&path, b"GGUFcorrupt but user-owned").unwrap();
+    assert!(
+        store
+            .import_file(&path, request("invalid"), &ImportCancellation::default())
+            .is_err()
+    );
+    assert_eq!(fs::read(path).unwrap(), b"GGUFcorrupt but user-owned");
+    assert_clean(&root);
+}

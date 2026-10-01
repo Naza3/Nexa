@@ -20,3 +20,14 @@ Windows 的 example 文件名为 `native-smoke.exe`。原生库构建配置以 `
 退出码：0 表示当前请求的验证范围通过；1 表示已执行的验证失败；2 表示参数/前置文件错误。读取不到文件时不会写一份伪成功报告。默认设备标签和无法测量的性能值为 `unavailable`。目标 Windows/Android 验收单独标记 `skipped`；即便在对应 OS 执行，也不能代替指定设备的完整验收。
 
 执行规格中后续阶段的 `check`、`test --suite contract`、`build`、`api-smoke` 尚未实现，调用会明确失败。现在不能用它们宣布 T02–T09 完成。
+
+
+## T02 存储与调度验证
+
+```sh
+cargo test --locked -p runtime-types -p runtime-core -p model-store
+NEXA_TEST_MODEL=/path/to/Qwen3-0.6B-Q8_0.gguf NEXA_TEST_THREADS=2 cargo test --locked -p llama-adapter --test real_model -- --ignored --test-threads=1 --nocapture
+NEXA_TEST_MODEL=/path/to/Qwen3-0.6B-Q8_0.gguf NEXA_TEST_THREADS=2 cargo test --locked -p engine-host --test real_runtime -- --ignored --test-threads=1 --nocapture
+```
+
+先重建shim版本2，`AIR_NATIVE_DIR`指向最新构建。`native-smoke`兼容校验现要求shim_version=2；新air_generate_observed保留v1生成入口。adapter真实测试分别记录至少一批prefill成功后及decode阶段取消；host真实测试把原模型复制到临时model-store并验证调度端到端。逻辑fake不能代替这些真实GGUF命令，Windows/Android状态分别记录。

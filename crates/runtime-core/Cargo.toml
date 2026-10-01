@@ -1,9 +1,8 @@
 [package]
-name = "runtime-types"
+name = "runtime-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde.workspace = true
-uuid.workspace = true
+runtime-types = { path = "../runtime-types" }

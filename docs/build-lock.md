@@ -1,6 +1,6 @@
 # T00 开发构建锁
 
-日期：2026-09-30。此文件记录已经在 Linux 云开发机上构建的组合；**不是 Windows / Android 支持声明**。T00 的 Windows CPU 基线门槛仍需 Windows 执行，目标 i5-8400 与 Android 真机均未验收。
+日期：2026-10-01。此文件记录Linux开发与固定Windows CI构建组合；精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，目标i5-8400与Android真机均未验收。
 
 ## 固定输入
 
@@ -14,7 +14,7 @@
 | 开发机 | Linux x86_64，kernel 6.18.44；INTEL XEON PLATINUM 8573C；容器可见 9 CPU、约 9.7 GiB 内存 |
 | CPU 选项 | Release、静态库、`GGML_NATIVE=OFF`、OpenMP/CUDA/Vulkan/Metal 关闭 |
 | x64 指令集 | 上游固定配置实际启用 SSE4.2、AVX、AVX2、F16C、FMA、BMI2；不宣称兼容所有 x64 CPU |
-| Windows 编译器/SDK | MSVC 19.44.35229.0 / SDK 10.0.26100.0；Windows Server 2022 10.0.20348；原生Release与CTest已在首跑通过，Rust整体链接待补Advapi32复验 |
+| Windows 编译器/SDK | MSVC 19.44.35229.0 / SDK 10.0.26100.0；Windows Server 2022 10.0.20348；原生Release、CTest与Rust静态链接已在d3d7cf2的CI通过 |
 | Android NDK/Flutter | unavailable；尚未加入工程依赖 |
 
 没有升级跟随 master 的构建脚本。CMake 检查 submodule HEAD，不匹配直接失败。原生模型默认日志被抑制，以避免上游输出完整用户路径；开发基线用合成输入，原始上游日志只留在忽略目录。
@@ -42,9 +42,9 @@ ctest --test-dir build/native-release --output-on-failure
 
 ## 所有权与目前限制
 
-- ABI v1 见 `native/llama-shim/include/air_llama.h`；调用方必须遵守合法句柄和线程归属前置条件
+- shim build_info版本2，保留air_generate兼容入口并增加air_generate_observed；见 `native/llama-shim/include/air_llama.h`；调用方必须遵守合法句柄和线程归属前置条件
 - 每个进程最多一个引擎、一个模型；prepared 消费一次，生成结束清空请求 KV；取消标志可由另一线程设置
-- 原生回调是同步借用，必须及时返回；有界异步消费者队列、10 秒慢消费者和执行 deadline 属于后续 T02/T03，不在这里冒充实现
+- 原生回调是同步借用，允许decode步骤间共享256KiB预算内可取消、有时限等待；T02已实现4KiB分片、10秒慢消费者和三类deadline。T03进程隔离/强杀尚未实现，详见ADR0003
 - 目前仅接入 Qwen3 架构及能明确关闭思考的模板；验收支持以精确模型矩阵为准
 - seed `UINT32_MAX` 沿用锁定上游的随机哨兵，其他 seed 在相同环境尽力复现；不承诺跨设备逐字相同
 - Windows UTF-8 路径由上游 `ggml_fopen` 转为宽字符文件打开；已读源码，尚未 Windows 实测

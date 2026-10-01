@@ -1,0 +1,1101 @@
+use crate::{
+    CancellationHandle, EventReceiver, ExecutionEvents, Executor, ExecutorCommand, ExecutorEvent,
+    ModelResolver, executor::Envelope, output::Output,
+};
+use runtime_types::*;
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, SyncSender},
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
+};
+
+type Reply<T> = mpsc::Sender<Result<T, RuntimeError>>;
+#[derive(Clone)]
+pub struct RuntimeHandle {
+    sender: SyncSender<Command>,
+}
+/// Owns the scheduler thread. Drop requests graceful cancellation; it never kills
+/// a native thread. Explicit shutdown waits for safe executor resource release.
+pub struct Runtime {
+    handle: RuntimeHandle,
+    thread: Option<JoinHandle<()>>,
+}
+enum Command {
+    Submit(GenerationRequest, Reply<EventReceiver>),
+    Load(ModelId, LoadOptions, Reply<()>),
+    Unload(Reply<()>),
+    Cancel(RequestId, Reply<()>),
+    Status(Reply<RuntimeStatus>),
+    Shutdown(Option<Reply<()>>),
+}
+impl Runtime {
+    pub fn spawn(
+        config: RuntimeConfig,
+        resolver: impl ModelResolver,
+        executor: impl Executor,
+    ) -> Result<Self, RuntimeError> {
+        config.validate()?;
+        let (sender, receiver) = mpsc::sync_channel(64);
+        let (events, event_receiver) = mpsc::sync_channel(32);
+        let handle = RuntimeHandle { sender };
+        let thread = thread::Builder::new()
+            .name("nexa-runtime".into())
+            .spawn(move || {
+                Actor::new(
+                    config,
+                    Box::new(resolver),
+                    Box::new(executor),
+                    receiver,
+                    events,
+                    event_receiver,
+                )
+                .run()
+            })
+            .map_err(|_| RuntimeError::new(ErrorCode::Io, "cannot create scheduler thread"))?;
+        Ok(Self {
+            handle,
+            thread: Some(thread),
+        })
+    }
+    pub fn handle(&self) -> RuntimeHandle {
+        self.handle.clone()
+    }
+    pub fn shutdown(mut self) -> Result<(), RuntimeError> {
+        let result = self.handle.shutdown();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        result
+    }
+}
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            let _ = self.handle.sender.send(Command::Shutdown(None));
+        }
+    }
+}
+impl RuntimeHandle {
+    fn ask<T>(&self, build: impl FnOnce(Reply<T>) -> Command) -> Result<T, RuntimeError> {
+        let (tx, rx) = mpsc::channel();
+        self.sender.send(build(tx)).map_err(|_| stopped())?;
+        rx.recv().map_err(|_| stopped())?
+    }
+    pub fn submit(&self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
+        request.validate()?;
+        self.ask(|reply| Command::Submit(request, reply))
+    }
+    pub fn load(&self, model: ModelId, options: LoadOptions) -> Result<(), RuntimeError> {
+        options.validate()?;
+        self.ask(|reply| Command::Load(model, options, reply))
+    }
+    pub fn unload(&self) -> Result<(), RuntimeError> {
+        self.ask(Command::Unload)
+    }
+    pub fn cancel(&self, id: RequestId) -> Result<(), RuntimeError> {
+        self.ask(|reply| Command::Cancel(id, reply))
+    }
+    pub fn status(&self) -> Result<RuntimeStatus, RuntimeError> {
+        self.ask(Command::Status)
+    }
+    pub fn shutdown(&self) -> Result<(), RuntimeError> {
+        self.ask(|reply| Command::Shutdown(Some(reply)))
+    }
+}
+fn stopped() -> RuntimeError {
+    RuntimeError::new(ErrorCode::RuntimeShutdown, "runtime has shut down")
+}
+fn error(code: ErrorCode) -> RuntimeError {
+    RuntimeError::new(code, code.as_str())
+}
+struct Job {
+    request: GenerationRequest,
+    output: Arc<Output>,
+    seq: u64,
+    enqueued: Instant,
+    load_started: Option<Instant>,
+    execution_started: Option<Instant>,
+    timings: RequestTimings,
+    usage: Usage,
+    started: bool,
+    waiting: bool,
+}
+impl Job {
+    fn event(&mut self, kind: RequestEventKind, charge: usize) {
+        self.seq += 1;
+        self.output.publish(
+            RequestEvent {
+                request_id: self.request.request_id,
+                seq: self.seq,
+                kind,
+            },
+            charge,
+        );
+    }
+    fn timings(&self) -> RequestTimings {
+        let mut t = self.timings;
+        if self.waiting {
+            t.queue_ms = millis(self.enqueued.elapsed());
+        }
+        if let Some(start) = self.load_started {
+            t.load_ms = millis(start.elapsed());
+        }
+        if let Some(start) = self.execution_started {
+            t.execution_ms = millis(start.elapsed());
+        }
+        t
+    }
+    fn terminate(mut self, result: Result<(Usage, FinishReason), RuntimeError>) {
+        if let Ok((usage, _)) = result {
+            self.usage = usage;
+        }
+        let timings = self.timings();
+        let kind = if let Some(reason) = self.output.reason() {
+            if !matches!(
+                reason,
+                ErrorCode::RequestCancelled
+                    | ErrorCode::ConsumerStopped
+                    | ErrorCode::SlowConsumer
+                    | ErrorCode::RuntimeShutdown
+            ) {
+                RequestEventKind::Failed {
+                    error: error(reason),
+                    usage: self.usage,
+                    timings,
+                }
+            } else {
+                RequestEventKind::Cancelled {
+                    reason,
+                    usage: self.usage,
+                    timings,
+                }
+            }
+        } else {
+            match result {
+                Ok((usage, finish_reason)) => RequestEventKind::Completed {
+                    usage,
+                    finish_reason,
+                    timings,
+                },
+                Err(error) => RequestEventKind::Failed {
+                    error,
+                    usage: self.usage,
+                    timings,
+                },
+            }
+        };
+        self.event(kind, 0);
+    }
+}
+fn millis(d: Duration) -> u64 {
+    d.as_millis().min(u64::MAX as u128) as u64
+}
+enum Operation {
+    Load {
+        start: Instant,
+        cancel: CancellationHandle,
+        reply: Option<Reply<()>>,
+        timeout: bool,
+        abandoned: bool,
+    },
+    Generate {
+        start: Instant,
+        cancel: CancellationHandle,
+    },
+    Unload {
+        reply: Option<Reply<()>>,
+        next: Option<(ResolvedModel, LoadOptions, Reply<()>)>,
+        faulted: bool,
+    },
+}
+struct Actor {
+    config: RuntimeConfig,
+    resolver: Box<dyn ModelResolver>,
+    executor: Box<dyn Executor>,
+    commands: Receiver<Command>,
+    events: SyncSender<Envelope>,
+    event_receiver: Receiver<Envelope>,
+    state: ModelState,
+    selected: Option<ResolvedModel>,
+    options: Option<LoadOptions>,
+    active: Option<Job>,
+    queue: VecDeque<Job>,
+    operation: Option<Operation>,
+    operation_id: u64,
+    last_error: Option<RuntimeError>,
+    poison: Option<RuntimeError>,
+    idle_since: Instant,
+    stopping: bool,
+    shutdown_replies: Vec<Reply<()>>,
+}
+impl Actor {
+    fn new(
+        config: RuntimeConfig,
+        resolver: Box<dyn ModelResolver>,
+        executor: Box<dyn Executor>,
+        commands: Receiver<Command>,
+        events: SyncSender<Envelope>,
+        event_receiver: Receiver<Envelope>,
+    ) -> Self {
+        Self {
+            config,
+            resolver,
+            executor,
+            commands,
+            events,
+            event_receiver,
+            state: ModelState::Unloaded,
+            selected: None,
+            options: None,
+            active: None,
+            queue: VecDeque::new(),
+            operation: None,
+            operation_id: 0,
+            last_error: None,
+            poison: None,
+            idle_since: Instant::now(),
+            stopping: false,
+            shutdown_replies: Vec::new(),
+        }
+    }
+    fn run(mut self) {
+        loop {
+            for _ in 0..32 {
+                match self.commands.try_recv() {
+                    Ok(command) => self.command(command),
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        self.begin_shutdown(None);
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                }
+            }
+            for _ in 0..32 {
+                match self.event_receiver.try_recv() {
+                    Ok(event) => self.executor_event(event),
+                    Err(_) => break,
+                }
+            }
+            self.tick();
+            if self.stopping
+                && self.operation.is_none()
+                && self.active.is_none()
+                && matches!(self.state, ModelState::Unloaded | ModelState::Faulted)
+            {
+                for reply in self.shutdown_replies.drain(..) {
+                    let _ = reply.send(Ok(()));
+                }
+                break;
+            }
+            match self.commands.recv_timeout(Duration::from_millis(2)) {
+                Ok(command) => self.command(command),
+                Err(mpsc::RecvTimeoutError::Disconnected) => self.begin_shutdown(None),
+                Err(_) => {}
+            }
+        }
+    }
+    fn status(&self) -> RuntimeStatus {
+        RuntimeStatus {
+            state: self.state,
+            selected_model: self.selected.as_ref().map(|m| m.id.clone()),
+            load_options: self.options,
+            active_request: self.active.as_ref().map(|j| j.request.request_id),
+            queued_jobs: self.queue.len(),
+            stopping: self.stopping,
+            last_error: self.last_error.clone(),
+        }
+    }
+    fn command(&mut self, command: Command) {
+        match command {
+            Command::Status(reply) => {
+                let _ = reply.send(Ok(self.status()));
+            }
+            Command::Submit(request, reply) => {
+                let result = self.submit(request);
+                let _ = reply.send(result);
+            }
+            Command::Load(id, options, reply) => self.explicit_load(id, options, reply),
+            Command::Unload(reply) => {
+                if let Some(err) = self.busy_error() {
+                    let _ = reply.send(Err(err));
+                } else if self.state == ModelState::Unloaded {
+                    let _ = reply.send(Ok(()));
+                } else if self.state == ModelState::Faulted {
+                    let _ = reply.send(Err(error(ErrorCode::RuntimeFaulted)));
+                } else {
+                    self.unload(Some(reply), None);
+                }
+            }
+            Command::Cancel(id, reply) => {
+                let result = self.cancel(id, ErrorCode::RequestCancelled);
+                let _ = reply.send(result);
+            }
+            Command::Shutdown(reply) => self.begin_shutdown(reply),
+        }
+    }
+    fn busy_error(&self) -> Option<RuntimeError> {
+        if self.stopping {
+            Some(stopped())
+        } else if self.active.is_some() || !self.queue.is_empty() || self.operation.is_some() {
+            Some(error(ErrorCode::RuntimeBusy))
+        } else {
+            None
+        }
+    }
+    fn resolve(&self, id: &ModelId, options: LoadOptions) -> Result<ResolvedModel, RuntimeError> {
+        let model = self.resolver.resolve(id)?;
+        if model.id != *id || !model.validated {
+            return Err(error(ErrorCode::UnsupportedModel));
+        }
+        if options.context_size > model.context_limit {
+            return Err(RuntimeError::new(
+                ErrorCode::ContextLengthExceeded,
+                "load context exceeds the validated model limit",
+            ));
+        }
+        Ok(model)
+    }
+    fn submit(&mut self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
+        if self.stopping {
+            return Err(stopped());
+        }
+        if matches!(
+            self.operation,
+            Some(Operation::Unload { next: Some(_), .. })
+        ) {
+            return Err(error(ErrorCode::RuntimeBusy));
+        }
+        if self.state == ModelState::Faulted
+            || matches!(
+                self.operation,
+                Some(Operation::Unload { faulted: true, .. })
+            )
+        {
+            return Err(error(ErrorCode::RuntimeFaulted));
+        }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|j| j.request.request_id == request.request_id)
+            || self
+                .queue
+                .iter()
+                .any(|j| j.request.request_id == request.request_id)
+        {
+            return Err(error(ErrorCode::DuplicateRequestId));
+        }
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|m| m.id != request.model)
+        {
+            return Err(error(ErrorCode::ModelConflict));
+        }
+        if self.active.is_some() && self.queue.len() >= self.config.max_queued_jobs {
+            return Err(error(ErrorCode::QueueFull));
+        }
+        if self.selected.is_none() {
+            let options = self.config.load_options;
+            let model = self.resolve(&request.model, options)?;
+            self.selected = Some(model);
+            self.options = Some(options);
+        }
+        let output = Output::new(self.config.slow_consumer_timeout);
+        let mut job = Job {
+            request,
+            output: output.clone(),
+            seq: 0,
+            enqueued: Instant::now(),
+            load_started: None,
+            execution_started: None,
+            timings: RequestTimings::default(),
+            usage: Usage::default(),
+            started: false,
+            waiting: false,
+        };
+        job.event(RequestEventKind::Accepted, 0);
+        if self.active.is_some() {
+            job.waiting = true;
+            job.event(RequestEventKind::Queued, 0);
+            self.queue.push_back(job);
+        } else {
+            if matches!(self.operation, Some(Operation::Load { .. })) {
+                job.load_started = Some(Instant::now());
+                job.event(RequestEventKind::Loading, 0);
+            }
+            self.active = Some(job);
+            self.start_active();
+        }
+        Ok(EventReceiver { output })
+    }
+    fn explicit_load(&mut self, id: ModelId, options: LoadOptions, reply: Reply<()>) {
+        if let Some(err) = self.busy_error() {
+            let _ = reply.send(Err(err));
+            return;
+        }
+        let model = match self.resolve(&id, options) {
+            Ok(model) => model,
+            Err(err) => {
+                let _ = reply.send(Err(err));
+                return;
+            }
+        };
+        if self.state == ModelState::Ready
+            && self.selected.as_ref().is_some_and(|m| m.id == id)
+            && self.options == Some(options)
+        {
+            let _ = reply.send(Ok(()));
+            return;
+        }
+        if matches!(self.state, ModelState::Ready | ModelState::Faulted) {
+            self.unload(None, Some((model, options, reply)));
+        } else {
+            self.selected = Some(model);
+            self.options = Some(options);
+            self.start_load(Some(reply));
+        }
+    }
+    fn sink(&mut self, output: Option<Arc<Output>>) -> ExecutionEvents {
+        self.operation_id += 1;
+        ExecutionEvents {
+            operation: self.operation_id,
+            sender: self.events.clone(),
+            output,
+        }
+    }
+    fn start_load(&mut self, reply: Option<Reply<()>>) {
+        self.state = ModelState::Loading;
+        self.last_error = None;
+        if let Some(job) = &mut self.active {
+            job.load_started = Some(Instant::now());
+            job.event(RequestEventKind::Loading, 0);
+        }
+        let command = ExecutorCommand::Load {
+            model: self.selected.clone().unwrap(),
+            options: self.options.unwrap(),
+        };
+        let sink = self.sink(None);
+        match self.executor.start(command, sink) {
+            Ok(cancel) => {
+                self.operation = Some(Operation::Load {
+                    start: Instant::now(),
+                    cancel,
+                    reply,
+                    timeout: false,
+                    abandoned: false,
+                })
+            }
+            Err(err) => {
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(err.clone()));
+                }
+                self.fault(err);
+            }
+        }
+    }
+    fn start_active(&mut self) {
+        if self.operation.is_some() {
+            return;
+        }
+        match self.state {
+            ModelState::Unloaded => self.start_load(None),
+            ModelState::Ready => {
+                let job = self.active.as_mut().unwrap();
+                job.execution_started = Some(Instant::now());
+                let command = ExecutorCommand::Generate {
+                    request: job.request.clone(),
+                };
+                let output = job.output.clone();
+                let sink = self.sink(Some(output));
+                self.state = ModelState::Generating;
+                match self.executor.start(command, sink) {
+                    Ok(cancel) => {
+                        self.operation = Some(Operation::Generate {
+                            start: Instant::now(),
+                            cancel,
+                        })
+                    }
+                    Err(err) => self.fault(err),
+                }
+            }
+            _ => {}
+        }
+    }
+    fn unload(
+        &mut self,
+        reply: Option<Reply<()>>,
+        next: Option<(ResolvedModel, LoadOptions, Reply<()>)>,
+    ) {
+        let faulted = self.state == ModelState::Faulted;
+        self.state = ModelState::Unloading;
+        let sink = self.sink(None);
+        match self.executor.start(ExecutorCommand::Unload, sink) {
+            Ok(_) => {
+                self.operation = Some(Operation::Unload {
+                    reply,
+                    next,
+                    faulted,
+                })
+            }
+            Err(err) => {
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(err.clone()));
+                }
+                if let Some((_, _, reply)) = next {
+                    let _ = reply.send(Err(err.clone()));
+                }
+                self.fault(err);
+            }
+        }
+    }
+    fn cancel(&mut self, id: RequestId, reason: ErrorCode) -> Result<(), RuntimeError> {
+        if let Some(index) = self.queue.iter().position(|j| j.request.request_id == id) {
+            let job = self.queue.remove(index).unwrap();
+            job.output.cancel(reason);
+            job.terminate(Err(error(reason)));
+            return Ok(());
+        }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|j| j.request.request_id == id)
+        {
+            self.active.as_ref().unwrap().output.cancel(reason);
+            self.cancel_active();
+            return Ok(());
+        }
+        Err(error(ErrorCode::RequestNotFound))
+    }
+    fn cancel_active(&mut self) {
+        if let Some(Operation::Generate { cancel, .. }) = &self.operation {
+            cancel.cancel();
+            return;
+        }
+        if matches!(self.operation, Some(Operation::Load { .. })) {
+            if let Some(job) = self.active.take() {
+                job.terminate(Err(error(ErrorCode::RequestCancelled)));
+            }
+            self.promote_during_load();
+            if self.active.is_none()
+                && let Some(Operation::Load {
+                    cancel,
+                    reply,
+                    abandoned,
+                    ..
+                }) = &mut self.operation
+                && reply.is_none()
+            {
+                *abandoned = true;
+                cancel.cancel();
+            }
+            return;
+        }
+        if let Some(job) = self.active.take() {
+            job.terminate(Err(error(ErrorCode::RequestCancelled)));
+        }
+        self.next_job();
+    }
+    fn pop_eligible(&mut self) -> Option<Job> {
+        while let Some(job) = self.queue.pop_front() {
+            if let Some(reason) = job.output.reason() {
+                job.terminate(Err(error(reason)));
+            } else if job.enqueued.elapsed() >= self.config.queue_timeout {
+                job.terminate(Err(error(ErrorCode::QueueTimeout)));
+            } else {
+                return Some(job);
+            }
+        }
+        None
+    }
+    fn promote_during_load(&mut self) {
+        if let Some(mut job) = self.pop_eligible() {
+            job.timings.queue_ms = millis(job.enqueued.elapsed());
+            job.waiting = false;
+            job.load_started = Some(Instant::now());
+            job.event(RequestEventKind::Loading, 0);
+            self.active = Some(job);
+        }
+    }
+    fn next_job(&mut self) {
+        self.idle_since = Instant::now();
+        if let Some(mut job) = self.pop_eligible() {
+            job.timings.queue_ms = millis(job.enqueued.elapsed());
+            job.waiting = false;
+            self.active = Some(job);
+            self.start_active();
+        }
+    }
+    fn executor_event(&mut self, envelope: Envelope) {
+        if envelope.operation != self.operation_id {
+            if envelope.charge > 0
+                && let Some(output) = &envelope.output
+            {
+                output.release(envelope.charge);
+            }
+            return;
+        }
+        if self.poison.is_some() {
+            if envelope.charge > 0
+                && let Some(output) = &envelope.output
+            {
+                output.release(envelope.charge);
+            }
+            let ended = matches!(
+                (&self.operation, &envelope.event),
+                (
+                    Some(Operation::Load { .. }),
+                    ExecutorEvent::Loaded | ExecutorEvent::Failed(_)
+                ) | (
+                    Some(Operation::Generate { .. }),
+                    ExecutorEvent::Completed { .. }
+                        | ExecutorEvent::GenerationFailed { .. }
+                        | ExecutorEvent::Failed(_)
+                ) | (
+                    Some(Operation::Unload { .. }),
+                    ExecutorEvent::Unloaded | ExecutorEvent::Failed(_)
+                )
+            ) || matches!(envelope.event, ExecutorEvent::Faulted(_));
+            if ended {
+                let loaded = matches!(envelope.event, ExecutorEvent::Loaded);
+                let err = self.poison.take().unwrap();
+                self.fault(err);
+                if loaded {
+                    self.unload(None, None);
+                }
+            }
+            return;
+        }
+        match &mut self.operation {
+            Some(Operation::Load { start, timeout, .. })
+                if envelope.emitted_at.saturating_duration_since(*start)
+                    >= self.config.load_timeout =>
+            {
+                *timeout = true
+            }
+            Some(Operation::Generate { start, .. })
+                if envelope.emitted_at.saturating_duration_since(*start)
+                    >= self.config.execution_timeout =>
+            {
+                if let Some(job) = &self.active {
+                    job.output.cancel(ErrorCode::ExecutionTimeout);
+                }
+            }
+            _ => {}
+        }
+        match envelope.event {
+            ExecutorEvent::Loaded => {
+                let Some(Operation::Load {
+                    reply,
+                    timeout,
+                    abandoned,
+                    ..
+                }) = self.operation.take()
+                else {
+                    self.protocol_fault();
+                    return;
+                };
+                if timeout {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(error(ErrorCode::LoadTimeout)));
+                    }
+                    self.fault(error(ErrorCode::LoadTimeout));
+                    self.unload(None, None);
+                    return;
+                }
+                if let Some(reply) = reply {
+                    let _ = reply.send(Ok(()));
+                }
+                self.state = ModelState::Ready;
+                if let Some(job) = &mut self.active
+                    && let Some(start) = job.load_started.take()
+                {
+                    job.timings.load_ms = millis(start.elapsed());
+                }
+                if self.active.is_some() {
+                    self.start_active();
+                } else {
+                    self.idle_since = Instant::now();
+                    if abandoned || self.stopping {
+                        self.unload(None, None);
+                    }
+                }
+            }
+            ExecutorEvent::Prepared { prompt_tokens } => {
+                if !matches!(self.operation, Some(Operation::Generate { .. })) {
+                    self.protocol_fault();
+                    return;
+                }
+                if let Some(job) = &mut self.active {
+                    if job.started {
+                        self.protocol_fault();
+                        return;
+                    }
+                    job.started = true;
+                    job.event(RequestEventKind::Started { prompt_tokens }, 0);
+                }
+            }
+            ExecutorEvent::TextDelta(text) => {
+                if let Some(job) = &mut self.active {
+                    if !job.started {
+                        job.output.release(envelope.charge);
+                        self.protocol_fault();
+                        return;
+                    }
+                    if job.output.reason().is_none() {
+                        job.event(RequestEventKind::TextDelta(text), envelope.charge);
+                    } else {
+                        job.output.release(envelope.charge);
+                    }
+                }
+            }
+            ExecutorEvent::Completed {
+                usage,
+                finish_reason,
+            } => {
+                if !matches!(self.operation, Some(Operation::Generate { .. }))
+                    || self.active.as_ref().is_none_or(|j| !j.started)
+                {
+                    self.fault(error(ErrorCode::NativeProtocol));
+                    return;
+                }
+                self.operation = None;
+                if let Some(job) = self.active.take() {
+                    job.terminate(Ok((usage, finish_reason)));
+                }
+                self.state = ModelState::Ready;
+                self.next_job();
+            }
+            ExecutorEvent::Failed(err) => self.operation_failed(err),
+            ExecutorEvent::GenerationFailed { error, usage } => {
+                if let Some(job) = &mut self.active {
+                    job.usage = usage;
+                }
+                self.operation_failed(error);
+            }
+            ExecutorEvent::Unloaded => {
+                let Some(Operation::Unload {
+                    reply,
+                    next,
+                    faulted,
+                }) = self.operation.take()
+                else {
+                    self.protocol_fault();
+                    return;
+                };
+                self.state = if faulted {
+                    ModelState::Faulted
+                } else {
+                    ModelState::Unloaded
+                };
+                if let Some(reply) = reply {
+                    let _ = reply.send(Ok(()));
+                }
+                if let Some((model, options, reply)) = next {
+                    if self.stopping {
+                        let _ = reply.send(Err(stopped()));
+                        return;
+                    }
+                    self.selected = Some(model);
+                    self.options = Some(options);
+                    self.start_load(Some(reply));
+                } else if self.active.is_some() {
+                    self.start_active();
+                }
+            }
+            ExecutorEvent::Faulted(err) => self.fault(err),
+        }
+    }
+    fn operation_failed(&mut self, err: RuntimeError) {
+        match self.operation.take() {
+            Some(Operation::Load {
+                reply,
+                timeout,
+                abandoned,
+                ..
+            }) => {
+                let err = if timeout {
+                    error(ErrorCode::LoadTimeout)
+                } else {
+                    err
+                };
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(err.clone()));
+                }
+                if abandoned && !timeout {
+                    self.state = ModelState::Unloaded;
+                    if self.active.is_some() {
+                        self.start_active();
+                    } else {
+                        self.next_job();
+                    }
+                } else {
+                    self.fault(err);
+                }
+            }
+            Some(Operation::Generate { .. }) => {
+                if let Some(job) = self.active.take() {
+                    job.terminate(Err(err));
+                }
+                self.state = ModelState::Ready;
+                self.next_job();
+            }
+            Some(Operation::Unload { reply, next, .. }) => {
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(err.clone()));
+                }
+                if let Some((_, _, reply)) = next {
+                    let _ = reply.send(Err(err.clone()));
+                }
+                self.fault(err);
+            }
+            None => self.fault(err),
+        }
+    }
+    fn protocol_fault(&mut self) {
+        let err = error(ErrorCode::NativeProtocol);
+        if self.operation.is_none() {
+            self.fault(err);
+            return;
+        }
+        self.state = ModelState::Faulted;
+        self.last_error = Some(err.clone());
+        self.poison = Some(err.clone());
+        if let Some(job) = &self.active {
+            job.output.cancel(ErrorCode::NativeProtocol);
+        }
+        for job in self.queue.drain(..) {
+            job.terminate(Err(err.clone()));
+        }
+        if let Some(Operation::Load { cancel, .. } | Operation::Generate { cancel, .. }) =
+            &self.operation
+        {
+            cancel.cancel();
+        }
+    }
+    fn fault(&mut self, err: RuntimeError) {
+        self.poison = None;
+        if let Some(operation) = self.operation.take() {
+            match operation {
+                Operation::Load { cancel, reply, .. } => {
+                    cancel.cancel();
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(err.clone()));
+                    }
+                }
+                Operation::Generate { cancel, .. } => cancel.cancel(),
+                Operation::Unload { reply, next, .. } => {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(err.clone()));
+                    }
+                    if let Some((_, _, reply)) = next {
+                        let _ = reply.send(Err(err.clone()));
+                    }
+                }
+            }
+        }
+        self.state = ModelState::Faulted;
+        self.last_error = Some(err.clone());
+        if let Some(job) = self.active.take() {
+            job.terminate(Err(err.clone()));
+        }
+        for job in self.queue.drain(..) {
+            job.terminate(Err(err.clone()));
+        }
+    }
+    fn begin_shutdown(&mut self, reply: Option<Reply<()>>) {
+        if let Some(reply) = reply {
+            self.shutdown_replies.push(reply);
+        }
+        if self.stopping {
+            return;
+        }
+        self.stopping = true;
+        for job in self.queue.drain(..) {
+            job.output.cancel(ErrorCode::RuntimeShutdown);
+            job.terminate(Err(stopped()));
+        }
+        if let Some(job) = &self.active {
+            job.output.cancel(ErrorCode::RuntimeShutdown);
+            self.cancel_active();
+        }
+        if let Some(Operation::Load { cancel, .. }) = &self.operation {
+            cancel.cancel();
+        }
+    }
+    fn tick(&mut self) {
+        let mut retained = VecDeque::new();
+        while let Some(job) = self.queue.pop_front() {
+            if let Some(reason) = job.output.reason() {
+                job.terminate(Err(error(reason)));
+            } else if job.enqueued.elapsed() >= self.config.queue_timeout {
+                job.terminate(Err(error(ErrorCode::QueueTimeout)));
+            } else {
+                retained.push_back(job);
+            }
+        }
+        self.queue = retained;
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|j| j.output.reason().is_some())
+        {
+            self.cancel_active();
+        }
+        match &mut self.operation {
+            Some(Operation::Load {
+                start,
+                cancel,
+                timeout,
+                ..
+            }) if start.elapsed() >= self.config.load_timeout && !*timeout => {
+                *timeout = true;
+                cancel.cancel();
+            }
+            Some(Operation::Generate { start, cancel, .. })
+                if start.elapsed() >= self.config.execution_timeout =>
+            {
+                if let Some(job) = &self.active {
+                    job.output.cancel(ErrorCode::ExecutionTimeout);
+                }
+                cancel.cancel();
+            }
+            _ => {}
+        }
+        if self.operation.is_none()
+            && self.active.is_none()
+            && self.queue.is_empty()
+            && self.state == ModelState::Ready
+            && (self.stopping || self.idle_since.elapsed() >= self.config.idle_unload)
+        {
+            self.unload(None, None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::*;
+    struct Noop;
+    impl Executor for Noop {
+        fn start(
+            &mut self,
+            _: ExecutorCommand,
+            _: ExecutionEvents,
+        ) -> Result<CancellationHandle, RuntimeError> {
+            Ok(CancellationHandle::noop())
+        }
+    }
+    #[test]
+    fn stale_delta_releases_its_own_ledger_not_new_request() {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let (events, event_receiver) = mpsc::sync_channel(32);
+        let resolver = |id: &ModelId| {
+            Ok(ResolvedModel {
+                id: id.clone(),
+                path: "fake.gguf".into(),
+                context_limit: 4096,
+                default_context: 4096,
+                validated: true,
+            })
+        };
+        let mut actor = Actor::new(
+            RuntimeConfig::default(),
+            Box::new(resolver),
+            Box::new(Noop),
+            rx,
+            events,
+            event_receiver,
+        );
+        let old = Output::new(Duration::from_secs(10));
+        let old_sink = actor.sink(Some(old.clone()));
+        assert!(old_sink.text_delta("old"));
+        let stale = actor.event_receiver.recv().unwrap();
+        let new = Output::new(Duration::from_secs(10));
+        let new_receiver = EventReceiver {
+            output: new.clone(),
+        };
+        let old_receiver = EventReceiver { output: old };
+        let new_sink = actor.sink(Some(new));
+        assert!(new_sink.text_delta("new"));
+        let before = new_receiver.buffered_bytes();
+        assert!(before > 0);
+        assert!(old_receiver.buffered_bytes() > 0);
+        actor.executor_event(stale);
+        assert_eq!(old_receiver.buffered_bytes(), 0);
+        assert_eq!(new_receiver.buffered_bytes(), before);
+    }
+    #[test]
+    fn a11_new_arrival_during_idle_unload_waits_and_reloads() {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let (events, event_receiver) = mpsc::sync_channel(32);
+        let resolver = |id: &ModelId| {
+            Ok(ResolvedModel {
+                id: id.clone(),
+                path: "fake.gguf".into(),
+                context_limit: 4096,
+                default_context: 4096,
+                validated: true,
+            })
+        };
+        let config = RuntimeConfig {
+            idle_unload: Duration::from_millis(1),
+            ..RuntimeConfig::default()
+        };
+        let mut actor = Actor::new(
+            config,
+            Box::new(resolver),
+            Box::new(Noop),
+            rx,
+            events,
+            event_receiver,
+        );
+        let request = || GenerationRequest {
+            request_id: RequestId::new(),
+            model: ModelId::new("qa-small").unwrap(),
+            messages: vec![Message::new(Role::User, "synthetic")],
+            options: GenerationOptions::default(),
+        };
+        fn feed(actor: &mut Actor, event: ExecutorEvent) {
+            actor.executor_event(Envelope {
+                operation: actor.operation_id,
+                event,
+                charge: 0,
+                output: None,
+                emitted_at: Instant::now(),
+            });
+        }
+        let _first = actor.submit(request()).unwrap();
+        feed(&mut actor, ExecutorEvent::Loaded);
+        feed(&mut actor, ExecutorEvent::Prepared { prompt_tokens: 8 });
+        feed(
+            &mut actor,
+            ExecutorEvent::Completed {
+                usage: Usage::default(),
+                finish_reason: FinishReason::Stop,
+            },
+        );
+        actor.idle_since = Instant::now() - Duration::from_millis(2);
+        actor.tick();
+        assert_eq!(actor.state, ModelState::Unloading);
+        let _second = actor.submit(request()).unwrap();
+        assert_eq!(actor.state, ModelState::Unloading);
+        assert!(actor.active.is_some());
+        feed(&mut actor, ExecutorEvent::Unloaded);
+        assert_eq!(actor.state, ModelState::Loading);
+        feed(&mut actor, ExecutorEvent::Loaded);
+        assert_eq!(actor.state, ModelState::Generating);
+        feed(&mut actor, ExecutorEvent::Prepared { prompt_tokens: 8 });
+        feed(
+            &mut actor,
+            ExecutorEvent::Completed {
+                usage: Usage::default(),
+                finish_reason: FinishReason::Stop,
+            },
+        );
+        assert_eq!(actor.state, ModelState::Ready);
+    }
+}

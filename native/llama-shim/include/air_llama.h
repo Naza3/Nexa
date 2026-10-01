@@ -4,12 +4,13 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* ABI v1. All strings are pointer + UTF-8 byte length, never NUL-terminated.
+/* ABI v2 (v1 entry points and layouts remain compatible). All strings are pointer + UTF-8 byte length, never NUL-terminated.
  * Borrowed inputs must remain alive for the call. Output buffers belong to
  * shim; release with air_buffer_free. Error outputs are reset on every fallible
  * call. Engine/model/prepared are thread-affine, cancel alone supports
- * concurrent set. Destroy in prepared -> model -> engine order. No callback may
- * unwind or block. Only one engine per process is supported. No function logs
+ * concurrent set. Destroy in prepared -> model -> engine order. Callbacks must not unwind or block indefinitely. Text callbacks may wait
+ * for a bounded output budget only with cancellation-interruptible waits and
+ * no additional native locks held. Progress callbacks must return promptly. Only one engine per process is supported. No function logs
  * request content.
  */
 typedef struct air_engine air_engine;
@@ -72,6 +73,19 @@ void air_prepared_free(air_prepared *prepared);
 int32_t air_generate(air_prepared *prepared, const air_cancel *cancel,
                      air_text_callback callback, void *user, air_usage *usage,
                      air_error *error);
+/* Additive ABI v2 observation. phase: 0 prefill entered (completed=0),
+ * 1 a prefill batch has successfully completed, 2 decode entered (completed=total).
+ * completed_prompt_tokens counts only successful prefill batches. These are
+ * synchronous numeric observations, not a terminal event. The callback must not
+ * unwind/block; nonzero stops with code 8. A null callback disables observation.
+ * Consumes prepared exactly like air_generate, including on failure. */
+typedef int32_t (*air_progress_callback)(void *user, uint32_t phase,
+                                        uint32_t completed_prompt_tokens,
+                                        uint32_t total_prompt_tokens);
+int32_t air_generate_observed(air_prepared *prepared, const air_cancel *cancel,
+                              air_text_callback callback, void *user,
+                              air_progress_callback progress, void *progress_user,
+                              air_usage *usage, air_error *error);
 int32_t air_cancel_create(air_cancel **out, air_error *error);
 void air_cancel_set(air_cancel *cancel);
 void air_cancel_destroy(air_cancel *cancel);

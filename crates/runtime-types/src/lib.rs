@@ -5,6 +5,9 @@
 
 use std::fmt;
 
+mod scheduler;
+pub use scheduler::*;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_MESSAGES: usize = 128;
 pub const MAX_STOPS: usize = 4;
@@ -228,6 +231,24 @@ pub enum ErrorCode {
     WrongThread,
     ConsumerStopped,
     NativeProtocol,
+    ModelNotFound,
+    InvalidManifest,
+    Io,
+    IntegrityFailure,
+    AlreadyExists,
+    InsufficientSpace,
+    ModelConflict,
+    RuntimeBusy,
+    RuntimeFaulted,
+    RuntimeShutdown,
+    QueueFull,
+    DuplicateRequestId,
+    RequestNotFound,
+    QueueTimeout,
+    LoadTimeout,
+    ExecutionTimeout,
+    SlowConsumer,
+    ExecutorUnavailable,
 }
 
 impl ErrorCode {
@@ -242,6 +263,24 @@ impl ErrorCode {
             Self::WrongThread => "wrong_thread",
             Self::ConsumerStopped => "consumer_stopped",
             Self::NativeProtocol => "native_protocol_error",
+            Self::ModelNotFound => "model_not_found",
+            Self::InvalidManifest => "invalid_manifest",
+            Self::Io => "io",
+            Self::IntegrityFailure => "integrity_failure",
+            Self::AlreadyExists => "already_exists",
+            Self::InsufficientSpace => "insufficient_space",
+            Self::ModelConflict => "model_conflict",
+            Self::RuntimeBusy => "runtime_busy",
+            Self::RuntimeFaulted => "runtime_faulted",
+            Self::RuntimeShutdown => "runtime_shutdown",
+            Self::QueueFull => "queue_full",
+            Self::DuplicateRequestId => "duplicate_request_id",
+            Self::RequestNotFound => "request_not_found",
+            Self::QueueTimeout => "queue_timeout",
+            Self::LoadTimeout => "load_timeout",
+            Self::ExecutionTimeout => "execution_timeout",
+            Self::SlowConsumer => "slow_consumer",
+            Self::ExecutorUnavailable => "executor_unavailable",
         }
     }
 }

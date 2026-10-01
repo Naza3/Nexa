@@ -229,19 +229,42 @@ impl Prepared<'_> {
     }
 
     /// Streams complete UTF-8 pieces, at most 4096 bytes per callback. The
-    /// callback must return promptly: enqueue/copy data rather than blocking on
-    /// another task. Returning Stop aborts generation as ConsumerStopped.
+    /// callback may use a bounded, cancellation-interruptible output budget
+    /// wait between decode operations. It must never wait indefinitely or hold
+    /// additional native locks. Returning Stop aborts as ConsumerStopped.
     ///
     /// A callback panic is caught at the C boundary. Native resources are cleaned
     /// up before the panic resumes on this Rust stack (with panic=unwind).
     pub fn generate<F>(
-        mut self,
+        self,
         cancel: &CancelHandle,
         on_text: F,
     ) -> Result<GenerationResult, GenerationError>
     where
         F: FnMut(&str) -> StreamControl,
     {
+        self.generate_observed(cancel, on_text, |_| StreamControl::Continue)
+    }
+
+    /// Adds synchronous, numeric phase evidence. Progress callbacks must return
+    /// promptly and are panic-isolated exactly like text callbacks. Batch
+    /// completion means successful native evaluation, never a timing estimate.
+    pub fn generate_observed<F, P>(
+        mut self,
+        cancel: &CancelHandle,
+        on_text: F,
+        on_progress: P,
+    ) -> Result<GenerationResult, GenerationError>
+    where
+        F: FnMut(&str) -> StreamControl,
+        P: FnMut(GenerationProgress) -> StreamControl,
+    {
+        let mut progress = ProgressCallbackState {
+            on_progress,
+            panic: None,
+            protocol_error: None,
+            stopped: false,
+        };
         let mut callback = CallbackState {
             on_text,
             panic: None,
@@ -259,24 +282,26 @@ impl Prepared<'_> {
         // SAFETY: All references stay live during this synchronous call. The
         // callback catches panics and never retains native borrowed text.
         let status = unsafe {
-            ffi::air_generate(
+            ffi::air_generate_observed(
                 raw.as_ptr(),
                 cancel.raw(),
                 text_callback::<F>,
                 (&mut callback as *mut CallbackState<F>).cast(),
+                progress_callback::<P>,
+                (&mut progress as *mut ProgressCallbackState<P>).cast(),
                 &mut usage,
                 &mut error,
             )
         };
         let result = check_status(status, error);
-        if let Some(panic) = callback.panic.take() {
+        if let Some(panic) = callback.panic.take().or_else(|| progress.panic.take()) {
             resume_unwind(panic);
         }
         let usage_value = Usage {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
         };
-        if let Some(error) = callback.protocol_error {
+        if let Some(error) = callback.protocol_error.or(progress.protocol_error) {
             return Err(GenerationError {
                 error,
                 usage: usage_value,
@@ -296,7 +321,7 @@ impl Prepared<'_> {
                 });
             }
         };
-        if callback.stopped {
+        if callback.stopped || progress.stopped {
             return Err(GenerationError {
                 error: protocol("native generation ignored consumer stop"),
                 usage: usage_value,
@@ -316,6 +341,20 @@ impl Drop for Prepared<'_> {
             unsafe { ffi::air_prepared_free(raw.as_ptr()) };
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenerationPhase {
+    PrefillStarted,
+    PrefillBatchCompleted,
+    DecodeStarted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GenerationProgress {
+    pub phase: GenerationPhase,
+    pub completed_prompt_tokens: u32,
+    pub total_prompt_tokens: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -500,6 +539,56 @@ where
     }
 }
 
+struct ProgressCallbackState<P> {
+    on_progress: P,
+    panic: Option<Box<dyn Any + Send>>,
+    protocol_error: Option<RuntimeError>,
+    stopped: bool,
+}
+unsafe extern "C" fn progress_callback<P>(
+    user: *mut c_void,
+    phase: u32,
+    completed: u32,
+    total: u32,
+) -> i32
+where
+    P: FnMut(GenerationProgress) -> StreamControl,
+{
+    // SAFETY: The shim invokes this unique borrowed stack state synchronously.
+    let state = unsafe { &mut *user.cast::<ProgressCallbackState<P>>() };
+    if state.panic.is_some() || state.protocol_error.is_some() || state.stopped {
+        return 1;
+    }
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let valid = total > 0 && completed <= total;
+        let phase = match phase {
+            0 if valid && completed == 0 => GenerationPhase::PrefillStarted,
+            1 if valid && completed > 0 => GenerationPhase::PrefillBatchCompleted,
+            2 if valid && completed == total => GenerationPhase::DecodeStarted,
+            _ => {
+                state.protocol_error = Some(protocol("invalid native progress observation"));
+                return StreamControl::Stop;
+            }
+        };
+        (state.on_progress)(GenerationProgress {
+            phase,
+            completed_prompt_tokens: completed,
+            total_prompt_tokens: total,
+        })
+    }));
+    match outcome {
+        Ok(StreamControl::Continue) => 0,
+        Ok(StreamControl::Stop) => {
+            state.stopped = true;
+            1
+        }
+        Err(panic) => {
+            state.panic = Some(panic);
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +654,68 @@ mod tests {
         drop(callback);
         assert_eq!(calls, 1);
     }
+    fn invoke_progress<P: FnMut(GenerationProgress) -> StreamControl>(
+        state: &mut ProgressCallbackState<P>,
+        phase: u32,
+        completed: u32,
+        total: u32,
+    ) -> i32 {
+        // SAFETY: Synchronous fixture has the exact ABI callback state/layout.
+        unsafe {
+            progress_callback::<P>(
+                (state as *mut ProgressCallbackState<P>).cast(),
+                phase,
+                completed,
+                total,
+            )
+        }
+    }
+    fn progress_state<P: FnMut(GenerationProgress) -> StreamControl>(
+        on_progress: P,
+    ) -> ProgressCallbackState<P> {
+        ProgressCallbackState {
+            on_progress,
+            panic: None,
+            protocol_error: None,
+            stopped: false,
+        }
+    }
+    #[test]
+    fn progress_panic_and_invalid_observations_never_cross_ffi() {
+        let mut callback = progress_state(|_| panic!("progress consumer panic fixture"));
+        assert_eq!(invoke_progress(&mut callback, 1, 16, 128), 1);
+        assert!(callback.panic.is_some());
+        assert_eq!(invoke_progress(&mut callback, 2, 128, 128), 1);
+        for (phase, completed, total) in [
+            (8, 0, 1),
+            (0, 1, 2),
+            (1, 0, 2),
+            (1, 3, 2),
+            (2, 1, 2),
+            (0, 0, 0),
+        ] {
+            let mut callback =
+                progress_state(|_| panic!("invalid progress must not reach observer"));
+            assert_eq!(invoke_progress(&mut callback, phase, completed, total), 1);
+            assert!(callback.protocol_error.is_some());
+            assert!(callback.panic.is_none());
+        }
+    }
+    #[test]
+    fn progress_stop_is_sticky_and_records_successful_batch() {
+        let mut calls = 0;
+        let mut callback = progress_state(|event| {
+            assert_eq!(event.phase, GenerationPhase::PrefillBatchCompleted);
+            assert_eq!(event.completed_prompt_tokens, 16);
+            assert_eq!(event.total_prompt_tokens, 128);
+            calls += 1;
+            StreamControl::Stop
+        });
+        assert_eq!(invoke_progress(&mut callback, 1, 16, 128), 1);
+        assert_eq!(invoke_progress(&mut callback, 1, 32, 128), 1);
+        drop(callback);
+        assert_eq!(calls, 1);
+    }
     #[test]
     fn cancellation_can_cross_threads() {
         fn assert_send_sync<T: Send + Sync>() {}
@@ -577,7 +728,7 @@ mod tests {
     #[test]
     fn native_build_reports_pinned_abi() {
         let info = build_info().unwrap();
-        assert!(info.contains("\"shim_version\":1"));
+        assert!(info.contains("\"shim_version\":2"));
         assert!(info.contains("\"backend\":\"cpu\""));
         assert!(info.contains("2149c00f4442dc59302e134a02e4c99d5f7ed9fc"));
     }

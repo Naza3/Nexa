@@ -21,13 +21,19 @@
 
 ## 当前工程入口
 
-已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
+已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
 
 - [构建锁](docs/build-lock.md)：固定上游/工具链、实际编译参数与限制
 - [模型矩阵](docs/model-matrix.md)：真实模型与模板 hash
 - [可执行验证](xtask/README.md)：当前已实现命令，不混同后续 CLI
 - [开发探针决策](docs/decisions/0002-development-native-probe.md)：Linux 工程验证不替代目标平台门槛
 - `.github/workflows/native-windows.yml`：授权开发分支的 Windows CPU 构建与真实模型 CI
+
+- [T02核心](crates/runtime-core/README.md)：单actor、队列、状态、取消、deadline、共享文本预算
+- [模型存储](crates/model-store/README.md)：受控导入、manifest、验证缓存和目录原子提交
+- [原生执行器](crates/engine-host/README.md)：专用线程和真实端到端测试
+- [T02决策](docs/decisions/0003-t02-scheduler-storage-and-observability.md)：存储/调度、shim2与验证边界
+- [T02验证](docs/verification/2026-10-01-t02-runtime.md)：逻辑测试与真实模型证据，目标平台状态
 
 ## runtime 全量路径与规划
 

@@ -365,3 +365,170 @@ fn real_model_system_multiturn_and_request_isolation() {
         multi_usage_before.completion_tokens
     );
 }
+
+/// A08: cancellation is initiated by an independent control thread only after
+/// a successful non-final prefill batch. No sleep-based phase inference is used.
+#[test]
+#[ignore = "requires the exact locked Qwen3 GGUF and real native inference"]
+fn real_model_observed_prefill_and_decode_cancellation() {
+    use llama_adapter::GenerationPhase;
+    use sha2::{Digest, Sha256};
+    use std::{
+        fs::File,
+        io::Read,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    let path = std::env::var_os("NEXA_TEST_MODEL").expect("NEXA_TEST_MODEL is required");
+    let mut file = File::open(&path).unwrap();
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let size = file.read(&mut buffer).unwrap();
+        if size == 0 {
+            break;
+        }
+        hash.update(&buffer[..size]);
+    }
+    assert_eq!(
+        format!("{:x}", hash.finalize()),
+        "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"
+    );
+    let threads = test_threads("real_model_observed_prefill_and_decode_cancellation");
+    let mut engine = Engine::new().unwrap();
+    let load_cancel = CancelHandle::new().unwrap();
+    let mut model = engine
+        .load(
+            &path,
+            LoadOptions {
+                context_size: 2048,
+                threads,
+                batch_size: 16,
+            },
+            &load_cancel,
+        )
+        .unwrap();
+    let options = GenerationOptions {
+        max_tokens: 32,
+        temperature: 0.0,
+        seed: 42,
+        ..Default::default()
+    };
+    let messages = [Message::new(
+        Role::User,
+        format!(
+            "Read this synthetic sequence and summarize it: {}",
+            "alpha beta gamma delta. ".repeat(220)
+        ),
+    )];
+    let cancel = CancelHandle::new().unwrap();
+    let prepared = model.prepare(&messages, &options, &cancel).unwrap();
+    let prompt_tokens = prepared.prompt_tokens();
+    assert!(prompt_tokens > 256 && prompt_tokens + options.max_tokens <= 2048);
+    let (phase_tx, phase_rx) = mpsc::sync_channel(1);
+    let copy = cancel.clone();
+    let controller = std::thread::spawn(move || {
+        let evidence = phase_rx.recv_timeout(Duration::from_secs(60)).unwrap();
+        let sent = Instant::now();
+        copy.cancel();
+        (evidence, sent)
+    });
+    let mut signalled = false;
+    let mut decode_entered = false;
+    let error = prepared
+        .generate_observed(
+            &cancel,
+            |_| panic!("prefill cancellation emitted text"),
+            |progress| {
+                if progress.phase == GenerationPhase::DecodeStarted {
+                    decode_entered = true;
+                }
+                if !signalled
+                    && progress.phase == GenerationPhase::PrefillBatchCompleted
+                    && progress.completed_prompt_tokens < progress.total_prompt_tokens
+                {
+                    phase_tx.try_send(progress).unwrap();
+                    signalled = true;
+                }
+                StreamControl::Continue
+            },
+        )
+        .unwrap_err();
+    let returned = Instant::now();
+    let (evidence, sent) = controller.join().unwrap();
+    let latency = returned.duration_since(sent);
+    assert!(
+        !decode_entered,
+        "cancellation was too late; do not label it prefill evidence"
+    );
+    assert!(
+        evidence.completed_prompt_tokens > 0
+            && evidence.completed_prompt_tokens < evidence.total_prompt_tokens
+    );
+    assert_eq!(error.error.code, ErrorCode::RequestCancelled);
+    assert_eq!(error.usage.prompt_tokens, prompt_tokens);
+    assert_eq!(error.usage.completion_tokens, 0);
+    assert!(
+        latency < Duration::from_secs(1),
+        "CPU cancellation exceeded the 1-second interaction target: {latency:?}"
+    );
+    eprintln!(
+        "{}",
+        serde_json::json!({"test":"A08_mid_prefill","inference_threads":threads,"context_size":2048,"batch_size":16,"completed_prefill_tokens_at_signal":evidence.completed_prompt_tokens,"prompt_tokens":prompt_tokens,"completion_tokens":0,"decode_entered":decode_entered,"cancel_to_return_ms":latency.as_secs_f64()*1000.0})
+    );
+
+    let short = [Message::new(
+        Role::User,
+        "List twenty fruits, one per line.",
+    )];
+    let cancel = CancelHandle::new().unwrap();
+    let (text_tx, text_rx) = mpsc::sync_channel(1);
+    let copy = cancel.clone();
+    let controller = std::thread::spawn(move || {
+        text_rx.recv_timeout(Duration::from_secs(60)).unwrap();
+        let sent = Instant::now();
+        copy.cancel();
+        sent
+    });
+    let mut signalled = false;
+    let error = model
+        .prepare(&short, &options, &cancel)
+        .unwrap()
+        .generate(&cancel, |_| {
+            if !signalled {
+                text_tx.try_send(()).unwrap();
+                signalled = true;
+            }
+            StreamControl::Continue
+        })
+        .unwrap_err();
+    let returned = Instant::now();
+    let sent = controller.join().unwrap();
+    let latency = returned.duration_since(sent);
+    assert_eq!(error.error.code, ErrorCode::RequestCancelled);
+    assert!(error.usage.completion_tokens > 0);
+    assert!(latency < Duration::from_secs(1));
+    eprintln!(
+        "{}",
+        serde_json::json!({"test":"A08_decode","inference_threads":threads,"completion_tokens":error.usage.completion_tokens,"cancel_to_return_ms":latency.as_secs_f64()*1000.0})
+    );
+
+    // New observer panics must unwind only after native cleanup, then the same
+    // model must accept a real inference request with a fresh cancellation flag.
+    let cancel = CancelHandle::new().unwrap();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = model
+                .prepare(&short, &options, &cancel)
+                .unwrap()
+                .generate_observed(
+                    &cancel,
+                    |_| StreamControl::Continue,
+                    |_| panic!("intentional observer panic"),
+                );
+        }))
+        .is_err()
+    );
+    let (text, usage) = collect(&mut model, &short, &options);
+    assert!(!text.is_empty() && usage.completion_tokens > 0);
+}

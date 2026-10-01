@@ -299,6 +299,13 @@ extern "C" void air_prepared_free(air_prepared *p) {
 extern "C" int32_t air_generate(air_prepared *raw, const air_cancel *cancel,
                                 air_text_callback callback, void *user,
                                 air_usage *usage, air_error *error) {
+  return air_generate_observed(raw, cancel, callback, user, nullptr, nullptr,
+                               usage, error);
+}
+extern "C" int32_t air_generate_observed(
+    air_prepared *raw, const air_cancel *cancel, air_text_callback callback,
+    void *user, air_progress_callback progress, void *progress_user,
+    air_usage *usage, air_error *error) {
   std::unique_ptr<air_prepared> p(raw);
   if (usage)
     *usage = {0, 0, 3};
@@ -335,6 +342,13 @@ extern "C" int32_t air_generate(air_prepared *raw, const air_cancel *cancel,
       llama_sampler_chain_add(sampler.get(),
                               llama_sampler_init_dist(p->options.seed));
     }
+    auto observe = [&](uint32_t phase, uint32_t completed) {
+      if (progress && progress(progress_user, phase, completed,
+                               usage->prompt_tokens) != 0)
+        throw failure(8, "progress consumer stopped");
+      check_cancel(cancel);
+    };
+    observe(0, 0);
     for (size_t i = 0; i < p->tokens.size(); i += p->model->batch) {
       check_cancel(cancel);
       auto batch = llama_batch_get_one(
@@ -344,7 +358,10 @@ extern "C" int32_t air_generate(air_prepared *raw, const air_cancel *cancel,
       check_cancel(cancel);
       if (r)
         throw failure(6, "prefill failed");
+      observe(1, static_cast<uint32_t>(std::min<size_t>(
+                     i + p->model->batch, p->tokens.size())));
     }
+    observe(2, usage->prompt_tokens);
     air_stream_buffer stream(p->stops);
     auto emit = [&](bool final) {
       stream.flush(final, [&](const std::string &chunk) {
@@ -418,7 +435,7 @@ extern "C" int32_t air_get_build_info(air_buffer *out, air_error *error) {
   return guarded(error, [&] {
     if (!out)
       throw failure(1, "null output");
-    *out = buffer("{\"shim_version\":1,\"backend\":\"cpu\",\"llama_commit\":"
+    *out = buffer("{\"shim_version\":2,\"backend\":\"cpu\",\"llama_commit\":"
                   "\"" AIR_LLAMA_COMMIT "\"}");
   });
 }

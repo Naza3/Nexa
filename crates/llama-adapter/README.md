@@ -1,12 +1,13 @@
 # llama-adapter
 
-T01 的 Rust 安全包装，原生实现固定为 `native/llama-shim/include/air_llama.h` ABI v1。
+T01/T02 的 Rust 安全包装，原生实现固定为 `native/llama-shim/include/air_llama.h` ABI v2。保留 v1 符号及结构布局；新 `air_generate_observed` 为追加入口，新 adapter 需要包含该入口的 v2 shim。
 
 - `Engine::load(&mut self)` 返回借用 engine 的 `Model`
 - `Model::prepare(&mut self)` 应用真实模板、tokenizer 和上下文预算，返回借用 model 的 `Prepared`
 - `Prepared::generate(self)` 每条请求只消费一次，返回正常结束或带真实 usage 的错误；丢弃未运行的 Prepared 也会清理
+- `Prepared::generate_observed` 额外回调 prefill 开始、成功批次及 decode 开始；只报告数值进度，不能用耗时猜阶段，进度回调必须立即返回
 - engine/model/prepared 不能跨线程；`CancelHandle` 是单次、可克隆、可跨线程的独立原子取消标志
-- 回调借用完整 UTF-8，最多 4096 字节。调用方必须快速复制/有界入队，不在回调内阻塞。回调 panic 在 C ABI 内被捕获，原生清理后在 Rust 栈恢复（`panic=unwind`）
+- 回调借用完整 UTF-8，最多 4096 字节。调用方快速复制/有界入队；允许在 decode 步骤之间等待同一有界输出预算，但必须可由取消唤醒、设有限时且不持额外原生锁，禁止无限阻塞。回调 panic 在 C ABI 内被捕获，原生清理后在 Rust 栈恢复（`panic=unwind`）
 - 原生错误仅供受信任宿主诊断，不能未经清洗通过 HTTP 暴露。示例只记录数值、hash 和错误类别，不记录消息内容
 - seed `u32::MAX` 是上游随机哨兵，其他 seed 只在同模型/后端/硬件/工具链内尽力复现
 
@@ -29,8 +30,10 @@ AIR_NATIVE_DIR="$PWD/build/native-release" cargo build --locked -p llama-adapter
 cargo run --locked -p llama-adapter --example native-smoke -- \
   --model /path/to/locked.gguf --prompt-file tests/fixtures/chinese.txt \
   --mode generate --context-size 2048 --max-tokens 64 --repeat 2
-NEXA_TEST_MODEL=/path/to/locked.gguf cargo test --locked -p llama-adapter \
+NEXA_TEST_MODEL=/path/to/locked.gguf NEXA_TEST_THREADS=2 cargo test --locked -p llama-adapter \
   --test real_model -- --ignored --test-threads=1
 ```
 
 `native-smoke --help` 列出取消、背压和预算模式；`xtask native-smoke` 驱动多场景并校验锁定元数据。默认单测不加载模型，显式忽略的真实模型测试覆盖 stop 命中、上下文超限、丢弃 prepared、取消/消费者停止/panic 后同一模型恢复及重复加载释放。仅测试通过不代表推理质量或目标设备性能验收。
+
+A08 的 `real_model_observed_prefill_and_decode_cancellation` 先校验固定官方 GGUF SHA-256，再由独立控制线程在成功完成且未完成全部 prompt 的 prefill 批次观测后取消。必须没有进入 decode、completion_tokens=0，单独记录取消到安全返回延迟；decode 取消另测。它还验证新 progress 回调 panic 的隔离及同模型恢复。该测试通过的设备/线程配置见验证记录，不扩大原支持矩阵。
