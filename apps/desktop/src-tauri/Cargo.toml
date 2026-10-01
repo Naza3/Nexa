@@ -17,12 +17,12 @@ uuid = { version = "=1.26.1", features = ["v4", "serde"] }
 [target.'cfg(windows)'.dependencies]
 desktop-bridge = { path = "../../../crates/desktop-bridge" }
 runtime-api = { path = "../../../crates/runtime-api" }
-tauri = { package = "tauri", version = "=2.12.1" }
+tauri = { package = "tauri", version = "=2.12.1", features = [] }
 rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
 clipboard-win = "=5.4.1"
 
 [build-dependencies]
-tauri-build = "=2.7.1"
+tauri-build = { version = "=2.7.1", features = [] }
 
 [dev-dependencies]
 tempfile = "=3.27.0"

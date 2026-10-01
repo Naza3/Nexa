@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 import package_desktop_windows as pack
@@ -112,3 +113,14 @@ class DesktopPackageTests(unittest.TestCase):
         for item in sources["files"] + native["components"][0]["license_files"]:
             self.assertEqual(pack.base.digest(root / item["path"]), item["sha256"])
         self.assertEqual(native["components"][0]["crate_file"], "x64/WebView2LoaderStatic.lib")
+
+    def test_tauri_cli_managed_feature_arrays_are_explicit(self):
+        # Tauri CLI 2.12.1 persists these arrays before invoking cargo, even with
+        # --locked. Omitting them changes source and must not be ignored away.
+        manifest = tomllib.loads((pack.SHELL / "Cargo.toml").read_text(encoding="utf-8"))
+        tauri = manifest["target"]["cfg(windows)"]["dependencies"]["tauri"]
+        build = manifest["build-dependencies"]["tauri-build"]
+        self.assertEqual(tauri["version"], "=2.12.1")
+        self.assertEqual(build["version"], "=2.7.1")
+        self.assertEqual(tauri["features"], [])
+        self.assertEqual(build["features"], [])

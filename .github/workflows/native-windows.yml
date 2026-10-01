@@ -86,6 +86,16 @@ jobs:
             npm run tauri -- build --ci --no-bundle --target x86_64-pc-windows-msvc -- --locked 2>&1 | Tee-Object -FilePath ../../artifacts/verification/windows-desktop-build.log
             if ($LASTEXITCODE -ne 0) { throw 'Actual Tauri Release build failed' }
           } finally { Pop-Location }
+          # Tauri CLI can rewrite Cargo.toml features even when Cargo uses --locked.
+          # Refuse that source drift before spending time on the native build.
+          # Porcelain records only repo-relative paths, never changed contents.
+          $sourceStatus = @(git status --porcelain --untracked-files=all)
+          if ($LASTEXITCODE -ne 0) { throw 'Post-Tauri source status check failed' }
+          if ($sourceStatus.Count -gt 0) {
+            $sourceStatus | Tee-Object -FilePath artifacts/verification/windows-desktop-source-status.log
+            throw 'Tauri build left changed or untracked source; clean CI source is required'
+          }
+          'Source clean after actual Tauri build' | Set-Content -Encoding utf8 artifacts/verification/windows-desktop-source-status.log
       - name: Build management harness without native libraries
         run: |
           $ErrorActionPreference = 'Stop'

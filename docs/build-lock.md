@@ -91,7 +91,7 @@ T05源码6a7e9d0的Cargo.lock LF SHA-256为`4c7533fa5c496faafc6c74bf4b222120d6dd
 第五轮[CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)实际成功组合：Server2022 build10.0.20348.5622 / image20260927.320.1 / AMD EPYC7763 / 2逻辑CPU；VS2022 Enterprise17.14.37710.0、MSVC19.44.35229.0、VCTools14.44.35207、SDK10.0.26100.0。CRT来自所选实例Redist14.44.35112，DLL文件版14.44.35211.0，产品3个/工具1个app-local DLL均由固定系统PowerShell5.1验证Valid/Microsoft。产品/工具源manifest均6a7e9d0、tree498d0a9、dirty=false；详细hash/体积/真实Release验收见T05报告。此CI安装环境不代表用户拥有相同VS edition，也不代替Win10无开发工具/离线验收。
 
 
-## T06 桌面依赖与构建隔离（Linux已验部分，Windows原生待CI）
+## T06 桌面依赖与构建隔离（首轮Windows构建已过，解压验收待修复复验）
 
 实际registry精确锁与本地验证组合：Node24.19.0/npm11.9.0，React/ReactDOM19.3.0、Tauri JS API/CLI2.12.1、Vite8.3.1、TypeScript5.9.3、Vitest5.0.3、ESLint10.11.0。`apps/desktop/package-lock.json`独立管理前端；`npm ci`、typecheck/lint、36tests、生产build与audit0已实际通过。生产JS260464bytes、CSS17539bytes、HTML457bytes；构建排除了显式preview mock，未验证的浏览器交互和原生UI仍分层保留。
 
@@ -101,4 +101,7 @@ Linux壳使用专用target完成5共享模块测试、clippy/fmt；Windows-targe
 
 桌面原许可库存含registry省略原文的精确补件，以及已核对的Microsoft WebView2 SDK1.0.3800.47静态x64loader原LICENSE/NOTICE。SDK整包SHA256为`56c9f26bdd07916a2d1949fb58a5c7e434dfa1173577dca879206050c4e718db`，registry crate中的loader与SDK原件逐字节一致，SHA256为`89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8`。来源/许可校验清单见`packaging/desktop-windows/third-party/`，打包时再次按hash/源revision验证，不在打包时联网下载补件。
 
-锁文件实际字节hash写入每次桌面manifest，Windows checkout换行差异不以Linux字节hash硬断言。完整来源一致性必须与同次T05 runtime manifest匹配，不能拿另一源码版本的runtime目录拼包。新增CI尚待运行；具体结果见[T06验证](verification/2026-10-01-t06-desktop.md)。
+锁文件实际字节hash写入每次桌面manifest，Windows checkout换行差异不以Linux字节hash硬断言。完整来源一致性必须与同次T05 runtime manifest匹配，不能拿另一源码版本的runtime目录拼包。首轮CI36838790221真实Windows编译/PE/许可打包已过，因Tauri CLI对manifest注入空features导致dirty，T05/T06解压验收均被洁净源码门槛拦下。修复将本版CLI确切生成的features数组纳入源码，并在Tauri后早期断言clean，保持后续门槛；新源码CI仍待复验。具体结果见[T06验证](verification/2026-10-01-t06-desktop.md)。
+
+
+Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package = "tauri", version = "=2.12.1", features = [] }`与`tauri-build = { version = "=2.7.1", features = [] }`是本次实际CLI生成并二次运行保持字节不变的形式；没有改变依赖版本或根锁。源码清洁度断言属于必要发行门槛，不能因工具写回而忽略manifest。
