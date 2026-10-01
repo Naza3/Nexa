@@ -13,7 +13,7 @@
 ## 已有工程事实
 
 - 原始远程提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168` 已通过 GitHub 原始对象精确重建本地 Git；初始 tree/commit SHA 一致，未创建替代历史
-- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建/桌面诊断已通过，完整Release bridge与UI操作尚未通过；仍无移动工程
+- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建/桌面诊断/完整Release bridge已通过，用户原生UI操作待验证；仍无移动工程
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
@@ -41,7 +41,7 @@
 | T03 PC worker | 已完成 | a8930494在Windows CI36801681068通过：Job父子/后代回收、五秒强杀、单账本IPC、144项Rust+5项真实模型及独立无native父端链；范围见T03记录 |
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；用户Win10 build19044 / i5-8400短验已通过且包identity一致；按用户最新范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
-| T06 Windows UI | 进行中 | bridge/React/Tauri/桌面包已实现；真实Windows原生构建、PE/许可、源码clean、桌面诊断与旧T05完整验收通过；c8dff8的CI36855675437最终bridge步骤15分钟超时，未产出完整生命周期报告；仅修验收工具的继承stdout/EOF有界等待，完整Windows复验及用户UI仍待完成 |
+| T06 Windows UI | 待验证 | bc43e0f3的CI36864041027全成功：真正Tauri/源码clean/PE许可/中文空格解压、真实Release bridge默认关UI后同runtime可访问与同时退出回收均通过；桌面ZIP已独立核验，仍待用户Win10原生窗口选模/聊天/剪贴板/关闭事件，不能称完整完成 |
 | T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | 本轮Linux仅开发探针，不是扩展平台发布 |
@@ -60,7 +60,7 @@
 
 1. T00–T04阶段证据已收口，继续授权开发分支，不合并或部署
 2. T05源码6a7e9d0的Windows CI36829233039已通过，产品/工具ZIP已独立复核并供用户本地验收；用户Windows10 / i5-8400报告已回，产品与验收器identity匹配该交付包
-3. T06真实Windows Tauri构建/PE/许可/中文空格桌面诊断已通过；修复验收工具等待后代继承stdout造成的无界EOF依赖，重跑完整Release bridge确认两种关闭语义后，再供用户Win10原生UI导入/聊天/停止/关闭验收；不把探针或bridge harness当窗口已验
+3. T06源码bc43e0f3的Windows CI36864041027全成功，桌面包完整性/来源/PE/许可与真实Release bridge生命周期已独立复核；下一步用户Win10原生UI导入/聊天/停止/剪贴板/关闭验收，不把探针或bridge harness当窗口已验
 4. 无开发工具、实际离线和长期稳定性列为后期验证；VC预装与RAM未知，Windows11/Android另行实测，不泛化当前支持证据
 5. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
 
@@ -77,6 +77,10 @@
 
 已实际完成：前端锁重装、typecheck/lint/build、36测试和npm audit 0；Linux真实模型bridge两种独立进程退出语义通过。Windows已多次完成真正Tauri Release、源码clean、PE/原许可闭包、完整T05包16项及HTTP89pass/9skip、50/50/50断流；实际桌面诊断包验证通过，已装WebView2为131.0.2903.86。早期同EXE对照观察宿主Job下BREAKAWAY返回OS5、继承Job则正常启动/退出且Ctrl+C pending；生产仅移除BREAKAWAY，保留DETACHED/NEWGROUP，不改Job/权限或CLI信号。
 
-最新源码c8dff8a8992f714ee2b121f6a134da47a0d03537的CI36855675437在2026-10-01 12:30:05 UTC最终桌面bridge步骤被15分钟平台时限终止；前23步骤通过，但bridge-real、bridge-failure与acceptance三份报告均缺失，没有产品包发布。独立合成复现发现验收harness的reader.join/EOF与Python Windows communicate在后代持writer时可无界等待；现只修测试工具为私有有界文件报告/直接子进程有限wait和reap，原时限/生产flags/最终gate不变。修复后Linux根283测试通过、包装Python66测试（2Windows-only skip）通过；仍须新源码完整Windows Release bridge复验。
+最新交付源码`bc43e0f3ac215d41e5d93cccf670ab43d67d41c0`、tree`beb8647c1e6494591f36af38535554f7678719d0`的[CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)于13:31:29 UTC已确认completed/success：Windows根278pass/0fail/6ignored、壳4tests、早期Rust传输8tests、Python66tests全部通过；完整桌面Release bridge真实导入/生成/取消再生成、同实例连接、实际宿主进程退出后API仍可访问、同时退出回收worker/实例及空闲设置语义全部通过，五类实际路径均含中文和空格，包未被修改。
+
+桌面原ZIP9,507,755bytes，SHA256 `2ea95591ddabc4e7ae930ea166e6343f6aad275fa01975d3eb7bebbef0546fe9`；私有Actions artifact`11166511363`。750文件、嵌套runtime同source/tree、所有hash/许可、6个PE/import闭包均已独立重算核验。安装29,501,813bytes，其中完整runtime14,203,784bytes、UI EXE10,573,312bytes，模型0bytes。工具等待缺口已通过真实Windows早期回归和完整Release链验证；此前失败/取消证据均保留于T06记录。原生窗口报告仍为`native_window_tested=false`，T06状态保持待用户UI验收，不冒充完成。
+
+13:37 UTC已向用户交付完整原桌面ZIP，外文件名为`Nexa-Win10-Desktop-验收包-bc43e0f.zip`；内部字节与上述SHA256保持不变，当前等待用户Windows10原生UI验收反馈。
 
 云浏览器127.0.0.1预览曾被客户端阻止，未完成视觉交互；用户Win10原生选模/剪贴板/关闭事件仍待实际操作。Nexa不创建kill-on-UI-close的runtime Job，尊重外部宿主Job/会话整体终止，不承诺脱离其生命周期。T05旧发行范围及用户延后无开发工具、离线、长期稳定性的决定不变。

@@ -91,7 +91,7 @@ T05源码6a7e9d0的Cargo.lock LF SHA-256为`4c7533fa5c496faafc6c74bf4b222120d6dd
 第五轮[CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)实际成功组合：Server2022 build10.0.20348.5622 / image20260927.320.1 / AMD EPYC7763 / 2逻辑CPU；VS2022 Enterprise17.14.37710.0、MSVC19.44.35229.0、VCTools14.44.35207、SDK10.0.26100.0。CRT来自所选实例Redist14.44.35112，DLL文件版14.44.35211.0，产品3个/工具1个app-local DLL均由固定系统PowerShell5.1验证Valid/Microsoft。产品/工具源manifest均6a7e9d0、tree498d0a9、dirty=false；详细hash/体积/真实Release验收见T05报告。此CI安装环境不代表用户拥有相同VS edition，也不代替Win10无开发工具/离线验收。
 
 
-## T06 桌面依赖与构建隔离（Windows构建/诊断已过，验收工具有界等待修复待复验）
+## T06 桌面依赖与构建隔离（Windows完整构建/桌面包/Release bridge已过，用户UI待验）
 
 实际registry精确锁与本地验证组合：Node24.19.0/npm11.9.0，React/ReactDOM19.3.0、Tauri JS API/CLI2.12.1、Vite8.3.1、TypeScript5.9.3、Vitest5.0.3、ESLint10.11.0。`apps/desktop/package-lock.json`独立管理前端；`npm ci`、typecheck/lint、36tests、生产build与audit0已实际通过。生产JS260464bytes、CSS17539bytes、HTML457bytes；构建排除了显式preview mock，未验证的浏览器交互和原生UI仍分层保留。
 
@@ -108,3 +108,6 @@ Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package 
 
 
 第五轮源码c8dff8的CI36855675437保留同一工具链与依赖锁，真正Tauri Release/源码clean/桌面诊断和T05完整解压验收通过；最终桌面bridge步骤被15分钟平台时限终止，未完成产品验收。当前修复仅涉及harness私有文件报告及Python直接子进程有界等待，不升级依赖、不改变生产启动flags或延长时限；完整证据与未通过项见T06记录。
+
+
+第六轮源码`bc43e0f3ac215d41e5d93cccf670ab43d67d41c0`的[CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)于13:31:29 UTC已确认completed/success，依赖/工具链锁保持原组合。真正Tauri Release、早期Windows无模型传输回归、T05与T06完整解压/真实模型bridge均通过；桌面ZIP9,507,755bytes（SHA256 `2ea95591ddabc4e7ae930ea166e6343f6aad275fa01975d3eb7bebbef0546fe9`），manifest SHA256 `c8a259d2ba20fa90c5dac7e21d8e13e7c22fd28e091d11c7b037ecb2cdc34673`，完整下载包的库存/hash/许可/PE闭包已独立复核。用户Win10原生窗口操作仍未验证，详见T06记录。

@@ -115,3 +115,6 @@ python scripts/package_desktop_windows.py
 真实构建输出位于`build/desktop/cargo/x86_64-pc-windows-msvc/release/`。独立packager只拼合已构建Tauri EXE与完整匹配T05包；无签名、公网发布、安装器、WebView2自动下载或模型捆绑。`scripts/run_desktop_smoke.py --model <GGUF> --harness <真实bridge验收器>`从中文空格临时路径解压桌面ZIP，校验完整性、实际WebView2版本并运行真实bridge；失败保留本次目录，避免未确认清理时删除使用中的data。
 
 壳`--diagnose`和bridge报告明确不证明原生窗口UI已操作。实际Windows10原生选择、真实聊天、取消、剪贴板与两种关闭语义按[桌面README](../packaging/desktop-windows/README.md)手工验收；当前[验证记录](../docs/verification/2026-10-01-t06-desktop.md)区分Linux、WindowsCI及用户UI结果。
+
+
+2026-10-01源码`bc43e0f3`的[Windows CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)已实际通过上述Tauri/桌面打包及Release bridge全链：原生诊断、中文空格路径、真实导入/聊天/取消/再次生成、独立UI宿主退出保留runtime、同时退出回收均已留证。该结果只证明真实bridge和产品包，不代表Tauri原生窗口事件、选模对话框或剪贴板已实测；T06当前待用户Win10手工UI验收。
