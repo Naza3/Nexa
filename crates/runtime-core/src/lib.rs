@@ -3,7 +3,7 @@ mod executor;
 mod output;
 mod scheduler;
 pub use executor::*;
-pub use output::{EventReceiver, MAX_BUFFERED_TEXT_BYTES, MAX_DELTA_BYTES};
+pub use output::{EventLease, EventReceiver, MAX_BUFFERED_TEXT_BYTES, MAX_DELTA_BYTES, TextPermit};
 use runtime_types::{ModelId, ResolvedModel, RuntimeError};
 pub use scheduler::{Runtime, RuntimeHandle};
 /// A bounded metadata/path lookup. Perform imports and whole-file integrity

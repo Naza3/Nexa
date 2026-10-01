@@ -80,7 +80,8 @@ flowchart TD
 | runtime-types | 请求、事件、错误、配置的数据类型与协议版本 | UI、原生指针 |
 | runtime-core | 队列、任务取消、模型状态、超时、空闲卸载 | llama.h、HTTP、Flutter 类型 |
 | model-store | 导入、校验、manifest、目录与原子写入 | 自动寻找和下载模型 |
-| engine-host | 把核心操作映射到进程或嵌入式执行器 | 业务会话历史 |
+| engine-host | 专用原生线程执行器，worker/移动嵌入共用 | 第二套调度、业务会话历史 |
+| process-host / runtime-ipc | 父进程执行器、进程隔离与私有协议 | 父进程链接原生库 |
 | llama-adapter | 模板、分词、采样、prefill、decode、资源释放 | HTTP、App 页面 |
 | runtime-api | 鉴权、请求验证、HTTP/SSE 映射 | 直接操作模型指针 |
 | runtime-worker | IPC 控制、推理线程、原生崩溃隔离 | 公开监听端口 |
@@ -115,7 +116,8 @@ Flutter 通过 Rust 桥提交请求与接收事件。Rust 创建专用推理线�
 | `crates/runtime-types/` | 类型、事件、错误和序列化 |
 | `crates/runtime-core/` | 调度器、生命周期、资源策略 |
 | `crates/model-store/` | GGUF 导入与 manifest 管理 |
-| `crates/engine-host/` | PC 进程执行器与移动嵌入执行器 |
+| `crates/engine-host/` | worker 与移动嵌入共用的原生线程执行器 |
+| `crates/process-host/`、`crates/runtime-ipc/` | PC父进程执行器、私有NDJSON与信用校验 |
 | `crates/llama-adapter/` | Rust 安全封装及 native 构建入口 |
 | `crates/runtime-api/` | Axum 路由、鉴权、SSE |
 | `crates/runtime-worker/` | `ai-runtime-worker` 二进制 |
@@ -268,6 +270,8 @@ Android 覆盖默认值：context_size=2048、max_output_tokens=256、max_queued
 
 内存预算包含权重、KV cache、计算缓冲、运行时与 UI。内存不足时优先提示减少上下文或使用更小模型；不在用户不知道的情况下改变模型、量化或历史内容。
 
+每次实际加载（含idle重载和显式恢复Unload后）须重新resolve模型并检查ID、当前验证/指纹与context限制；选中缓存不是永久验证许可。变化时拒绝native Load，保留模型ID和原参数，完整校验仍在actor外进行。
+
 空闲计时只在无活动任务、无排队任务时启动。计时器触发与新请求到达由调度器串行决定，禁止卸载正在推理的 context。
 
 ## 6. 调度、状态与取消
@@ -297,6 +301,8 @@ stateDiagram-v2
 - 同模型、同参数重复 load 为幂等操作；显式 unload 同样要求任务全部结束。
 - 重启 runtime 后 selected_model 为空；不恢复旧任务。
 - 加载失败使当前批次任务失败；不能让后续请求无限等待。Faulted 只接受查询、关停或显式 load 重试。
+
+进程回收未获OS确认是窄化的fail-closed例外：父端专用CleanupUnconfirmed事件使状态保持Faulted、last_error为executor_cleanup_unconfirmed，当前及排队请求均Failed（即使先前已请求取消）。此执行器不可再显式Load恢复，不允许创建第二个child；shutdown必须有界返回清理错误，不能冒充reaped或安全ACK。状态查询仍可用，诊断保留未确认PID；该事件/错误码不允许worker通过wire声明。它不改变普通已确认死亡后的显式Load恢复规则。
 
 ### 6.2 请求状态与事件
 
@@ -328,14 +334,22 @@ stateDiagram-v2
 
 ### 6.4 PC IPC
 
-使用逐行 JSON（NDJSON），每帧一行，字符串内换行由 JSON 转义。帧带 protocol_version、kind、request_id、payload；事件另带 seq。
+使用逐行 JSON（NDJSON），每帧一行，字符串内换行由 JSON 转义。共享实现位于 runtime-ipc，父端 process-host 不链接原生库；runtime-worker 直接使用 EngineHost，不创建第二个 Runtime。父端仍是公共状态、FIFO、deadline 与 request seq 的唯一来源。
 
-- 请求帧上限 2 MiB，事件帧上限 64 KiB；超限/畸形帧触发协议错误并回收 worker。
-- 启动先交换 Hello，核对 protocol、shim 与 llama commit；不匹配则拒绝执行。
-- worker 的管道读取/控制线程独立于推理线程，Cancel 不等待 Generate 返回。
-- stdout 只用于协议，llama 和 Rust 日志全部重定向到 stderr。
-- 写事件采用有界队列及可取消写入；stdout 阻塞不得阻塞读取取消命令。
-- EOF、破损帧、worker 异常退出都要让所有受影响的请求收到一次终态。
+- 每帧带 protocol_version、session_id（每次spawn的新UUID）、operation_id、request_id、kind、payload及seq。Hello和命令的seq为null；worker事件seq从1开始，在同session内严格递增，不重置为公共seq
+- 请求帧上限2 MiB，事件帧上限64 KiB，均包含最后LF。完整编码必须在首次写出前检查；读取在累积前检查上限，拒绝残缺EOF、非法UTF-8、未知字段/kind、重复字段、版本或身份不符
+- 父端先发送Hello并指定session；worker读取实际build_info，双方严格核对protocol=1、shim=2、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
+- 命令为Load、Generate、Unload、Cancel、Credit、Shutdown。普通操作operation_id非零递增，Generate的request_id须与payload相同；Cancel/Credit只作用于绑定的session/operation/request。Shutdown为session控制帧，operation_id=0、request_id=null
+- 事件为原始ExecutorEvent，包括Prepared、TextDelta和清理后的终态；Loaded/Unloaded对应各自操作。Prepared只能一次，TextDelta/Completed不能抢在它前面，usage须匹配Prepared及请求max_tokens；每操作仅一次终态
+- 父端是唯一输出预算账本。每Generate预留16 KiB暂存和最多两个120 KiB信用，合计≤256 KiB。信用ID在session内非零严格递增，每个信用只准一次≤4 KiB UTF-8 delta，其完整编码≤25 KiB（最坏24 KiB转义正文+1 KiB封套）
+- 信用不会在worker写出或父端读取时自动归还。不可复制的TextPermit贯穿IPC→actor→EventLease；消费写入完成/丢弃后才释放。关闭、旧代际、失败或未用信用仅释放自己持有的permit，不把共享总账本清零
+- 最近已结束操作可接收在终态传播竞态中刚发出的新Credit并立即退休；迟到Cancel幂等，均不得转用于下一操作。重复/倒退信用、跨session或其他旧operation仍是协议错误
+- 两信用是保守内存取舍，不是吞吐保证。256 KiB只表示callback之后合规待发送输出的保守账本；输入帧、畸形帧解析有独立硬限，模型、KV、原生tokenizer/stop暂存、分配器与线程栈另计，不能宣传整个堆≤256 KiB
+- worker读取控制线程独立于推理和stdout写线程。Cancel立即设置独立标志并唤醒信用等待；stdout阻塞不得堵住读取取消。stdout只用于协议，原生日志写stderr
+- 首次取消开始五秒宽限，重复取消不重置期限。未获安全清理ACK时终止并回收整个worker，确认死亡后才报告Faulted；正常终态在资源清理后发送，槽位一直保留到ACK/已回收故障
+- EOF、破损帧、异常退出、握手或退出超时使受影响请求内部各终结一次；不重放任何部分输出。Faulted后只由显式Load启动新worker；旧worker已回收时显式Load恢复链内部的ExecutorCommand::Unload可直接确认；Faulted下公共unload仍返回RuntimeFaulted。Runtime shutdown还等待Executor::close完成并报告回收错误
+
+Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md) 及 [T03验证](docs/verification/2026-10-01-t03-worker.md)，不把Linux开发探针当作Windows目标验收。
 
 ## 7. HTTP 与客户端契约
 
@@ -519,8 +533,8 @@ Flutter 的推理事件流订阅不代替取消句柄：初始化得到 runtime 
 
 ### 9.2 编译边界
 
-- `engine-host/process` 只编译 IPC 客户端，不依赖 llama 原生库。
-- `engine-host/embedded` 引入 llama-adapter，供移动端使用。
+- `process-host` 只编译 IPC 客户端，不依赖 engine-host、llama-adapter 或原生库。
+- `engine-host` 引入 llama-adapter，供 runtime-worker 和未来移动嵌入使用；worker 不启动第二个 Runtime。
 - worker 的 backend-cpu/cuda/vulkan/metal 功能按目标构建；GPU 功能仍保留 CPU 路径。
 - 构建脚本仅从锁定 vendor 源码构建，不在 build.rs 中执行 git pull 或下载未知二进制。
 - x64/arm64 发布包不能直接使用构建机的全部本机指令集。关闭隐式 native 优化，并验证选定的基础指令集；不要假定单个开关等于兼容所有旧 CPU。

@@ -21,7 +21,7 @@
 
 ## 当前工程入口
 
-已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
+已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
 
 - [构建锁](docs/build-lock.md)：固定上游/工具链、实际编译参数与限制
 - [模型矩阵](docs/model-matrix.md)：真实模型与模板 hash
@@ -34,6 +34,11 @@
 - [原生执行器](crates/engine-host/README.md)：专用线程和真实端到端测试
 - [T02决策](docs/decisions/0003-t02-scheduler-storage-and-observability.md)：存储/调度、shim2与验证边界
 - [T02验证](docs/verification/2026-10-01-t02-runtime.md)：逻辑测试与真实模型证据，目标平台状态
+- [T03协议](crates/runtime-ipc/README.md)：私有NDJSON、session/operation/seq、信用与有界codec
+- [T03父端](crates/process-host/README.md)：纯Rust管理进程、平台containment、故障与回收
+- [T03 worker](crates/runtime-worker/README.md)：独立控制/写入/原生线程、信用与真实模型验证
+- [T03决策](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md)：独立worker、单一账本与消费lease
+- [T03验证](docs/verification/2026-10-01-t03-worker.md)：逐项记录逻辑/进程/真实模型/Windows边界
 
 ## runtime 全量路径与规划
 
@@ -45,7 +50,8 @@
 | `crates/runtime-types/` | 自有 DTO、事件、错误和版本 | T01/T02；第 2、6 节 |
 | `crates/runtime-core/` | actor、模型状态、队列、取消、deadline | T02；第 5–6 节 |
 | `crates/model-store/` | 文件导入、manifest、原子提交 | T02；第 5 节 |
-| `crates/engine-host/` | process / embedded 执行器 | T02/T03/T07；第 2、9 节 |
+| `crates/engine-host/` | worker/移动共用原生线程执行器 | T02/T03/T07；第 2、9 节 |
+| `crates/process-host/`、`crates/runtime-ipc/` | 父进程执行器、严格协议与信用校验 | T03；第6.4节 |
 | `crates/llama-adapter/`、`native/llama-shim/` | 安全封装、C ABI、模板和原生推理 | T01；第 4 节 |
 | `vendor/llama.cpp/` | 固定 commit 的上游源码 | T00；第 9 节 |
 | `crates/runtime-worker/` | PC IPC、控制线程、原生线程 | T03；第 6.4 节 |

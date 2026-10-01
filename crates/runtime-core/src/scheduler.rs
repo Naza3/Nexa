@@ -125,7 +125,7 @@ struct Job {
     waiting: bool,
 }
 impl Job {
-    fn event(&mut self, kind: RequestEventKind, charge: usize) {
+    fn event(&mut self, kind: RequestEventKind, permit: Option<crate::TextPermit>) {
         self.seq += 1;
         self.output.publish(
             RequestEvent {
@@ -133,7 +133,7 @@ impl Job {
                 seq: self.seq,
                 kind,
             },
-            charge,
+            permit,
         );
     }
     fn timings(&self) -> RequestTimings {
@@ -188,7 +188,7 @@ impl Job {
                 },
             }
         };
-        self.event(kind, 0);
+        self.event(kind, None);
     }
 }
 fn millis(d: Duration) -> u64 {
@@ -228,6 +228,7 @@ struct Actor {
     operation_id: u64,
     last_error: Option<RuntimeError>,
     poison: Option<RuntimeError>,
+    cleanup_error: Option<RuntimeError>,
     idle_since: Instant,
     stopping: bool,
     shutdown_replies: Vec<Reply<()>>,
@@ -257,6 +258,7 @@ impl Actor {
             operation_id: 0,
             last_error: None,
             poison: None,
+            cleanup_error: None,
             idle_since: Instant::now(),
             stopping: false,
             shutdown_replies: Vec::new(),
@@ -286,8 +288,10 @@ impl Actor {
                 && self.active.is_none()
                 && matches!(self.state, ModelState::Unloaded | ModelState::Faulted)
             {
+                let closed = self.executor.close();
+                let result = self.cleanup_error.clone().map_or(closed, Err);
                 for reply in self.shutdown_replies.drain(..) {
-                    let _ = reply.send(Ok(()));
+                    let _ = reply.send(result.clone());
                 }
                 break;
             }
@@ -417,15 +421,15 @@ impl Actor {
             started: false,
             waiting: false,
         };
-        job.event(RequestEventKind::Accepted, 0);
+        job.event(RequestEventKind::Accepted, None);
         if self.active.is_some() {
             job.waiting = true;
-            job.event(RequestEventKind::Queued, 0);
+            job.event(RequestEventKind::Queued, None);
             self.queue.push_back(job);
         } else {
             if matches!(self.operation, Some(Operation::Load { .. })) {
                 job.load_started = Some(Instant::now());
-                job.event(RequestEventKind::Loading, 0);
+                job.event(RequestEventKind::Loading, None);
             }
             self.active = Some(job);
             self.start_active();
@@ -433,6 +437,10 @@ impl Actor {
         Ok(EventReceiver { output })
     }
     fn explicit_load(&mut self, id: ModelId, options: LoadOptions, reply: Reply<()>) {
+        if let Some(error) = &self.cleanup_error {
+            let _ = reply.send(Err(error.clone()));
+            return;
+        }
         if let Some(err) = self.busy_error() {
             let _ = reply.send(Err(err));
             return;
@@ -461,23 +469,33 @@ impl Actor {
     }
     fn sink(&mut self, output: Option<Arc<Output>>) -> ExecutionEvents {
         self.operation_id += 1;
-        ExecutionEvents {
-            operation: self.operation_id,
-            sender: self.events.clone(),
-            output,
-        }
+        ExecutionEvents::for_actor(self.operation_id, self.events.clone(), output)
     }
     fn start_load(&mut self, reply: Option<Reply<()>>) {
         self.state = ModelState::Loading;
         self.last_error = None;
         if let Some(job) = &mut self.active {
             job.load_started = Some(Instant::now());
-            job.event(RequestEventKind::Loading, 0);
+            job.event(RequestEventKind::Loading, None);
         }
-        let command = ExecutorCommand::Load {
-            model: self.selected.clone().unwrap(),
-            options: self.options.unwrap(),
+        // Selection remembers identity/options, not an everlasting validation.
+        // Re-resolve at EVERY real load, including idle unload/reload and the
+        // post-Unload half of explicit recovery. The resolver only checks bounded
+        // metadata/fingerprints here; full verification belongs outside the actor.
+        let options = self.options.unwrap();
+        let id = self.selected.as_ref().unwrap().id.clone();
+        let model = match self.resolve(&id, options) {
+            Ok(model) => model,
+            Err(error) => {
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(error.clone()));
+                }
+                self.fault(error);
+                return;
+            }
         };
+        self.selected = Some(model.clone());
+        let command = ExecutorCommand::Load { model, options };
         let sink = self.sink(None);
         match self.executor.start(command, sink) {
             Ok(cancel) => {
@@ -616,7 +634,7 @@ impl Actor {
             job.timings.queue_ms = millis(job.enqueued.elapsed());
             job.waiting = false;
             job.load_started = Some(Instant::now());
-            job.event(RequestEventKind::Loading, 0);
+            job.event(RequestEventKind::Loading, None);
             self.active = Some(job);
         }
     }
@@ -629,21 +647,20 @@ impl Actor {
             self.start_active();
         }
     }
-    fn executor_event(&mut self, envelope: Envelope) {
+    fn executor_event(&mut self, mut envelope: Envelope) {
+        // A parent-local containment failure disables this executor even if its
+        // last callback scope has just retired. Never treat it as a stale ACK.
+        if let ExecutorEvent::CleanupUnconfirmed(error) = &envelope.event {
+            self.cleanup_unconfirmed(error.clone());
+            return;
+        }
+        if self.cleanup_error.is_some() {
+            return;
+        }
         if envelope.operation != self.operation_id {
-            if envelope.charge > 0
-                && let Some(output) = &envelope.output
-            {
-                output.release(envelope.charge);
-            }
             return;
         }
         if self.poison.is_some() {
-            if envelope.charge > 0
-                && let Some(output) = &envelope.output
-            {
-                output.release(envelope.charge);
-            }
             let ended = matches!(
                 (&self.operation, &envelope.event),
                 (
@@ -735,20 +752,20 @@ impl Actor {
                         return;
                     }
                     job.started = true;
-                    job.event(RequestEventKind::Started { prompt_tokens }, 0);
+                    job.usage.prompt_tokens = prompt_tokens;
+                    if job.output.reason().is_none() {
+                        job.event(RequestEventKind::Started { prompt_tokens }, None);
+                    }
                 }
             }
             ExecutorEvent::TextDelta(text) => {
                 if let Some(job) = &mut self.active {
                     if !job.started {
-                        job.output.release(envelope.charge);
                         self.protocol_fault();
                         return;
                     }
                     if job.output.reason().is_none() {
-                        job.event(RequestEventKind::TextDelta(text), envelope.charge);
-                    } else {
-                        job.output.release(envelope.charge);
+                        job.event(RequestEventKind::TextDelta(text), envelope.permit.take());
                     }
                 }
             }
@@ -807,6 +824,71 @@ impl Actor {
                 }
             }
             ExecutorEvent::Faulted(err) => self.fault(err),
+            ExecutorEvent::CleanupUnconfirmed(_) => {
+                unreachable!("handled before operation matching")
+            }
+        }
+    }
+    fn cleanup_unconfirmed(&mut self, _diagnostic: RuntimeError) {
+        if self.cleanup_error.is_some() {
+            return;
+        }
+        let cause = self
+            .active
+            .as_ref()
+            .and_then(|job| job.output.reason())
+            .or({
+                if self.stopping {
+                    Some(ErrorCode::RuntimeShutdown)
+                } else if matches!(self.operation, Some(Operation::Load { timeout: true, .. })) {
+                    Some(ErrorCode::LoadTimeout)
+                } else {
+                    None
+                }
+            });
+        let message = match cause {
+            Some(cause) => format!(
+                "executor cleanup could not be confirmed; original cause: {}",
+                cause.as_str()
+            ),
+            None => "executor cleanup could not be confirmed".into(),
+        };
+        let error = RuntimeError::new(ErrorCode::ExecutorCleanupUnconfirmed, message);
+        self.cleanup_error = Some(error.clone());
+        self.poison = None;
+        if let Some(operation) = self.operation.take() {
+            match operation {
+                Operation::Load { reply, .. } => {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(error.clone()));
+                    }
+                }
+                Operation::Unload { reply, next, .. } => {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(error.clone()));
+                    }
+                    if let Some((_, _, reply)) = next {
+                        let _ = reply.send(Err(error.clone()));
+                    }
+                }
+                Operation::Generate { .. } => {}
+            }
+        }
+        self.state = ModelState::Faulted;
+        self.last_error = Some(error.clone());
+        // Ordinary termination prioritizes a prior cancellation reason. Here
+        // failure to confirm stopping MUST remain visible as a failure instead.
+        for mut job in self.active.take().into_iter().chain(self.queue.drain(..)) {
+            let timings = job.timings();
+            let usage = job.usage;
+            job.event(
+                RequestEventKind::Failed {
+                    error: error.clone(),
+                    usage,
+                    timings,
+                },
+                None,
+            );
         }
     }
     fn operation_failed(&mut self, err: RuntimeError) {
@@ -876,7 +958,12 @@ impl Actor {
             cancel.cancel();
         }
     }
-    fn fault(&mut self, err: RuntimeError) {
+    fn fault(&mut self, mut err: RuntimeError) {
+        // A transport sees only the cancellation flag for Load. Preserve the
+        // actor's original deadline cause after the child has been reaped.
+        if matches!(self.operation, Some(Operation::Load { timeout: true, .. })) {
+            err = error(ErrorCode::LoadTimeout);
+        }
         self.poison = None;
         if let Some(operation) = self.operation.take() {
             match operation {
@@ -1063,8 +1150,7 @@ mod ledger_tests {
             actor.executor_event(Envelope {
                 operation: actor.operation_id,
                 event,
-                charge: 0,
-                output: None,
+                permit: None,
                 emitted_at: Instant::now(),
             });
         }

@@ -3,6 +3,7 @@
 //! This crate deliberately contains no HTTP types, native pointers, or scheduling
 //! implementation. Public wire DTOs will be introduced with their owning layers.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 mod scheduler;
@@ -18,7 +19,8 @@ pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
 /// llama.cpp uses this value to request a fresh random seed.
 pub const RANDOM_SEED: u32 = u32::MAX;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
     User,
@@ -36,7 +38,8 @@ impl Role {
 }
 
 /// Debug intentionally omits request text.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Message {
     pub role: Role,
     pub content: String,
@@ -60,7 +63,8 @@ impl fmt::Debug for Message {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoadOptions {
     pub context_size: u32,
     pub threads: u32,
@@ -94,7 +98,8 @@ impl LoadOptions {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GenerationOptions {
     pub max_tokens: u32,
     pub temperature: f32,
@@ -191,7 +196,8 @@ pub fn validate_messages(messages: &[Message]) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Usage {
     /// Includes the complete template and special tokens.
     pub prompt_tokens: u32,
@@ -205,7 +211,8 @@ impl Usage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
     Length,
@@ -220,7 +227,8 @@ impl FinishReason {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     InvalidArgument,
     RequestCancelled,
@@ -230,6 +238,7 @@ pub enum ErrorCode {
     NativeFailure,
     WrongThread,
     ConsumerStopped,
+    #[serde(rename = "native_protocol_error")]
     NativeProtocol,
     ModelNotFound,
     InvalidManifest,
@@ -249,6 +258,7 @@ pub enum ErrorCode {
     ExecutionTimeout,
     SlowConsumer,
     ExecutorUnavailable,
+    ExecutorCleanupUnconfirmed,
 }
 
 impl ErrorCode {
@@ -281,11 +291,13 @@ impl ErrorCode {
             Self::ExecutionTimeout => "execution_timeout",
             Self::SlowConsumer => "slow_consumer",
             Self::ExecutorUnavailable => "executor_unavailable",
+            Self::ExecutorCleanupUnconfirmed => "executor_cleanup_unconfirmed",
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeError {
     pub code: ErrorCode,
     /// Diagnostic text for the trusted host; do not expose native paths over HTTP.

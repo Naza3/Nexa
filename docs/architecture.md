@@ -1,6 +1,6 @@
 # Nexa 总体方案与架构
 
-日期：2026-09-30。本文是实施设计，模块和产物尚未实现；事实进度见 [当前状态](../PROJECT_STATE.md)。runtime 的具体协议、默认值和验收以 [执行规格](../ai-runtime-v0.1-execution-spec.md) 为准；范围依据见 [ADR 0001](decisions/0001-nexa-scope-and-layers.md)。
+日期：2026-10-01。本文描述设计与模块边界；各项是否已经实现和验证见 [当前状态](../PROJECT_STATE.md)。runtime 的具体协议、默认值和验收以 [执行规格](../ai-runtime-v0.1-execution-spec.md) 为准；范围依据见 [ADR 0001](decisions/0001-nexa-scope-and-layers.md)。
 
 ## 1. 目标与设计取舍
 
@@ -49,7 +49,9 @@ flowchart TB
 | runtime-types | 请求、事件、错误、模型标识与配置 DTO | 无平台 UI、HTTP、原生指针 |
 | runtime-core | 调度 actor、状态、队列、取消、超时和卸载策略 | 只依赖公共类型及存储/执行器抽象 |
 | model-store | 管理目录、GGUF 导入、manifest 与校验 | 不下载市场模型，不存聊天 |
-| engine-host | process / embedded 执行器实现 | process 不链接 llama；embedded 引入 adapter |
+| engine-host | 原生专用线程执行器，供 worker 和未来移动嵌入使用 | 引入 adapter；不创建第二调度器 |
+| process-host | PC 父进程执行器与子进程回收 | 只依赖纯 Rust core/types/IPC，不链接 llama |
+| runtime-ipc | 私有协议 DTO、严格有界 codec 与代际/信用校验 | 不含 native、HTTP 或第二套公共状态 |
 | llama-adapter + shim | 模板、tokenizer、采样、prefill/decode、原生资源 | 只在推理线程使用模型/context |
 | runtime-worker | IPC、独立控制路径、原生线程与错误隔离 | 无公开 HTTP 端口 |
 | runtime-api / runtime-cli | HTTP/SSE、鉴权、错误映射与管理命令 | 不直接操作模型指针 |
@@ -60,7 +62,7 @@ flowchart TB
 依赖组织规则：
 
 1. `runtime-types` 位于底层；原生类型不进入公共 DTO。
-2. core 所需 trait 由 core 的接口模块或公共抽象定义，engine-host/model-store 实现或被组装适配；避免 core 与 host 互相依赖。
+2. core 所需 trait 由 core 的接口模块或公共抽象定义，engine-host/process-host/model-store 实现或被组装适配；避免 core 与 host 互相依赖。
 3. API、worker、CLI、mobile 为组装入口。PC 父进程的最终依赖图不得引入原生推理库。
 4. 摘要层只依赖自有类型和 `InferenceClient` 抽象；HTTP 与嵌入适配器在宿主侧组装。
 5. 不为预测将来需要的每种后端预建空插件或大量空 crate；按纵向功能增加实际代码。
@@ -71,7 +73,7 @@ flowchart TB
 
 管理进程持有数据目录实例锁、认证令牌、模型注册表和调度器。首次有效请求可选定模型并加载；请求不同模型时遵守原规格的 model_conflict，不自动挤掉当前模型。
 
-worker 与父进程使用私有 stdin/stdout NDJSON。stdout 仅传协议，stderr 传日志；启动握手验证协议、shim 和 llama commit。控制读取与生成独立，取消不等待生成返回。事件写入有界且可取消。
+worker 与父进程使用私有 stdin/stdout NDJSON。stdout 仅传协议，stderr 传日志；启动握手验证协议、shim 和 llama commit。控制读取与生成独立，取消不等待生成返回。事件写入有界且可取消。父端是唯一 Runtime；worker 通过 ExecutionEvents sink 直接使用 EngineHost。每次子进程启动使用新 session UUID，每次操作另有单调 operation_id，wire seq 与公共请求 seq 分开。
 
 正常退出回收 worker；父进程异常退出由管道关闭和 Windows Job Object 等机制回收。worker 崩溃后当前及排队请求终结，进入 Faulted，显式 load 恢复。崩溃隔离不能替代 FFI 内存安全验证。
 
@@ -94,7 +96,7 @@ App 初始化一个 runtime 实例。原生模型由专用线程独占，桥只�
 
 queue、load、execution 分别计时。模板 token 计入输入；不得静默截断、跨请求复用 KV 或在输出后自动重放。
 
-每请求最多 256 KiB 待发送文本、delta 最多 4 KiB 等具体限制沿用执行规格。预算与慢消费者处理在原生回调、IPC、HTTP/桥接各层共同落实，不能只限制最后一层。
+每请求最多 256 KiB 待发送文本、delta 最多 4 KiB 等具体限制沿用执行规格。预算与慢消费者处理在原生回调、IPC、HTTP/桥接各层共同落实，不能只限制最后一层。PC 父端保守预留16 KiB暂存和两个120 KiB信用；每个信用只准一条≤4 KiB文本，实际消费或丢弃 EventLease 后才退账。详见 [T03决策](decisions/0004-t03-process-isolation-and-credit-ledger.md)。这个输出账本不等于模型、原生tokenizer、输入帧、分配器或整个进程内存上限。
 
 ### 4.4 业务任务与推理请求
 

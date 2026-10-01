@@ -296,6 +296,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "process-host"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "runtime-core",
+ "runtime-ipc",
+ "runtime-types",
+ "serde_json",
+ "tempfile",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -315,6 +329,18 @@ name = "runtime-core"
 version = "0.1.0"
 dependencies = [
  "runtime-types",
+ "serde",
+]
+
+[[package]]
+name = "runtime-ipc"
+version = "0.1.0"
+dependencies = [
+ "runtime-core",
+ "runtime-types",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -323,6 +349,19 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "uuid",
+]
+
+[[package]]
+name = "runtime-worker"
+version = "0.1.0"
+dependencies = [
+ "engine-host",
+ "llama-adapter",
+ "runtime-core",
+ "runtime-ipc",
+ "runtime-types",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

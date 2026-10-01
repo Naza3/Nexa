@@ -44,6 +44,15 @@ jobs:
           cargo --version
           cmake --version
           New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+      - name: Build management harness without native libraries
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:AIR_NATIVE_DIR = Join-Path $PWD 'deliberately-absent-native-libraries'
+          cargo tree --locked -p process-host --edges normal 2>&1 | Tee-Object -FilePath artifacts/verification/windows-process-host-dependencies.log
+          if ($LASTEXITCODE -ne 0) { throw 'Management dependency graph failed' }
+          if (Select-String -Path artifacts/verification/windows-process-host-dependencies.log -Pattern 'engine-host|llama-adapter|runtime-worker') { throw 'Management process links native inference dependency' }
+          cargo build --locked -p process-host --bin nexa-process-harness 2>&1 | Tee-Object -FilePath artifacts/verification/windows-management-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Independent management build failed' }
       - name: Build pinned upstream and shim
         id: native_build
         run: |
@@ -59,12 +68,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
           cargo fmt --all -- --check 2>&1 | Tee-Object -FilePath artifacts/verification/windows-rustfmt.log
           if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
-          cargo test --locked --workspace 2>&1 | Tee-Object -FilePath artifacts/verification/windows-rust-tests.log
+          cargo test --locked --workspace -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-rust-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'Unit or documentation tests failed' }
           cargo clippy --locked --workspace --all-targets -- -D warnings 2>&1 | Tee-Object -FilePath artifacts/verification/windows-clippy.log
           if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
           cargo build --locked -p llama-adapter --example native-smoke
           if ($LASTEXITCODE -ne 0) { throw 'Smoke build failed' }
+          cargo build --locked -p runtime-worker --bin ai-runtime-worker
+          if ($LASTEXITCODE -ne 0) { throw 'Worker build failed' }
       - name: Download exact public test model and verify identity
         id: model_identity
         run: |
@@ -108,6 +119,22 @@ jobs:
           $env:NEXA_TEST_THREADS = '2'
           cargo test --locked -p engine-host --test real_runtime -- --ignored --test-threads=1 --nocapture 2>&1 | Tee-Object -FilePath artifacts/verification/windows-real-runtime.log
           if ($LASTEXITCODE -ne 0) { throw 'Real model-store/runtime integration failed' }
+      - name: Verify real worker credit and cancellation
+        if: ${{ !cancelled() && steps.model_identity.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          $env:NEXA_TEST_MODEL = Join-Path $PWD 'models/qa-small.gguf'
+          $env:NEXA_TEST_THREADS = '2'
+          cargo test --locked -p runtime-worker --test real_credit -- --ignored --test-threads=1 --nocapture 2>&1 | Tee-Object -FilePath artifacts/verification/windows-worker-real-credit.log
+          if ($LASTEXITCODE -ne 0) { throw 'Real worker credit/cancellation integration failed' }
+      - name: Verify real isolated management and worker runtime
+        if: ${{ !cancelled() && steps.model_identity.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          $worker = Join-Path $PWD 'target/debug/ai-runtime-worker.exe'
+          $model = Join-Path $PWD 'models/qa-small.gguf'
+          & (Join-Path $PWD 'target/debug/nexa-process-harness.exe') real $worker $model 2>&1 | Tee-Object -FilePath artifacts/verification/windows-real-process-runtime.log
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated management/worker real-model integration failed' }
       - name: Record reusable compiled-tool hashes
         id: native_manifest
         if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
@@ -117,14 +144,14 @@ jobs:
           $entries = foreach ($file in $files) {
             @{ path = [IO.Path]::GetRelativePath($PWD, $file.FullName).Replace('\', '/'); sha256 = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); size_bytes = $file.Length }
           }
-          @{ schema_version = 1; project_commit = $env:GITHUB_SHA; files = @($entries) } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifacts/native-build-manifest.json
+          @{ schema_version = 1; project_commit = $env:GITHUB_SHA; files = @($entries) } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifacts/verification/native-build-manifest.json
       - name: Preserve compiled diagnostic tools
-        if: ${{ !cancelled() && steps.native_manifest.outcome == 'success' }}
+        if: ${{ failure() && !cancelled() && steps.native_manifest.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-native-tools-${{ github.sha }}
           path: |
-            artifacts/native-build-manifest.json
+            artifacts/verification/native-build-manifest.json
             build/native-release/**/*.lib
             build/native-release/**/llama-completion.exe
             build/native-release/**/llama-bench.exe

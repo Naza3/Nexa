@@ -77,7 +77,8 @@ impl FromStr for RequestId {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResolvedModel {
     pub id: ModelId,
     pub path: PathBuf,
@@ -86,7 +87,8 @@ pub struct ResolvedModel {
     pub validated: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GenerationRequest {
     pub request_id: RequestId,
     pub model: ModelId,
