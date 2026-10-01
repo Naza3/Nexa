@@ -1,72 +1,176 @@
-//! Explicit acceptance executable: newly-created temporary credentials only.
-//! stdout contains numeric/boolean evidence, never prompts, output, or tokens.
+//! Explicit acceptance executable: uniquely-created temporary credentials only.
+//! Both success and failure stdout are closed, sanitized JSON protocols.
+#[path = "harness/probe.rs"]
+mod probe;
+#[path = "harness/report.rs"]
+mod report;
 use desktop_bridge::{
     ChatEvent, ChatStartRequest, ConnectionState, DesktopBridge, DesktopPreferences,
     LoadModelRequest, RuntimeState,
 };
+use report::{Cleanup, FailureReport, Fault};
 use runtime_api::{
     Config,
     token::{create_private_dir, init_private_token, write_private_new},
 };
 use runtime_cli::instance::{Discovery, InstanceLock};
 use runtime_types::{Message, Role};
-use serde_json::json;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use serde_json::{Value, json};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::Arc,
+    time::Duration,
+};
 use uuid::Uuid;
-type AnyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
-fn arguments() -> AnyResult<(PathBuf, PathBuf)> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+type Result<T> = std::result::Result<T, Fault>;
+macro_rules! at {
+    ($stage:ident, $name:literal, $expression:expr) => {{
+        $stage = $name;
+        $expression?
+    }};
+}
+fn ensure(condition: bool) -> Result<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(Fault::new("assertion_failed"))
+    }
+}
+fn arguments(args: Vec<std::ffi::OsString>) -> Result<(PathBuf, PathBuf)> {
     if args.len() != 4 || args[0] != "--runtime" || args[2] != "--model" {
-        return Err("Usage: nexa-desktop-harness --runtime ABS_AI_RUNTIME --model ABS_GGUF".into());
+        return Err(Fault::new("invalid_arguments"));
     }
     let runtime = PathBuf::from(&args[1]);
     let model = PathBuf::from(&args[3]);
     if !runtime.is_absolute() || !model.is_absolute() {
-        return Err("Acceptance inputs must be absolute local paths".into());
+        return Err(Fault::new("invalid_arguments"));
     }
     Ok((runtime, model))
 }
-fn path_shape(path: &std::path::Path) -> serde_json::Value {
+fn path_shape(path: &Path) -> Value {
     let text = path.to_string_lossy();
     json!({"contains_non_ascii":!text.is_ascii(),"contains_space":text.contains(' ')})
 }
-fn lifecycle_child(runtime: &std::path::Path, root: &std::path::Path, stop: bool) -> AnyResult<()> {
-    let status = std::process::Command::new(std::env::current_exe()?)
+async fn start(bridge: &DesktopBridge) -> Result<desktop_bridge::DesktopSnapshot> {
+    bridge
+        .start(false)
+        .await
+        .map_err(|error| Fault::startup(error, bridge.startup_diagnostics()))
+}
+/// Only launches this executable's fixed internal mode. The pipe is drained by
+/// a bounded reader, never copied to a report. Runtime stdio stays detached.
+async fn lifecycle_child(runtime: &Path, root: &Path, stop: bool) -> Result<()> {
+    let mut child = Command::new(std::env::current_exe()?)
         .arg("--lifecycle-child")
         .arg("--runtime")
         .arg(runtime)
         .arg("--data-dir")
         .arg(root)
         .arg(if stop { "stop" } else { "keep" })
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit())
-        .status()?;
-    if !status.success() {
-        return Err("independent desktop lifecycle child failed".into());
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| Fault {
+            code: "child_spawn_failed",
+            ..Fault::io(error)
+        })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Fault::new("child_report_invalid"))?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take((report::MAX_REPORT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => (),
+            Err(error) => break Err(Fault::io(error)),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break Err(Fault::new("timeout"));
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    if status.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    } // owned test UI child only, never runtime PID
+    let bytes = reader
+        .join()
+        .map_err(|_| Fault::new("child_report_invalid"))?
+        .map_err(Fault::io)?;
+    let status = status?;
+    if bytes.len() > report::MAX_REPORT_BYTES {
+        return Err(Fault {
+            child_exit_code: status.code(),
+            ..Fault::new("child_report_invalid")
+        });
     }
-    Ok(())
-}
-async fn child_main() -> AnyResult<()> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 6
-        || args[0] != "--lifecycle-child"
-        || args[1] != "--runtime"
-        || args[3] != "--data-dir"
-        || !(args[5] == "keep" || args[5] == "stop")
+    if status.success() {
+        if std::str::from_utf8(&bytes).ok().map(str::trim) != Some(report::CHILD_SUCCESS) {
+            return Err(Fault {
+                child_exit_code: status.code(),
+                ..Fault::new("child_report_invalid")
+            });
+        }
+        return Ok(());
+    }
+    let report = FailureReport::parse(&bytes).map_err(|error| Fault {
+        child_exit_code: status.code(),
+        ..error
+    })?;
+    if !report.stage.starts_with("child_")
+        || report.child_stage.is_some()
+        || report.cleanup.status != "not_needed"
     {
-        return Err("invalid internal lifecycle-child arguments".into());
+        return Err(Fault {
+            child_exit_code: status.code(),
+            ..Fault::new("child_report_invalid")
+        });
     }
-    let bridge = DesktopBridge::new(PathBuf::from(&args[4]), PathBuf::from(&args[2]))?;
-    bridge.start(false).await?;
-    bridge
-        .settings_save(DesktopPreferences {
-            close_runtime_on_exit: args[5] == "stop",
-            ..Default::default()
-        })
-        .await?;
-    bridge.close().await?;
-    Ok(())
+    Err(report.into_child_fault(status.code()))
+}
+async fn child_main(args: Vec<std::ffi::OsString>) -> std::result::Result<(), Box<FailureReport>> {
+    let mut stage = "child_arguments";
+    let result: Result<()> = async {
+        if args.len() != 6
+            || args[0] != "--lifecycle-child"
+            || args[1] != "--runtime"
+            || args[3] != "--data-dir"
+            || !(args[5] == "keep" || args[5] == "stop")
+        {
+            return Err(Fault::new("invalid_arguments"));
+        }
+        let bridge = at!(
+            stage,
+            "child_construct_bridge",
+            DesktopBridge::new(PathBuf::from(&args[4]), PathBuf::from(&args[2]))
+        );
+        at!(stage, "child_start", start(&bridge).await);
+        at!(
+            stage,
+            "child_save_preferences",
+            bridge
+                .settings_save(DesktopPreferences {
+                    close_runtime_on_exit: args[5] == "stop",
+                    ..Default::default()
+                })
+                .await
+        );
+        at!(stage, "child_close", bridge.close().await);
+        Ok(())
+    }
+    .await;
+    result.map_err(|fault| Box::new(FailureReport::new(stage, fault, Cleanup::not_needed(true))))
 }
 fn request(max: u32) -> ChatStartRequest {
     ChatStartRequest {
@@ -75,7 +179,7 @@ fn request(max: u32) -> ChatStartRequest {
         max_output_tokens: max,
     }
 }
-async fn consume(bridge: &DesktopBridge, id: Uuid, cancel: bool) -> AnyResult<(usize, u64)> {
+async fn consume(bridge: &DesktopBridge, id: Uuid, cancel: bool) -> Result<(usize, u64)> {
     tokio::time::timeout(Duration::from_secs(90), async {
         let mut bytes = 0;
         let mut cancelled = false;
@@ -95,18 +199,21 @@ async fn consume(bridge: &DesktopBridge, id: Uuid, cancel: bool) -> AnyResult<(u
                     }
                     ChatEvent::Cancelled if cancel && cancelled => return Ok((bytes, 0)),
                     ChatEvent::Failed { code, .. } => {
-                        return Err(format!("generation failed: {code}").into());
+                        return Err(Fault::bridge(desktop_bridge::BridgeError {
+                            code,
+                            message: String::new(),
+                        }));
                     }
-                    other if other.is_terminal() => return Err("unexpected chat terminal".into()),
+                    other if other.is_terminal() => return Err(Fault::new("assertion_failed")),
                     _ => (),
                 }
             }
         }
     })
     .await
-    .map_err(|_| "generation acceptance deadline")?
+    .map_err(|_| Fault::new("timeout"))?
 }
-async fn ready(bridge: &DesktopBridge) -> AnyResult<()> {
+async fn ready(bridge: &DesktopBridge) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let s = bridge.snapshot().await?;
@@ -119,94 +226,200 @@ async fn ready(bridge: &DesktopBridge) -> AnyResult<()> {
         }
     })
     .await
-    .map_err(|_| "runtime did not return to ready")?
+    .map_err(|_| Fault::new("timeout"))?
 }
-async fn run(root: PathBuf, runtime: PathBuf, model: PathBuf) -> AnyResult<serde_json::Value> {
-    // A unique directory is the only permitted credential/config destination.
-    create_private_dir(&root)?;
-    init_private_token(&root)?;
-    let mut config = Config::default();
-    config.api.listen = "127.0.0.1:0".parse()?;
-    write_private_new(&root.join("config.toml"), config.to_toml()?.as_bytes())?;
-    let bridge = Arc::new(DesktopBridge::new(root.clone(), runtime.clone())?);
+fn observe_cleanup(root: &Path, cleanup: &mut Cleanup) {
+    cleanup.instance_lock = match InstanceLock::try_acquire(root) {
+        Ok(Some(_)) => "free",
+        Ok(None) => "held",
+        Err(_) => "unavailable",
+    }
+    .into();
+    cleanup.discovery = match std::fs::symlink_metadata(root.join("runtime/instance.json")) {
+        Ok(_) => "present",
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent",
+        Err(_) => "unavailable",
+    }
+    .into();
+    cleanup.temporary_data_retained = root.exists();
+}
+async fn cleanup(root: &Path, runtime: &Path) -> Cleanup {
+    let result: Result<()> = async {
+        let bridge = DesktopBridge::new(root.to_owned(), runtime.to_owned())?;
+        bridge.stop().await?;
+        Ok(())
+    }
+    .await;
+    let mut cleanup = Cleanup::not_needed(root.exists());
+    cleanup.status = if result.is_ok() {
+        "confirmed"
+    } else {
+        "unconfirmed"
+    }
+    .into();
+    if let Err(fault) = result {
+        cleanup.code = Some(fault.code.into());
+        cleanup.bridge_code = fault.bridge_code;
+        cleanup.os_error = fault.os_error;
+    }
+    observe_cleanup(root, &mut cleanup);
+    if cleanup.status == "confirmed"
+        && (cleanup.instance_lock != "free" || cleanup.discovery != "absent")
+    {
+        cleanup.status = "unconfirmed".into();
+        cleanup.code = Some("cleanup_unconfirmed".into());
+    }
+    cleanup
+}
+async fn run(
+    root: PathBuf,
+    runtime: PathBuf,
+    model: PathBuf,
+) -> std::result::Result<Value, Box<FailureReport>> {
+    let mut stage = "create_private_directory";
+    let mut bridge_created = false;
     let data_shape = path_shape(&root);
     let runtime_shape = path_shape(&runtime);
     let model_shape = path_shape(&model);
-    let outcome=async {
-        // The child starts the service, closes its bridge and ACTUALLY exits.
-        // Parent proof below detects lifetime coupling to the launching UI.
-        lifecycle_child(&runtime,&root,false)?;
-        let started=bridge.start(false).await?;if !matches!(started.connection,ConnectionState::Connected){return Err("runtime not connected".into());}
-        let first_instance=Discovery::read(&root)?.instance_id;
+    let outcome:Result<Value>=async {
+        at!(stage,"create_private_directory",create_private_dir(&root));
+        at!(stage,"initialize_token",init_private_token(&root));
+        let mut config=Config::default();config.api.listen=std::net::SocketAddr::from(([127,0,0,1],0));
+        let text=config.to_toml().map_err(|_|Fault::new("configuration_error"))?;
+        at!(stage,"write_config",write_private_new(&root.join("config.toml"),text.as_bytes()));
+        let bridge=Arc::new(at!(stage,"construct_bridge",DesktopBridge::new(root.clone(),runtime.clone())));
+        bridge_created=true;
+        at!(stage,"launch_initial_child",lifecycle_child(&runtime,&root,false).await);
+        let started=at!(stage,"start_after_child_exit",start(&bridge).await);
+        ensure(matches!(started.connection,ConnectionState::Connected))?;
+        let first_instance=at!(stage,"read_initial_instance",Discovery::read(&root)).instance_id;
         let attached=Arc::new(DesktopBridge::new(root.clone(),runtime.clone())?);
-        attached.start(false).await?;
-        if Discovery::read(&root)?.instance_id!=first_instance{return Err("attach replaced runtime".into());}
-        attached.close_ui_only().await?;
-        let model=bridge.import_model(model,"desktop-qa".into()).await?;
-        if !model.available{return Err("real model unavailable".into());}
-        let page=bridge.models_page(None).await?;if page.data.len()!=1||page.data[0].id.as_str()!="desktop-qa"{return Err("model page mismatch".into());}
-        if bridge.save_idle(600).await.unwrap_err().code!="runtime_running"{return Err("running runtime setting was not rejected".into());}
-        bridge.load_model(LoadModelRequest{model_id:"desktop-qa".into(),context_size:2048,threads:2,batch_size:128}).await?;
-        let (first_bytes,usage)=consume(&bridge,bridge.chat_start(request(32))?.request_id,false).await?;
-        if first_bytes==0||usage==0{return Err("real generation had no output/usage".into());}
-        let (cancel_bytes,_)=consume(&bridge,bridge.chat_start(request(512))?.request_id,true).await?;
-        ready(&bridge).await?;
-        let (repeat_bytes,_)=consume(&bridge,bridge.chat_start(request(16))?.request_id,false).await?;
-        if repeat_bytes==0{return Err("post-cancel generation empty".into());}
-        bridge.close().await?;
+        at!(stage,"attach_existing",start(&attached).await);
+        ensure(Discovery::read(&root)?.instance_id==first_instance)?;
+        at!(stage,"close_attached_window",attached.close_ui_only().await);
+        let model=at!(stage,"import_model",bridge.import_model(model,"desktop-qa".into()).await);
+        ensure(model.available)?;
+        let page=at!(stage,"list_models",bridge.models_page(None).await);
+        ensure(page.data.len()==1&&page.data[0].id.as_str()=="desktop-qa")?;
+        stage="reject_running_idle_change";
+        match bridge.save_idle(600).await {Err(error) if error.code=="runtime_running"=>(),Err(error)=>return Err(error.into()),Ok(_)=>return Err(Fault::new("assertion_failed"))}
+        at!(stage,"load_model",bridge.load_model(LoadModelRequest{model_id:"desktop-qa".into(),context_size:2048,threads:2,batch_size:128}).await);
+        let first=at!(stage,"first_chat_start",bridge.chat_start(request(32))).request_id;
+        let(first_bytes,usage)=at!(stage,"first_chat_consume",consume(&bridge,first,false).await);
+        ensure(first_bytes>0&&usage>0)?;
+        let cancel=at!(stage,"cancel_chat_start",bridge.chat_start(request(512))).request_id;
+        let(cancel_bytes,_)=at!(stage,"cancel_chat_consume",consume(&bridge,cancel,true).await);
+        at!(stage,"wait_ready",ready(&bridge).await);
+        let repeat=at!(stage,"repeat_chat_start",bridge.chat_start(request(16))).request_id;
+        let(repeat_bytes,_)=at!(stage,"repeat_chat_consume",consume(&bridge,repeat,false).await);
+        ensure(repeat_bytes>0)?;
+        at!(stage,"close_window",bridge.close().await);
         let after_close=Arc::new(DesktopBridge::new(root.clone(),runtime.clone())?);
-        if !matches!(after_close.snapshot().await?.connection,ConnectionState::Connected)||Discovery::read(&root)?.instance_id!=first_instance{return Err("default UI close stopped runtime".into());}
-        lifecycle_child(&runtime,&root,false)?;
-        if !matches!(after_close.snapshot().await?.connection,ConnectionState::Connected)||Discovery::read(&root)?.instance_id!=first_instance{return Err("actual UI-process exit stopped runtime".into());}
-        after_close.unload_model().await?;
-        after_close.load_model(LoadModelRequest{model_id:"desktop-qa".into(),context_size:2048,threads:2,batch_size:128}).await?;
-        // This independent controller exits after shutdown with a worker loaded.
-        lifecycle_child(&runtime,&root,true)?;
-        after_close.settings_save(DesktopPreferences{close_runtime_on_exit:true,..Default::default()}).await?;
-        let (first_close,second_close)=tokio::join!(after_close.close(),after_close.close());first_close?;second_close?;
-        if Discovery::read(&root).is_ok()||InstanceLock::try_acquire(&root)?.is_none(){return Err("close with runtime did not release lock/discovery".into());}
+        let observed=at!(stage,"verify_default_close",after_close.snapshot().await);
+        ensure(matches!(observed.connection,ConnectionState::Connected)&&Discovery::read(&root)?.instance_id==first_instance)?;
+        at!(stage,"launch_keep_child",lifecycle_child(&runtime,&root,false).await);
+        let observed=at!(stage,"verify_process_exit",after_close.snapshot().await);
+        ensure(matches!(observed.connection,ConnectionState::Connected)&&Discovery::read(&root)?.instance_id==first_instance)?;
+        at!(stage,"unload_model",after_close.unload_model().await);
+        at!(stage,"reload_model",after_close.load_model(LoadModelRequest{model_id:"desktop-qa".into(),context_size:2048,threads:2,batch_size:128}).await);
+        at!(stage,"launch_stop_child",lifecycle_child(&runtime,&root,true).await);
+        at!(stage,"save_close_preference",after_close.settings_save(DesktopPreferences{close_runtime_on_exit:true,..Default::default()}).await);
+        stage="repeated_close";
+        let(a,b)=tokio::join!(after_close.close(),after_close.close());a?;b?;
+        stage="verify_instance_released";
+        ensure(Discovery::read(&root).is_err()&&InstanceLock::try_acquire(&root)?.is_some())?;
         let stopped=Arc::new(DesktopBridge::new(root.clone(),runtime.clone())?);
-        if stopped.save_idle(600).await?.settings.idle_unload_seconds!=600{return Err("stopped runtime setting not persisted".into());}
-        stopped.start(false).await?;stopped.stop().await?;
+        let saved=at!(stage,"save_stopped_idle",stopped.save_idle(600).await);
+        ensure(saved.settings.idle_unload_seconds==600)?;
+        at!(stage,"restart_runtime",start(&stopped).await);
+        at!(stage,"stop_runtime",stopped.stop().await);
         Ok(json!({"success":true,"real_model":true,"threads":2,"context_size":2048,"batch_size":128,"first_output_bytes":first_bytes,"cancel_partial_bytes":cancel_bytes,"repeat_output_bytes":repeat_bytes,"first_usage_tokens":usage,"model_size_bytes":model.size_bytes,"model_sha256":model.sha256,"data_dir_path_shape":data_shape,"runtime_path_shape":runtime_shape,"model_path_shape":model_shape,"same_instance_attach":true,"default_close_kept_runtime":true,"actual_process_exit_kept_runtime":true,"actual_process_close_runtime_reaped":true,"repeated_close":true,"close_runtime_released_instance":true,"runtime_setting_rejected_while_running":true,"runtime_setting_persisted_stopped":true}))
     }.await;
-    // Even assertion failures attempt authenticated, confirmed stop, never PID kill.
-    let cleanup = DesktopBridge::new(root.clone(), runtime)?.stop().await;
-    if cleanup.is_err() {
-        return Err("acceptance cleanup unconfirmed; temporary directory retained".into());
+    // Cleanup is independent evidence, never a replacement for the first cause.
+    let mut cleanup = if bridge_created {
+        cleanup(&root, &runtime).await
+    } else {
+        Cleanup::not_needed(root.exists())
+    };
+    let value = match outcome {
+        Ok(value) => value,
+        Err(fault) => return Err(Box::new(FailureReport::new(stage, fault, cleanup))),
+    };
+    if cleanup.status != "confirmed" {
+        return Err(Box::new(FailureReport::new(
+            "cleanup_stop",
+            Fault::new("cleanup_unconfirmed"),
+            cleanup,
+        )));
     }
-    outcome
+    if let Err(error) = std::fs::remove_dir_all(&root) {
+        cleanup.temporary_data_retained = root.exists();
+        return Err(Box::new(FailureReport::new(
+            "remove_temporary_data",
+            Fault::io(error),
+            cleanup,
+        )));
+    }
+    Ok(value)
+}
+fn emit_failure(report: &FailureReport) {
+    let bytes = serde_json::to_vec(&report).expect("primitive diagnostic serialization");
+    if !report.validate() || bytes.len() > report::MAX_REPORT_BYTES {
+        std::process::exit(1);
+    }
+    println!("{}", std::str::from_utf8(&bytes).expect("JSON is UTF-8"));
 }
 #[tokio::main]
 async fn main() {
-    if std::env::args_os()
-        .nth(1)
-        .is_some_and(|s| s == "--lifecycle-child")
-    {
-        if let Err(error) = child_main().await {
-            eprintln!("desktop lifecycle child failed: {error}");
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == "--probe-launch" {
+        let report = probe::run().await;
+        if !report.validate() {
             std::process::exit(1);
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&report).expect("primitive probe report")
+        );
+        // A valid bounded observation is a successful probe execution, even
+        // when the observed Windows registration or spawn failed.
+        return;
+    }
+    if args.first().is_some_and(|s| s == "--signal-probe-child") {
+        if args.len() != 2 || !probe::child(Path::new(&args[1])).await {
+            std::process::exit(2);
         }
         return;
     }
-    let result = async {
-        let (runtime, model) = arguments()?;
-        let root = std::env::temp_dir().join(format!("Nexa 桌面 bridge 验证 {}", Uuid::new_v4()));
-        let result = run(root.clone(), runtime, model).await;
-        match &result {
-            Ok(_) => {
-                std::fs::remove_dir_all(root)?;
-            }
-            Err(_) => { /* retain private directory after uncertain cleanup; never print its path */
+    if args.first().is_some_and(|s| s == "--lifecycle-child") {
+        match child_main(args).await {
+            Ok(()) => println!("{}", report::CHILD_SUCCESS),
+            Err(report) => {
+                emit_failure(&report);
+                std::process::exit(1);
             }
         }
-        result
+        return;
     }
-    .await;
-    match result {
+    let outcome = match arguments(args) {
+        Ok((runtime, model)) => {
+            run(
+                std::env::temp_dir().join(format!("Nexa 桌面 bridge 验证 {}", Uuid::new_v4())),
+                runtime,
+                model,
+            )
+            .await
+        }
+        Err(fault) => Err(Box::new(FailureReport::new(
+            "arguments",
+            fault,
+            Cleanup::not_needed(false),
+        ))),
+    };
+    match outcome {
         Ok(value) => println!("{value}"),
-        Err(error) => {
-            eprintln!("desktop acceptance failed: {error}");
+        Err(report) => {
+            emit_failure(&report);
             std::process::exit(1);
         }
     }

@@ -45,6 +45,26 @@ jobs:
           cargo --version
           cmake --version
           New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+      - name: Observe Windows detached startup context before desktop compilation
+        id: desktop_launch_probe
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:AIR_NATIVE_DIR = Join-Path $PWD 'deliberately-absent-native-libraries'
+          cargo build --locked -p desktop-bridge --bin nexa-desktop-harness
+          if ($LASTEXITCODE -ne 0) { throw 'Independent launch-observation harness build failed' }
+          # This records platform observations only. It neither starts the
+          # product runtime nor substitutes for the real Release/UI gates.
+          python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --probe-launch --harness target/debug/nexa-desktop-harness.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch observation did not produce a valid bounded report' }
+      - name: Preserve early private desktop launch observation
+        if: ${{ !cancelled() && steps.desktop_launch_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-desktop-launch-probe-${{ github.sha }}
+          path: artifacts/verification/windows-desktop/launch-probe.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Install fixed desktop Node toolchain
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

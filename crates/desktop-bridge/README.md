@@ -42,3 +42,11 @@ nexa-desktop-harness --runtime ABS_AI_RUNTIME --model ABS_GGUF
 Harness 仅新建唯一临时目录、临时凭据与 listen=0 配置，使用真实 GGUF；输出只有脱敏数值、布尔与路径形状（是否中文/空格），没有正文、Token 或完整目录。覆盖 import/list/load/中文流/取消/再生成/unload、实例复用、两种关闭、设置与显式 stop。它还启动固定内部 `--lifecycle-child` 子进程：子进程创建 runtime、关闭 bridge 并真正退出后，父进程重新证明 API；载入 worker 后另子进程按设置 shutdown，父进程核对锁/记录释放。此证据证明 bridge 进程生命周期，不代替 Tauri 原生窗口 close 事件、WebView2、Windows 用户操作验收。
 
 失败不放宽产品界限。检查日志存 `artifacts/verification/`，不提交临时数据、模型或凭据；证据目录保留首次失败及修复后重跑结果。
+
+## 启动失败诊断（T06 CI 第二轮后）
+
+正常验收失败仍以 exit 1 结束，但 stdout 现在是 ≤4096 字节的闭集 JSON：固定阶段、固定错误类别、白名单 bridge code、可空 i32 OS/进程退出码，以及独立 cleanup 结果。没有任意 message/stderr/路径字段；内部生命周期 child 也必须给出有界、完整且无重复/额外字段的报告。最初失败不会被 cleanup 失败覆盖。`StartupDiagnostics` 是仅 Rust 的数字观测，不属于 invoke 或前端 DTO；每个已接纳 start 尝试先重置它，退出 0 与没有退出观测不同。
+
+`nexa-desktop-harness --probe-launch` 是独立的 Windows 启动观察模式，无模型、无 Token、无 runtime 行为更改。它用与 bridge 相同的三个 Windows creation flags 启动同一可执行文件的固定内部子模式，在 250ms 窗口内观察 `tokio::signal::ctrl_c()` 是 pending、收到事件还是返回真实 OS 错误。父端观察至多 10 秒，异常后额外至多 1 秒确认自己的探针子进程退出；未确认回收时保留私有目录并报告 cleanup_confirmed=false。已无子进程或退出已确认，才清理有界私有报告。输出 kind 为 `nexa-desktop-launch-probe`；合法观察报告就 exit 0，错误观察不会被改成 success。非 Windows 仅报告 `unsupported_platform`。此探针不证明 runtime/worker 生命周期，更不替代 Windows UI 或真实推理验收。
+
+所有协议 key、stage/code 和枚举在 `src/bin/harness/report.rs`；Python wrapper 通过源码一致性测试防止白名单漂移。启动 flags 和 CLI `ctrl_c` 逻辑在此次诊断改动中保持不变，Windows 根因必须根据真实探针和分阶段报告确认。

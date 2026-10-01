@@ -92,6 +92,32 @@ class EvidenceStagingTests(unittest.TestCase):
         self.assertFalse(output["short_package_checks_passed"])
         self.assertEqual(output["checks"][0]["status"], "fail")
 
+    def test_desktop_structured_failure_preserves_cause_and_cleanup(self):
+        report = {
+            "schema_version": 1, "kind": "nexa-desktop-bridge-acceptance", "success": False,
+            "stage": "launch_initial_child", "code": "bridge_error", "bridge_code": "runtime_start_failed",
+            "os_error": 5, "runtime_exit_code": None, "child_stage": "child_start", "child_exit_code": 1,
+            "cleanup": {"status": "unconfirmed", "code": "bridge_error", "bridge_code": "connection_failed",
+                        "os_error": None, "instance_lock": "held", "discovery": "present", "temporary_data_retained": True},
+        }
+        self.put("windows-desktop/bridge-failure.json", json.dumps(report))
+        result = self.run_stage()
+        self.assertEqual(result["result"], "pass")
+        output = json.loads((self.out / "windows-desktop/bridge-failure.json").read_text(encoding="utf-8"))
+        self.assertEqual(output, report)
+
+    def test_desktop_failure_requires_its_exact_closed_schema(self):
+        self.put("windows-desktop/bridge-failure.json", json.dumps({"stage": "private text", "success": False}))
+        self.assert_rejected("windows-desktop/bridge-failure.json")
+
+    def test_launch_probe_negative_observation_is_preserved(self):
+        report = {"schema_version": 1, "kind": "nexa-desktop-launch-probe", "success": False,
+                  "code": "signal_registration_failed", "os_error": None, "spawn_os_error": None,
+                  "child_exit_code": 0, "signal_state": "error", "signal_os_error": 6, "cleanup_confirmed": True}
+        self.put("windows-desktop/launch-probe.json", json.dumps(report))
+        self.assertEqual(self.run_stage()["result"], "pass")
+        self.assertEqual(json.loads((self.out / "windows-desktop/launch-probe.json").read_text(encoding="utf-8")), report)
+
     def test_oversized_report_rejected_before_open(self):
         path = self.source / "windows-rust-tests.log"
         with path.open("wb") as file:

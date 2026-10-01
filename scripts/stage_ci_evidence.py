@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+from run_desktop_smoke import bridge_failure, launch_probe_report
 
 JSON_REPORTS = (
     "windows-baseline.json", "windows-native-smoke.json", "upstream-bench.json",
@@ -25,6 +26,8 @@ JSON_REPORTS = (
     "windows-package/package-acceptance.json",
     "windows-desktop/build-result.json", "windows-desktop/pe-inspection.json",
     "windows-desktop/diagnostics.json", "windows-desktop/bridge-real.json",
+    "windows-desktop/bridge-failure.json",
+    "windows-desktop/launch-probe.json",
     "windows-desktop/acceptance.json",
 )
 LOG_REPORTS = tuple(f"windows-{name}.log" for name in (
@@ -132,6 +135,10 @@ def stage(source, destination, repo, environment=None):
                 raw = read_regular(path)
                 text = raw.decode("utf-8-sig")
                 if name.endswith(".json"):
+                    if name == "windows-desktop/bridge-failure.json":
+                        bridge_failure(text)
+                    if name == "windows-desktop/launch-probe.json":
+                        launch_probe_report(text)
                     value = json.loads(text, object_pairs_hook=unique_object, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("non-finite JSON value")))
                     output = (json.dumps(clean(value, roots), ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
                 else:

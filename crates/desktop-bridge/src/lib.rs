@@ -30,7 +30,16 @@ use std::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 
+/// Native-only numeric observations for the last accepted start attempt.
+/// These are not part of any invoke command or frontend DTO.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StartupDiagnostics {
+    pub os_error: Option<i32>,
+    pub process_exit_code: Option<i32>,
+}
+
 pub struct DesktopBridge {
+    startup_diagnostics: Mutex<StartupDiagnostics>,
     root: PathBuf,
     executable: PathBuf,
     work: AsyncMutex<()>,
@@ -56,6 +65,7 @@ impl DesktopBridge {
             return Err(BridgeError::new("packaged_runtime_missing"));
         }
         Ok(Self {
+            startup_diagnostics: Mutex::new(StartupDiagnostics::default()),
             root: data_dir,
             executable: runtime_executable,
             work: AsyncMutex::new(()),
@@ -66,6 +76,9 @@ impl DesktopBridge {
             import_disconnected: AtomicBool::new(false),
             chat: Mutex::new(chat::ChatSlot::default()),
         })
+    }
+    pub fn startup_diagnostics(&self) -> StartupDiagnostics {
+        *self.startup_diagnostics.lock().unwrap()
     }
     fn open(&self) -> Result<()> {
         if self.closing.load(Ordering::Acquire) {
@@ -156,6 +169,7 @@ impl DesktopBridge {
             .try_lock()
             .map_err(|_| BridgeError::new("desktop_busy"))?;
         self.open()?;
+        *self.startup_diagnostics.lock().unwrap() = StartupDiagnostics::default();
         if settings::require_initialized(&self.root).is_err() {
             if !initialize_if_missing {
                 return Err(BridgeError::new("not_initialized"));
@@ -213,9 +227,10 @@ impl DesktopBridge {
                 CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
             );
         }
-        let mut child = command
-            .spawn()
-            .map_err(|error| BridgeError::spawn(&error))?;
+        let mut child = command.spawn().map_err(|error| {
+            self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
+            BridgeError::spawn(&error)
+        })?;
         let started = tokio::time::Instant::now();
         let result = loop {
             if let Ok(snapshot) = self.snapshot_inner().await
@@ -223,11 +238,11 @@ impl DesktopBridge {
             {
                 break Ok(snapshot);
             }
-            if child
-                .try_wait()
-                .map_err(|_| BridgeError::new("runtime_start_failed"))?
-                .is_some()
-            {
+            if let Some(status) = child.try_wait().map_err(|error| {
+                self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
+                BridgeError::new("runtime_start_failed")
+            })? {
+                self.startup_diagnostics.lock().unwrap().process_exit_code = status.code();
                 // A competing start may have won. Discover/prove once, never replay.
                 break match self.snapshot_inner().await {
                     Ok(s) if matches!(s.connection, ConnectionState::Connected) => Ok(s),
