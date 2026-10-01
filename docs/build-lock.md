@@ -63,3 +63,6 @@ ctest --test-dir build/native-release --output-on-failure
 
 
 2026-09-30 23:45 UTC，[固定提交 d3d7cf2 的 Windows CI](https://github.com/Naza3/Nexa/actions/runs/36791679663) 全部通过。选定 2 线程 / 2 逻辑 CPU 配置的上游生成、五次 bench、自有 suite 和真实恢复测试通过；探索性 4 线程配置仍超时。具体统计、模型与 artifact 校验见本轮验证记录；不把 CI 配置推广为 i5-8400 或任意线程数性能保证。
+
+
+2026-10-01 00:37 UTC，T02实现提交`bc316da6a66eb52a24ee7a5cb56d8f8c45d1ad37`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36796147278)全部通过：原生/整体Rust检查、固定模型身份、上游与native suite、三项adapter真实回归和store→actor→host真实链路。shim2的mid-prefill观察取消3.4101ms，经actor取消至公共终态15.7851ms（各单次功能测量）。精确artifact完整性与边界见[T02报告](verification/2026-10-01-t02-runtime.md)。

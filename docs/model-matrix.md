@@ -1,6 +1,6 @@
 # 模型验证矩阵
 
-日期：2026-09-30。该表只记录开发链路候选模型，不将小模型的链路结果当作 Telegram 摘要质量或 Windows/Android 真机支持。
+日期：2026-10-01。该表只记录开发链路候选模型，不将小模型的链路结果当作 Telegram 摘要质量或 Windows/Android 真机支持。
 
 | 字段 | 固定值 |
 | --- | --- |
@@ -16,7 +16,7 @@
 | 本轮 context | 2048；开发 smoke 输出预算按用例限制 |
 | 模板模式 | common/chat，Jinja，enable_thinking=false；不向用户文本添加控制词 |
 | llama commit | `2149c00f4442dc59302e134a02e4c99d5f7ed9fc` |
-| Windows x64 CPU | 已验证最小原生链路：Server 2022 / EPYC CI、2 逻辑 CPU / 2 推理线程、context 2048；[运行证据](https://github.com/Naza3/Nexa/actions/runs/36791679663)。4 线程超配探针超时，不在本次通过配置内 |
+| Windows x64 CPU | 已验证T00/T01原生链路及T02真实存储/调度：Server 2022 / EPYC CI、2逻辑CPU / 2推理线程、context2048；[最新T02运行](https://github.com/Naza3/Nexa/actions/runs/36796147278)。独立mid-prefill取消有数值证据；4线程超配探针仍超时，不在通过配置内 |
 | Android arm64 CPU | unavailable；未构建/未真机运行 |
 
 文件和模板 hash 已对实际下载文件计算；详细本轮 Linux 开发结果见对应验证记录。模型文件不提交源码仓库，不自动下载到最终产品。

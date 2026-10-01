@@ -20,6 +20,6 @@ T00/T01 已在固定 Windows x64 CPU / 2线程 / Qwen3-0.6B Q8_0 / context2048 �
 
 ## 验证与限制
 
-调度fake仅用于有界性、竞态、deadline及状态回归。真实GGUF链路和独立prefill/decode取消有Linux开发证据；Windows新增工作流必须实际通过后才记录T02目标平台门槛。T03崩溃隔离、T05独立验收机、Android真机、长时内存趋势和摘要业务质量均未完成。
+调度fake仅用于有界性、竞态、deadline及状态回归。真实GGUF链路和独立prefill/decode取消有Linux开发证据，且实现提交`bc316da6a66eb52a24ee7a5cb56d8f8c45d1ad37`已通过[固定Windows 2线程/context2048 CI](https://github.com/Naza3/Nexa/actions/runs/36796147278)的T02阶段门槛。T03崩溃隔离、T05独立验收机、Android真机、长时内存趋势和摘要业务质量均未完成。
 
 入口：[core](../../crates/runtime-core/README.md)、[host](../../crates/engine-host/README.md)、[本轮验证](../verification/2026-10-01-t02-runtime.md)。
