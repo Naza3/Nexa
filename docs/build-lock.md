@@ -44,10 +44,10 @@ ctest --test-dir build/native-release --output-on-failure
 
 - shim build_info版本2，保留air_generate兼容入口并增加air_generate_observed；见 `native/llama-shim/include/air_llama.h`；调用方必须遵守合法句柄和线程归属前置条件
 - 每个进程最多一个引擎、一个模型；prepared 消费一次，生成结束清空请求 KV；取消标志可由另一线程设置
-- 原生回调是同步借用，允许decode步骤间共享256KiB预算内可取消、有时限等待；T02已实现4KiB分片、10秒慢消费者和三类deadline。T03进程隔离/强杀尚未实现，详见ADR0003
+- 原生回调是同步借用，允许decode步骤间共享256KiB预算内可取消、有时限等待；T02已实现4KiB分片、10秒慢消费者和三类deadline。T03已实现独立worker、单一信用账本与消费lease，固定Windows Job/强杀验收通过；详见ADR0004和T03报告
 - 目前仅接入 Qwen3 架构及能明确关闭思考的模板；验收支持以精确模型矩阵为准
 - seed `UINT32_MAX` 沿用锁定上游的随机哨兵，其他 seed 在相同环境尽力复现；不承诺跨设备逐字相同
-- Windows UTF-8 路径由上游 `ggml_fopen` 转为宽字符文件打开；已读源码，尚未 Windows 实测
+- 原生GGUF的非ASCII路径由上游`ggml_fopen`转为宽字符；该模型路径场景尚未单独Windows实测。T03已实际验证worker可执行文件及参数的空格/Unicode路径，二者不混同
 
 ## Windows CI
 
@@ -66,3 +66,6 @@ ctest --test-dir build/native-release --output-on-failure
 
 
 2026-10-01 00:37 UTC，T02实现提交`bc316da6a66eb52a24ee7a5cb56d8f8c45d1ad37`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36796147278)全部通过：原生/整体Rust检查、固定模型身份、上游与native suite、三项adapter真实回归和store→actor→host真实链路。shim2的mid-prefill观察取消3.4101ms，经actor取消至公共终态15.7851ms（各单次功能测量）。精确artifact完整性与边界见[T02报告](verification/2026-10-01-t02-runtime.md)。
+
+
+2026-10-01 01:47:46 UTC，T03实现`a8930494f62909cccb11876011a650d9713bc74c`的[Windows CI36801681068](https://github.com/Naza3/Nexa/actions/runs/36801681068)全部通过。新增纯Rust process-host/runtime-ipc及native runtime-worker；Windows FFI使用锁定windows-sys0.61.2。在native构建前以不存在AIR_NATIVE_DIR独立构建父端，实际Job/父退出/强杀、信用和真实双进程链路通过；仅固定Server2022/2逻辑CPU/2推理线程/context2048组合，4线程超配诊断仍60秒超时。ZIP摘要、测试数量、CRLF锁文件摘要等精确证据见[T03报告](verification/2026-10-01-t03-worker.md)。

@@ -11,7 +11,7 @@
 ## 已有工程事实
 
 - 原始远程提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168` 已通过 GitHub 原始对象精确重建本地 Git；初始 tree/commit SHA 一致，未创建替代历史
-- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03新增runtime-ipc、process-host、runtime-worker，Linux聚合/真实模型已通过，待Windows验证，无HTTP、UI或移动工程
+- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过，无HTTP、UI或移动工程
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
@@ -24,6 +24,8 @@
 - T02 已实现受控模型导入/manifest、单一调度actor、有界FIFO/输出、三类deadline、空闲卸载与专用原生线程；Linux与固定Windows配置的真实store→core→host→shim链路均通过；实现提交`bc316da6a66eb52a24ee7a5cb56d8f8c45d1ad37`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36796147278)于2026-10-01 00:37 UTC完成
 - shim build_info升2，保留旧air_generate并新增数值进度观察；Linux与Windows均在成功prefill批次后及decode阶段分别跨线程取消；Windows单次mid-prefill为3.4101ms、经actor取消至终态15.7851ms，不作普遍延迟保证。实测见 [T02记录](docs/verification/2026-10-01-t02-runtime.md)
 
+- T03实现提交`a8930494f62909cccb11876011a650d9713bc74c`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36801681068)于2026-10-01 01:47:46 UTC全部通过；ZIP摘要与精确提交/模型身份已复核。独立无native管理程序真实生成、取消与回收成功；极端清理未确认永久fail-closed，不虚报reaped
+
 ## 任务状态
 
 | 任务 | 状态 | 当前边界 |
@@ -32,8 +34,8 @@
 | T00 工程与基线 | 已完成 | 固定组合已在 Windows CPU 完成真实上游生成和五次 bench；输入、统计与构建证据已归档 |
 | T01 原生链路 | 已完成 | 最小阶段门槛通过 Windows 真实中英文流式、重复加载释放、模板/特殊 token、取消和恢复；A08独立prefill已补Linux/Windows观测 |
 | T02 调度与存储 | 已完成 | 代码bc316da6及固定Windows 2线程/context2048组合通过；A05–A12按逻辑测试/真实链路分别留证，不代表HTTP或进程隔离 |
-| T03 PC worker | 待验证 | Linux最终workspace145项、5项真实模型、22项进程故障/containment及独立无native父端链通过；待精确提交Windows Job/故障/真实链路CI |
-| T04 HTTP/CLI | 未开始 | 等T03进程隔离阶段门槛；当前harness不是HTTP服务 |
+| T03 PC worker | 已完成 | a8930494在Windows CI36801681068通过：Job父子/后代回收、五秒强杀、单账本IPC、144项Rust+5项真实模型及独立无native父端链；范围见T03记录 |
+| T04 HTTP/CLI | 未开始 | T03门槛已满足；下一步HTTP/SSE、鉴权与CLI，当前harness不是HTTP服务 |
 | T05–T06 Windows发行与UI | 未开始 | 仍需PC全链路及独立验收机 |
 | T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
@@ -44,7 +46,7 @@
 
 - 模型的原生 context 分配会向上按256取整；Nexa 单独保存用户请求的逻辑context预算，真实33-token边界回归已覆盖，不能借分配扩容放宽预算
 - 上游 `llama-completion --reasoning off` 未在初始prompt分支传关闭参数；基线使用锁定原模板渲染的固定合成prompt。自有shim直接关闭思考，不剥离输出标签
-- 回调仍为同步借用，现允许共享预算内可取消等待；T02实现256KiB预算、4KiB UTF-8分片、10秒无消费进展时限及协作式deadline；T03在Linux开发环境验证五秒kill/崩溃隔离、跨进程单一信用及消费lease，Windows实际Job/回收验证待运行
+- 回调仍为同步借用，现允许共享预算内可取消等待；T02实现256KiB预算、4KiB UTF-8分片、10秒无消费进展时限及协作式deadline；T03已在固定Windows CI验证五秒kill、Job父子/后代回收、跨进程单一信用及消费lease；Linux不承诺异常父退出后任意孙进程回收
 - Linux与Windows已补独立prefill中途取消及decode取消观测；100短请求/20加载的长期内存趋势及目标硬件表现未完成；Linux数据仅代表共享开发机
 - ASan/UBSan纯流缓冲测试通过；LeakSanitizer因沙箱ptrace不可用，未宣称原生库通过完整内存泄漏检测
 - 摘要文本质量、证据归因、Android后台生命周期、正式Windows发行能力均未验证
@@ -52,6 +54,6 @@
 ## 下一步
 
 1. 保持T02已通过的固定Windows证据，T03改动继续开发分支，不合并或部署
-2. 发布已通过Linux聚合的T03开发提交并执行Windows CI，确认Job、五秒取消强杀、父退出回收及真实worker链路，见[T03记录](docs/verification/2026-10-01-t03-worker.md)
+2. T03 Windows门槛已通过，推进T04 HTTP/SSE、鉴权、CLI；保留[T03记录](docs/verification/2026-10-01-t03-worker.md)中的平台/线程/内存和异常清理边界
 3. Windows CI仍不替代i5-8400、T05独立无开发工具验收机或Android真机；平台/支持矩阵不能泛化
 4. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
