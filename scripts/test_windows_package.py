@@ -64,9 +64,14 @@ class PackageTests(unittest.TestCase):
             directory = Path(folder) / "VS 中文 开发 (Tools) & literal!"
             directory.mkdir()
             dev = directory / "VsDevCmd.bat"
-            dev.write_bytes(b'@echo off\r\nif not "%1"=="-no_logo" exit /b 21\r\nif not "%2"=="-arch=x64" exit /b 22\r\nif not "%3"=="-host_arch=x64" exit /b 23\r\nset "Path=%~dp0compiler"\r\nset "VCToolsRedistDir=%~dp0Redist"\r\nexit /b 0\r\n')
+            # cmd batch slots split unquoted '=' delimiters. Preserve %* as
+            # well as the actual slots so a failed assertion reports evidence,
+            # rather than hiding parameter values behind an exit code.
+            dev.write_bytes(b'@echo off\r\nset "NEXA_FIXTURE_ARGS=%*"\r\nset "NEXA_FIXTURE_ARG_1=%1"\r\nset "NEXA_FIXTURE_ARG_2=%2"\r\nset "NEXA_FIXTURE_ARG_3=%3"\r\nset "NEXA_FIXTURE_ARG_4=%4"\r\nset "NEXA_FIXTURE_ARG_5=%5"\r\nset "Path=%~dp0compiler"\r\nset "VCToolsRedistDir=%~dp0Redist"\r\nexit /b 0\r\n')
             env = pack.windows_environment(os.environ, "")
             actual = pack.devcmd_environment(dev, env)
+            self.assertEqual(actual.get("NEXA_FIXTURE_ARGS", "").strip(), "-no_logo -arch=x64 -host_arch=x64")
+            self.assertEqual([actual.get(f"NEXA_FIXTURE_ARG_{n}") for n in range(1, 6)], ["-no_logo", "-arch", "x64", "-host_arch", "x64"])
             self.assertEqual(actual["PATH"], str(directory / "compiler"))
             self.assertEqual(actual["VCTOOLSREDISTDIR"], str(directory / "Redist"))
             dev.write_bytes(b'@echo off\r\nexit /b 7\r\n')

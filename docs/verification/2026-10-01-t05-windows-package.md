@@ -13,7 +13,7 @@
 | T00–T04 已有固定 Windows 基线 | 已通过既有阶段 | [T04 记录](2026-10-01-t04-http-cli.md)，CI36816604494；不是本轮 Release 包 |
 | 包/验收代码与 Linux 逻辑回归 | 最终开发聚合通过 | Rust236pass/6ignored、native identity3pass；Python父级30pass后边界修补全32pass，真实模型另行分层记录 |
 | CI 证据 staging 安全回归 | 通过局部验证 | 下节实际命令与结果；不证明 Windows 产品可运行 |
-| Windows Release 构建、PE/许可/manifest/hash/ZIP | 进行中，CI打包初始化失败 | run36823563860在VsDevCmd调用失败，尚未生成Release产品；具体原始错误见第二轮记录 |
+| Windows Release 构建、PE/许可/manifest/hash/ZIP | 进行中，CI打包初始化失败 | run36823563860在VsDevCmd调用失败，随后36825830693在前置真实cmd fixture的exit22断言失败；尚未生成Release产品 |
 | 中文空格新解压目录、空 CWD、受限 PATH 真实 CLI/API | 未执行 | 必须跑解压产品与解压独立工具，不能用 debug/仓库二进制替代 |
 | Windows 10 i5-8400 /16GB 本地短验 | 未执行 | 需本地实际 OS build 与包/工具/report identity |
 | 无开发工具独立机器、VC预装状态、实际离线 | 未验证 | PATH 清理、Server2022 或机器角色声明不足以证明 |
@@ -146,3 +146,15 @@ The network path was not found.
 跨平台回归验证精确调用参数/引号规则与错误传播；新增真实Windows用例以受控临时batch模拟开发环境，路径包含中文、空格、括号、`&`与`!`，检查三个参数、PATH/Redist取值和exit/b7失败传播。该用例在非Windows明确skip；在原有CI的`Install fixed development tools`步骤由`unittest discover -s scripts -p 'test_*.py'`自动执行，早于原生编译和第16步打包，不用等完整CI结束才发现cmd解析错误。
 
 父级实际运行Python全套：**35项收集，34 passed / 1 Windows专用 skipped**，exit0；`git diff --check`通过。这只证明当前主机的回归，真实Windows cmd用例和最终Release包仍等待新提交的CI。没有将skip称为通过，也没有改写run36823563860的原始失败。
+
+## 第三轮 Windows CI：真实cmd回归暴露fixture参数假设
+
+窄修提交 `f044335fa723f06c3fede94efa49018080a6479f`（tree `4b4aeede9982079de2c7403a1e011199e7a6e152`）的 [run 36825830693](https://github.com/Naza3/Nexa/actions/runs/36825830693)，attempt1 / job `110251188861`，06:38:14 UTC启动，06:39:38 UTC终态failure。第3步工具安装成功后的Python前置测试收集35项，**34 passed / 1 error**；错误来自新增的真实Windows用例，确实执行而非skip。
+
+`test_real_windows_devcmd_with_spaces_unicode_and_failure`在`test_windows_package.py:69`调用`devcmd_environment`，由`package_windows.py:242`报告`Visual Studio environment initialization failed (22): cmd.exe`，stdout为空。该fixture明确将exit22用于`%2`不等于`-arch=x64`；其前一项`%1`检查的exit21未触发，说明batch已经实际启动并运行到第二参数断言，不能把此错误等同第二轮无法启动的network-path错误。
+
+cmd batch会对未引用的等号参数进行自己的分隔，fixture对`%2`的期待成为限定排查范围；本轮日志没有打印实际`%2/%3`值，不倒填它们。生产标准VS参数、来源/运行库检查保持不变，由打包工位核实并修正测试oracle。真实Windows用例在昂贵编译之前失败，实现了前置护栏；本轮native、Rust、模型、Release包及解压验收全部skipped，不能继承上一run的成功为本轮通过，也不能称已有可交付ZIP。
+
+脱敏artifact `11145371348`，ZIP2,551 bytes，SHA-256 `9341fdb3c27358f6db4431a2f1b1db601de20a44ebb37c662d90aa847112ecae`。下载后与GitHub digest相同、stage各项输出hash核对通过；完整日志、run/jobs/artifact元数据、ZIP及解包保存在`artifacts/verification/t05-windows-36825830693*`。没有触发重复CI，原始三轮结果均保留；T05仍进行中，Windows10/A20未验证。
+
+第三轮后的窄修仅改真实Windows fixture：记录原始`%*`和`%1`至`%5`到受控`NEXA_FIXTURE_*`环境字段，由Python分别精确断言完整三个标准flags以及等号分隔后的五个batch参数槽；删除fixture内部错误的三槽if-exit断言。生产打包脚本完全不变，中文/空格/括号/`&`/`!`路径、实际PATH/Redist取值和exit/b7负例均保留。Linux回归仍为35项收集、34 passed / 1 Windows专用 skipped；新五槽期望的实际Windows观测等待下一run，不把本次skip或预期值当成已测结果。
