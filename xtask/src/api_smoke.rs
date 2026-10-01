@@ -13,8 +13,8 @@ use std::{
     collections::BTreeMap,
     ffi::OsString,
     net::SocketAddr,
-    path::PathBuf,
-    process::{Command, ExitCode},
+    path::{Path, PathBuf},
+    process::{ExitCode, Stdio},
     time::Duration,
 };
 use tokio::{
@@ -142,7 +142,7 @@ impl ProbeFailure {
     }
 }
 #[derive(Serialize)]
-struct Report {
+pub struct Report {
     schema_version: u32,
     kind: &'static str,
     platform: String,
@@ -150,14 +150,18 @@ struct Report {
     model_sha256: Option<String>,
     inference: Value,
     disconnect_cycles_requested: u32,
+    disconnect_cycles_attempted: u32,
+    disconnect_cycles_passed: u32,
     checks: Vec<Check>,
 }
-struct Options {
-    address: SocketAddr,
-    root: PathBuf,
-    model: String,
-    out: PathBuf,
-    disconnect_cycles: u32,
+pub struct Options {
+    pub address: SocketAddr,
+    pub root: PathBuf,
+    pub model: String,
+    pub out: PathBuf,
+    pub disconnect_cycles: u32,
+    pub cli: Option<PathBuf>,
+    pub release_acceptance: bool,
 }
 struct Oracle {
     options: Options,
@@ -382,7 +386,7 @@ impl Oracle {
         self.phase = "disconnect";
         self.disconnect().await?;
         self.phase = "cli_management";
-        self.cli_checks();
+        self.cli_checks().await;
         let (status, _) = self.post("/runtime/unload", json!({})).await?;
         let (_, after) = self.get("/runtime/status").await?;
         self.check(
@@ -426,7 +430,19 @@ impl Oracle {
         ] {
             self.skip(id, why);
         }
-        let (status, value) = self.post("/runtime/shutdown", json!({})).await?;
+        let (status, value) = if self.options.release_acceptance {
+            let binary = self
+                .options
+                .cli
+                .as_ref()
+                .ok_or("explicit CLI is required")?;
+            (
+                200,
+                cli_json(binary, &self.options.root, &["stop".into()]).await?,
+            )
+        } else {
+            self.post("/runtime/shutdown", json!({})).await?
+        };
         let stopped = wait_stopped(
             &self.options.root,
             record.instance_id,
@@ -773,6 +789,7 @@ impl Oracle {
     }
     async fn disconnect(&mut self) -> Result<()> {
         for iteration in 1..=self.options.disconnect_cycles {
+            self.report.disconnect_cycles_attempted += 1;
             let mut client = self.connect().await?;
             let request_id = Uuid::new_v4();
             let mut headers = HeaderMap::new();
@@ -816,6 +833,9 @@ impl Oracle {
                 .and_then(safe_symbol)
                 .unwrap_or("none");
             let pass = initial_status == 200 && idle && status == 200 && valid;
+            if pass {
+                self.report.disconnect_cycles_passed += 1;
+            }
             self.check(&format!("A09_disconnect_then_next_{iteration}"),pass,&format!("request_id={request_id}, initial_status={initial_status}, idle={idle}, cleanup_ms={cleanup_ms}, state={state}, prior_error={prior_error}, sessions_started={sessions_started:?}, sessions_reaped={sessions_reaped:?}, next_status={status}, error={error}, finish={finish}, valid_completion={valid}, prompt_tokens={:?}, completion_tokens={:?}, total_tokens={:?}",next["usage"]["prompt_tokens"].as_u64(),next["usage"]["completion_tokens"].as_u64(),next["usage"]["total_tokens"].as_u64()));
             if let Err(diagnostic) = idle_result {
                 self.report
@@ -830,21 +850,31 @@ impl Oracle {
         }
         Ok(())
     }
-    fn cli_checks(&mut self) {
-        let binary = std::env::current_exe().ok().and_then(|p| {
-            p.parent().map(|p| {
-                p.join(if cfg!(windows) {
-                    "ai-runtime.exe"
-                } else {
-                    "ai-runtime"
+    async fn cli_checks(&mut self) {
+        let binary = self.options.cli.clone().or_else(|| {
+            if self.options.release_acceptance {
+                return None;
+            }
+            std::env::current_exe().ok().and_then(|p| {
+                p.parent().map(|p| {
+                    p.join(if cfg!(windows) {
+                        "ai-runtime.exe"
+                    } else {
+                        "ai-runtime"
+                    })
                 })
             })
         });
         let Some(binary) = binary.filter(|p| p.is_file()) else {
-            self.skip(
-                "actual_cli_management",
-                "ai-runtime binary is not beside xtask; build both before running this check",
-            );
+            if self.options.release_acceptance || self.options.cli.is_some() {
+                self.check(
+                    "actual_cli_management",
+                    false,
+                    "explicit product CLI is missing; required release checks cannot be skipped",
+                );
+            } else {
+                self.skip("actual_cli_management", "ai-runtime binary is not beside xtask; provide --cli or build both before running this developer check");
+            }
             return;
         };
         for args in [
@@ -853,19 +883,33 @@ impl Oracle {
             &["models", "list"],
             &["version", "--json"],
         ] {
-            let result = Command::new(&binary)
-                .arg("--data-dir")
-                .arg(&self.options.root)
-                .args(args)
-                .output();
-            let pass = result.is_ok_and(|o| {
-                o.status.success() && serde_json::from_slice::<Value>(&o.stdout).is_ok()
+            let values: Vec<_> = args.iter().map(OsString::from).collect();
+            let result = cli_json(&binary, &self.options.root, &values).await;
+            let pass = result.is_ok_and(|v| match args {
+                ["status"] => v["active_request"].is_null() && v["queued_jobs"] == 0,
+                ["devices"] => {
+                    v["build_backends"]
+                        .as_array()
+                        .is_some_and(|backends| backends.iter().any(|b| b == "cpu"))
+                        && v["devices"].as_array().is_some_and(|devices| {
+                            devices
+                                .iter()
+                                .any(|d| d["id"] == "cpu" && d["kind"] == "cpu")
+                        })
+                }
+                ["models", "list"] => v["data"].as_array().is_some_and(|a| {
+                    a.iter()
+                        .any(|m| m["id"] == self.options.model && m["validated"] == true)
+                }),
+                ["version", "--json"] => {
+                    v["protocol_version"] == 1
+                        && v["management_native_linkage"] == false
+                        && v["target_arch"] == std::env::consts::ARCH
+                }
+                _ => false,
             });
-            self.check(
-                &format!("actual_cli:{}", args.join("_")),
-                pass,
-                "actual packaged CLI exits zero with valid JSON; no response bodies are recorded",
-            );
+            self.check(&format!("actual_cli:{}", args.join("_")), pass,
+                "explicit product CLI exits zero with independently checked JSON; no response bodies are recorded");
         }
     }
 }
@@ -1058,6 +1102,8 @@ fn parse(args: &[OsString]) -> Result<Options> {
             "--model",
             "--out",
             "--disconnect-cycles",
+            "--cli",
+            "--release-acceptance",
         ]
         .contains(&key)
             || values.insert(key, pair[1].clone()).is_some()
@@ -1105,14 +1151,165 @@ fn parse(args: &[OsString]) -> Result<Options> {
         return Err("disconnect cycles must be in 1..=50".into());
     }
 
+    let cli = values.remove("--cli").map(PathBuf::from);
+    let release_acceptance = match values.remove("--release-acceptance") {
+        None => false,
+        Some(value) if value == "true" => true,
+        Some(value) if value == "false" => false,
+        Some(_) => return Err("--release-acceptance requires true or false".into()),
+    };
+    if release_acceptance && cli.is_none() {
+        return Err("--release-acceptance requires an explicit --cli".into());
+    }
+    if cli.as_ref().is_some_and(|p| !p.is_absolute()) {
+        return Err("--cli must be an absolute product executable path".into());
+    }
     Ok(Options {
         address,
         root,
         model,
         out,
         disconnect_cycles,
+        cli,
+        release_acceptance,
     })
 }
+/// One oracle for developer HTTP checks and the standalone package verifier.
+/// Failure still attempts authenticated unified shutdown; reports never contain raw I/O.
+pub async fn run(options: Options) -> Report {
+    let report = Report {
+        schema_version: 1,
+        kind: "nexa-http-cli-black-box-smoke",
+        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        model: options.model.clone(),
+        model_sha256: None,
+        inference: json!({"backend":"cpu","context_size":2048,"threads":2,"batch_size":128,"gpu_layers":0}),
+        disconnect_cycles_requested: options.disconnect_cycles,
+        disconnect_cycles_attempted: 0,
+        disconnect_cycles_passed: 0,
+        checks: Vec::new(),
+    };
+    let mut oracle = Oracle {
+        options,
+        report,
+        phase: "routes_auth_validation_load",
+    };
+    if let Err(error) = oracle.run().await {
+        let detail = format!(
+            "verification stopped during {}; no raw response, token, prompt, or private path is recorded",
+            oracle.phase
+        );
+        oracle.check("smoke_execution", false, &detail);
+        let diagnostic = error
+            .downcast_ref::<ProbeFailure>()
+            .cloned()
+            .unwrap_or_else(|| ProbeFailure::from_error(oracle.phase, error.as_ref()));
+        oracle
+            .report
+            .checks
+            .last_mut()
+            .expect("check was just recorded")
+            .diagnostic = Some(diagnostic);
+        let cleaned = async {
+            let record = Discovery::read(&oracle.options.root)?;
+            let (status, value) = oracle.post("/runtime/shutdown", json!({})).await?;
+            if status != 200 || value["status"] != "stopped" {
+                return Err("cleanup failed".into());
+            }
+            wait_stopped(
+                &oracle.options.root,
+                record.instance_id,
+                Duration::from_secs(30),
+            )
+            .await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        }
+        .await
+        .is_ok();
+        oracle.check(
+            "cleanup_after_failed_smoke",
+            cleaned,
+            "best-effort unified shutdown and instance-lock release after a failed test",
+        );
+    }
+    oracle.report
+}
+impl Report {
+    pub fn passed(&self) -> bool {
+        self.checks.iter().all(|check| check.status != "fail")
+    }
+}
+
+/// Never inherit developer DLL search paths or credentials into a product process.
+pub fn product_command(binary: &Path) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(binary);
+    command.env_clear();
+    for name in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let root = PathBuf::from(root);
+        if let Ok(path) = std::env::join_paths([root.join("System32"), root]) {
+            command.env("PATH", path);
+        }
+    }
+    #[cfg(not(windows))]
+    command.env("PATH", "/usr/bin:/bin");
+    command
+}
+
+/// Execute only the selected product CLI from an isolated data-directory CWD.
+/// Bound both execution time and output; stderr is deliberately never collected.
+pub async fn cli_json(binary: &Path, root: &Path, args: &[OsString]) -> Result<Value> {
+    let root = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(root)
+    };
+    let mut child = product_command(binary)
+        .arg("--data-dir")
+        .arg(&root)
+        .args(args)
+        .current_dir(root.parent().unwrap_or(&root))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut output = child
+        .stdout
+        .take()
+        .ok_or("CLI stdout unavailable")?
+        .take(1024 * 1024 + 1);
+    let result = tokio::time::timeout(Duration::from_secs(750), async {
+        let mut bytes = Vec::new();
+        output.read_to_end(&mut bytes).await?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("CLI output exceeds limit".into());
+        }
+        if !child.wait().await?.success() {
+            return Err("CLI returned failure".into());
+        }
+        Ok::<Value, Box<dyn std::error::Error + Send + Sync>>(serde_json::from_slice(&bytes)?)
+    })
+    .await;
+    match result {
+        Ok(Ok(value)) => Ok(value),
+        outcome => {
+            // This is an owned Child handle, never a PID obtained from discovery.
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            match outcome {
+                Ok(Err(e)) => Err(e),
+                _ => Err("CLI deadline expired".into()),
+            }
+        }
+    }
+}
+
 pub fn main(args: &[OsString]) -> ExitCode {
     let options = match parse(args) {
         Ok(v) => v,
@@ -1132,77 +1329,14 @@ pub fn main(args: &[OsString]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let report = Report {
-        schema_version: 1,
-        kind: "nexa-http-cli-black-box-smoke",
-        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-        model: options.model.clone(),
-        model_sha256: None,
-        inference: json!({"backend":"cpu","context_size":2048,"threads":2,"batch_size":128,"gpu_layers":0}),
-        disconnect_cycles_requested: options.disconnect_cycles,
-        checks: Vec::new(),
-    };
-    let mut oracle = Oracle {
-        options,
-        report,
-        phase: "routes_auth_validation_load",
-    };
-    if let Err(error) = runtime.block_on(oracle.run()) {
-        let detail = format!(
-            "verification stopped during {}; no raw response, token, prompt, or private path is recorded",
-            oracle.phase
-        );
-        oracle.check("smoke_execution", false, &detail);
-        let diagnostic = error
-            .downcast_ref::<ProbeFailure>()
-            .cloned()
-            .unwrap_or_else(|| ProbeFailure::from_error(oracle.phase, error.as_ref()));
-        oracle
-            .report
-            .checks
-            .last_mut()
-            .expect("check was just recorded")
-            .diagnostic = Some(diagnostic);
-        let cleaned = runtime
-            .block_on(async {
-                let record = Discovery::read(&oracle.options.root)?;
-                let (status, value) = oracle.post("/runtime/shutdown", json!({})).await?;
-                if status != 200 || value["status"] != "stopped" {
-                    return Err("cleanup failed".into());
-                }
-                wait_stopped(
-                    &oracle.options.root,
-                    record.instance_id,
-                    Duration::from_secs(30),
-                )
-                .await?;
-                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-            })
-            .is_ok();
-        oracle.check(
-            "cleanup_after_failed_smoke",
-            cleaned,
-            "best-effort unified shutdown and instance-lock release after a failed test",
-        );
-    }
-    let pass = oracle
-        .report
-        .checks
-        .iter()
-        .all(|check| check.status != "fail");
+    let out = options.out.clone();
+    let report = runtime.block_on(run(options));
+    let pass = report.passed();
     let written = (|| -> Result<()> {
-        if let Some(parent) = oracle
-            .options
-            .out
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-        {
+        if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(
-            &oracle.options.out,
-            serde_json::to_vec_pretty(&oracle.report)?,
-        )?;
+        std::fs::write(&out, serde_json::to_vec_pretty(&report)?)?;
         Ok(())
     })();
     if written.is_err() {
@@ -1212,7 +1346,7 @@ pub fn main(args: &[OsString]) -> ExitCode {
     println!(
         "api-smoke: {} ({} checks)",
         if pass { "pass" } else { "fail" },
-        oracle.report.checks.len()
+        report.checks.len()
     );
     if pass {
         ExitCode::SUCCESS
@@ -1281,6 +1415,68 @@ mod tests {
         let mut args = base;
         args.extend(["--disconnect-cycles", "5", "--disconnect-cycles", "5"].map(OsString::from));
         assert!(parse(&args).is_err());
+    }
+    #[test]
+    fn release_mode_requires_an_explicit_absolute_cli() {
+        let base = [
+            "--base-url",
+            "http://127.0.0.1:12345",
+            "--data-dir",
+            "private",
+            "--model",
+            "qa-small",
+            "--out",
+            "report.json",
+            "--release-acceptance",
+            "true",
+        ]
+        .map(OsString::from)
+        .to_vec();
+        assert!(parse(&base).is_err());
+        let mut relative = base.clone();
+        relative.extend(["--cli", "relative-cli"].map(OsString::from));
+        assert!(parse(&relative).is_err());
+        let mut explicit = base;
+        explicit.push("--cli".into());
+        explicit.push(
+            std::env::current_dir()
+                .unwrap()
+                .join("missing-cli")
+                .into_os_string(),
+        );
+        assert!(parse(&explicit).unwrap().release_acceptance);
+    }
+    #[tokio::test]
+    async fn release_mode_missing_cli_is_a_failure_not_a_skip() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = Options {
+            address: "127.0.0.1:12345".parse().unwrap(),
+            root: temp.path().into(),
+            model: "fixed".into(),
+            out: PathBuf::new(),
+            disconnect_cycles: 1,
+            cli: Some(temp.path().join("missing-product-cli")),
+            release_acceptance: true,
+        };
+        let mut oracle = Oracle {
+            options,
+            phase: "cli_management",
+            report: Report {
+                schema_version: 1,
+                kind: "test",
+                platform: "test".into(),
+                model: "fixed".into(),
+                model_sha256: None,
+                inference: Value::Null,
+                disconnect_cycles_requested: 1,
+                disconnect_cycles_attempted: 0,
+                disconnect_cycles_passed: 0,
+                checks: Vec::new(),
+            },
+        };
+        oracle.cli_checks().await;
+        assert_eq!(oracle.report.checks[0].status, "fail");
+        assert!(!oracle.report.passed());
     }
     #[test]
     fn probe_diagnostics_never_serialize_raw_errors_or_parameters() {

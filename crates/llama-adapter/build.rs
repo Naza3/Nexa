@@ -1,8 +1,4 @@
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{env, fs, path::PathBuf, process::Command};
 
 fn run(command: &mut Command) {
     let result = command
@@ -10,24 +6,7 @@ fn run(command: &mut Command) {
         .expect("could not start CMake; install CMake >= 3.24");
     assert!(result.success(), "native build failed: {command:?}");
 }
-fn find_library(root: &Path, name: &str, suffix: &str) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let filename = format!("{}{name}{suffix}", if suffix == ".a" { "lib" } else { "" });
-    for entry in fs::read_dir(root).unwrap_or_else(|error| panic!("read native directory: {error}"))
-    {
-        let entry = entry.expect("read native entry");
-        let path = entry.path();
-        if entry.file_type().expect("native entry type").is_dir() {
-            found.extend(find_library(&path, name, suffix));
-        } else if path
-            .file_name()
-            .is_some_and(|value| value == filename.as_str())
-        {
-            found.push(path);
-        }
-    }
-    found
-}
+mod native_identity;
 fn main() {
     for variable in [
         "AIR_NATIVE_DIR",
@@ -50,10 +29,17 @@ fn main() {
         target_os == "linux" || (target_os == "windows" && target_env == "msvc"),
         "this T01 build entry supports Linux host verification and Windows MSVC only; Android integration is T07"
     );
+    assert!(
+        !env::var("CARGO_CFG_TARGET_FEATURE")
+            .unwrap_or_default()
+            .split(',')
+            .any(|f| f == "crt-static"),
+        "crt-static is unsupported; Nexa Windows builds require the default dynamic MSVC CRT (/MD)"
+    );
     let native = if let Some(path) = env::var_os("AIR_NATIVE_DIR") {
-        let native = PathBuf::from(path)
-            .canonicalize()
-            .expect("AIR_NATIVE_DIR must exist");
+        let native =
+            std::path::absolute(PathBuf::from(path)).expect("AIR_NATIVE_DIR must be a usable path");
+        assert!(native.is_dir(), "AIR_NATIVE_DIR must exist");
         println!("cargo:rerun-if-changed={}", native.display());
         native
     } else {
@@ -91,26 +77,24 @@ fn main() {
             .arg(jobs));
         native
     };
-    let suffix = if target_env == "msvc" { ".lib" } else { ".a" };
-    for name in [
-        "air_llama",
-        "llama-common",
-        "llama-common-base",
-        "cpp-httplib",
-        "llama",
-        "ggml",
-        "ggml-cpu",
-        "ggml-base",
-    ] {
-        let libraries = find_library(&native, name, suffix);
-        assert_eq!(
-            libraries.len(),
-            1,
-            "expected exactly one {name}{suffix} in AIR_NATIVE_DIR/native build; got {libraries:?}"
-        );
+    let identity_path = native.join("air-native-Release.txt");
+    println!("cargo:rerun-if-changed={}", identity_path.display());
+    let identity_text = fs::read_to_string(&identity_path).expect("native build identity missing: re-run CMake configure and build Release for this target; AIR_NATIVE_DIR is not trusted by library name alone");
+    let identity = native_identity::parse(&identity_text).expect("invalid native build identity");
+    native_identity::validate(
+        &identity,
+        &target_os,
+        &env::var("CARGO_CFG_TARGET_ARCH").unwrap(),
+        &env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default(),
+    )
+    .expect("native build identity mismatch");
+    let libraries = native_identity::libraries(&native, &identity, target_env == "msvc")
+        .expect("invalid native target paths");
+    for (name, library) in native_identity::LIBRARIES.into_iter().zip(libraries) {
+        println!("cargo:rerun-if-changed={}", library.display());
         println!(
             "cargo:rustc-link-search=native={}",
-            libraries[0].parent().unwrap().display()
+            library.parent().unwrap().display()
         );
         println!("cargo:rustc-link-lib=static={name}");
     }

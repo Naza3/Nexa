@@ -15,7 +15,7 @@ concurrency:
 jobs:
   native:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         shell: pwsh
@@ -63,12 +63,23 @@ jobs:
         id: native_build
         run: |
           $ErrorActionPreference = 'Stop'
-          cmake -S native/llama-shim -B build/native-release -G 'Visual Studio 17 2022' -A x64 2>&1 | Tee-Object -FilePath artifacts/verification/windows-configure.log
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = (& $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          if ($LASTEXITCODE -ne 0 -or !$vs) { throw 'Existing Visual Studio C++ instance missing' }
+          cmake -S native/llama-shim -B build/native-release -G 'Visual Studio 17 2022' -A x64 "-DCMAKE_GENERATOR_INSTANCE=$vs" -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL 2>&1 | Tee-Object -FilePath artifacts/verification/windows-configure.log
           if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
           cmake --build build/native-release --config Release --target air_llama air-stream-test llama-completion llama-bench --parallel 4 2>&1 | Tee-Object -FilePath artifacts/verification/windows-native-build.log
           if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
           ctest --test-dir build/native-release -C Release --output-on-failure 2>&1 | Tee-Object -FilePath artifacts/verification/windows-ctest.log
           if ($LASTEXITCODE -ne 0) { throw 'Native stream test failed' }
+      - name: Verify native build identity boundary
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build/identity-tests | Out-Null
+          rustc --edition 2024 --test crates/llama-adapter/native_identity.rs -o build/identity-tests/native-identity-tests.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native identity test compilation failed' }
+          & (Join-Path $PWD 'build/identity-tests/native-identity-tests.exe') --nocapture 2>&1 | Tee-Object -FilePath artifacts/verification/windows-native-identity-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native identity boundary tests failed' }
       - name: Check Rust and build real-model verifier
         run: |
           $ErrorActionPreference = 'Stop'
@@ -150,6 +161,115 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'HTTP CLI smoke tools build failed' }
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_api_smoke.py --cli target/debug/ai-runtime.exe --xtask target/debug/xtask.exe --model models/qa-small.gguf --out-dir artifacts/verification/windows-api-cli --timeout-seconds 600 --disconnect-cycles 50
           if ($LASTEXITCODE -ne 0) { throw 'Real HTTP/CLI smoke failed; inspect its sanitized per-case report' }
+      - name: Build and integrity-check private Release packages
+        id: portable_package
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Reuse this job's identity-checked native Release tree; the packager
+          # only incrementally checks air_llama, then builds true Rust Release EXEs.
+          cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
+          if ($LASTEXITCODE -ne 0) { throw 'Portable Release packaging failed' }
+      - name: Verify freshly extracted Release products outside the repository
+        id: package_acceptance
+        if: ${{ !cancelled() && steps.portable_package.outcome == 'success' && steps.model_identity.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $PWD.Path
+          $root = Join-Path $env:RUNNER_TEMP ('Nexa T05 中文 空格 ' + [Guid]::NewGuid().ToString('N'))
+          $cwd = Join-Path $root '独立 空目录'
+          New-Item -ItemType Directory -Path $cwd -Force | Out-Null
+          $report = Join-Path $root 'package-acceptance.json'
+          $evidence = Join-Path $repo 'artifacts/verification/windows-package'
+          $sourceModel = Join-Path $repo 'models/qa-small.gguf'
+          $model = Join-Path $root '模型 输入/候选 模型.gguf'
+          $oldPath = $env:PATH
+          try {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $model) -Force | Out-Null
+            Copy-Item -LiteralPath $sourceModel -Destination $model
+            if ((Get-FileHash -LiteralPath $model -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $sourceModel -Algorithm SHA256).Hash) { throw 'Unicode-path model copy identity mismatch' }
+            foreach ($name in @('windows-x64-cpu', 'acceptance-tools')) {
+              $zip = Join-Path $repo "dist/$name.zip"
+              $expected = (Get-Content -LiteralPath "$zip.sha256" -Raw).Trim()
+              if ($expected -notmatch ('^[a-f0-9]{64}  ' + [regex]::Escape("$name.zip") + '$')) { throw 'Invalid ZIP checksum record' }
+              $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $expected.Substring(0, 64)) { throw 'ZIP checksum mismatch' }
+              $builtManifest = Join-Path $repo "dist/$name/manifest.json"
+              $builtIdentity = Get-Content -LiteralPath $builtManifest -Raw | ConvertFrom-Json
+              if ($builtIdentity.project_commit -ne $env:GITHUB_SHA -or $builtIdentity.project_dirty -isnot [bool] -or $builtIdentity.project_dirty -ne $false) { throw 'Built package source is not the clean CI commit' }
+              Expand-Archive -LiteralPath $zip -DestinationPath $root
+              $extracted = Join-Path $root $name
+              $manifest = Join-Path $extracted 'manifest.json'
+              if ((Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $builtManifest -Algorithm SHA256).Hash) { throw 'Extracted manifest differs from validated package' }
+              $identity = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+              if ($identity.project_commit -ne $env:GITHUB_SHA -or $identity.project_dirty -isnot [bool] -or $identity.project_dirty -ne $false) { throw 'Extracted package source identity mismatch' }
+              $sums = @(Get-Content -LiteralPath (Join-Path $extracted 'SHA256SUMS'))
+              foreach ($line in $sums) {
+                if ($line -notmatch '^([a-f0-9]{64})  ([^:]+)$') { throw 'Invalid extracted file checksum record' }
+                $hash = $Matches[1]; $relative = $Matches[2]
+                if ([IO.Path]::IsPathRooted($relative) -or ($relative -split '[\\/]') -contains '..') { throw 'Unsafe extracted checksum path' }
+                if ((Get-FileHash -LiteralPath (Join-Path $extracted $relative) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw 'Extracted package file checksum mismatch' }
+              }
+              if (@(Get-ChildItem -LiteralPath $extracted -Recurse -File).Count -ne ($sums.Count + 1)) { throw 'Extracted package has unlisted files' }
+            }
+            $product = Join-Path $root 'windows-x64-cpu'
+            $tool = Join-Path $root 'acceptance-tools/nexa-acceptance.exe'
+            if (!(Test-Path -LiteralPath $tool) -or !(Test-Path -LiteralPath (Join-Path $product 'ai-runtime.exe'))) { throw 'Extracted product or verifier missing' }
+            # The helper has its own app-local CRT. Its product children also
+            # clear their environment and never borrow helper DLLs or this CWD.
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+            Push-Location -LiteralPath $cwd
+            try {
+              & $tool --package $product --model $model --out $report --machine-role ci --disconnect-cycles 50
+              $acceptanceExit = $LASTEXITCODE
+            } finally { Pop-Location }
+            if ($acceptanceExit -ne 0) { throw 'Extracted Release package acceptance failed' }
+            $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+            if (!$result.short_package_checks_passed -or $result.product.project_commit -ne $env:GITHUB_SHA) { throw 'Package acceptance result or commit mismatch' }
+            if ($result.environment.machine_role_user_declared -ne 'ci' -or $result.a20_target_evidence -notlike 'unverified*') { throw 'CI must not certify clean target-machine acceptance' }
+            if ($result.http_cli.disconnect_cycles_requested -ne 50 -or $result.http_cli.disconnect_cycles_attempted -ne 50 -or $result.http_cli.disconnect_cycles_passed -ne 50) { throw 'Release disconnect cycles did not all execute and pass' }
+            foreach ($field in @('product_executable', 'source_model', 'owned_working_directory', 'owned_data_and_imported_model_directory')) {
+              $shape = $result.path_coverage.$field
+              if ($shape.contains_non_ascii -ne $true -or $shape.contains_space -ne $true) { throw 'Required Unicode and space path coverage was not observed' }
+            }
+          } finally {
+            $env:PATH = $oldPath
+            if (Test-Path -LiteralPath $report) {
+              New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+              Copy-Item -LiteralPath $report -Destination (Join-Path $evidence 'package-acceptance.json')
+            }
+            # Only this step's uniquely owned extraction directory is removed.
+            Remove-Item -LiteralPath $root -Recurse -Force
+          }
+      - name: Preserve private Windows CPU product package
+        if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-windows-x64-cpu-${{ github.sha }}
+          path: |
+            dist/windows-x64-cpu.zip
+            dist/windows-x64-cpu.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve separate acceptance tool package
+        if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-acceptance-tools-${{ github.sha }}
+          path: |
+            dist/acceptance-tools.zip
+            dist/acceptance-tools.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve Release symbols when produced
+        if: ${{ !cancelled() && steps.portable_package.outcome == 'success' && hashFiles('build/windows-x64-cpu/cargo/x86_64-pc-windows-msvc/release/*.pdb') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-windows-symbols-${{ github.sha }}
+          path: build/windows-x64-cpu/cargo/x86_64-pc-windows-msvc/release/*.pdb
+          if-no-files-found: error
+          retention-days: 14
       - name: Record reusable compiled-tool hashes
         id: native_manifest
         if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
@@ -173,11 +293,21 @@ jobs:
             build/native-release/**/air-stream-test.exe
             target/debug/examples/native-smoke.exe
           retention-days: 7
+      - name: Stage sanitized verification evidence
+        if: always()
+        env:
+          NEXA_CI_NATIVE_BUILD: ${{ steps.native_build.outcome }}
+          NEXA_CI_MODEL_IDENTITY: ${{ steps.model_identity.outcome }}
+          NEXA_CI_PORTABLE_PACKAGE: ${{ steps.portable_package.outcome }}
+          NEXA_CI_PACKAGE_ACCEPTANCE: ${{ steps.package_acceptance.outcome }}
+        run: |
+          python -X warn_default_encoding -W error::EncodingWarning scripts/stage_ci_evidence.py
+          if ($LASTEXITCODE -ne 0) { throw 'Evidence review/staging failed; no raw directory will be uploaded' }
       - name: Preserve verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-cpu-native-${{ github.sha }}
-          path: artifacts/verification/
+          path: artifacts/upload-evidence/
           if-no-files-found: warn
           retention-days: 14

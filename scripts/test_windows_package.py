@@ -1,0 +1,193 @@
+import importlib.util
+import json
+import os
+import struct
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+spec = importlib.util.spec_from_file_location("package_windows", Path(__file__).with_name("package_windows.py"))
+pack = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pack)
+
+
+class PackageTests(unittest.TestCase):
+    def test_windows_environment_overrides_case_insensitively(self):
+        base = {"PATH": "old path", "VCTOOLSREDISTDIR": "old redist", "ImageOS": "windows2022", "ImageVersion": "20260929", "SystemRoot": "C:/Windows"}
+        output = "Path=new path\r\nVCToolsRedistDir=new redist\r\n= C:=ignored\r\nCOMPLEX=a=b=c\r\n"
+        env = pack.windows_environment(base, output)
+        self.assertEqual(env["PATH"], "new path")
+        self.assertEqual(env["VCTOOLSREDISTDIR"], "new redist")
+        self.assertEqual(env["IMAGEOS"], "windows2022")
+        self.assertEqual(env["IMAGEVERSION"], "20260929")
+        self.assertEqual(env["SYSTEMROOT"], "C:/Windows")
+        self.assertEqual(env["COMPLEX"], "a=b=c")
+        self.assertEqual(len(env), 6)
+        self.assertTrue(all(key == key.upper() for key in env))
+        self.assertEqual(base["PATH"], "old path")
+
+    def test_windows_environment_removes_preexisting_case_duplicates(self):
+        env = pack.windows_environment({"PATH": "first", "Path": "second", "VCToolsRedistDir": "first", "vctoolsredistdir": "second"}, "pAtH=selected\nvCtOoLsReDiStDiR=selected CRT")
+        self.assertEqual(env, {"PATH": "selected", "VCTOOLSREDISTDIR": "selected CRT"})
+
+    def test_relative_paths_are_strict(self):
+        for name in ("../escape", "/absolute", "C:/absolute", "a\\b", "a//b", "a/./b", "a/../b", "bad.", "bad ", "a\x00b", "", "\ud800"):
+            with self.subTest(name=repr(name)), self.assertRaises((ValueError, UnicodeError)):
+                pack.relative(name)
+        self.assertEqual(pack.relative("licenses/test/LICENSE"), "licenses/test/LICENSE")
+
+    def test_parse_imports_includes_delay_loads_and_deduplicates(self):
+        text = "Image has the following dependencies:\n KERNEL32.dll\n VCRUNTIME140.dll\nImage has the following delay load dependencies:\n msvcp140.dll\n KERNEL32.dll\nSummary"
+        self.assertEqual(pack.parse_dependents(text), ["kernel32.dll", "msvcp140.dll", "vcruntime140.dll"])
+        with self.assertRaises(ValueError):
+            pack.parse_dependents("not a successful dumpbin response")
+
+    def test_os_contract_debug_and_unknown_dependencies(self):
+        self.assertEqual(pack.dependency_kind("kernel32.dll", {}), "os")
+        self.assertEqual(pack.dependency_kind("api-ms-win-crt-runtime-l1-1-0.dll", {}), "os")
+        self.assertEqual(pack.dependency_kind("vcruntime140.dll", {"vcruntime140.dll": 1}), "app-local")
+        for name in ("ucrtbased.dll", "vcruntime140d.dll", "vcruntime140_1d.dll", "msvcp140d.dll", "concrt140d.dll", "unknown.dll", "api-ms-win-evil/dll.dll"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                pack.dependency_kind(name, {name: 1} if "d.dll" in name else {})
+
+    def test_recursive_app_local_closure_is_exact(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder)
+            copied = []
+            deps = {"ai-runtime.exe": ["kernel32.dll", "vcruntime140.dll"], "ai-runtime-worker.exe": ["msvcp140.dll"], "msvcp140.dll": ["vcruntime140.dll", "vcruntime140_1.dll"], "vcruntime140.dll": ["kernel32.dll"], "vcruntime140_1.dll": ["vcruntime140.dll"]}
+            result = pack.collect_dependencies(stage, {x: x for x in deps if x.endswith(".dll")}, lambda p: deps[p.name], lambda s,d: copied.append(d.name))
+            self.assertEqual(set(result), set(deps))
+            self.assertEqual(sorted(copied), ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"])
+
+    def fixture(self, stage):
+        for name in ("ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/index.json"):
+            path = stage / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture", encoding="utf-8")
+        return {"product": "nexa-runtime", "files": pack.entries(stage), "dependencies": {"ai-runtime.exe": {"imports": [{"name":"kernel32.dll", "kind":"os"}]}, "ai-runtime-worker.exe": {"imports": [{"name":"kernel32.dll", "kind":"os"}]}}}
+
+    def test_manifest_rejects_missing_changed_extra_duplicate_and_pollution(self):
+        for mode in ("missing", "changed", "extra", "duplicate", "traversal", "pollution", "unresolved"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:
+                stage = Path(folder)
+                manifest = self.fixture(stage)
+                pack.verify_package(stage, manifest)
+                if mode == "missing":
+                    (stage / "ai-runtime.exe").unlink()
+                elif mode == "changed":
+                    (stage / "ai-runtime.exe").write_text("changed", encoding="utf-8")
+                elif mode == "extra":
+                    (stage / "unexpected.txt").write_text("extra", encoding="utf-8")
+                elif mode == "duplicate":
+                    manifest["files"].append(dict(manifest["files"][0]))
+                elif mode == "traversal":
+                    manifest["files"][0]["path"] = "../escape"
+                elif mode == "unresolved":
+                    manifest["dependencies"]["ai-runtime.exe"]["imports"].append({"name":"vcruntime140.dll", "kind":"app-local"})
+                else:
+                    (stage / "test-fault-worker.exe").write_text("pollution", encoding="utf-8")
+                    manifest["files"] = pack.entries(stage)
+                with self.assertRaises(ValueError):
+                    pack.verify_package(stage, manifest)
+
+    def test_rejects_symlink_and_case_duplicate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder)
+            (stage / "original").write_text("data", encoding="utf-8")
+            if os.name != "nt":
+                (stage / "link").symlink_to(stage / "original")
+                with self.assertRaises(ValueError):
+                    pack.entries(stage)
+                (stage / "link").unlink()
+                (stage / "Original").write_text("duplicate", encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    pack.entries(stage)
+
+    def test_hash_inventory_covers_manifest_without_self_reference(self):
+        with tempfile.TemporaryDirectory() as folder:
+            stage = Path(folder)
+            manifest = self.fixture(stage)
+            pack.write_json(stage / "manifest.json", manifest)
+            sums = "".join(f"{x['sha256']}  {x['path']}\n" for x in pack.entries(stage))
+            (stage / "SHA256SUMS").write_text(sums, encoding="utf-8")
+            pack.verify_package(stage, manifest)
+            self.assertIn("  manifest.json\n", sums)
+            self.assertNotIn("  SHA256SUMS\n", sums)
+            (stage / "manifest.json").write_text("tampered", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                pack.verify_package(stage, manifest)
+
+    def test_failed_promotion_rolls_back_previous_package(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dist = Path(folder)
+            old = dist / "windows-x64-cpu"
+            old.mkdir()
+            (old / "old").write_text("previous", encoding="utf-8")
+            stage = dist / "stage"
+            stage.mkdir()
+            (stage / "new").write_text("new", encoding="utf-8")
+            with self.assertRaises(OSError):
+                pack.promote(stage, dist / "missing.zip", dist / "missing.sha256", dist)
+            self.assertTrue((old / "old").is_file())
+            self.assertFalse((old / "new").exists())
+            self.assertEqual(sorted(p.name for p in dist.iterdir()), ["windows-x64-cpu"])
+
+    def test_windows_reparse_source_is_rejected_even_without_symlink_flag(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "runtime.dll"
+            path.write_text("fixture", encoding="utf-8")
+            real_lstat = Path.lstat
+            def reparse_lstat(item):
+                result = real_lstat(item)
+                if item == path:
+                    class Metadata:
+                        st_file_attributes = 0x400
+                    return Metadata()
+                return result
+            with mock.patch.object(Path, "lstat", reparse_lstat), mock.patch.object(Path, "is_symlink", return_value=False), self.assertRaisesRegex(ValueError, "reparse"):
+                pack.regular(path)
+
+    def test_pe_machine_rejects_wrong_architecture_and_non_pe(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "program.exe"
+            data = bytearray(128)
+            data[:2] = b"MZ"
+            struct.pack_into("<I", data, 0x3C, 64)
+            data[64:68] = b"PE\0\0"
+            struct.pack_into("<H", data, 68, 0x8664)
+            path.write_bytes(data)
+            pack.pe_machine(path)
+            struct.pack_into("<H", data, 68, 0xAA64)
+            path.write_bytes(data)
+            with self.assertRaises(ValueError):
+                pack.pe_machine(path)
+            path.write_bytes(b"fake executable")
+            with self.assertRaises(ValueError):
+                pack.pe_machine(path)
+
+    def test_license_subtree_cannot_hide_executable_or_model(self):
+        for name in ("licenses/hidden.gguf", "licenses/test-fault-worker.exe", "licenses/secrets/api-token"):
+            with tempfile.TemporaryDirectory() as folder, self.subTest(name=name):
+                stage = Path(folder)
+                manifest = self.fixture(stage)
+                path = stage / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("pollution", encoding="utf-8")
+                manifest["files"] = pack.entries(stage)
+                with self.assertRaises(ValueError):
+                    pack.verify_package(stage, manifest)
+
+    def test_evidence_sanitizes_user_and_project_paths_recursively(self):
+        data = {"native": [r"C:\Users\Person\repo\build\file", "C:/Users/Person/repo/file"], "sha256": "abcdef"}
+        cleaned = pack.sanitize(data, [(r"C:\Users\Person\repo", "<project>"), (r"C:\Users\Person", "<user-profile>")])
+        self.assertEqual(cleaned["native"], [r"<project>\build\file", "<project>/file"])
+        self.assertEqual(cleaned["sha256"], "abcdef")
+
+    def test_non_windows_host_cannot_claim_windows_build(self):
+        with mock.patch.object(pack.sys, "platform", "linux"), self.assertRaisesRegex(ValueError, "native Windows"):
+            pack.build()
+
+
+if __name__ == "__main__":
+    unittest.main()

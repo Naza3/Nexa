@@ -1,4 +1,4 @@
-# T00 开发构建锁
+# 开发与 Windows 包构建锁
 
 日期：2026-10-01。此文件记录Linux开发与固定Windows CI构建组合；精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，目标i5-8400与Android真机均未验收。
 
@@ -38,7 +38,7 @@ ctest --test-dir build/native-release --output-on-failure
 
 `llama-adapter` 负责单线程拥有原生对象，`runtime-types` 无原生依赖。`AIR_NATIVE_DIR` 可指向上述已经构建的目录；不设置时由 build.rs 在 Cargo OUT_DIR 单独构建，禁止在构建时下载模型或拉取上游代码。
 
-静态链接：air_llama、llama-common、llama-common-base、llama、ggml、ggml-cpu、ggml-base、cpp-httplib；平台系统库由 build.rs 选择。`cpp-httplib` 是固定上游 common 库的编译依赖，不表示 Nexa 已实现 HTTP 或模型在线下载。
+静态链接：air_llama、llama-common、llama-common-base、llama、ggml、ggml-cpu、ggml-base、cpp-httplib；平台系统库由 build.rs 选择。`cpp-httplib` 是固定上游 common 库的编译依赖；T04 HTTP使用Rust Axum/Hyper，Nexa仍不自动下载模型。
 
 ## 所有权与目前限制
 
@@ -71,8 +71,19 @@ ctest --test-dir build/native-release --output-on-failure
 2026-10-01 01:47:46 UTC，T03实现`a8930494f62909cccb11876011a650d9713bc74c`的[Windows CI36801681068](https://github.com/Naza3/Nexa/actions/runs/36801681068)全部通过。新增纯Rust process-host/runtime-ipc及native runtime-worker；Windows FFI使用锁定windows-sys0.61.2。在native构建前以不存在AIR_NATIVE_DIR独立构建父端，实际Job/父退出/强杀、信用和真实双进程链路通过；仅固定Server2022/2逻辑CPU/2推理线程/context2048组合，4线程超配诊断仍60秒超时。ZIP摘要、测试数量、CRLF锁文件摘要等精确证据见[T03报告](verification/2026-10-01-t03-worker.md)。
 
 
-## T04 HTTP 依赖锁（Linux收口，Windows实际验证待执行）
+## T04 HTTP 依赖锁（固定 Windows CI 已通过）
 
-新增依赖已实际在Linux构建，并通过Windows MSVC all-targets交叉check；Windows实际运行仍在T04记录单独追踪。Cargo.lock固定：Axum0.8.9、Tokio1.53.1、Hyper1.11.1、hyper-util0.1.21、bytes1.12.1、http-body-util0.1.5、tower0.5.3、hmac0.12.1、subtle2.6.1、getrandom0.4.3、toml0.9.12+spec-1.1.0；Windows直接FFI使用windows-sys0.61.2（旧间接依赖另保留0.59.0）。Hyper在workspace manifest也精确锁1.11.1，Queue/writev与Bytes owner源码假设不能无验证升级。
+新增依赖已实际在Linux和Windows构建/运行；T04实现ccb2053的Windows CI36816604494通过，具体结果见T04记录。Cargo.lock固定：Axum0.8.9、Tokio1.53.1、Hyper1.11.1、hyper-util0.1.21、bytes1.12.1、http-body-util0.1.5、tower0.5.3、hmac0.12.1、subtle2.6.1、getrandom0.4.3、toml0.9.12+spec-1.1.0；Windows直接FFI使用windows-sys0.61.2（旧间接依赖另保留0.59.0）。Hyper在workspace manifest也精确锁1.11.1，Queue/writev与Bytes owner源码假设不能无验证升级。
 
-当前LF Cargo.lock SHA-256为`5df74f8dae12b0e546551fa20e087e9c0595eb3cbe6811fb2f9d18f07cfe94da`；Windows checkout换行与artifact摘要另记，不混为同一字节文件。管理CLI/API正常依赖不含engine-host/llama-adapter/runtime-worker；实际缺失native目录的独立构建结果见[T04记录](verification/2026-10-01-t04-http-cli.md)。
+T04基线LF Cargo.lock SHA-256为`5df74f8dae12b0e546551fa20e087e9c0595eb3cbe6811fb2f9d18f07cfe94da`；Windows checkout换行与artifact摘要另记，不混为同一字节文件。管理CLI/API正常依赖不含engine-host/llama-adapter/runtime-worker；实际缺失native目录的独立构建结果见[T04记录](verification/2026-10-01-t04-http-cli.md)。
+
+
+## T05 Windows Release 便携构建（实际 CI 待验证）
+
+T05保留同一锁定源码/CPU范围和既有`build/native-release`，不并排重做另一套native workflow。CMake显式VS2022/x64/Release/`MultiThreadedDLL`（/MD），关闭`GGML_BACKEND_DL`及CUDA/Vulkan/Metal/OpenMP/隐式native优化。每个配置生成`air-native-Release.txt`，验证精确source/build/架构/CRT/选项/archive路径；原始绝对身份只留build，不进入分发manifest。Rust首次缺失native目录独立构建CLI，worker再链接该已核验Release树。
+
+`cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu`使用`build/windows-x64-cpu/cargo/x86_64-pc-windows-msvc/release`构建两个产品及独立验收器。MSVC/SDK具体版本和实际VS edition来自本次构建manifest，不能把早期19.44/SDK10.0.26100.0硬套到新runner。产品与验收器各自解析普通/延迟PE依赖并补齐既有VS所提供的未修改Release x64 CRT。额外运行库安装、新协议接受或不一致源需另行报告，不能从System32搬DLL或静默更换工具链。
+
+manifest/SHA256SUMS、许可原文/清单、ZIP/hash分别核对。包内不包含模型、数据、测试凭据、PDB或验收程序；验收器为独立ZIP且自带所需CRT。CI要求产品与工具manifest均为GITHUB_SHA且project_dirty=false；解压后重新校验identity与字节hash。精确交付与法律边界见[ADR0006](decisions/0006-t05-windows-portable-package.md)，结果见[T05报告](verification/2026-10-01-t05-windows-package.md)。
+
+T05新增Windows FFI/工具依赖与最终Cargo.lock的精确摘要待父级整合后按实际值记录；以上T04的锁hash只指其历史基线，不表示工作树锁文件未变。CI证据通过`scripts/stage_ci_evidence.py`闭合允许列表输出，保留模型/模板/fixture/工具/失败身份，不再上传任意artifacts目录正文。

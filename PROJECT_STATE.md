@@ -38,7 +38,8 @@
 | T02 调度与存储 | 已完成 | 代码bc316da6及固定Windows 2线程/context2048组合通过；A05–A12按逻辑测试/真实链路分别留证，不代表HTTP或进程隔离 |
 | T03 PC worker | 已完成 | a8930494在Windows CI36801681068通过：Job父子/后代回收、五秒强杀、单账本IPC、144项Rust+5项真实模型及独立无native父端链；范围见T03记录 |
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
-| T05–T06 Windows发行与UI | 未开始 | 仍需PC全链路及独立验收机 |
+| T05 Windows发行 | 进行中 | 已放行私有Windows10优先CPU便携包、独立验收工具与复用native的Release CI；实际包/CI及本地独立机器证据待补，见T05记录 |
+| T06 Windows UI | 未开始 | T05独立验收门槛尚未完成，不以Server2022 CI代替 |
 | T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | 本轮Linux仅开发探针，不是扩展平台发布 |
@@ -56,6 +57,11 @@
 ## 下一步
 
 1. T00–T04阶段证据已收口，继续授权开发分支，不合并或部署
-2. 按T05准备Windows 10 x64 CPU便携包、依赖/许可清单及本地验收步骤；用户可在构建完成后参与本地电脑验收，Windows 11保持后续范围
-3. Windows Server 2022 CI仍不替代Windows 10 i5-8400本地验收、T05独立无开发工具验收机或Android真机；平台/支持矩阵不能泛化
-4. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
+2. 完成T05实现及本地聚合检查后，在已授权开发分支取得Windows Release包/独立工具的精确CI证据；产品ZIP/工具ZIP分别校验，真实验收必须使用中文空格新解压目录中的产品
+3. CI通过后T05仍保持待验证，提供无需开发工具的独立验收器供用户Windows 10本地执行；实际OS build、无开发工具/VC预装/离线条件分别记录，Windows 11保持后续范围
+4. Windows Server 2022 CI仍不替代Windows 10 i5-8400本地验收、T05独立无开发工具验收机或Android真机；平台/支持矩阵不能泛化
+5. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
+
+## T05 当前工作
+
+[ADR0006](docs/decisions/0006-t05-windows-portable-package.md)冻结产品与验收器分离、既有VS Release CRT app-local依赖闭包、严格文件/许可/hash以及失败保留；[T05验证](docs/verification/2026-10-01-t05-windows-package.md)分层记录真实结果。只在开发Actions上传私有验收产物，不创建公开Release、不合并部署、不远控或初始化长期真实token。项目root LICENSE未选是后续外部分发决策，不阻塞本轮内部开发包。

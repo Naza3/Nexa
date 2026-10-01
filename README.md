@@ -2,7 +2,7 @@
 
 为自己的 Windows / Android 应用提供统一的本地大模型推理核心。首个业务验证场景是 Telegram 群消息摘要。
 
-当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；本地验收、Windows发行/UI和Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
+当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；T05正在实现私有CPU便携包与独立验收工具；本地验收、Windows发行阶段门槛/UI和Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
 
 ## 交付形态
 
@@ -28,7 +28,9 @@
 
 先按 [构建锁](docs/build-lock.md) 准备原生依赖，再使用 [当前验证命令](xtask/README.md) 运行单测与真实模型 smoke。精确模型来源及 hash 见 [模型矩阵](docs/model-matrix.md)。
 
-`cargo test --locked --workspace` 和 `xtask baseline-verify/native-smoke` 已有实现；执行规格中的 `ai-runtime`、HTTP、移动与发行命令仍属于后续阶段，不能视为可用产品。
+`cargo test --locked --workspace`、`xtask baseline-verify/native-smoke/api-smoke` 和 `ai-runtime` HTTP/管理CLI已有实现。T05新增Windows原生开发机上的 `cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu` 与独立 `nexa-acceptance.exe`；构建/运行状态见[T05验证](docs/verification/2026-10-01-t05-windows-package.md)，不能把命令存在当成Windows10目标机验收通过。
+
+产品包为 `windows-x64-cpu.zip`，独立验收工具为 `acceptance-tools.zip`，各自附SHA-256。解压后可用工具的 `--model <现有固定GGUF> --out <报告.json>` 做短验；产品路径变化时显式 `--package <目录>`。不要求用户安装开发工具，不包含模型、UI、用户数据或长期凭据。详见[便携包说明](packaging/windows-x64-cpu/README.md)和[独立验收工具](xtask/PACKAGE_ACCEPTANCE.md)。
 
 Telegram 消息来源和摘要触发方式尚未确定。消息获取、账号和摘要产物由应用层管理，模型推理可以离线完成；离线推理不表示 Telegram 数据获取无需联网。
 

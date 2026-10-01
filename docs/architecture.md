@@ -77,6 +77,8 @@ worker 与父进程使用私有 stdin/stdout NDJSON。stdout 仅传协议，stde
 
 正常退出回收 worker；父进程异常退出由管道关闭和 Windows Job Object 等机制回收。worker 崩溃后当前及排队请求终结，进入 Faulted，显式 load 恢复。崩溃隔离不能替代 FFI 内存安全验证。
 
+T05 将管理 CLI/API 与匹配 CPU worker 放在同一产品目录，worker 路径以已验证的产品可执行文件目录为准，不从调用方 CWD 或 PATH 猜测。原生静态库仍只进入 worker；微软动态 CRT 按实际 PE 闭包 app-local 提供。验收器另包、另有自身依赖，不参与产品发现、不为产品补DLL。构建身份、文件/许可/hash与目标机器验收边界见[ADR0006](decisions/0006-t05-windows-portable-package.md)。
+
 ### 4.2 Android
 
 App 初始化一个 runtime 实例。原生模型由专用线程独占，桥只传公共 DTO 和受控句柄；推理不阻塞 UI 线程。

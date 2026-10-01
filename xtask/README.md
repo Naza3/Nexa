@@ -19,7 +19,7 @@ Windows 的 example 文件名为 `native-smoke.exe`。原生库构建配置以 `
 
 退出码：0 表示当前请求的验证范围通过；1 表示已执行的验证失败；2 表示参数/前置文件错误。读取不到文件时不会写一份伪成功报告。默认设备标签和无法测量的性能值为 `unavailable`。目标 Windows/Android 验收单独标记 `skipped`；即便在对应 OS 执行，也不能代替指定设备的完整验收。
 
-执行规格中后续阶段的`check`、`test --suite contract`、`build`尚未实现，调用会明确失败。T04已新增api-smoke，范围与关停副作用见下节；每阶段实际验收分别记录，不能凭一条命令宣布T02–T09全完成。
+执行规格中后续阶段的`check`、`test --suite contract`尚未实现，调用会明确失败。T04已有api-smoke，T05新增Windows专用build及独立验收器，范围和关停副作用见下节；每阶段实际验收分别记录，不能凭一条命令宣布T02–T09全完成。
 
 
 ## T02 存储与调度验证
@@ -46,3 +46,44 @@ python scripts/run_api_smoke.py --cli target/debug/ai-runtime.exe --xtask target
 ```
 
 Linux去掉.exe并使用实际Cargo target路径。先构建runtime-cli、xtask及runtime-worker；wrapper只创建临时私有data/credentials，端口0，由实际CLI在线导入固定模型，smoke显式cpu/context2048/threads2/batch128，最后确认服务退出。模型hash事先由baseline-verify/固定fixture核验；报告继续记录sha256。shared开发环境将TMPDIR设到空间充足的专用临时根，避免/tmp tmpfs容量污染测试。
+
+
+## T05 Windows Release 产品与独立验收包
+
+原生 Windows x64 开发机上执行：
+
+```powershell
+cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
+```
+
+`xtask/src/windows_package.rs`委托`scripts/package_windows.py`，要求固定Rust1.98.1、CMake4.4.3及既有VS2022 C++/Release Redist。脚本不下载/安装工具、模型或运行库；不接受Linux交叉构建冒充Windows包。复用`build/native-release`，验证同一VS实例、配置、x64/CPU/CRT和精确archive身份后增量检查原生目标。Rust Release使用专门target目录；先缺native独立构建管理CLI，再构建worker和独立验收器。
+
+输出：
+
+- `dist/windows-x64-cpu/`、`dist/windows-x64-cpu.zip`、`dist/windows-x64-cpu.zip.sha256`
+- `dist/acceptance-tools/`、`dist/acceptance-tools.zip`、`dist/acceptance-tools.zip.sha256`
+- `artifacts/verification/windows-package/build-result.json`、`pe-inspection.json`；这是构建/闭包证据，不是运行验收
+- 存在时的PDB位于`build/windows-x64-cpu/cargo/x86_64-pc-windows-msvc/release/`，不混入两份ZIP
+
+产品与工具各自提供真实PE闭包所需的app-local CRT、许可、manifest/SHA256SUMS。逐文件白名单/大小/hash/路径/Release/架构检查完成后才发布输出目录。源工作树dirty可用于本地诊断记录；CI供本地验收的产物必须为精确GITHUB_SHA且project_dirty=false。模型与临时token/data不进入包。
+
+目标用户只运行预编译工具，完整接口与覆盖见[PACKAGE_ACCEPTANCE.md](PACKAGE_ACCEPTANCE.md)：
+
+```powershell
+.\acceptance-tools\nexa-acceptance.exe --model 'D:\模型 空格\Qwen3-0.6B-Q8_0.gguf' --out '.\package-report.json' --machine-role target
+```
+
+默认产品在工具目录旁`../windows-x64-cpu`，可显式`--package DIR`；模型与报告必须提供。CI显式传解压产品目录，验收器核对后将包内真实CLI传给共用api-smoke，不依赖xtask位置猜测。发行必测CLI缺失直接失败。`api-smoke`开发入口新增`--cli ABS_PATH --release-acceptance true`供这一严格路径使用；一般T04入口保留其已有范围。独立验收默认五次断流恢复，`--disconnect-cycles 1..50`可显式指定；T05 Release CI明确传50，原有T04 debug CI也保留50次。
+
+所有产品进程在自有空临时CWD和仅系统目录PATH启动，不能借验收器自身DLL补产品依赖；工具也仅持有短命测试凭据。退出0只表示短程包检查过，A20/Win10实际build/无开发工具/VC预装/实际离线证据分别记录，不提前打开T06门槛。
+
+独立开发检查（不要求目标机执行）：
+
+```sh
+python -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_*.py'
+rustc --edition 2024 --test crates/llama-adapter/native_identity.rs -o build/native-identity-tests
+build/native-identity-tests
+python scripts/stage_ci_evidence.py
+```
+
+Windows独立identity测试程序后缀为`.exe`。证据stage只接受闭合已审查报告，保留状态、参数、身份与脱敏前后hash；上游合成正文只留hash/字节数/fixture关联。拒绝内容产生安全失败report并exit1，不上传原始整个目录。真正Windows/目标机结果见[T05记录](../docs/verification/2026-10-01-t05-windows-package.md)。

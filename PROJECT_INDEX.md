@@ -43,6 +43,13 @@
 - [T04验证](docs/verification/2026-10-01-t04-http-cli.md)：Linux开发验证、固定Windows CI212项测试/真实DACL与Job、HTTP50及平台边界分开记录
 - [T04 API](crates/runtime-api/README.md)：本机HTTP/严格文本兼容子集；[CLI](crates/runtime-cli/README.md)提供受控命令（实现/验收分别记录）
 
+- [T05决策](docs/decisions/0006-t05-windows-portable-package.md)：Windows10优先便携产品/独立验收器、真实依赖与许可、CI和目标机门槛
+- [T05验证](docs/verification/2026-10-01-t05-windows-package.md)：分层记录包/真实解压验收/本地设备；未执行项不算通过
+- [便携包模板](packaging/windows-x64-cpu/README.md)、[独立验收工具](xtask/PACKAGE_ACCEPTANCE.md)：产品使用步骤和无需Cargo/Python的短验入口
+- `xtask/src/windows_package.rs` / `scripts/package_windows.py`：Windows原生x64 Release构建、PE闭包/许可/hash/ZIP
+- `crates/llama-adapter/native_identity.rs`：精确配置/架构/CRT/source/archive身份边界，独立rustc测试
+- `scripts/stage_ci_evidence.py` / `scripts/test_stage_ci_evidence.py`：闭合允许列表脱敏证据，保留失败及合成输出hash链
+
 ## runtime 全量路径与规划
 
 以下路径按任务逐步创建；仅上节明确列出的入口已存在，其余仍是规划。
@@ -93,7 +100,7 @@
 
 ## 验证入口的真实性
 
-当前已有 Cargo 与原生构建入口，尚无前端或 Flutter 工程。T04已新增产品CLI和xtask api-smoke；执行规格第12节的通用check/build与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
+当前已有 Cargo 与原生构建入口，尚无前端或 Flutter 工程。T04已新增产品CLI和xtask api-smoke；T05正在加入Windows专用build/独立验收器；执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。

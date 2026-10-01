@@ -565,6 +565,10 @@ Android 初始 ABI 为 arm64-v8a、minSdk=28；targetSdk 和 NDK 根据锁定的
 
 第一版采用整包发行，无运行时自动下载加速插件。模型独立导入。符号文件另外保存，不混入普通用户包。
 
+T05当前实现以[ADR0006](docs/decisions/0006-t05-windows-portable-package.md)为准：`dist/windows-x64-cpu`只放两个Rust Release产品EXE、实际PE依赖闭包所需app-local运行库、配置/README、manifest/SHA256SUMS和许可；独立工具放`dist/acceptance-tools`，各有ZIP及外部SHA-256。二者分别补齐实际CRT依赖，验收器不属于产品也不能为产品补DLL。构建复用同一`build/native-release`可信Release原生树，不增加重复全量native workflow。
+
+已安装VS的标准未修改Release x64 CRT仅从所选实例的`VCToolsRedistDir`取所需文件，记录来源/版本/签名/适用许可；不复制System32/Debug/Preview/整个工具链，不静默安装运行库。严格manifest/hash与实际PE普通/延迟导入闭包一致，缺app-local VC DLL静态检查必须失败，即便CI全局已安装VC运行库。项目root LICENSE尚未选定不阻塞私有内部开发包，外部分发/公开Release另行决策。
+
 包体报告分别列出：压缩下载大小、安装大小、UI、runtime、原生运行依赖、模型大小。Windows WebView 运行环境存在与否也要写清；不把外置运行库当成不存在的成本。
 
 ## 10. 可执行开发任务
@@ -642,7 +646,7 @@ A19 的报告区分权重 mmap、进程私有内存、驱动缓存与 GPU 分配
 
 ## 12. 验证命令与操作步骤
 
-> 以下是项目必须实现的命令契约。生成本文本并不代表这些命令已经存在。T00/T04/T09 要分别实现对应 xtask 和 CLI；读者在完成相关阶段后运行。所有路径均可调整为自己的实际路径。
+> 以下是项目必须实现的命令契约。生成本文本并不代表这些命令已经存在。T00/T04/T05/T09 要分别实现对应 xtask 和 CLI；实际可运行范围见xtask/README.md，不能把下面的规划check/contract/android命令当成已实现。所有路径均可调整为自己的实际路径。
 
 ### 12.1 开发验证
 
@@ -659,19 +663,30 @@ cargo run --locked -p xtask -- test --suite contract
 cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
 ```
 
-xtask check 要执行对应目标的编译检查与 Clippy；contract 套件验证协议、状态、队列，不要求大型模型。build 输出固定到 `dist/windows-x64-cpu/`，包含可启动的 CLI/API 和 worker。
+`check`与`test --suite contract`仍为后续契约，目前应直接使用`cargo fmt --all -- --check`、`cargo test --locked --workspace -- --test-threads=1`和`cargo clippy --locked --workspace --all-targets -- -D warnings`。T05实现的Windows专用`build`输出`dist/windows-x64-cpu/`及独立`dist/acceptance-tools/`，只在原生Windows x64 MSVC主机运行；实际构建结果按[T05验证](docs/verification/2026-10-01-t05-windows-package.md)记录。
 
 网络依赖首次准备完成后，CI 使用锁文件构建。没有完整依赖缓存时不误用 offline 参数并把失败算作代码错误。
 
 ### 12.2 Windows 真实模型验证
 
-T04实现`ccb2053fe514f582f6161f9fc87ee25346aa55e4`已通过固定Windows Server 2022 CPU CI，包括临时凭据真实CLI在线导入、HTTP/SSE、50次断连恢复与关停。证据见[T04验证](docs/verification/2026-10-01-t04-http-cli.md)。以下dist路径仍属于T05发行交付；该CI不替代Windows 10本地电脑或无开发工具验收。
+T04实现`ccb2053fe514f582f6161f9fc87ee25346aa55e4`已通过固定Windows Server 2022 CPU CI，包括临时凭据真实CLI在线导入、HTTP/SSE、50次断连恢复与关停。证据见[T04验证](docs/verification/2026-10-01-t04-http-cli.md)。T05发行交付按下一节独立工具执行并单列证据；该CI不替代Windows 10本地电脑或无开发工具验收。
+
+T05产品与独立工具ZIP完整解压为相邻目录后，推荐无需开发工具的短验入口：
+
+```powershell
+.\acceptance-tools\nexa-acceptance.exe --model 'C:\模型 空格\Qwen3-0.6B-Q8_0.gguf' --out '.\package-report.json' --machine-role target
+# 两包不相邻时再传 --package 'C:\实际 产品目录\windows-x64-cpu'
+```
+
+只需已有固定模型与报告输出路径，不安装Rust/Python/VS。工具严格核对产品完整性/PE闭包，再从自有中文空格临时目录用清理后的环境实际运行产品CLI、HTTP、取消、断流恢复和退出；短命data/凭据由工具拥有，不初始化用户长期服务。退出0仅证明该短验范围，A20/独立无开发工具/实际离线条件仍须如实记录；Windows Server2022不等于Win10，Win11后续。详见[独立验收说明](xtask/PACKAGE_ACCEPTANCE.md)。
+
+以下为开发者手动HTTP检查，不是要求目标机安装Cargo。
 
 终端 A，在项目根目录运行。`C:\models\qa-small.gguf` 要替换成 model-matrix 已记录的实际文件。
 
 ```powershell
 $aiExe = Join-Path $PWD 'dist/windows-x64-cpu/ai-runtime.exe'
-$aiData = Join-Path $env:LOCALAPPDATA 'ai-runtime-test'
+$aiData = Join-Path $env:TEMP ('Nexa manual test ' + [Guid]::NewGuid().ToString('N'))
 & $aiExe --data-dir $aiData init
 & $aiExe --data-dir $aiData models import --id qa-small --file 'C:\models\qa-small.gguf'
 & $aiExe --data-dir $aiData serve
@@ -681,7 +696,7 @@ $aiData = Join-Path $env:LOCALAPPDATA 'ai-runtime-test'
 
 ```powershell
 $aiExe = Join-Path $PWD 'dist/windows-x64-cpu/ai-runtime.exe'
-$aiData = Join-Path $env:LOCALAPPDATA 'ai-runtime-test'
+$aiData = Join-Path $env:TEMP ('Nexa manual test ' + [Guid]::NewGuid().ToString('N'))
 $apiToken = (Get-Content -Raw (Join-Path $aiData 'secrets/api-token')).Trim()
 & $aiExe --data-dir $aiData load qa-small --backend cpu --context 2048 --threads 2 --batch 128
 & $aiExe --data-dir $aiData status
