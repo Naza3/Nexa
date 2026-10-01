@@ -220,12 +220,7 @@ impl DesktopBridge {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            use windows_sys::Win32::System::Threading::{
-                CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-            };
-            command.creation_flags(
-                CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
-            );
+            command.creation_flags(runtime_creation_flags());
         }
         let mut child = command.spawn().map_err(|error| {
             self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
@@ -503,6 +498,26 @@ impl DesktopBridge {
         result
     }
 }
+#[cfg(windows)]
+fn runtime_creation_flags() -> u32 {
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+    // Respect inherited host Job limits. We do not request breakaway, create a
+    // UI-owned kill-on-close Job, or claim survival beyond an external Job.
+    CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+}
+#[cfg(all(test, windows))]
+mod windows_launch_tests {
+    #[test]
+    fn runtime_flags_detach_console_but_respect_inherited_job() {
+        use windows_sys::Win32::System::Threading::{
+            CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        };
+        let flags = super::runtime_creation_flags();
+        assert_eq!(flags, CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+        assert_eq!(flags & CREATE_BREAKAWAY_FROM_JOB, 0);
+    }
+}
+
 pub fn default_data_dir() -> Result<PathBuf> {
     runtime_cli::command::parse(vec!["status".into()])
         .map(|o| o.data_dir)

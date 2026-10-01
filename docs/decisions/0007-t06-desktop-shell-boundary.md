@@ -13,6 +13,14 @@
 7. 独立 `desktop-windows.zip` 嵌入前端 EXE，并完整保留同源 `runtime/` T05 包、manifest、SHA256SUMS 与许可。包的源码/根锁身份须匹配；桌面额外 PE/app-local CRT 按实际 import 闭包验证。UI/runtime/model 字节数分开记录，模型和用户数据不入包。自校验仅表示一致性，不冒充签名。
 8. `--diagnose` 只报告实际安装的 WebView2 版本、桌面包身份与完整性，不建立 WebView、不初始化数据、不启动 runtime。真实 bridge harness、实际原生窗口和用户 Win10 UI 操作分层保留，不能互相替代。
 
+## Windows外部宿主Job边界补充
+
+2026-10-01的固定Windows对照已观察：同一harness EXE和DETACHED_PROCESS/CREATE_NEW_PROCESS_GROUP条件下，请求BREAKAWAY时进程创建返回OS5；省略BREAKAWAY时父/子均在Job中，子进程正常退出且Ctrl+C在250ms观察窗内保持pending。两份报告hash及源码见[T06第四轮记录](../verification/2026-10-01-t06-desktop.md)。这支持当前宿主Job不允许显式脱离，不代表查询了其具体限制位，也不是生产runtime或UI验收。
+
+据此固定生产启动为`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，移除BREAKAWAY请求；不增加失败后fallback，不改CLI信号处理、Job限制、权限或系统安全配置。Nexa保证自己不创建kill-on-UI-close的runtime Job，不以正常UI退出或句柄析构结束runtime；保留外部宿主已有containment。不承诺外部宿主整个Job、登录会话或系统终止后runtime仍存活，不尝试绕过它。runtime自身对子worker的T03 Job回收约束不变。
+
+默认关闭自身UI后保留同一runtime，以及选择同时退出后的真实清理，仍必须由修复源码的完整Windows Release bridge生命周期和用户原生窗口操作分别验证。早期双策略探针继续保留作诊断，不替代最终产品门槛。
+
 ## 构建与许可
 
 - 当前独立图锁定 tauri 2.12.1、tauri-build 2.7.1、rfd 0.17.2、clipboard-win 5.4.1；JS API/CLI 2.12.1。精确图在各自锁文件，不共用或链接根 Cargo.lock

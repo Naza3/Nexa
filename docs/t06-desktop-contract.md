@@ -52,7 +52,7 @@
 1. 数据目录沿用 CLI 的 `%LOCALAPPDATA%/Nexa`（测试显式临时目录），不创建另一套隐含服务。配置/令牌权限校验复用已有代码。
 2. 发现文件、PID和端口只作定位。每条新 TCP 必须使用 `runtime_cli::client::VerifiedConnection` / `connect_data_dir` 完成 endpoint-bound HMAC proof，再在同一连接发送 Bearer；禁止 reqwest 池化、代理、重定向、自动重连/重放。不同控制请求可各建独立已证明连接，避免取消排在生成后面。
 3. 已占实例锁但连接/proof失败时显示错误，绝不据此抢锁、删记录、杀PID或另启替身。锁空闲时从固定随包路径启动；启动竞态由已有实例锁和端口绑定裁决，失败后只重新发现/校验，不自动重放业务请求。
-4. 壳从已验证产品布局解析 `runtime/ai-runtime.exe`，它与 `ai-runtime-worker.exe`及CRT保持同目录。Rust 原生 Command 固定参数，无 shell/PATH/CWD搜索。必须避免会在壳退出时自动杀掉 runtime 的 sidecar/Job管理模式；stdin/stdout/stderr不依赖UI存活的管道，输出不无限收集。
+4. 壳从已验证产品布局解析 `runtime/ai-runtime.exe`，它与 `ai-runtime-worker.exe`及CRT保持同目录。Rust 原生 Command 固定参数，无 shell/PATH/CWD搜索。Windows固定使用`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，不请求`CREATE_BREAKAWAY_FROM_JOB`，不在失败后改变策略重试。Nexa不创建在UI退出时杀掉runtime的sidecar、kill-on-drop或UI-owned Job；stdin/stdout/stderr不依赖UI存活的管道，输出不无限收集。尊重外部宿主既有Job/会话containment，不修改其限制/权限，不保证整个外部Job或会话终止后runtime仍存活，也不尝试脱离该限制。runtime对子worker的既有Job回收规则不变。
 5. 默认关闭：先停止接收UI操作，取消本UI在途请求，关闭本UI HTTP流并有限等待清理；正常关闭保留 runtime 及其他客户端请求。UI消失/崩溃造成流断开也要触发现有断流取消，不自动重放。
 6. 选择同时退出或显式停止：明确说明影响其他客户端，走既有 shutdown + wait_stopped；未确认清理时不得显示已停止。原生关闭事件先阻止立即退出，运行同一异步流程，重复关闭合并；失败给保留窗口/重试/仅关UI的明确选择，不猜PID强杀。
 7. Tauri只允许main本地打包窗口调用固定命令，禁远程导航/远程资源和通用shell/HTTP/fs/clipboard-read权限。配置CSP；自定义命令要通过 AppManifest::commands + capabilities 精确授权，不能误以为注册命令默认受插件ACL限制。
@@ -73,7 +73,7 @@
 - 本轮用已安装的Evergreen WebView2，不自动下载、安装或改变系统权限。缺失时在WebView建立前给原生可读错误及微软官方安装入口；不能只做网页内错误（网页根本无法启动）。检测实际版本并纳入验证证据，Win10 build19044或装有Edge都不等于WebView2一定存在。
 - 不新增fixed WebView2；微软当前文档说明Win10非打包Win32使用fixed v120+涉及AppContainer目录ACL要求，不适合本轮未经批准的系统权限变化。
 - 自动验证：根回归；bridge假服务恶意proof/redirect/丢帧/大帧/取消竞态/慢消费者/终态一次；Linux真实模型import→load→流→cancel→再次生成→unload→stop；Windows相同宿主链及实际Tauri构建/PE闭包/中文空格路径。
-- Windows关闭语义用真实子进程验证：默认关UI后已证明API仍可调用；同时退出后实例锁/记录释放、worker回收；关闭中重复点击、连接既有runtime、异协议/proof失败、端口占用、取消在started前后均覆盖。bridge harness不能冒充已验证原生窗口事件；壳若暂不能自动驱动，明确保留Win10用户操作验收。
+- Windows关闭语义须用真实子进程验证：默认关UI后必须证明同实例API仍可调用；同时退出后实例锁/记录释放、worker回收。正常关闭自身UI与外部宿主终止整个Job/会话分开，不以启动探针代替完整生命周期证据。关闭中重复点击、连接既有runtime、异协议/proof失败、端口占用、取消在started前后均覆盖。bridge harness不能冒充已验证原生窗口事件；壳若暂不能自动驱动，明确保留Win10用户操作验收。
 - 前端单测/浏览器检查三页、键盘/中文输入、无模型/忙碌/失败/清空/重复点击/切页；mock只证明UI。T06完成仍需Windows UI实际导入、真实聊天、停止和关闭两种语义，不用截图代替生成。
 
 ## 8. 官方核对来源

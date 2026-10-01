@@ -41,4 +41,4 @@ Telegram 消息来源和摘要触发方式尚未确定。消息获取、账号�
 
 `apps/desktop/`已有React/TypeScript/Vite模型、聊天和设置三页，`src-tauri/`为独立Rust workspace。Linux前端36测试/构建、纯Rust bridge真实模型与进程生命周期已通过；这不代表Windows窗口已验。原生Tauri构建、桌面ZIP与用户Win10操作门槛见[T06记录](docs/verification/2026-10-01-t06-desktop.md)。
 
-桌面开发产物为另一个`desktop-windows.zip`，内含嵌入前端EXE与完整匹配的`runtime/`子目录，模型继续外置。需要已安装WebView2 Evergreen，缺失时原生提示官方入口，不自动安装或修改系统权限。默认关窗口保留runtime；同时退出会影响所有客户端，须实际确认清理。使用与手工验收见[桌面说明](packaging/desktop-windows/README.md)，构建命令见[验证入口](xtask/README.md#t06-桌面构建与分层验收)。
+桌面开发产物为另一个`desktop-windows.zip`，内含嵌入前端EXE与完整匹配的`runtime/`子目录，模型继续外置。需要已安装WebView2 Evergreen，缺失时原生提示官方入口，不自动安装或修改系统权限。默认正常关闭自身窗口保留runtime，不创建随UI关闭杀runtime的Job；外部宿主整体终止Job/会话后的存活不作保证。同时退出会影响所有客户端，须实际确认清理。使用与手工验收见[桌面说明](packaging/desktop-windows/README.md)，构建命令见[验证入口](xtask/README.md#t06-桌面构建与分层验收)。
