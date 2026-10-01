@@ -13,7 +13,7 @@
 | T00–T04 已有固定 Windows 基线 | 已通过既有阶段 | [T04 记录](2026-10-01-t04-http-cli.md)，CI36816604494；不是本轮 Release 包 |
 | 包/验收代码与 Linux 逻辑回归 | 最终开发聚合通过 | Rust236pass/6ignored、native identity3pass；Python父级30pass后边界修补全32pass，真实模型另行分层记录 |
 | CI 证据 staging 安全回归 | 通过局部验证 | 下节实际命令与结果；不证明 Windows 产品可运行 |
-| Windows Release 构建、PE/许可/manifest/hash/ZIP | 进行中，CI打包初始化失败 | run36823563860在VsDevCmd调用失败，随后36825830693在前置真实cmd fixture的exit22断言失败；尚未生成Release产品 |
+| Windows Release 构建、PE/许可/manifest/hash/ZIP | 进行中，CI打包初始化失败 | 前序VsDevCmd/fixture问题已有后续验证；最新run36826425239在CRT签名cmdlet模块加载失败，未有可交付Release ZIP |
 | 中文空格新解压目录、空 CWD、受限 PATH 真实 CLI/API | 未执行 | 必须跑解压产品与解压独立工具，不能用 debug/仓库二进制替代 |
 | Windows 10 i5-8400 /16GB 本地短验 | 未执行 | 需本地实际 OS build 与包/工具/report identity |
 | 无开发工具独立机器、VC预装状态、实际离线 | 未验证 | PATH 清理、Server2022 或机器角色声明不足以证明 |
@@ -158,3 +158,37 @@ cmd batch会对未引用的等号参数进行自己的分隔，fixture对`%2`的
 脱敏artifact `11145371348`，ZIP2,551 bytes，SHA-256 `9341fdb3c27358f6db4431a2f1b1db601de20a44ebb37c662d90aa847112ecae`。下载后与GitHub digest相同、stage各项输出hash核对通过；完整日志、run/jobs/artifact元数据、ZIP及解包保存在`artifacts/verification/t05-windows-36825830693*`。没有触发重复CI，原始三轮结果均保留；T05仍进行中，Windows10/A20未验证。
 
 第三轮后的窄修仅改真实Windows fixture：记录原始`%*`和`%1`至`%5`到受控`NEXA_FIXTURE_*`环境字段，由Python分别精确断言完整三个标准flags以及等号分隔后的五个batch参数槽；删除fixture内部错误的三槽if-exit断言。生产打包脚本完全不变，中文/空格/括号/`&`/`!`路径、实际PATH/Redist取值和exit/b7负例均保留。Linux回归仍为35项收集、34 passed / 1 Windows专用 skipped；新五槽期望的实际Windows观测等待下一run，不把本次skip或预期值当成已测结果。
+
+## 第四轮 Windows CI：真实cmd回归通过，签名cmdlet模块加载失败
+
+fixture修复提交 `29dd01e75832852b426f6a31ef56c1cd2358033d`（tree `40f88b87e2b317bed970ffec7bca38ddbc4b6d90`）的 [run 36826425239](https://github.com/Naza3/Nexa/actions/runs/36826425239)，attempt1 / job `110253024795`，06:44:50 UTC启动，07:05:20 UTC终态failure。
+
+### 已观察通过的范围
+
+第3步Python **35 passed，无skip**，新增真实Windows cmd用例已实际通过：中文/空格/括号/`&`/`!`路径，标准flags原始文本与五个batch参数槽，PATH/Redist环境和exit/b7失败传播均得到该测试验证。这确认第三轮fixture窄修，不能替代最终产品验收。
+
+管理端独立构建、原生Release/CTest、native identity3项、format、workspace strict clippy和Rust测试均通过；Rust实际合计 **234 passed / 0 failed / 6 ignored**。固定模型身份、上游/原生suite、既有5项独立真实模型及管理/worker链路均通过。T04 debug HTTP/CLI报告 **89 pass / 0 fail / 9 skipped**，断流requested/attempted/passed=**50/50/50**，wrapper57.469秒，所有生命周期步骤exit0、forced_cleanup=false。旧4线程超配诊断仍单列failed，不改变支持范围。
+
+### 第16步实际失败及证据边界
+
+打包于07:01:14.346开始，07:05:06.402返回`command failed (1): powershell.exe`。`Get-AuthenticodeSignature`发现`Microsoft.PowerShell.Security`模块，但模块无法加载；错误ID为`CouldNotAutoloadMatchingModule`。错误展示的脚本片段只包含`...Microsoft.VC143.CRT\vcruntime140.dll`尾段。它是签名检查工具加载失败，不能解释成DLL签名无效，也不能放宽`Valid`和Microsoft来源要求。
+
+日志显示外层workflow使用`C:\Program Files\PowerShell\7\pwsh.EXE`，冻结打包脚本则通过裸`powershell.exe`启动子进程并继承开发环境。实际子PowerShell绝对路径、PSModulePath、完整Redist目录/版本及Import-Module底层异常均未记录；跨宿主模块搜索冲突只是排查候选，不作为已证明根因。不得借此修改ExecutionPolicy、Defender或系统配置。
+
+脚本控制流在DLL签名检查前安排了三个Release构建命令，但它没有输出成功命令的逐步日志，本轮也未上传最终Release EXE、manifest或build-result。**不能单凭到达签名检查推定并对外宣称三份Release二进制已验收**。可实证的是签名cmdlet对`vcruntime140.dll`的调用失败。完整产品/工具ZIP尚未生成或上传，解压后真实Release/UTF8路径/50断流验收未执行；前置debug HTTP50不替代它们。
+
+### 原始证据
+
+- 脱敏artifact `11145848691`：ZIP37,910 bytes，SHA-256 `3df37804b291f337d423e923da035d487b221a98839c6cc0a69ef8d50f85502f`；已下载核对GitHub digest和26份stage报告hash
+- failure-only原生诊断artifact `11145953184`：ZIP29,186,710 bytes，SHA-256 `744e5c0cea21116a887bfbb32cec75f3a1bfd336c93e5416f73e74e43a397006`；已下载核对archive、源commit及14项manifest文件大小/hash
+- 原始job/run/jobs/artifact元数据、ZIP和解包保存于`artifacts/verification/t05-windows-36826425239*`；未重跑或删除旧失败。打包工位负责限定的子PowerShell环境诊断；本记录没有提前声明修复结果
+
+T05保持进行中。Windows10目标机/A20/独立离线无开发工具条件仍未验证，T06门槛未打开。
+
+### PowerShell 签名工具边界窄修（真实Windows待新CI）
+
+本次仅固定签名工具的宿主与模块解析边界：使用`SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe`；复制子进程环境并仅移除继承的`PSMODULEPATH`，不修改父进程、用户或系统环境。显式按绝对系统路径加载Security、Utility、Management模块，禁止自动换用其他目录的同名模块；失败记录宿主/版本及实际模块异常类型、ID和消息。原有`Valid`且Microsoft签名者要求不变，没有安装软件、降低签名要求或修改ExecutionPolicy/Defender/网络设置。
+
+新增前置真实Windows测试先在原继承环境显式导入模块，记录实际底层错误的脱敏诊断，不输出完整环境。随后用固定系统host验证系统PowerShell可执行文件的有效Microsoft签名，同时要求未签名临时ps1被拒绝；该ps1不会被执行。测试由现有早期Python发现步骤收集，仍先于完整native/Release编译。
+
+父级实际执行Python全套：**38项收集，36 passed / 2 Windows专用 skipped**，exit0；diff检查通过。PS7模块搜索路径污染继续仅列为候选，待下一Windows实际诊断确认；不能将本次Linuxskip、新代码存在或旧日志到达签名检查解释为Windows签名验证/Release包已通过。

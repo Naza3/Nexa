@@ -78,6 +78,58 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r"initialization failed \(7\)"):
                 pack.devcmd_environment(dev, env)
 
+    def test_windows_powershell_uses_only_system_host_modules_and_child_env_fix(self):
+        env = {"SYSTEMROOT": "C:/Windows", "PSMODULEPATH": "C:/Program Files/PowerShell/7/Modules", "PATH": "selected VS path", "VCTOOLSREDISTDIR": "selected CRT", "KEEP_SETTING": "unchanged"}
+        before = dict(env)
+        with mock.patch.object(pack, "regular", side_effect=lambda path: path), mock.patch.object(pack, "command", return_value="fixture") as run:
+            self.assertEqual(pack.powershell("'fixture'", env), "fixture")
+        args, actual_env = run.call_args.args
+        self.assertEqual(args[0], Path("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"))
+        self.assertEqual(actual_env, {key: value for key, value in env.items() if key != "PSMODULEPATH"})
+        self.assertEqual(env, before)
+        script = args[-1]
+        for name in ("Microsoft.PowerShell.Security", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Management"):
+            self.assertIn("Modules/" + name + "/" + name + ".psd1", script.replace("\\", "/"))
+        self.assertIn("Import-Module -Name", script)
+        self.assertIn("$_.FullyQualifiedErrorId", script)
+        self.assertIn("$_.Exception.Message", script)
+        self.assertIn("exit 1", script)
+        self.assertNotIn("Set-ExecutionPolicy", script)
+
+    def test_authenticode_requires_valid_microsoft_signature_without_fallback(self):
+        for status, signer in (("NotSigned", ""), ("UnknownError", "Microsoft Corporation"), ("HashMismatch", "Microsoft Corporation"), ("Valid", "Unrelated publisher")):
+            with self.subTest(status=status, signer=signer), mock.patch.object(pack, "powershell", return_value=json.dumps({"signature_status": status, "signer": signer})), self.assertRaisesRegex(ValueError, "valid Microsoft signature"):
+                pack.authenticode_info(Path("fixture.dll"), {})
+        with mock.patch.object(pack, "powershell", side_effect=ValueError("specific system module import failure")), self.assertRaisesRegex(ValueError, "specific system module import failure"):
+            pack.authenticode_info(Path("fixture.dll"), {})
+
+    @unittest.skipUnless(os.name == "nt", "requires real Windows PowerShell and Authenticode")
+    def test_real_windows_authenticode_with_inherited_module_path(self):
+        env = pack.windows_environment(os.environ, "")
+        before = dict(env)
+        host = pack.regular(Path(env["SYSTEMROOT"]) / "System32/WindowsPowerShell/v1.0/powershell.exe")
+        # Read-only diagnostic of the inherited lookup, not an acceptance bypass.
+        # The fixed-host signature checks below must still succeed independently.
+        diagnostic_script = ("$ErrorActionPreference='Stop';"
+                             "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"
+                             "try {Import-Module Microsoft.PowerShell.Security -ErrorAction Stop;"
+                             "[Console]::WriteLine('inherited Security module import: success; host=' + $PSHOME + '; version=' + $PSVersionTable.PSVersion);"
+                             "} catch {[Console]::WriteLine('inherited Security module import: failed; host=' + $PSHOME + '; version=' + $PSVersionTable.PSVersion + '; type=' + $_.Exception.GetType().FullName + '; id=' + $_.FullyQualifiedErrorId + '; message=' + $_.Exception.Message);}")
+        diagnostic = pack.command([host, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", diagnostic_script], env)
+        replacements = [(str(pack.ROOT), "<project>"), (env.get("USERPROFILE", ""), "<user-profile>"), (env["SYSTEMROOT"], "<windows>"), (env.get("PROGRAMFILES", ""), "<program-files>")]
+        print(pack.sanitize(diagnostic, replacements))
+        info = pack.authenticode_info(host, env)
+        self.assertEqual(info["signature_status"], "Valid")
+        self.assertIn("Microsoft Corporation", info["signer"])
+        self.assertEqual(Path(info["powershell_host"]).resolve(), host.parent.resolve())
+        self.assertTrue(info["powershell_version"].startswith("5.1."))
+        with tempfile.TemporaryDirectory(prefix="nexa-unsigned-") as folder:
+            unsigned = Path(folder) / "unsigned-fixture.ps1"
+            unsigned.write_text("# Unsigned test data; never executed.\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "valid Microsoft signature"):
+                pack.authenticode_info(unsigned, env)
+        self.assertEqual(env, before)
+
     def test_relative_paths_are_strict(self):
         for name in ("../escape", "/absolute", "C:/absolute", "a\\b", "a//b", "a/./b", "a/../b", "bad.", "bad ", "a\x00b", "", "\ud800"):
             with self.subTest(name=repr(name)), self.assertRaises((ValueError, UnicodeError)):

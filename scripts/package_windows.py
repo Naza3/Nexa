@@ -103,7 +103,33 @@ def command(args, env=None, cwd=ROOT, allowed=(0,)):
 
 
 def powershell(script, env=None):
-    return command(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop';" + script], env)
+    child_env = windows_environment(os.environ if env is None else env, "")
+    system_root = child_env.get("SYSTEMROOT")
+    if not system_root:
+        fail("SYSTEMROOT is required to locate Windows PowerShell")
+    host = regular(Path(system_root) / "System32/WindowsPowerShell/v1.0/powershell.exe")
+    # pwsh -> Python/cmd -> Windows PowerShell otherwise inherits the PS7 module
+    # search path. Remove only this child variable; never change the parent or OS.
+    child_env.pop("PSMODULEPATH", None)
+    prefix = ("$ErrorActionPreference='Stop';"
+              "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"
+              "$OutputEncoding=[Console]::OutputEncoding;"
+              "$PSModuleAutoLoadingPreference='None';")
+    for name in ("Microsoft.PowerShell.Security", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Management"):
+        module = regular(host.parent / "Modules" / name / (name + ".psd1"))
+        prefix += ("try {Import-Module -Name " + ps_literal(module) + " -ErrorAction Stop;} catch {"
+                   "[Console]::Error.WriteLine('Nexa system module import failed; module=" + name +
+                   "; host=' + $PSHOME + '; version=' + $PSVersionTable.PSVersion + '; type=' + "
+                   "$_.Exception.GetType().FullName + '; id=' + $_.FullyQualifiedErrorId + "
+                   "'; message=' + $_.Exception.Message); exit 1;}")
+    return command([host, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", prefix + script], child_env)
+
+
+def authenticode_info(source, env):
+    info = json.loads(powershell("$p=" + ps_literal(source) + "; $s=Get-AuthenticodeSignature -LiteralPath $p; $f=Get-Item -LiteralPath $p; @{signature_status=[string]$s.Status; signer=[string]$s.SignerCertificate.Subject; file_version=$f.VersionInfo.FileVersion; product_version=$f.VersionInfo.ProductVersion; powershell_version=[string]$PSVersionTable.PSVersion; powershell_host=$PSHOME} | ConvertTo-Json -Compress", env))
+    if info["signature_status"] != "Valid" or "Microsoft Corporation" not in info["signer"]:
+        fail("CRT DLL does not have a valid Microsoft signature")
+    return info
 
 
 def ps_literal(value):
@@ -449,9 +475,7 @@ def build():
         def copy_crt(source, dest):
             regular(source)
             # Version/signature must describe the original DLL before copying.
-            info = json.loads(powershell("$p=" + ps_literal(source) + "; $s=Get-AuthenticodeSignature -LiteralPath $p; $f=Get-Item -LiteralPath $p; @{signature_status=[string]$s.Status; signer=[string]$s.SignerCertificate.Subject; file_version=$f.VersionInfo.FileVersion; product_version=$f.VersionInfo.ProductVersion} | ConvertTo-Json -Compress", env))
-            if info["signature_status"] != "Valid" or "Microsoft Corporation" not in info["signer"]:
-                fail("CRT DLL does not have a valid Microsoft signature")
+            info = authenticode_info(source, env)
             pe_machine(source)
             shutil.copyfile(source, dest)
             if digest(source) != digest(dest):
