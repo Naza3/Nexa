@@ -1,12 +1,12 @@
 # Nexa 当前状态
 
-最后更新：2026-10-01。状态区分工程实现、Linux 开发验证、Windows CI 与目标设备验收，不把任何一项互相替代。
+最后更新：2026-10-02。状态区分工程实现、Linux 开发验证、Windows CI 与目标设备验收，不把任何一项互相替代。
 
 ## 当前目标与授权
 
 用户已明确要求按照文档规划实施，并允许本地检查通过后推送新的开发分支、增加和运行 Windows GitHub Actions。未授权合并或部署。首个业务仍是 Telegram 群摘要；来源、触发、样本与保留策略保持待决，不自行登录账号或向群发送摘要。
 
-Windows 10为首要交付目标，Windows 11后续增加；首版平台范围为Windows x64 CPU与Android arm64 CPU。具体支持须由固定模型、后端和设备组合实测，不从目标平台或硬件规格推导性能保证。Android准确设备、ABI/页大小和持续性能仍待验证。
+Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GGUF。Android已确定采用MNN，CPU、OpenCL、QNN v79/v81与直接Hexagon均纳入计划，不先做Android llama。面向Snapdragon 8 Elite及后续，公开首测参考OnePlus 15 / SM8850 / v81，SM8750 / v79为兼容档；实际系统、驱动、ABI/页大小、内存和持续性能待诊断。方向与门槛见[ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)及[执行计划](docs/t07-android-mnn-plan.md)，不从型号推导支持或性能保证。
 
 无开发工具、离线运行和长期稳定性列为后期验证。T05以已完成的Release CI、完整包检查及独立Windows 10手工短验按当前阶段范围收口；A20/长期稳定性仍未验证，不阻塞T06当前开发。
 
@@ -41,10 +41,10 @@ Windows 10为首要交付目标，Windows 11后续增加；首版平台范围为
 | T03 PC worker | 已完成 | a8930494在Windows CI36801681068通过：Job父子/后代回收、五秒强杀、单账本IPC、144项Rust+5项真实模型及独立无native父端链；范围见T03记录 |
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；独立Windows 10短验已通过；按当前阶段范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
-| T06 Windows UI | 待验证 | bc43e0f3的CI36864041027全成功，桌面ZIP已独立核验；旧包原生启动/导入/聊天/停止生成及两种关闭已有独立手工验收确认，剪贴板等其余分支待验。同级GGUF被旧包误拒已复现，窄范围兼容与固定错误码已在源码修复，待新Windows CI；不能称完整完成 |
-| T07–T08 Android核心与UI | 未开始 | 无Android工具链/真机，本轮build.rs明确拒绝Android目标 |
+| T06 Windows UI | 待验证 | 新目录/诊断源码75e458f的CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包及解压bridge验收通过；产物独立复核通过并已交付；新目录原生UI仍未测 |
+| T07–T08 Android核心与UI | 未开始 | MNN方向/六切片文档已就绪，尚无MNN适配、工具链锁、模型包、APK或真机证据；既有llama build.rs仍拒绝Android |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
-| T10 平台/后端扩展 | 未开始 | 本轮Linux仅开发探针，不是扩展平台发布 |
+| T10 平台/后端扩展 | 未开始 | Android后端纳入T07-D～F单列验收；其余扩展未开始，Linux仍仅开发探针 |
 | S00–S04 摘要 | 未开始 | 来源/触发/样本/质量目标及接口契约仍待冻结 |
 
 ## 重要实现与验证界限
@@ -60,9 +60,10 @@ Windows 10为首要交付目标，Windows 11后续增加；首版平台范围为
 
 1. T00–T04阶段证据已收口，继续授权开发分支，不合并或部署
 2. T05源码6a7e9d0的Windows CI36829233039已通过，产品/工具ZIP已独立复核；另有Windows 10独立手工短验通过，不能替代尚未完成的A20条件
-3. T06旧包bc43e0f3的CI已通过；独立手工验收确认原生启动/导入/聊天/停止生成及两种关闭。继续剪贴板等其余分支验收，并让同级GGUF兼容与模型目录扩展经过完整Windows CI，不以Linux复现或bridge harness替代
+3. 新源码75e458f的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功；下载产物已独立核验并交付，证据见[T06最终目录版记录](docs/verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。新目录原生UI仍未测，剪贴板等原生分支继续待验
 4. 无开发工具、实际离线和长期稳定性列为后期验证；Windows11/Android另行实测，不泛化当前支持证据
-5. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
+5. Android从T07-A精确MNN/工具链与CPU原型开始；新增SDK/许可和实际设备条件分别核验，未获批准不下载SDK或接受协议。T07-B再冻结具体C ABI/schema/公共类型迁移
+6. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
 
 ## T05 收口与后期验证
 
@@ -77,14 +78,18 @@ Windows 10为首要交付目标，Windows 11后续增加；首版平台范围为
 
 已实际完成：前端锁重装、typecheck/lint/build、36测试和npm audit 0；Linux真实模型bridge两种独立进程退出语义通过。Windows已多次完成真正Tauri Release、源码clean、PE/原许可闭包、完整T05包16项及HTTP89pass/9skip、50/50/50断流；实际桌面诊断包验证通过，已装WebView2为131.0.2903.86。早期同EXE对照观察宿主Job下BREAKAWAY返回OS5、继承Job则正常启动/退出且Ctrl+C pending；生产仅移除BREAKAWAY，保留DETACHED/NEWGROUP，不改Job/权限或CLI信号。
 
-最新交付源码`bc43e0f3ac215d41e5d93cccf670ab43d67d41c0`、tree`beb8647c1e6494591f36af38535554f7678719d0`的[CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)于13:31:29 UTC已确认completed/success：Windows根278pass/0fail/6ignored、壳4tests、早期Rust传输8tests、Python66tests全部通过；完整桌面Release bridge真实导入/生成/取消再生成、同实例连接、实际宿主进程退出后API仍可访问、同时退出回收worker/实例及空闲设置语义全部通过，五类实际路径均含中文和空格，包未被修改。
+先前交付源码`bc43e0f3ac215d41e5d93cccf670ab43d67d41c0`、tree`beb8647c1e6494591f36af38535554f7678719d0`的[CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)于13:31:29 UTC已确认completed/success：Windows根278pass/0fail/6ignored、壳4tests、早期Rust传输8tests、Python66tests全部通过；完整桌面Release bridge真实导入/生成/取消再生成、同实例连接、实际宿主进程退出后API仍可访问、同时退出回收worker/实例及空闲设置语义全部通过，五类实际路径均含中文和空格，包未被修改。
 
 桌面原ZIP9,507,755bytes，SHA256 `2ea95591ddabc4e7ae930ea166e6343f6aad275fa01975d3eb7bebbef0546fe9`；私有Actions artifact`11166511363`。750文件、嵌套runtime同source/tree、所有hash/许可、6个PE/import闭包均已独立重算核验。安装29,501,813bytes，其中完整runtime14,203,784bytes、UI EXE10,573,312bytes，模型0bytes。工具等待缺口已通过真实Windows早期回归和完整Release链验证；此前失败/取消证据均保留于T06记录。CI原生窗口报告仍为`native_window_tested=false`；独立手工结果与CI分层记录，T06仍有原生UI分支及新目录功能待验，不冒充完成。
 
 旧包bc43e0f3已有独立手工验收确认原生启动、导入、聊天、停止生成、默认关闭保留服务和同时退出六项行为；剪贴板与其余错误恢复仍待验证。另在受控解压产品包中加入[模型矩阵](docs/model-matrix.md)锁定的公开Qwen3-0.6B Q8_0输入，已独立复现旧版严格文件集合误拒同级GGUF；来源是本地工程复现，不能记为新版本Windows运行通过。
 
-当前源码已将程序根及固定model/models目录的直接普通GGUF识别为用户输入（只读四字节头、不自动导入、不计payload），保持声明文件/hash/source、runtime/licenses、未知DLL/EXE/嵌套目录及reparse拒绝，并保留固定启动错误码。Linux原包+真实GGUF已复现修复前失败/修复后通过；新行为与新增实际EXE三处模型正例、DLL/manifest篡改负例仍待新Windows CI，不能追溯为旧包已支持。
+当前源码已将程序根及固定model/models目录的直接普通GGUF识别为用户输入（只读四字节头、不自动导入、不计payload），保持声明文件/hash/source、runtime/licenses、未知DLL/EXE/嵌套目录及reparse拒绝，并保留固定启动错误码。Linux原包+真实GGUF已复现修复前失败/修复后通过；新行为及实际EXE三处模型正例、DLL/manifest篡改负例纳入75e458f已成功的Windows CI；下载产物独立复核已通过，不能追溯为旧包已支持。
 
 云浏览器127.0.0.1预览曾被客户端阻止，未完成浏览器视觉交互；Windows 10剪贴板与其余错误恢复等仍待独立手工验收。Nexa不创建kill-on-UI-close的runtime Job，尊重外部宿主Job/会话整体终止，不承诺脱离其生命周期。T05阶段范围及后期无开发工具、离线、长期稳定性验证边界不变。
 
-当前工程要求：设置可选择任意支持的本地模型目录、已有GGUF直接读取不再复制，并按文件名自动命名。按[外部目录契约](docs/t06-model-directory-contract.md)推进：native folder picker/一次性选择，源目录只读、非递归；私有索引和token仍在AppData，不迁移删除旧managed模型。目录应用/重扫须先停止服务，不自动shutdown；有效目录必须由同TCP proof后的服务身份确认。当前壳/核心/UI已接通并进入最终聚合检查，和同级GGUF诊断修复合并后再发布。Linux真实旧managed链及external六项通用观察通过，Windows执行项明确未测；harness已MSVC check，step24会严格要求external 16布尔全true。壳23tests、Python83tests（2 Windows-only skip）、目录版前端60tests及对应typecheck/lint/build已通过；根workspace最终独立复核306pass/0fail/6ignored及strict clippy/fmt通过。新Windows CI及新目录原生操作仍待验证，不将旧包独立手工验收追溯为新功能通过。
+当前工程要求：设置可选择任意支持的本地模型目录、已有GGUF直接读取不再复制，并按文件名自动命名。按[外部目录契约](docs/t06-model-directory-contract.md)推进：native folder picker/一次性选择，源目录只读、非递归；私有索引和token仍在AppData，不迁移删除旧managed模型。目录应用/重扫须先停止服务，不自动shutdown；有效目录必须由同TCP proof后的服务身份确认。当前壳/核心/UI和同级GGUF诊断修复已接通并完成本地聚合检查；源码`75e458f60cbbfc2b136d8396d7e824c3fc07f23e`的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功，native job`110657335010`完成真实模型/runtime/HTTP/CLI、桌面打包及解压后bridge验收。此前Linux真实旧managed链及external通用观察与MSVC check分层保留；下载产物已独立完整性复核通过并交付：原ZIP9,785,013bytes，SHA256 `1d4f89eeb9c03b14aecaa7199c847413ee85b215cd44ee8bf9436bbb14596858`；source tree `8cec0b3be1d8c4f3442d72f2c27f87f8506d9523`。壳23tests、Python83tests（2 Windows-only skip）、目录版前端60tests及对应typecheck/lint/build已通过；根workspace最终独立复核306pass/0fail/6ignored及strict clippy/fmt通过。本轮CI与产物独立核验通过不等于原生窗口已操作；新目录选择/零复制/自动名称的原生UI仍未测，不将旧包手工验收追溯为新功能通过。
+
+## Android MNN 文档迁移
+
+[ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)已记录方向并同步架构/规格/路线；[计划](docs/t07-android-mnn-plan.md)拆为CPU原型、MnnExecutor/包/安全契约、前台APK、OpenCL、QNN v79/v81、直接Hexagon六切片。当前只是文档完成；MNN3.6.1完整commit为研究候选，未进入实际构建锁，所有Android实现和设备门槛均未开始。新schema/ABI/profile字段未冻结，不新增外部协议承诺。Windows源码与当前CI状态独立，不因本迁移改变。

@@ -1,6 +1,6 @@
-# 开发与 Windows 包构建锁
+# 开发与平台构建锁
 
-日期：2026-10-01。此文件记录Linux开发与固定Windows CI构建组合；精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，T05另有独立Windows 10手工短验通过；T06新目录版与剩余原生UI分支、无开发工具/离线/长期稳定性及Android真机仍待验。
+日期：2026-10-02。已锁定部分为Linux开发与固定Windows CI组合；Android/MNN只列待锁项，不宣称可构建。精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，T05另有独立Windows 10手工短验通过；T06新目录版CI及产物独立复核通过并交付；新目录及剩余原生UI分支、无开发工具/离线/长期稳定性及Android真机仍待验。
 
 ## 固定输入
 
@@ -16,6 +16,22 @@
 | x64 指令集 | 上游固定配置实际启用 SSE4.2、AVX、AVX2、F16C、FMA、BMI2；不宣称兼容所有 x64 CPU |
 | Windows 编译器/SDK | MSVC 19.44.35229.0 / SDK 10.0.26100.0；Windows Server 2022 10.0.20348；原生Release、CTest与Rust静态链接已在d3d7cf2的CI通过 |
 | Android NDK/Flutter | unavailable；尚未加入工程依赖 |
+
+## Android MNN 待锁清单（全部未构建/未验证）
+
+按[ADR0008](decisions/0008-android-mnn-engine-and-package.md)和[执行计划](t07-android-mnn-plan.md)从T07-A开始，不修改上述Windows llama锁：
+
+| 项目 | 当前状态与锁定条件 |
+| --- | --- |
+| MNN | 已查到3.6.1候选commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`；未纳入vendor/构建锁，须实际构建后确认 |
+| 原生适配 | MnnExecutor/C ABI未实现；ABI版本、补丁集/hash与线程/取消契约在T07-B冻结 |
+| 模型导出 | 导出器/转换器完整commit、参数、原模型revision、量化/校准、全文件/包hash均待锁；不沿用GGUF文件身份 |
+| Android构建 | arm64-v8a；NDK/Clang/CMake/Ninja、API级别、页对齐、Rust target、JDK/Gradle/AGP、Flutter/bridge待可重复构建确认 |
+| OpenCL | 后端构建、驱动探测、profile、缓存身份与真实fallback未验证 |
+| QNN | QAIRT/QNN精确版本、Host/HTP依赖、SM8750/v79与SM8850/v81目标图分别锁定；尚无SDK/产物验证 |
+| 直接Hexagon | 独立SDK/Tools、Host/DSP库、量化/C4产物及v79/v81实测；不能继承QNN结果 |
+
+新增SDK下载/安装、新协议接受及再分发条件须另行核验并获相应批准；本轮未执行这些步骤。候选版本的官方来源及源码审查见[计划](t07-android-mnn-plan.md)，不使用动态latest代替锁定身份。
 
 没有升级跟随 master 的构建脚本。CMake 检查 submodule HEAD，不匹配直接失败。原生模型默认日志被抑制，以避免上游输出完整用户路径；开发基线用合成输入，原始上游日志只留在忽略目录。
 
@@ -91,7 +107,7 @@ T05源码6a7e9d0的Cargo.lock LF SHA-256为`4c7533fa5c496faafc6c74bf4b222120d6dd
 第五轮[CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)实际成功组合：Server2022 build10.0.20348.5622 / image20260927.320.1 / AMD EPYC7763 / 2逻辑CPU；VS2022 Enterprise17.14.37710.0、MSVC19.44.35229.0、VCTools14.44.35207、SDK10.0.26100.0。CRT来自所选实例Redist14.44.35112，DLL文件版14.44.35211.0，产品3个/工具1个app-local DLL均由固定系统PowerShell5.1验证Valid/Microsoft。产品/工具源manifest均6a7e9d0、tree498d0a9、dirty=false；详细hash/体积/真实Release验收见T05报告。此CI安装环境不代替Windows 10无开发工具/离线验收。
 
 
-## T06 桌面依赖与构建隔离（Windows完整构建/桌面包/Release bridge已过，新目录版待验）
+## T06 桌面依赖与构建隔离（新目录版CI/产物复核通过，原生UI待验）
 
 实际registry精确锁与本地验证组合：Node24.19.0/npm11.9.0，React/ReactDOM19.3.0、Tauri JS API/CLI2.12.1、Vite8.3.1、TypeScript5.9.3、Vitest5.0.3、ESLint10.11.0。`apps/desktop/package-lock.json`独立管理前端；`npm ci`、typecheck/lint、36tests、生产build与audit0已实际通过。生产JS260464bytes、CSS17539bytes、HTML457bytes；构建排除了显式preview mock，未验证的浏览器交互和原生UI仍分层保留。
 
@@ -112,4 +128,6 @@ Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package 
 
 第六轮源码`bc43e0f3ac215d41e5d93cccf670ab43d67d41c0`的[CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)于13:31:29 UTC已确认completed/success，依赖/工具链锁保持原组合。真正Tauri Release、早期Windows无模型传输回归、T05与T06完整解压/真实模型bridge均通过；桌面ZIP9,507,755bytes（SHA256 `2ea95591ddabc4e7ae930ea166e6343f6aad275fa01975d3eb7bebbef0546fe9`），manifest SHA256 `c8a259d2ba20fa90c5dac7e21d8e13e7c22fd28e091d11c7b037ecb2cdc34673`，完整下载包的库存/hash/许可/PE闭包已独立复核。该CI未驱动原生窗口；另有独立手工验收确认旧包核心UI与两种关闭通过，新目录选择/零复制/自动名称另需构建与实测，详见T06记录。
 
-外部目录扩展的独立Tauri锁仅新增desktop-bridge→model-store、nexa-desktop→已存在的windows-sys 0.61.2两条依赖边；后者用于只读GetDriveTypeW本地盘类型检查，不升级registry版本或更换框架。完整新功能仍待对应Windows CI，依赖图保持不含native推理crate。
+外部目录扩展的独立Tauri锁仅新增desktop-bridge→model-store、nexa-desktop→已存在的windows-sys 0.61.2两条依赖边；后者用于只读GetDriveTypeW本地盘类型检查，不升级registry版本或更换框架。新目录版Windows CI及产物独立复核已通过，原生目录UI仍待验；依赖图保持不含native推理crate。
+
+2026-10-02，目录/诊断功能源码`75e458f60cbbfc2b136d8396d7e824c3fc07f23e`的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功，native job`110657335010`含真实模型/runtime/HTTP/CLI、桌面包构建和解压后bridge验收通过。下载产物独立完整性复核已通过并交付：原ZIP9,785,013bytes，SHA256 `1d4f89eeb9c03b14aecaa7199c847413ee85b215cd44ee8bf9436bbb14596858`，source tree `8cec0b3be1d8c4f3442d72f2c27f87f8506d9523`、dirty=false。实际750文件、两层manifest/hash、6个PE/依赖闭包及许可均核验，根/壳锁按该提交Windows CRLF字节复核；原始构建工作树未独立重建。新目录原生UI仍未测，不将CI/包核验等同完整桌面验收，精确结果见[T06记录](verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。Android文档迁移不改变该提交的工具链。

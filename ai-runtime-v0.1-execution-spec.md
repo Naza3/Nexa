@@ -1,17 +1,17 @@
 # Nexa Runtime v0.1 开发执行文档
 
-- 版本：1.1
-- 日期：2026-09-30
+- 版本：1.2
+- 日期：2026-10-02
 - 项目名：Nexa；命令与原生符号沿用 `ai-runtime` / `ai-runtime-worker` / `air_*`
 - 文档对象：实现项目的开发者、编码 AI、验收人员
 
-> 本文是可以据此分阶段开发和验收的实施规格，不是已经完成的软件。项目命令、接口和目录是需要实现的交付约定；本次文档导出没有编译项目、运行模型或做真机性能测试。上游能力已经参考官方资料核对，具体依赖版本在任务 T00 中锁定。
+> 本文是可以据此分阶段开发和验收的实施规格，不是已经完成的软件。项目命令、接口和目录是需要实现的交付约定；本次文档迁移没有编译项目、运行模型或做真机性能测试。Windows已有构建锁另记，Android/MNN依赖在T07-A中实际构建后锁定。
 
-本文负责 runtime 的具体契约。项目总体边界见 [架构](docs/architecture.md)，首个业务见 [Telegram 摘要方案](docs/telegram-summary.md)，任务依赖见 [路线](docs/roadmap.md)，实际进度见 [当前状态](PROJECT_STATE.md)。v1.1 按 [ADR 0001](docs/decisions/0001-nexa-scope-and-layers.md) 同步项目定位与文档职责；未新增已实现能力或改变下述 HTTP 子集。
+本文负责 runtime 的具体契约。项目总体边界见 [架构](docs/architecture.md)，首个业务见 [Telegram 摘要方案](docs/telegram-summary.md)，任务依赖见 [路线](docs/roadmap.md)，实际进度见 [当前状态](PROJECT_STATE.md)。v1.2 按 [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md) 将 Android 主引擎调整为 MNN；Windows llama/HTTP 行为保持，Android 仍未实现或验证。具体执行切片见[Android计划](docs/t07-android-mnn-plan.md)，新 ABI/模型包 schema/公共 DTO 尚待实施冻结。
 
 ## 1. 目标与冻结决策
 
-构建一个轻量的本地大模型运行时，让桌面应用通过本机 HTTP API 调用，让移动应用通过嵌入式库调用。第一版只接入 llama.cpp，复用模型管理、任务调度、推理适配和事件协议。
+构建一个轻量的本地大模型运行时，让桌面应用通过本机 HTTP API 调用，让移动应用通过嵌入式库调用。Windows 使用 llama.cpp，Android 主引擎采用 MNN；复用 Rust 控制层、模型管理安全规则、任务调度和事件语义，原生适配与模型资产分开。
 
 本项目首先为用户自己的 PC / Android 应用提供统一推理核心；首个业务验证是 Telegram 群消息摘要，同时保留本地聊天与短文本生成能力。UI 用于管理模型和验证能力，runtime 可以独立于 UI 使用。
 
@@ -19,9 +19,9 @@ Telegram 消息获取、来源快照、分块、摘要任务与产物属于调�
 
 | 项目 | 第一版决定 |
 |---|---|
-| 核心语言 | Rust；C++ 仅用于 llama.cpp 适配层 |
-| 推理引擎 | 固定 commit 的 llama.cpp，不跟随 master 自动升级 |
-| 模型 | 本地单文件 GGUF，文本生成模型；按明确清单验收 |
+| 核心语言 | Rust；C++ 封装 Windows llama / Android MNN 原生边界 |
+| 推理引擎 | Windows 固定 llama.cpp；Android MNN 完整 commit 待构建锁定，不先做 Android llama |
+| 模型 | Windows 单文件 GGUF；Android MNN 多文件模型包，均按精确身份/后端/设备验收 |
 | PC 形态 | Rust 常驻管理进程 + 按需启动的独立推理 worker |
 | 移动形态 | 同一核心嵌入 App，专用原生线程执行推理 |
 | PC UI | Tauri 2 + React + TypeScript + Vite |
@@ -31,24 +31,25 @@ Telegram 消息获取、来源快照、分块、摘要任务与产物属于调�
 | 并发 | 1 个加载模型、1 个运行任务、有限 FIFO 等待队列 |
 | 对话历史 | 调用方提交完整 messages；runtime 不持久化聊天历史 |
 | KV cache | 每个请求独立；第一版不跨请求复用 |
-| 模型导入 | 复制本地文件到管理目录；不内置模型下载市场 |
-| GPU | 按平台单独构建、按设备验证；CPU 始终作为基础路径 |
-| NPU | 第一版不承诺，也不接入 MNN、QNN、CoreML、ONNX |
+| 模型导入 | Windows 沿用 managed/external GGUF；Android 包复制到私有目录并原子校验，不内置模型市场 |
+| GPU | Android OpenCL 纳入 CPU 后续切片；各平台独立构建/验收，CPU 保留 |
+| NPU | Android QNN v79/v81 与直接 Hexagon 分开验证；不承诺收益或预授设备支持，不扩展其他引擎 |
 
 ### 1.1 发布顺序
 
-“统一 PC 和移动端”指统一核心源码、接口和可兼容的模型资产，不表示使用同一个二进制，也不表示所有平台共享后台服务生命周期。[S1][S2][S5]
+“统一 PC 和移动端”指共享 Rust 控制层和请求/事件语义；不要求相同原生引擎或模型二进制，不共享后台服务生命周期。MNN 模型包不等于 GGUF 改扩展名。
 
 | 发布层级 | 平台与范围 | 发布条件 |
 |---|---|---|
 | v0.1 必须完成 | Windows x64 CPU；Android arm64 CPU；PC HTTP；两端最小 UI | 两个平台真实模型与真机用例通过 |
 | v0.1 GPU 扩展 | Windows CUDA / Vulkan，分别构建发行包 | 每个声明支持的后端有硬件验收记录 |
 | v0.1.x 平台扩展 | Linux x64 CPU / Vulkan；macOS arm64 CPU / Metal | 独立构建、安装、推理、卸载验证通过 |
-| 后续移动扩展 | Android Vulkan 设备清单；iOS arm64 CPU / Metal | 驱动、内存、前后台和签名打包验证通过 |
+| Android 可选后端 | MNN OpenCL → QNN v79/v81 → 直接 Hexagon 实验 | 各自完成真实执行、质量、取消、内存与生命周期验收 |
+| 后续移动平台 | iOS arm64 CPU / Metal | 驱动、内存、前后台和签名打包验证通过 |
 
 架构从第一天保留 Linux、macOS 和 iOS 适配边界；首个正式验收集中在 Windows 与 Android。没有设备实测的平台只能标注“构建通过”或“待验证”。
 
-首批目标设备为用户提供的 Windows Intel i5-8400 / 16GB，以及 Android 骁龙 8E5 / 12GB。2026-10-01用户明确Windows 10优先、后续增加Windows 11，并可在构建完成后用本地电脑验收；本次用户报告已实测Windows10 workstation build19044 / 6逻辑CPU，CPU由用户确认为i5-8400，短验通过；用户声明有开发工具且测试联网，RAM/VC预装仍未知，手机型号/设备参数仍须实测记录。这些信息不是模型容量或性能实测结论。
+Windows 10为首要交付目标，Windows 11后续；Android面向Snapdragon 8 Elite及后续，公开首测参考OnePlus 15 / SM8850 / v81，SM8750 / v79为兼容档。官方来源和未验证边界见[计划](docs/t07-android-mnn-plan.md)；实际Android版本、驱动、ABI/页大小和内存由诊断确定。
 
 ### 1.2 暂不实现
 
@@ -68,9 +69,8 @@ flowchart TD
   D --> G{"运行形态"}
   G --> H["PC worker 进程"]
   G --> I["App 内推理线程"]
-  H --> J["共享 llama 适配层"]
-  I --> J
-  J --> K["llama.cpp 与平台计算后端"]
+  H --> J["llama-adapter / shim / llama.cpp"]
+  I --> K["MnnExecutor / C ABI / MNN（待实现）"]
 ```
 
 图中的共享核心表示代码复用：PC 进程和手机 App 各有自己的 runtime 实例。
@@ -78,9 +78,10 @@ flowchart TD
 | 模块 | 负责 | 不负责 |
 |---|---|---|
 | runtime-types | 请求、事件、错误、配置的数据类型与协议版本 | UI、原生指针 |
-| runtime-core | 队列、任务取消、模型状态、超时、空闲卸载 | llama.h、HTTP、Flutter 类型 |
+| runtime-core | 队列、任务取消、模型状态、超时、空闲卸载 | llama/MNN 原生类型、HTTP、Flutter 类型 |
 | model-store | 导入、校验、manifest、目录与原子写入 | 自动寻找和下载模型 |
-| engine-host | 专用原生线程执行器，worker/移动嵌入共用 | 第二套调度、业务会话历史 |
+| engine-host | 已有 llama 专用线程执行器，供 PC worker 使用 | 第二套调度、业务会话历史 |
+| MnnExecutor / mnn-adapter（待实现） | Android MNN 专用线程与原生适配，复用 Executor 契约 | llama/PC 宿主、第二套调度 |
 | process-host / runtime-ipc | 父进程执行器、进程隔离与私有协议 | 父进程链接原生库 |
 | llama-adapter | 模板、分词、采样、prefill、decode、资源释放 | HTTP、App 页面 |
 | runtime-api | 鉴权、请求验证、HTTP/SSE 映射 | 直接操作模型指针 |
@@ -101,7 +102,7 @@ worker 崩溃属于模型运行失败，不自动重放已经输出一部分的�
 
 ### 2.2 移动端执行
 
-Flutter 通过 Rust 桥提交请求与接收事件。Rust 创建专用推理线程，线程内部创建并独占原生资源。HTTP、PC IPC 和子进程管理不编入移动包。
+Flutter 通过 Rust 桥提交请求与接收事件。MnnExecutor 在专用线程创建并独占 MNN 资源，接入既有 core；不引入 Android llama、HTTP、PC IPC 或子进程管理。具体原生契约与多文件包迁移见[计划](docs/t07-android-mnn-plan.md)。
 
 第一版 Android 前台文本生成；App 进入后台即发出取消，任务安全结束后卸载。系统终止进程后不自动恢复未完成生成。原生层崩溃仍可能导致 App 退出，Rust 不会自动消除 FFI 内部的崩溃风险。摘要调用层如保存已完成阶段，须显式创建新的推理请求继续；不因此承诺后台定时摘要。
 
@@ -115,8 +116,9 @@ Flutter 通过 Rust 桥提交请求与接收事件。Rust 创建专用推理线�
 | `rust-toolchain.toml` | 精确 Rust 工具链版本 |
 | `crates/runtime-types/` | 类型、事件、错误和序列化 |
 | `crates/runtime-core/` | 调度器、生命周期、资源策略 |
-| `crates/model-store/` | GGUF 导入与 manifest 管理 |
-| `crates/engine-host/` | worker 与移动嵌入共用的原生线程执行器 |
+| `crates/model-store/` | 现有 GGUF 存储；待增加 MNN 包 schema/引用闭包校验 |
+| `crates/engine-host/` | 已有 PC llama 原生线程执行器 |
+| `crates/mnn-adapter/`、`native/mnn-shim/` | Android MNN 自有适配/C ABI（规划路径，未创建） |
 | `crates/process-host/`、`crates/runtime-ipc/` | PC父进程执行器、私有NDJSON与信用校验 |
 | `crates/llama-adapter/` | Rust 安全封装及 native 构建入口 |
 | `crates/runtime-api/` | Axum 路由、鉴权、SSE |
@@ -130,22 +132,24 @@ Flutter 通过 Rust 桥提交请求与接收事件。Rust 创建专用推理线�
 | `xtask/` | 构建、打包、验收命令 |
 | `tests/contract/` | HTTP、SSE、IPC、错误协议测试 |
 | `tests/fixtures/` | 小型输入文本、畸形文件；不提交大型模型 |
-| `docs/build-lock.md` | 工具版本、llama commit、构建选项、设备信息 |
-| `docs/model-matrix.md` | 支持模型、GGUF SHA-256、模板与验证结果 |
+| `docs/build-lock.md` | 工具版本、对应引擎/导出器 commit、构建选项、设备信息 |
+| `docs/model-matrix.md` | 模型文件/包 hash、模板、变体/后端与验证结果 |
 | `docs/decisions/` | 需要改变本规格的技术决策记录 |
 | `artifacts/verification/` | 测试与性能报告，不提交聊天正文 |
 
-依赖方向：types 被其他模块引用；core 仅依赖类型、存储接口和执行器接口；API、CLI、mobile 作为组装入口。llama.cpp 类型不能泄漏到 core。
+依赖方向：types 被其他模块引用；core 仅依赖类型、存储接口和执行器接口；API、CLI、mobile 作为组装入口。llama/MNN 类型不能泄漏到 core。
 
 技术依赖冻结：Tokio、Axum、Serde、thiserror、tracing、Clap、SHA-256 实现、平台数据目录库。只按实际用途引入依赖，不预先加入数据库、gRPC、WebSocket、插件系统。
 
-Flutter bridge 只导出 `runtime-mobile/src/api/` 下明确标记的接口；llama-adapter 内部函数不在生成器扫描范围内。生成代码提交版本控制；改变导出时重新生成并检查差异。[S8]
+Flutter bridge 只导出 `runtime-mobile/src/api/` 下明确标记的接口；llama/MNN adapter 内部函数不在生成器扫描范围内。生成代码提交版本控制；改变导出时重新生成并检查差异。[S8]
 
-## 4. llama.cpp 集成规格
+## 4. 原生集成规格
+
+4.1–4.4 描述已采用的 Windows llama 路径；其中线程、预算、终态和无静默降级要求同样约束 Android，不能直接把其函数签名或 GGUF 资产作为 MNN 接口。Android 差异见 4.5。
 
 ### 4.1 选择库集成
 
-最终产品使用 llama.cpp 库和自有轻量 C++ 适配层。上游 server 用作基线对照，不作为移动运行时，也不与自有 API 形成两套生产实现。
+Windows 产品使用 llama.cpp 库和自有轻量 C++ 适配层。上游 server 用作基线对照，不作为移动运行时，也不与自有 API 形成两套生产实现。
 
 llama.cpp 提供 C API；复杂聊天模板还需要关注同版本的 common/chat 辅助实现。不能把所有模型的 messages 简单拼成一段字符串。第一版在 C++ shim 内使用锁定版本的模板辅助代码，封装其 C++ 依赖。[S3][S4]
 
@@ -201,11 +205,19 @@ T00/T01 必须在 model-matrix 中记录精确来源、模型修订、量化格�
 
 缺失/不支持的模板返回 `unsupported_chat_template`；未验收架构返回 `unsupported_model`。GGUF magic 正确不代表模型可以成功加载。
 
+### 4.5 Android MNN 适配门槛（待实现）
+
+独立 MnnExecutor/C ABI 实现相同 Executor 语义，owner thread 持有全部 MNN 对象。模板缺失/能力不足须拒绝，不能采用纯文本拼接降级；prepare 与生成消费同一模板/tokenizer结果。每请求重新应用采样/seed并清理状态，精确预算通过后才 Started。独立原子取消在真实 prefill/decode 安全点生效，不能跨线程写普通 LlmContext::status 或提前释放资源。
+
+候选 MNN 的模板构建、sampler配置捕获和取消 API 必须按锁定源码复核；具体补丁、ABI、错误/版本映射在 T07-B 冻结并测试，不能默认上游 demo 已满足契约。详见[计划第4节](docs/t07-android-mnn-plan.md#4-原生契约先于功能页面)。
+
 ## 5. 模型、配置与资源
 
 ### 5.1 数据目录
 
 桌面端使用平台用户数据目录；支持 `--data-dir` 显式覆盖。Android 使用 App 私有持久目录，不使用易被系统清理的缓存目录。
+
+以下文件布局为 Windows 既有 managed GGUF 路径；T06 external 行为另见[目录契约](docs/t06-model-directory-contract.md)。Android 多文件包的实际布局/schema在 T07-B 冻结，不复用单文件字段假装已支持。
 
 | 相对路径 | 用途 |
 |---|---|
@@ -221,9 +233,9 @@ T00/T01 必须在 model-matrix 中记录精确来源、模型修订、量化格�
 
 导入顺序：检查空间和来源可读 → 复制到临时文件并计算 SHA-256 → 检查 GGUF / manifest → 在同文件系统原子移动 → 更新索引。失败清理 `.partial`。默认不覆盖同名模型；删除注册项不删除用户原始文件。
 
-Android 通过系统文件选择器取得 URI，使用 ContentResolver 打开输入流，复制到 App 私有目录；不能把 `content://` 当普通路径传给 C++。[S2]
+Android 通过系统文件选择器取得 URI，使用 ContentResolver 读取模型包，复制到 App 私有持久目录；不能把 `content://` 当普通路径传给 C++。完整校验 graph/weights/tokenizer/config/template及变体引用闭包、路径逃逸/链接、逐文件和整体hash后原子发布。模型包不可变，运行配置和缓存隔离，缺项/中断不注册半包；见[计划第5节](docs/t07-android-mnn-plan.md#5-多文件模型包与可变配置隔离)。
 
-manifest 至少包含：schema_version、id、display_name、relative_file、size_bytes、sha256、source、architecture、quantization、template_sha256、context_limit、default_context、validated_llama_commit、capabilities。未知字段可保留；缺失关键校验字段不标记为已验证。T02目录原子提交、Windows保留文件名限制和验证缓存决策见 [ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)，不改变公共model_id语法。
+现有 Windows GGUF manifest 至少包含：schema_version、id、display_name、relative_file、size_bytes、sha256、source、architecture、quantization、template_sha256、context_limit、default_context、validated_llama_commit、capabilities。未知字段可保留；缺失关键校验字段不标记为已验证。T02目录原子提交、Windows保留文件名限制和验证缓存决策见 [ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)，不改变公共model_id语法。
 
 ### 5.2 默认配置
 
@@ -258,7 +270,7 @@ gpu_layers = 0
 
 Android 覆盖默认值：context_size=2048、max_output_tokens=256、max_queued_jobs=1、idle_unload_seconds=60。execution_timeout 包含 prepare/prefill/decode，不包含排队和模型加载；三类计时分别记录。
 
-`backend`、`context_size`、`gpu_layers` 是 load-time 参数；修改后需要卸载并重新加载。`max_output_tokens` 是请求未提供输出预算时的默认值，不是无条件可用的剩余上下文。
+`backend`、`context_size` 是 load-time 参数；修改后需要卸载并重新加载。`gpu_layers` 属于 llama 路径，不强行映射为 MNN 层数；MNN 专用profile字段在实施时定义。`max_output_tokens` 是请求未提供输出预算时的默认值，不是无条件可用的剩余上下文。
 
 ### 5.3 设备选择
 
@@ -267,6 +279,8 @@ Android 覆盖默认值：context_size=2048、max_output_tokens=256、max_queued
 默认从 CPU 起步。GPU 发行包允许选择其对应后端；`auto` 只在已安装且已经该设备验证的候选中选择。第一版不根据显卡名称自动决定模型大小，不根据 TOPS 推导模型容量。
 
 手动指定 CUDA/Vulkan/Metal 失败就返回可读错误。auto 允许在尚未开始生成时尝试 CPU 一次，状态必须显示回退原因；已经输出文本的请求不得自动从头生成。
+
+Android OpenCL/QNN/Hexagon同样按已验证profile选择并报告实际算子执行/混合fallback。手动选择失败返回错误；auto仅在生成尚未开始、原资源安全清理、存在明确兼容CPU资产时最多回退一次，不静默换模型/量化/模板。生成开始后故障不自动重放。QNN与直接Hexagon分开准入，具体字段尚待实施冻结，见[计划第7节](docs/t07-android-mnn-plan.md#7-能力探测profile-与-cpu-兜底)。
 
 内存预算包含权重、KV cache、计算缓冲、运行时与 UI。内存不足时优先提示减少上下文或使用更小模型；不在用户不知道的情况下改变模型、量化或历史内容。
 
@@ -330,7 +344,7 @@ stateDiagram-v2
 
 事件缓冲有界：每请求最多 256 KiB 待发送文本，单个 delta 最多 4 KiB，按 UTF-8 字符边界切分。缓冲超过上限且 10 秒没有消费进展，取消为 `slow_consumer`。不能为了发布终态继续无限等待一个已经阻塞的消费者。T02以一个共享预算计入执行器、actor和消费队列的全部在途文本；短delta可保守计费以同时约束事件开销。原生同步回调只允许在decode步骤之间有界、可取消等待；活动槽仍保留到原生调用安全返回。
 
-一般设备上的交互目标：UI 立即响应停止操作，CPU 小模型取消通常应在 1 秒内完成；这是验收目标，必须记录实测。GPU 取消延迟单独报告。
+一般设备上的交互目标：UI 立即响应停止操作，CPU 小模型取消通常应在 1 秒内完成；这是验收目标，必须记录实测。GPU/NPU 取消延迟分别报告；MNN 不假定存在可直接套用的 llama abort 回调。
 
 ### 6.4 PC IPC
 
@@ -514,34 +528,35 @@ UI 不周期性轮询整个日志；状态更新最多每秒一次，文本事�
 
 ### 8.3 Android UI
 
-三个界面：模型导入、聊天、运行设置。Dart 通过 bridge 订阅公共事件，不直接持有 llama 指针。桥接入口只负责初始化、导入、加载、生成、取消、状态和生命周期通知。
+三个界面：模型导入、聊天、运行设置。Dart 通过 bridge 订阅公共事件，不直接持有 llama/MNN 指针。桥接入口只负责初始化、导入、加载、生成、取消、状态和生命周期通知。
 
 进入后台取消并在安全点卸载；返回前台显示“模型未加载”，由下次发送触发加载。不在本版启动前台服务，不公开本机端口，不申请无关存储权限。
 
-模型复制会暂时占用额外空间，UI 在导入前展示文件大小和目标位置。大文件复制、SHA-256、tokenizer 与推理全部离开 UI 线程。
+MNN 包导入会暂时占用额外空间，UI 在导入前展示总大小和目标位置，异常不能注册半包。大文件复制、SHA-256、tokenizer 与推理全部离开 UI 线程。
 
 Flutter 的推理事件流订阅不代替取消句柄：初始化得到 runtime handle，每次 generate 使用独立 request_id；关闭流订阅也要向 core 发取消。桥只导出可序列化的自有类型和受控不透明句柄，错误映射为公共错误码，不把 C++ 异常或裸指针直接交给 Dart。
 
 ## 9. 构建、发行与版本锁定
 
-### 9.1 T00 必须锁定的内容
+### 9.1 Windows T00 与 Android T07-A 的锁定内容
 
 | 项目 | 保存位置/要求 |
 |---|---|
 | Rust | rust-toolchain.toml 精确版本；Cargo.lock 提交 |
-| llama.cpp | submodule 精确 commit；不能只有分支名 |
+| llama.cpp | Windows submodule 精确 commit；不能只有分支名 |
+| MNN（T07-A） | 完整 commit、导出器、补丁/构建选项、SDK/原生依赖 hash 与许可；尚未锁定 |
 | C/C++ | Windows MSVC、CMake、Ninja 的版本；统一运行库设置 |
 | 桌面前端 | Node、包管理器精确版本；前端锁文件；Tauri 版本 |
 | 移动 | Flutter SDK、Dart、bridge/codegen、JDK、Gradle、NDK 版本 |
-| 模型 | 来源、revision、文件 SHA-256、模板 hash、量化 |
+| 模型 | 来源、revision、文件/包 SHA-256、模板/tokenizer、量化及后端变体 |
 | 平台 | OS 版本、ABI、最低版本、GPU 驱动与构建选项 |
 
-本文件不编造一个尚未实际构建验证的 llama commit。T00 的交付条件就是补齐这些值，并证明固定的组合可以构建。依赖下载可以在开发环境发生；发布后的文本推理不依赖联网。
+已通过的 Windows 锁保持；T07-A 补齐 MNN/Android 实际可构建的版本组合，不能把候选标签写成完成锁定。SDK下载、安装、新协议接受及再分发条件另行核验并按授权处理；发布后的文本推理不依赖联网。
 
 ### 9.2 编译边界
 
 - `process-host` 只编译 IPC 客户端，不依赖 engine-host、llama-adapter 或原生库。
-- `engine-host` 引入 llama-adapter，供 runtime-worker 和未来移动嵌入使用；worker 不启动第二个 Runtime。
+- `engine-host` 引入 llama-adapter，供 runtime-worker 使用；worker 不启动第二个 Runtime。Android 以独立 MnnExecutor 接入 core，其依赖图不包含 llama 或 PC 宿主。
 - worker 的 backend-cpu/cuda/vulkan/metal 功能按目标构建；GPU 功能仍保留 CPU 路径。
 - 构建脚本仅从锁定 vendor 源码构建，不在 build.rs 中执行 git pull 或下载未知二进制。
 - x64/arm64 发布包不能直接使用构建机的全部本机指令集。关闭隐式 native 优化，并验证选定的基础指令集；不要假定单个开关等于兼容所有旧 CPU。
@@ -550,7 +565,7 @@ Flutter 的推理事件流订阅不代替取消句柄：初始化得到 runtime 
 
 llama.cpp 的 CUDA、Vulkan、Metal 等构建路径分别维护；具体 CMake 选项以锁定版本为准。[S1][S7]
 
-Android 初始 ABI 为 arm64-v8a、minSdk=28；targetSdk 和 NDK 根据锁定的 Flutter 与发行要求记录。验证 native 库打包、动态依赖、目标设备页大小和指令集，不仅检查 APK 是否生成。CPU 通路稳定后才增加 Vulkan。
+Android 初始 ABI 为 arm64-v8a；旧 minSdk=28 是待复核的设计起点，min/targetSdk 与 NDK 根据锁定 MNN/Flutter 组合及发行要求确认。验证 native 依赖、页大小/对齐和指令集，不仅检查 APK 是否生成。CPU稳定后依次验证 OpenCL、QNN v79/v81、直接 Hexagon；具体目标和准入见[计划](docs/t07-android-mnn-plan.md)。
 
 ### 9.3 发行包
 
@@ -560,7 +575,7 @@ Android 初始 ABI 为 arm64-v8a、minSdk=28；targetSdk 和 NDK 根据锁定的
 | `windows-x64-cuda` | 对应 CUDA worker 与实际需要的运行库，单独统计大小 |
 | `windows-x64-vulkan` | 对应 Vulkan worker 与依赖 |
 | `desktop-windows` | Tauri UI + 匹配架构的 runtime 包 |
-| `android-arm64` | Flutter APK/AAB + Rust/llama 原生库；不内置模型 |
+| `android-arm64` | Flutter APK/AAB + Rust/MNN 原生库（待实现）；不内置模型 |
 | 后续平台包 | 依照同样原则独立构建、签名和验证 |
 
 第一版采用整包发行，无运行时自动下载加速插件。模型独立导入。符号文件另外保存，不混入普通用户包。
@@ -573,7 +588,7 @@ T05当前实现以[ADR0006](docs/decisions/0006-t05-windows-portable-package.md)
 
 ## 10. 可执行开发任务
 
-按照依赖推进，编号不要求 Windows UI 完成后才做 Android。T01 可提前安排 Android 构建探针；T02 后优先尽早开展 T07，完整真机验收仍不可省略。允许在完成依赖后穿插 UI 工作，但不能用 UI 截图替代模型运行验收。每个任务单独交付可审查变更与验证记录；Git 初始化后按项目指引提交。
+按照依赖推进，编号不要求 Windows UI 完成后才做 Android。T02 后以 MNN CPU 原型开展 T07，不先做 Android llama，完整真机验收仍不可省略。允许在完成依赖后穿插 UI 工作，但不能用 UI 截图替代模型运行验收。每个任务单独交付可审查变更与验证记录；Git 初始化后按项目指引提交。
 
 | ID | 前置 | 必须交付 | 完成判据 |
 |---|---|---|---|
@@ -582,12 +597,12 @@ T05当前实现以[ADR0006](docs/decisions/0006-t05-windows-portable-package.md)
 | T02 存储与调度 | T01 | 导入、manifest、队列、状态机、deadline、空闲卸载 | 并发、切换模型、队列超限、取消和资源回收通过 A05–A12 |
 | T03 PC worker | T02 | 进程执行器、NDJSON、握手、崩溃与退出处理 | 杀掉 worker 时 API 存活且所有受影响请求终结；无遗留进程 |
 | T04 HTTP/CLI | T03 | 第 7/8 节接口、SSE、令牌、CLI；xtask api-smoke | curl 非流式/流式和错误用例通过；两客户端串行执行 |
-| T05 Windows 发行 | T04 | CPU 便携包、依赖清单、安装说明 | 当前范围：Release包/依赖完整性、真实CI及用户Win10短验通过；A20无开发工具/离线按2026-10-01用户决定延后 |
+| T05 Windows 发行 | T04 | CPU便携包、依赖清单、安装说明 | Release/真实CI及独立Windows 10短验通过；A20无开发工具/离线与长期稳定性后期验证 |
 | T06 PC UI | T05 | 模型、聊天、设置；runtime 发现/启动/退出 | UI 可完成导入、聊天、停止；UI 关闭后 API 按设置继续服务 |
-| T07 Android 核心 | T02 | 移动构建、Rust 桥、生命周期、原生线程 | Android 真机运行真实模型；复用 core/adapter，无重复调度实现 |
+| T07 Android 核心 | T02 | MNN构建、Executor/C ABI、模型包、预算/采样/取消 | Android真机运行真实包；复用core，无重复调度，具体为T07-A/B |
 | T08 Android UI | T07 | 文件导入、流式聊天、取消、状态、APK | 飞行模式运行；后台取消；恢复前台不重放旧任务 |
 | T09 发布验收 | T06、T08 | contract-tests、平台 smoke、性能/包体报告、支持矩阵 | 所有 v0.1 必须用例通过；跳过项不能写成通过 |
-| T10 GPU/平台扩展 | T09 | 每个后端/平台独立包与报告 | 对应设备测试通过，才将组合列入支持矩阵 |
+| T10 其余后端/平台扩展 | T09 | 每个后端/平台独立包与报告 | Android OpenCL/QNN/Hexagon已纳入T07-D～F；均按设备证据准入 |
 
 T00 的上游基线用该固定版本附带的 CLI/server/bench 工具，命令来自该版本 `--help`，记录在 build-lock。上游命令名称和参数可能变化，不把本文中的自有项目命令误用于 llama.cpp。
 
@@ -607,11 +622,11 @@ T00 的上游基线用该固定版本附带的 CLI/server/bench 工具，命令�
 
 改变接口、默认行为、数据目录或目标平台时写入 docs/decisions，说明原因和迁移方式。依赖升级和功能开发分开验证，不能为解决编译报错悄悄追随上游 master。
 
-2026-10-01用户在Win10短验通过后明确无相应独立机器，批准将无开发工具、离线运行和长期稳定性作为后期验证并继续开发。T05按缩定范围收口，T06可推进；A19长期稳定性与A20保留未验证，当前阶段完成不等于完整v0.1发布验收完成。
+T05按Release CI和独立Windows 10短验的当前阶段范围收口，T06可推进；无开发工具、实际离线和长期稳定性列为后期验证。A19长期稳定性与A20仍未验证，阶段完成不等于完整v0.1发布验收。
 
 ## 11. 验收矩阵
 
-下面用例由 T01–T09 逐步实现。协议/状态类可自动化，真实推理和生命周期必须包含设备验证。
+下面用例由 T01–T09 逐步实现。协议/状态类可自动化，真实推理和生命周期必须包含设备验证。Android继承适用语义，HTTP/SSE、PC IPC/worker专属项仍由Windows验收；MNN包/后端新增门槛见计划，不把旧Windows通过记录追溯到扩展后的项目。
 
 | ID | 测试 | 预期 |
 |---|---|---|
@@ -629,18 +644,18 @@ T00 的上游基线用该固定版本附带的 CLI/server/bench 工具，命令�
 | A12 | 队列/加载/执行分别触发超时 | 对应错误码、清理资源，不永久占用槽位 |
 | A13 | 强制结束 worker | API 仍存活；任务失败；Faulted；显式 load 可恢复 |
 | A14 | API Ctrl+C / stop / 父进程异常退出 | 正常路径回收 worker；异常路径无长期遗留进程 |
-| A15 | 损坏 GGUF、缺模板、不支持架构 | 清晰错误，API 不崩溃，无无限重试 |
-| A16 | 内存不足或 GPU 加载失败 | 正确错误/明确回退，已输出请求不自动重放 |
+| A15 | 损坏GGUF/MNN包、缺引用/模板、不支持架构 | 清晰错误，宿主不崩溃，无无限重试 |
+| A16 | 内存不足或 GPU/NPU 加载失败 | 正确错误/明确回退，已输出请求不自动重放 |
 | A17 | 无令牌、错误令牌、外部来源、超大 body | 拒绝；正文和令牌不进入默认日志 |
 | A18 | 重复 request_id、畸形 IPC、协议版本不匹配 | 稳定错误，无任务混淆 |
 | A19 | 100 次短请求、20 次加载/卸载 | 无崩溃；请求终态完整；检查长期内存趋势 |
 | A20 | 未安装开发工具的 Windows 验收机 | 包内依赖齐备，CPU 路径离线运行 |
-| A21 | Android URI 导入中断、空间不足 | 不留下已注册的半文件，原文件不损坏 |
+| A21 | Android URI 多文件包导入中断、空间不足/引用逃逸 | 不注册半包或越界文件，源文件不损坏 |
 | A22 | Android 前后台切换、重建 UI、系统结束 App | 不后台无限生成；不复用已销毁句柄 |
 | A23 | Android 连续生成 15 分钟 | 记录热降频、内存和速度，无 UI 线程阻塞 |
 | A24 | PC 两个应用同时调用相同模型 | 串行正确；历史不共享；队列和取消互不串线 |
-| A25 | GPU 构建在指定硬件运行 | 日志/状态证明实际使用后端，记录 CPU 对照 |
-| A26 | 模型卸载前后内存与显存 | 记录实际释放；不能把 OS 文件缓存误报为泄漏 |
+| A25 | GPU/NPU 构建在指定硬件运行 | profile/状态证明实际执行与fallback，分别记录CPU对照 |
+| A26 | 模型卸载前后内存、GPU/DSP可观测分配 | 记录实际释放；不能把 OS 文件缓存误报为泄漏 |
 
 A19 的报告区分权重 mmap、进程私有内存、驱动缓存与 GPU 分配。预热后若仍持续增长必须定位；不要求 OS 工作集立即归零。
 
@@ -673,7 +688,7 @@ cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
 
 T04实现`ccb2053fe514f582f6161f9fc87ee25346aa55e4`已通过固定Windows Server 2022 CPU CI，包括临时凭据真实CLI在线导入、HTTP/SSE、50次断连恢复与关停。证据见[T04验证](docs/verification/2026-10-01-t04-http-cli.md)。T05发行交付按下一节独立工具执行并单列证据；该CI不替代Windows 10本地电脑或无开发工具验收。
 
-源码6a7e9d0已在[Windows CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)完成真正Release包、实际CRT闭包/签名、中文空格新解压路径和独立HTTP50验收。结果见[T05记录](docs/verification/2026-10-01-t05-windows-package.md)；用户Windows10 build19044 / i5-8400短验报告已回且交付identity匹配，16项包检查与HTTP44pass/9skip、5次断流恢复通过；机器有开发工具且测试联网，A20与长期稳定性仍未验证；用户已批准延后这三项，T05按当前范围收口并开始T06。
+源码6a7e9d0已在[Windows CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)完成Release包、CRT闭包/签名、中文空格路径和独立HTTP50验收。结果见[T05记录](docs/verification/2026-10-01-t05-windows-package.md)；另有独立Windows 10手工短验通过，A20与长期稳定性仍未验证。T05按当前阶段范围收口，T06继续。
 
 T05产品与独立工具ZIP完整解压为相邻目录后，推荐无需开发工具的短验入口：
 
@@ -744,7 +759,7 @@ api-smoke 至少覆盖 A01–A12、A17–A18 中可远程验证的部分，并�
 
 ### 12.3 Android 真机验证
 
-开发机配置好 T00 锁定的 Android 工具链后：
+以下仍为待实现的命令契约；开发机完成 T07-A 的 MNN/Android 工具链与包锁定后，由实际 xtask 实现确定参数，不把这段示例当成可运行成果：
 
 ```powershell
 flutter doctor -v
@@ -753,18 +768,18 @@ cargo run --locked -p xtask -- build --platform android-arm64 --backend cpu
 adb install -r dist/android-arm64/app-release.apk
 ```
 
-1. 用系统选择器导入 model-matrix 中的移动测试 GGUF，核对显示的 hash。
+1. 用系统选择器导入 model-matrix 中单独锁定的 MNN 测试包，核对包/变体hash与完整引用闭包。
 2. 打开飞行模式，发送一轮中文和一轮多轮聊天，确认本地生成。
 3. 在长输入处理和持续生成时分别停止，记录取消耗时。
 4. 切到后台，再回到前台，检查取消和卸载状态。
 5. 持续生成 15 分钟，记录速度、温度/热状态和内存变化。
 6. 结束 App 后重新打开，不应显示旧任务仍在执行。
 
-模型 hash 相同只说明输入文件相同；不要求 Android 与 Windows 生成结果逐字一致。
+Windows GGUF 与 Android MNN 包有不同资产hash；同一原模型也不代表量化或导出相同，不要求跨引擎逐字一致。OpenCL、QNN、直接 Hexagon 各自复跑适用项和[计划](docs/t07-android-mnn-plan.md)的后端/故障门槛。
 
 ## 13. 性能与轻量化验收
 
-以锁定 llama.cpp 的上游工具或最小适配基线作对照，在相同模型、模板、采样、上下文、线程数、GPU 层数和设备条件下测量。上游 bench 与端到端 HTTP 测量不是同一指标。[S10]
+Windows以锁定 llama.cpp、Android以锁定 MNN 的上游工具或最小适配基线作对照，在相同模型资产变体、模板、采样、上下文、后端配置和设备条件下测量。上游 bench 与端到端 HTTP 测量不是同一指标。[S10]
 
 | 指标 | 必须记录的定义 |
 |---|---|
@@ -786,20 +801,20 @@ PC 包装层对稳定 decode 吞吐的额外损耗以不超过基线约 10% 为�
 
 空闲无模型时应事件驱动、无忙循环。默认日志不记录 prompt、回复正文、令牌或完整用户路径，只记录请求 ID、模型 ID、状态、耗时、token 数、后端与错误码。需要诊断内容时使用用户主动开启的本地诊断方式。
 
-验收报告固定字段：项目 commit、llama commit、工具链、OS/设备/驱动、模型 hash、加载参数、用例结果、性能值、已知限制。测不到的值写 unavailable，不能写 0。
+验收报告固定字段：项目 commit、对应引擎/导出器 commit及补丁hash、工具链、OS/设备/驱动、模型 hash、加载参数、用例结果、性能值、已知限制。测不到的值写 unavailable，不能写 0。
 
 ## 14. runtime 第一版完成标准
 
 同时满足以下条件才能标记 v0.1 完成：
 
 - Windows CPU 发行包能够在独立验收机离线加载真实模型；API、CLI、UI 均可操作。
-- Android arm64 真机复用同一 core/adapter，能够导入模型、离线生成、取消并处理前后台。
+- Android arm64 真机复用 Rust core，以 MNN 独立适配实现模型包导入、离线生成、取消并处理前后台。
 - 单模型、有限队列、超时、空闲卸载、错误、崩溃恢复符合本文约定。
 - 实现并记录 Chat Completions 兼容子集，没有把缺失功能静默当作支持。
 - 固定依赖、模型和构建参数；附带重现命令、支持矩阵和测试报告。
 - 包体、内存、速度、取消延迟都有真实记录；没有把目标值写成测试结果。
 
-GPU 或其他平台可以随 v0.1 一起交付，但只有完成对应设备测试的组合才能标为支持；不因此阻塞 Windows/Android CPU 基础版。
+GPU/NPU 或其他平台可以随 v0.1 一起交付，但只有完成对应设备测试的组合才能标为支持；不因此阻塞 Windows/Android CPU 基础版。
 
 上述条件只定义 runtime v0.1。Telegram 摘要业务还需完成独立输入/覆盖、证据、质量、整任务取消和两端调用方验收，见摘要方案的 S-A01–S-A10；两类结果分别报告。
 
@@ -807,14 +822,14 @@ GPU 或其他平台可以随 v0.1 一起交付，但只有完成对应设备测�
 
 以下仅为用户授权工程实施时可使用的启动指令。阅读、审查或更新本文件本身不启动功能开发；实际授权和任务起点以当前会话及 PROJECT_STATE.md 为准。
 
-> 按 Nexa 的 AGENTS.md、PROJECT_STATE.md 和开发路线实施已授权任务。先检查现有工程；从状态记录的下一步继续，空工程先完成 T00/T01，按实际功能建立第 3 节所需结构。锁定 llama.cpp commit、工具链及小型 GGUF，实现真实原生推理、流式与取消。保留后续 T02–T10 边界，摘要按 S00–S04 独立推进，不把 Telegram 接入塞进 runtime。记录修改、实际命令、退出码、模型/设备和未验证项。缺少模型或设备时继续独立可验证工作，不把模拟或仅编译结果算成推理验收。每个任务完成后同步状态，在授权范围内按依赖推进；范围变化说明原因并记录决策。
+> 按 Nexa 的 AGENTS.md、PROJECT_STATE.md 和开发路线实施已授权任务。先检查现有工程；从状态记录的下一步继续，空工程先完成 T00/T01，按实际功能建立第 3 节所需结构。Windows保持已锁定llama/GGUF；Android按ADR0008及MNN计划从精确commit/CPU原型开始，分别验证模型包、真实推理、流式与取消。保留后续 T02–T10 边界，摘要按 S00–S04 独立推进，不把 Telegram 接入塞进 runtime。记录修改、实际命令、退出码、模型/设备和未验证项。缺少模型或设备时继续独立可验证工作，不把模拟或仅编译结果算成推理验收。每个任务完成后同步状态，在授权范围内按依赖推进；范围变化说明原因并记录决策。
 
 ## 16. 官方依据与更新规则
 
-资料核对日期：2026-09-29。下面链接是上游资料入口，不是固定版本依赖；T00 应把与实现相关的链接补为所选 commit 的永久链接。本文中队列大小、接口子集、超时、发布顺序等属于项目设计决策。
+资料核对日期：llama基线2026-09-29；Android MNN方向2026-10-02。下面链接是上游资料入口，不是固定版本依赖；T00 应把与实现相关的链接补为所选 commit 的永久链接。本文中队列大小、接口子集、超时、发布顺序等属于项目设计决策。
 
 - [S1 — llama.cpp 项目与计算后端](https://github.com/ggml-org/llama.cpp)：C/C++ 引擎、硬件后端与工具入口。
-- [S2 — llama.cpp Android 文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/android.md)：Android NDK 路径、模型文件与移动示例。
+- [S2 — MNN LLM 文档](https://mnn-docs.readthedocs.io/en/latest/transformers/llm.html)：Android主引擎的模型包、CPU/OpenCL/QNN/Hexagon资料入口；精确源码审查见MNN计划。
 - [S3 — llama.h](https://github.com/ggml-org/llama.cpp/blob/master/include/llama.h)：资源、分词、推理与取消相关 C API；具体签名以锁定版本为准。
 - [S4 — common/chat.h](https://github.com/ggml-org/llama.cpp/blob/master/common/chat.h)：聊天模板、思考模式和格式化辅助代码。
 - [S5 — Apple XCFramework](https://github.com/ggml-org/llama.cpp/blob/master/docs/xcframework.md)：Apple 平台库集成入口。

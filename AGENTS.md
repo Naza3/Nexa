@@ -17,18 +17,18 @@
 
 Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。首个业务场景为 Telegram 群消息摘要；两端最小 UI 用来管理模型和验证接入。
 
-- Rust 管理协议、模型、调度和生命周期；llama.cpp 承担推理，自有 C++ shim 封装原生边界。
+- Rust 管理协议、模型、调度和生命周期；Windows 使用 llama.cpp，Android 主引擎采用 MNN，各自以 C++ shim 封装原生边界。Android 不先实现 llama 路线，见 [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)。
 - Windows 使用 API 管理进程和独立 worker；Android 在每个 App 内嵌入核心并使用专用推理线程。统一源码与语义，不承诺跨平台二进制或 Android 多 App 共享模型实例。
 - Telegram 登录、消息获取、群记录、分块、摘要任务和产物属于调用层；runtime 不引入 Telegram SDK，不保存聊天历史。
 - 默认技术栈沿用执行规格：Axum/Tokio；桌面 Tauri 2 + React/TypeScript/Vite；移动 Flutter + flutter_rust_bridge 2。具体版本必须经构建验证后锁定。
-- 首版只验收 Windows x64 CPU 和 Android arm64 CPU；GPU、其他平台按设备独立验证后扩展。目标硬件见状态文件，不从内存容量或芯片宣传推导速度保证。
+- 基础验收为 Windows x64 CPU 和 Android arm64 MNN CPU；Android OpenCL、QNN v79/v81 与直接 Hexagon 全部纳入分阶段计划，按模型/设备独立验证后列为可选支持。目标与门槛见 [Android计划](docs/t07-android-mnn-plan.md)，不从内存容量或芯片宣传推导速度保证。
 - 首版保持单模型、单运行任务、有限 FIFO；不自行扩展多模型并行、RAG、工具调用、模型市场、公网服务或移动后台常驻。
 
 项目名为 Nexa；当前命令 `ai-runtime`、worker 名 `ai-runtime-worker`、`air_*` ABI 和 crate 名沿用原技术约定。统一更名须单独记录迁移，不在实现中混用。
 
 ## 3. 推理核心不变量
 
-- `runtime-core` 不依赖 llama 原生类型、HTTP 或 Flutter 类型；API 进程不链接 llama.cpp。
+- `runtime-core` 不依赖 llama/MNN 原生类型、HTTP 或 Flutter 类型；API 进程不链接原生推理库。两端共享控制层，原生 adapter 与模型资产格式按平台区分。
 - engine/model/context/sampler 由同一推理线程创建和释放；只有独立取消标志允许并发访问。不得为绕过所有权问题盲目添加 `unsafe impl Send/Sync`。
 - C ABI 明确所有权、UTF-8、错误及缓冲释放；C++ 异常与 Rust panic 不跨边界传播。
 - 模板及特殊 token 由适配层处理；输入预算必须包含模板。不得静默截断历史、偷偷换模型或用字符数冒充 token 数。
@@ -36,7 +36,7 @@ Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。�
 - 每个请求内部只产生一次终态；客户端断开时无需强行发送。输出过部分文本的请求不自动重放。
 - Windows worker 崩溃后管理进程保持可用，受影响请求终结，显式加载恢复；Android 不强杀原生线程或释放仍被使用的资源。
 - Android 进入后台请求取消，安全结束后卸载；重新前台不自动重放旧生成。定时或持续摘要不能绕过这一限制。
-- 模型、工具链和 llama.cpp commit 精确锁定；固定输入、模型 hash、后端与设备共同定义可复现基线。
+- 模型、工具链与对应引擎/导出器 commit 精确锁定；固定输入、模型/包 hash、后端与设备共同定义可复现基线。MNN 多文件引用闭包须完整校验，运行配置/缓存不改写不可变模型包。
 
 ## 4. 摘要调用层不变量
 
@@ -60,7 +60,7 @@ Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。�
 
 ## 6. 验证、交接与提交
 
-根据改动选择检查，实际命令从届时存在的项目配置取得。runtime 验收沿用执行规格 A01–A26，摘要验收使用摘要方案的 S-A01–S-A10。fake 仅用于协议/调度测试，不能替代真实 GGUF 和真机验收。
+根据改动选择检查，实际命令从届时存在的项目配置取得。runtime 验收沿用执行规格 A01–A26，摘要验收使用摘要方案的 S-A01–S-A10。fake 仅用于协议/调度测试，不能替代真实 GGUF/MNN 模型与真机验收。
 
 每个任务结束记录：任务 ID、修改范围、实际命令与退出码、验证级别、证据路径、未验证条件、下一步。状态使用 `未开始 / 进行中 / 待验证 / 已完成 / 受阻`，具体转换规则见路线。依赖未完成属于未开始，不滥用受阻。
 

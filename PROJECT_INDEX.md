@@ -15,6 +15,8 @@
 | [开发路线](docs/roadmap.md) | runtime 与摘要两条路线、任务状态及阶段门槛 |
 | [代理工作流](docs/agent-workflow.md) | 角色、派发和交接格式 |
 | [ADR 0001](docs/decisions/0001-nexa-scope-and-layers.md) | 项目命名、优先目标、runtime 与摘要的边界 |
+| [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md) | Windows llama保持、Android MNN主引擎、多文件包与分后端验收 |
+| [Android MNN计划](docs/t07-android-mnn-plan.md) | T07-A～F版本/CPU、契约、APK、OpenCL、QNN与直接Hexagon；均未实现 |
 | [文档基线验证](docs/verification/2026-09-30-document-baseline.md) | 本轮文档检查及未验证范围 |
 
 `.codex/config.toml` 和 `.codex/agents/*.toml` 是现有开发代理配置，不属于 Nexa 产品运行时，也不是产品依赖锁。
@@ -67,7 +69,8 @@
 | `crates/runtime-types/` | 自有 DTO、事件、错误和版本 | T01/T02；第 2、6 节 |
 | `crates/runtime-core/` | actor、模型状态、队列、取消、deadline | T02；第 5–6 节 |
 | `crates/model-store/` | 文件导入、manifest、原子提交 | T02；第 5 节 |
-| `crates/engine-host/` | worker/移动共用原生线程执行器 | T02/T03/T07；第 2、9 节 |
+| `crates/engine-host/` | 已有PC llama原生线程执行器 | T02/T03；第 2、9 节 |
+| `crates/mnn-adapter/`、`native/mnn-shim/` | Android MNN适配/C ABI规划路径，未创建 | T07；ADR0008、Android计划 |
 | `crates/process-host/`、`crates/runtime-ipc/` | 父进程执行器、严格协议与信用校验 | T03；第6.4节 |
 | `crates/llama-adapter/`、`native/llama-shim/` | 安全封装、C ABI、模板和原生推理 | T01；第 4 节 |
 | `vendor/llama.cpp/` | 固定 commit 的上游源码 | T00；第 9 节 |
@@ -101,14 +104,14 @@
 | 调度 / 存储 / IPC | 执行规格第 5–6 节、架构资源归属 |
 | API / SDK | 执行规格第 7–8 节、架构接入契约及未冻结扩展 |
 | Windows UI | T06契约、ADR0007、T06验证、apps/desktop与desktop-bridge |
-| Android | 架构移动生命周期、执行规格第 8.3、9.2、12.3 节 |
+| Android | ADR0008、Android MNN计划、架构移动生命周期、执行规格第4.5/8.3/9.2/12.3节 |
 | 摘要 | 摘要方案、路线 S00–S04；无需全文读原生实现 |
-| 依赖 / 后端扩展 | build-lock、model-matrix（创建后）、相关验证与决策 |
+| 依赖 / 后端扩展 | build-lock、model-matrix、相关验证与决策；MNN待锁项不等于已构建 |
 | 文档 / 交接 | AGENTS、本文、状态；按改动同步具体规范 |
 
 ## 验证入口的真实性
 
-当前已有Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及独立Windows 10手工短验已通过，T05按当前阶段范围完成，A20无开发工具/离线与长期稳定性延后验证。T06已通过bc43e0f3的Windows CI36864041027与完整Release bridge/独立桌面包核验，另有独立手工验收确认旧包启动/导入/聊天/停止与两种关闭；最新外部目录零复制/自动名称功能仍待新Windows CI和原生操作验收。执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
+当前已有Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及独立Windows 10手工短验已通过，T05按当前阶段范围完成，A20无开发工具/离线与长期稳定性延后验证。T06已通过bc43e0f3的Windows CI36864041027与完整Release bridge/独立桌面包核验，另有独立手工验收确认旧包启动/导入/聊天/停止与两种关闭；最新外部目录源码75e458f的Windows CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包和解压bridge验收通过；下载产物独立复核通过并已交付，新目录原生UI仍未测，详见[T06最终目录版记录](docs/verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。

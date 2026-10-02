@@ -2,19 +2,19 @@
 
 为自己的 Windows / Android 应用提供统一的本地大模型推理核心。首个业务验证场景是 Telegram 群消息摘要。
 
-当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；T05私有CPU便携包与独立验收工具已通过固定Windows Server2022 CI及独立Windows 10手工短验。无开发工具、离线运行和长期稳定性留作后期验证，T05按当前范围已完成。T06最小Windows UI/安全bridge/独立桌面包已实现，Windows原生构建/完整桌面包及真实Release bridge已通过，旧包核心UI已有独立手工验收；其余UI分支和新目录版仍待验证。Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
+当前T00–T04已完成固定Windows CPU CI阶段验收：Rust核心、模型存储、原生ABI、独立worker、进程隔离与HTTP/CLI已落地。Windows 10为首要交付目标，Windows 11后续增加；T05私有CPU便携包与独立验收工具已通过固定Windows Server2022 CI及独立Windows 10手工短验。无开发工具、离线运行和长期稳定性留作后期验证，T05按当前范围已完成。T06最小Windows UI/安全bridge/独立桌面包已实现，Windows原生构建/完整桌面包及真实Release bridge已通过，旧包核心UI已有独立手工验收；新目录版CI及产物独立复核已通过并交付，新目录原生UI操作和其余UI分支仍待验证。Android仍未完成，实际边界以[PROJECT_STATE.md](PROJECT_STATE.md)为准。
 
 ## 交付形态
 
 | 层 | 计划交付 | 使用方式 |
 | --- | --- | --- |
-| 共享推理核心 | Rust 类型、调度、模型管理、llama.cpp 适配 | PC 与移动端复用源码和事件语义 |
+| 共享推理核心 | Rust 类型、调度、模型管理；Windows llama / Android MNN 独立适配 | PC 与移动端复用控制层和事件语义 |
 | Windows runtime | 本机 HTTP 服务、CLI、独立推理 worker | 自有应用通过本机 API 调用 |
-| Android 嵌入库 | 原生库、受控 Rust 桥、Flutter 接入示例 | 每个 App 内独立实例，前台运行 |
+| Android 嵌入库 | MNN 原生库、受控 Rust 桥、Flutter 接入示例（未实现） | 每个 App 内独立实例，前台运行 |
 | 验证 UI | Tauri 桌面 / Flutter 移动最小界面 | 导入模型、生成、取消和检查状态 |
 | 摘要参考接入 | 来源标准化、分块、证据引用与任务编排 | 调用 Nexa；不侵入推理核心 |
 
-首版引擎采用固定 commit 的 llama.cpp；支持范围由模型、量化、模板、后端和设备实测组合决定。首版目标为Windows x64 CPU与Android arm64 CPU；固定CI和短验结果不覆盖无开发工具、实际离线或长期稳定性条件，Android仍未实测。
+Windows 保留固定 commit 的 llama.cpp/GGUF；Android 主引擎采用 MNN/多文件模型包，先完成 CPU，再验证 OpenCL、QNN v79/v81 与直接 Hexagon。见[方向决策](docs/decisions/0008-android-mnn-engine-and-package.md)和[执行计划](docs/t07-android-mnn-plan.md)。支持范围按模型、量化、模板、后端和设备实测组合认定；Android 尚未实现或实测。固定 Windows CI 和短验结果不覆盖无开发工具、实际离线或长期稳定性条件。
 
 ## 阅读入口
 
@@ -39,6 +39,6 @@ Telegram 消息来源和摘要触发方式尚未确定。消息获取、账号�
 
 ## T06 桌面开发入口
 
-`apps/desktop/`已有React/TypeScript/Vite模型、聊天和设置三页，`src-tauri/`为独立Rust workspace。前端36测试/构建与Windows CI36864041027的真正Tauri构建、桌面包和真实Release bridge生命周期已通过。独立手工验收已确认旧包原生启动、导入、聊天、停止生成及两种关闭，剪贴板等其余分支仍待验证；同级外置GGUF误拒问题已定位；当前已接入设置选择只读模型目录、零复制注册和自动名称，本地通用链已验，合并修复后仍需新Windows CI。详情见[T06记录](docs/verification/2026-10-01-t06-desktop.md)。
+`apps/desktop/`已有React/TypeScript/Vite模型、聊天和设置三页，`src-tauri/`为独立Rust workspace。前端36测试/构建与Windows CI36864041027的真正Tauri构建、桌面包和真实Release bridge生命周期已通过。独立手工验收已确认旧包原生启动、导入、聊天、停止生成及两种关闭，剪贴板等其余分支仍待验证；同级外置GGUF误拒问题已定位；当前已接入设置选择只读模型目录、零复制注册和自动名称，本地通用链已验，源码75e458f的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功，包含真实模型/runtime/HTTP/CLI、桌面包和解压bridge验收。下载产物独立复核已通过并交付；新目录选择、零复制和自动名称的原生UI仍未测，不能把bridge验收当作窗口操作通过。详情见[T06记录](docs/verification/2026-10-01-t06-desktop.md)。
 
 桌面开发产物为另一个`desktop-windows.zip`，内含嵌入前端EXE与完整匹配的`runtime/`子目录，模型继续外置。需要已安装WebView2 Evergreen，缺失时原生提示官方入口，不自动安装或修改系统权限。默认正常关闭自身窗口保留runtime，不创建随UI关闭杀runtime的Job；外部宿主整体终止Job/会话后的存活不作保证。同时退出会影响所有客户端，须实际确认清理。使用与手工验收见[桌面说明](packaging/desktop-windows/README.md)，构建命令见[验证入口](xtask/README.md#t06-桌面构建与分层验收)。
