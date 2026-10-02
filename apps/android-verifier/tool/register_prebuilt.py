@@ -5,7 +5,7 @@ app=Path(__file__).resolve().parents[1];repo=app.parents[1]
 lib=Path(os.environ['CARGO_TARGET_DIR'])/'aarch64-linux-android/release/libnexa_device_verifier.so'
 assert lib.is_file()
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
-inputs={}
+inputs={"pubspec.yaml":sha(app/"pubspec.yaml")}
 for root in [app/'rust',repo/'mobile/runtime/crates',repo/'crates/runtime-core',repo/'crates/runtime-types']:
     for p in root.rglob('*'):
         if p.is_file() and (p.suffix=='.rs' or p.name in ('Cargo.toml','Cargo.lock','rust-toolchain.toml')) and 'target' not in p.parts:

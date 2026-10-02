@@ -365,7 +365,7 @@ pub fn snapshot(epoch: &str) -> Result<Value> {
 }
 pub fn build() -> Value {
     let identity=mnn_adapter::build_identity().ok().map(|b|json!({"upstream_commit":b.upstream_commit,"patch_sha256":b.patch_sha256,"policy_sha256":b.policy_sha256,"artifact_manifest_sha256":b.artifact_manifest_sha256,"target":b.target,"compiler":b.compiler}));
-    json!({"source_commit":env!("NEXA_SOURCE_COMMIT"),"source_dirty":env!("NEXA_SOURCE_DIRTY").parse::<bool>().ok(),"version":"0.1.0+1","build_mode":env!("NEXA_BUILD_MODE"),"signing_kind":"internal_debug_key","application_id":"io.github.naza3.nexa.verifier","apk_sha256":null,"bridge_sha256":null,"hash_reason":"external_package_audit_required","frb":"2.13.0","flutter":"3.47.6","rust":"1.98.1","ndk":"30.0.16248370","native_identity":identity})
+    json!({"source_commit":env!("NEXA_SOURCE_COMMIT"),"source_dirty":env!("NEXA_SOURCE_DIRTY").parse::<bool>().ok(),"version":env!("NEXA_APP_VERSION"),"build_mode":env!("NEXA_BUILD_MODE"),"signing_kind":"internal_debug_key","application_id":"io.github.naza3.nexa.verifier","apk_sha256":null,"bridge_sha256":null,"hash_reason":"external_package_audit_required","frb":"2.13.0","flutter":"3.47.6","rust":"1.98.1","ndk":"30.0.16248370","native_identity":identity})
 }
 pub fn visibility(epoch: &str, visible: bool, sequence: i64) -> Result<Value> {
     let h = host(epoch)?;
@@ -602,7 +602,41 @@ fn atomic_json(path: &Path, value: &Value) -> Result<()> {
         .map_err(|_| failure("storage_failure"))?;
     Ok(())
 }
-fn summarize_outcome(o: &Operation, cleanup: &str, failed: bool) -> &'static str {
+pub fn is_cancellation(error: &Error) -> bool {
+    is_cancellation_code(&error.code)
+}
+pub fn is_cancellation_code(code: &str) -> bool {
+    matches!(code, "request_cancelled" | "backgrounded" | "slow_consumer")
+}
+fn terminal_error(o: &Operation, work_error: Option<&Error>) -> Option<Error> {
+    // Cleanup failures and observed failures always dominate a concurrent stop.
+    if work_error.is_some_and(|e| {
+        matches!(
+            e.code.as_str(),
+            "cleanup_unconfirmed" | "executor_cleanup_unconfirmed"
+        )
+    }) {
+        return work_error.cloned();
+    }
+    if let Some(e) = work_error.filter(|e| !is_cancellation(e)) {
+        return Some(e.clone());
+    }
+    if let Some(case) = o
+        .cases
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|case| case["verdict"] == "failed")
+    {
+        return Some(failure(
+            case["reason_code"].as_str().unwrap_or("unexpected_result"),
+        ));
+    }
+    // Keep the bounded stop cause (first fault, otherwise first cancellation),
+    // rather than a later generic checkpoint request_cancelled. No free text.
+    o.stop_error().or_else(|| work_error.cloned())
+}
+fn summarize_outcome(o: &Operation, cleanup: &str, error: Option<&Error>) -> &'static str {
     if cleanup == "unconfirmed" {
         return "failed";
     }
@@ -610,11 +644,12 @@ fn summarize_outcome(o: &Operation, cleanup: &str, failed: bool) -> &'static str
     if cases.iter().any(|c| c["verdict"] == "failed") {
         return "failed";
     }
-    if o.stopped() {
-        return "cancelled";
-    }
-    if failed {
-        return "failed";
+    if let Some(error) = error {
+        return if is_cancellation(error) {
+            "cancelled"
+        } else {
+            "failed"
+        };
     }
     if o.suite.as_deref() == Some("b3a_safety_v1")
         && cases.iter().any(|c| c["verdict"] == "not_run")
@@ -648,12 +683,8 @@ fn launch(
         } else {
             "confirmed"
         };
-        let error = result
-            .as_ref()
-            .err()
-            .cloned()
-            .or_else(|| o.output.lock().unwrap().reason.map(failure));
-        let outcome = summarize_outcome(&o, cleanup, result.is_err());
+        let error = terminal_error(&o, result.as_ref().err());
+        let outcome = summarize_outcome(&o, cleanup, error.as_ref());
         let report_id = uuid::Uuid::new_v4().to_string();
         let mut terminal = json!({"operation_id":o.id,"outcome":outcome,"cleanup":cleanup,"report_id":report_id,"error":error});
         let report = json!({"schema_version":1,"purpose":PURPOSE,"research_only":true,"production_admitted":false,"report_id":report_id,"operation_id":o.id,"suite_id":o.suite,"suite_sha256":o.suite.as_ref().map(|suite|digest(format!("{suite}\n{}",crate::runner::SUITE_SPEC).as_bytes())),"started_at_utc":o.started,"finished_at_utc":timestamp(),"terminal":terminal,"build":build(),"model":{"model_id":MODEL,"artifact_digest":mnn_model_store::candidate_digest(),"identity":report_model_identity()},"profile":{"backend":"cpu","context":2048,"threads":2,"batch_size":32,"max_tokens":256,"temperature":0,"top_p":1,"seed":0,"thinking":false},"device":h.device,"cases":*o.cases.lock().unwrap(),"coverage":{"executor":if o.kind=="suite"{"direct_public_sink"}else{"not_run"},"core":"not_run","adapter":if o.kind=="suite"{"separate_owner_after_executor_close"}else{"not_run"},"stability":"not_implemented_disabled","android_device_verdict":"self_report_requires_manual_review","logcat_canary":"not_run","memory_thermal":"not_run"}});
@@ -951,6 +982,63 @@ mod tests {
         assert!(state.lock().unwrap().selection.is_none());
     }
     #[test]
+    fn sealed_reason_preserves_cancellation_and_failure_precedence() {
+        let op = Operation::new("suite", None);
+        op.stop("backgrounded");
+        for (work, code, outcome) in [
+            ("request_cancelled", "backgrounded", "cancelled"),
+            ("native_failure", "native_failure", "failed"),
+            ("native_protocol", "native_protocol", "failed"),
+            ("cleanup_unconfirmed", "cleanup_unconfirmed", "failed"),
+        ] {
+            let error = terminal_error(&op, Some(&failure(work))).unwrap();
+            assert_eq!(error.code, code);
+            assert_eq!(
+                summarize_outcome(
+                    &op,
+                    if code == "cleanup_unconfirmed" {
+                        "unconfirmed"
+                    } else {
+                        "confirmed"
+                    },
+                    Some(&error)
+                ),
+                outcome
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("report.json");
+            atomic_json(
+                &path,
+                &json!({"terminal":{"outcome":outcome,"error":error}}),
+            )
+            .unwrap();
+            let sealed: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert_eq!(sealed["terminal"]["error"]["code"], code);
+        }
+        op.cases.lock().unwrap().push(
+            json!({"case_id":"english_stream","verdict":"failed","reason_code":"native_protocol"}),
+        );
+        assert_eq!(
+            terminal_error(&op, Some(&failure("request_cancelled")))
+                .unwrap()
+                .code,
+            "native_protocol"
+        );
+        assert_eq!(
+            terminal_error(&op, Some(&failure("cleanup_unconfirmed")))
+                .unwrap()
+                .code,
+            "cleanup_unconfirmed"
+        );
+        let guard = Operation::new("suite", None);
+        guard.stop("output_limit");
+        let error = terminal_error(&guard, Some(&failure("request_cancelled"))).unwrap();
+        assert_eq!(
+            summarize_outcome(&guard, "confirmed", Some(&error)),
+            "failed"
+        );
+    }
+    #[test]
     fn final_outcome_is_sticky_and_keeps_case_journal() {
         let op = Operation::new("suite", Some("b3a_smoke_v1".into()));
         op.cases
@@ -958,7 +1046,7 @@ mod tests {
             .unwrap()
             .push(json!({"case_id":"load","layer":"executor","verdict":"failed"}));
         crate::runner::complete_case_journal(&op);
-        assert_eq!(summarize_outcome(&op, "confirmed", false), "failed");
+        assert_eq!(summarize_outcome(&op, "confirmed", None), "failed");
         assert!(
             op.cases
                 .lock()
@@ -967,18 +1055,24 @@ mod tests {
                 .any(|c| c["case_id"] == "english_stream" && c["verdict"] == "not_run")
         );
         op.stop("request_cancelled");
-        assert_eq!(summarize_outcome(&op, "unconfirmed", true), "failed");
-        assert_eq!(summarize_outcome(&op, "confirmed", true), "failed");
+        assert_eq!(
+            summarize_outcome(&op, "unconfirmed", Some(&failure("cleanup_unconfirmed"))),
+            "failed"
+        );
+        assert_eq!(
+            summarize_outcome(&op, "confirmed", Some(&failure("request_cancelled"))),
+            "failed"
+        );
         let cancelled = Operation::new("suite", None);
         cancelled.stop("request_cancelled");
         assert_eq!(
-            summarize_outcome(&cancelled, "confirmed", true),
+            summarize_outcome(&cancelled, "confirmed", Some(&failure("request_cancelled"))),
             "cancelled"
         );
         let safety = Operation::new("suite", Some("b3a_safety_v1".into()));
         crate::runner::complete_case_journal(&safety);
         assert_eq!(
-            summarize_outcome(&safety, "confirmed", false),
+            summarize_outcome(&safety, "confirmed", None),
             "inconclusive"
         );
     }

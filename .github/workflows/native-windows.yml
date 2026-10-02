@@ -10,6 +10,7 @@ on:
       - 'native/mnn-patches/**'
       - 'scripts/android_mnn/**'
       - 'mobile/**'
+      - 'apps/android-verifier/**'
       - '.github/workflows/android-mnn-probe.yml'
       - '.github/workflows/android-mnn-native.yml'
       - 'docs/**'

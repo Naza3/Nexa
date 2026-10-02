@@ -143,15 +143,130 @@ fn command(
     }
     Ok((event, metrics))
 }
+#[derive(Clone, Copy)]
+enum Expected {
+    Loaded,
+    Completed,
+    Stop,
+    Cancelled,
+}
+fn cancelled(op: &Operation) -> crate::host::Error {
+    // A native cancellation without a recorded external or expected internal
+    // request is an unexpected result, not evidence that somebody stopped us.
+    if !op.stopped() {
+        return failure("unexpected_result");
+    }
+    op.stop_error()
+        .unwrap_or_else(|| failure("request_cancelled"))
+}
+fn executor_result(
+    op: &Operation,
+    event: &ExecutorEvent,
+    expected: Expected,
+    own_cancel: bool,
+) -> Result<()> {
+    match event {
+        ExecutorEvent::CleanupUnconfirmed(_) => Err(failure("cleanup_unconfirmed")),
+        ExecutorEvent::Faulted(e) => {
+            let mapped = runtime_error(e.clone());
+            Err(if crate::host::is_cancellation(&mapped) {
+                failure("native_failure")
+            } else {
+                mapped
+            })
+        }
+        ExecutorEvent::Failed(e) | ExecutorEvent::GenerationFailed { error: e, .. } => {
+            if e.code == runtime_types::ErrorCode::RequestCancelled {
+                if matches!(expected, Expected::Cancelled) && own_cancel && !op.stopped() {
+                    Ok(())
+                } else {
+                    Err(cancelled(op))
+                }
+            } else {
+                Err(runtime_error(e.clone()))
+            }
+        }
+        ExecutorEvent::Loaded if matches!(expected, Expected::Loaded) => Ok(()),
+        ExecutorEvent::Completed { finish_reason, .. }
+            if matches!(expected, Expected::Completed)
+                || matches!(expected, Expected::Stop)
+                    && *finish_reason == runtime_types::FinishReason::Stop =>
+        {
+            Ok(())
+        }
+        _ => Err(failure("unexpected_result")),
+    }
+}
+fn adapter_observation_error(e: &mnn_adapter::Error) -> crate::host::Error {
+    use mnn_adapter::ErrorKind;
+    failure(match e.kind {
+        ErrorKind::Cancelled => "request_cancelled",
+        ErrorKind::Budget => "context_length_exceeded",
+        ErrorKind::Invalid => "invalid_argument",
+        ErrorKind::Identity => "integrity_failure",
+        ErrorKind::Busy => "runtime_busy",
+        ErrorKind::WrongThread => "wrong_thread",
+        ErrorKind::Callback => "consumer_stopped",
+        ErrorKind::Native => "native_failure",
+        _ => "native_protocol",
+    })
+}
+fn adapter_error(op: &Operation, e: &mnn_adapter::Error) -> crate::host::Error {
+    if e.kind == mnn_adapter::ErrorKind::Cancelled {
+        cancelled(op)
+    } else {
+        adapter_observation_error(e)
+    }
+}
+fn generation_observation(
+    result: &std::result::Result<mnn_adapter::Generation, mnn_adapter::GenerationFailure>,
+) -> Result<()> {
+    confirm_generation_cleanup(result)?;
+    match result {
+        Err(e) => Err(adapter_observation_error(&e.error)),
+        Ok(g) => match g.finish_reason {
+            mnn_adapter::FinishReason::Eos
+            | mnn_adapter::FinishReason::Stop
+            | mnn_adapter::FinishReason::Length => Ok(()),
+            mnn_adapter::FinishReason::Cancelled => Err(failure("request_cancelled")),
+            _ => Err(failure("native_failure")),
+        },
+    }
+}
+fn generation_result(
+    op: &Operation,
+    result: &std::result::Result<mnn_adapter::Generation, mnn_adapter::GenerationFailure>,
+) -> Result<()> {
+    generation_observation(result).map_err(|e| {
+        if e.code == "request_cancelled" {
+            cancelled(op)
+        } else {
+            e
+        }
+    })
+}
+fn expected_phase_cancel(op: &Operation, observed: Result<()>, requested: bool) -> Result<()> {
+    match observed {
+        Err(e) if e.code == "request_cancelled" => {
+            if requested && !op.stopped() {
+                Ok(())
+            } else {
+                Err(cancelled(op))
+            }
+        }
+        Err(e) => Err(e),
+        Ok(()) => Err(failure("unexpected_result")),
+    }
+}
 fn record(
     op: &Operation,
     cases: &mut Vec<Value>,
     case: &str,
     layer: &str,
-    passed: bool,
+    result: &Result<()>,
     metrics: Value,
 ) {
-    let result = json!({"case_id":case,"layer":layer,"verdict":if passed{"passed"}else if op.stopped(){"inconclusive"}else{"failed"},"reason_code":if passed{None}else if op.stopped(){Some("operation_cancelled")}else{Some("unexpected_result")},"metrics":metrics});
+    let result = json!({"case_id":case,"layer":layer,"verdict":match result { Ok(())=>"passed", Err(e) if crate::host::is_cancellation(e)=>"inconclusive", Err(_)=>"failed" },"reason_code":result.as_ref().err().map(|e|e.code.as_str()),"metrics":metrics});
     op.emit("case_result",json!({"case_id":case,"layer":layer,"verdict":result["verdict"],"reason_code":result["reason_code"],"duration_ms":result["metrics"]["duration_ms"]}));
     op.cases.lock().unwrap().push(result.clone());
     cases.push(result);
@@ -161,7 +276,9 @@ fn began(op: &Operation, case: &str, layer: &str) {
 }
 fn checkpoint(op: &Operation) -> Result<()> {
     if op.stopped() {
-        Err(failure("request_cancelled"))
+        Err(op
+            .stop_error()
+            .unwrap_or_else(|| failure("request_cancelled")))
     } else {
         Ok(())
     }
@@ -183,7 +300,11 @@ pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
         &mut cases,
         "production_resolver_rejects",
         "executor",
-        production_rejected,
+        &if production_rejected {
+            Ok(())
+        } else {
+            Err(failure("integrity_failure"))
+        },
         json!({}),
     );
     if !production_rejected {
@@ -204,11 +325,9 @@ pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
             },
             false,
         )?;
-        let loaded = matches!(event, ExecutorEvent::Loaded);
-        record(op, &mut cases, "load", "executor", loaded, metrics);
-        if !loaded {
-            return Err(failure("native_failure"));
-        }
+        let loaded = executor_result(op, &event, Expected::Loaded, false);
+        record(op, &mut cases, "load", "executor", &loaded, metrics);
+        loaded?;
         let english = vec![Message::new(
             Role::User,
             "In one short sentence, explain why the sky appears blue.",
@@ -233,12 +352,15 @@ pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
                 },
                 false,
             )?;
-            let passed = matches!(event, ExecutorEvent::Completed { .. })
-                && m["output_bytes"].as_u64().unwrap_or(0) > 0;
-            record(op, &mut cases, case, "executor", passed, m);
-            if !passed {
-                return Err(failure("native_failure"));
-            }
+            let passed = executor_result(op, &event, Expected::Completed, false).and_then(|()| {
+                if m["output_bytes"].as_u64().unwrap_or(0) > 0 {
+                    Ok(())
+                } else {
+                    Err(failure("native_protocol"))
+                }
+            });
+            record(op, &mut cases, case, "executor", &passed, m);
+            passed?;
         }
         checkpoint(op)?;
         began(op, "eos_or_stop_completion", "executor");
@@ -254,20 +376,16 @@ pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
             false,
         )?;
         // This public layer deliberately merges EOS and explicit stop.
+        let stopped = executor_result(op, &event, Expected::Stop, false);
         record(
             op,
             &mut cases,
             "eos_or_stop_completion",
             "executor",
-            matches!(
-                event,
-                ExecutorEvent::Completed {
-                    finish_reason: runtime_types::FinishReason::Stop,
-                    ..
-                }
-            ),
+            &stopped,
             m,
         );
+        stopped?;
         checkpoint(op)?;
         began(op, "active_cancel", "executor");
         let (event, m) = command(
@@ -281,8 +399,14 @@ pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
             },
             true,
         )?;
-        let cancelled = matches!(event,ExecutorEvent::GenerationFailed{ref error,..}if error.code==runtime_types::ErrorCode::RequestCancelled);
-        record(op, &mut cases, "active_cancel", "executor", cancelled, m);
+        let cancelled = executor_result(
+            op,
+            &event,
+            Expected::Cancelled,
+            !m["cancel_to_return_ms"].is_null(),
+        );
+        record(op, &mut cases, "active_cancel", "executor", &cancelled, m);
+        cancelled?;
         checkpoint(op)?;
         began(op, "cancel_recovery", "executor");
         let mut recovery = request(english);
@@ -293,15 +417,9 @@ pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
             ExecutorCommand::Generate { request: recovery },
             false,
         )?;
-        record(
-            op,
-            &mut cases,
-            "cancel_recovery",
-            "executor",
-            matches!(event, ExecutorEvent::Completed { .. }),
-            m,
-        );
-        Ok(())
+        let recovered = executor_result(op, &event, Expected::Completed, false);
+        record(op, &mut cases, "cancel_recovery", "executor", &recovered, m);
+        recovered
     })();
     // A cleanup fault must survive all later errors. No timeout destroys owner resources.
     op.emit(
@@ -311,13 +429,15 @@ pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
     let metrics = finish_executor(
         &mut executor,
         op,
-        result
-            .as_ref()
-            .err()
-            .is_some_and(|e| e.code == "cleanup_unconfirmed"),
+        result.as_ref().err().is_some_and(|e| {
+            matches!(
+                e.code.as_str(),
+                "cleanup_unconfirmed" | "executor_cleanup_unconfirmed"
+            )
+        }),
     )?;
     drop(executor);
-    record(op, &mut cases, "unload_close", "executor", true, metrics);
+    record(op, &mut cases, "unload_close", "executor", &Ok(()), metrics);
     result?;
     checkpoint(op)?;
     adapter_cases(h, op, &mut cases)?;
@@ -350,7 +470,7 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
         .runtime_config()
         .to_str()
         .ok_or_else(|| failure("invalid_manifest"))?;
-    let cancel = Cancellation::new().map_err(|_| failure("native_failure"))?;
+    let cancel = Cancellation::new().map_err(|e| adapter_error(op, &e))?;
     let controller = cancel.clone();
     op.bind(runtime_core::CancellationHandle::new(move || {
         controller.cancel()
@@ -367,7 +487,7 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
         &cancel,
         |_| {},
     )
-    .map_err(|_| failure("native_failure"))?;
+    .map_err(|e| adapter_error(op, &e))?;
     let result = (|| {
         let messages = [mnn_adapter::Message {
             role: mnn_adapter::Role::User,
@@ -383,7 +503,7 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
         };
         let mut probe = model
             .prepare(&request, &cancel, |_| {})
-            .map_err(|_| failure("native_failure"))?;
+            .map_err(|e| adapter_error(op, &e))?;
         let tokens = probe.info().prompt_tokens;
         if probe.close().is_err() {
             std::mem::forget(probe);
@@ -397,34 +517,37 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
                     std::mem::forget(p);
                     return Err(failure("cleanup_unconfirmed"));
                 }
-                true
+                Ok(())
             }
-            Err(_) => false,
+            Err(e) => Err(adapter_error(op, &e)),
         };
         record(
             op,
             cases,
             "exact_budget_prepare",
             "adapter",
-            exact,
+            &exact,
             json!({"prompt_tokens":tokens,"reserved_completion_tokens":request.max_tokens}),
         );
+        exact?;
         request.max_tokens += 1;
         let over = match model.prepare(&request, &cancel, |_| {}) {
-            Err(e) => e.kind == mnn_adapter::ErrorKind::Budget,
+            Err(e) if e.kind == mnn_adapter::ErrorKind::Budget => Ok(()),
+            Err(e) => Err(adapter_error(op, &e)),
             Ok(mut prepared) => {
                 if prepared.close().is_err() {
                     std::mem::forget(prepared);
                     return Err(failure("cleanup_unconfirmed"));
                 }
-                false
+                Err(failure("unexpected_result"))
             }
         };
-        record(op, cases, "over_one_budget", "adapter", over, json!({}));
+        record(op, cases, "over_one_budget", "adapter", &over, json!({}));
+        over?;
         request.max_tokens = 16;
         let prepared = model
             .prepare(&request, &cancel, |_| {})
-            .map_err(|_| failure("native_failure"))?;
+            .map_err(|e| adapter_error(op, &e))?;
         let generation = prepared.generate(
             &cancel,
             |s| {
@@ -436,20 +559,21 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
             },
             |_| {},
         );
-        confirm_generation_cleanup(&generation)?;
+        let generated_ok = generation_result(op, &generation);
         record(
             op,
             cases,
             "adapter_reload_stream",
             "adapter",
-            generation.is_ok(),
+            &generated_ok,
             json!({"duration_ms":now.elapsed().as_millis()}),
         );
+        generated_ok?;
         let mut baseline = String::new();
         request.max_tokens = 32;
         let generated = model
             .prepare(&request, &cancel, |_| {})
-            .map_err(|_| failure("native_failure"))?
+            .map_err(|e| adapter_error(op, &e))?
             .generate(
                 &cancel,
                 |text| {
@@ -460,10 +584,7 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
                 },
                 |_| {},
             );
-        confirm_generation_cleanup(&generated)?;
-        if generated.is_err() {
-            return Err(failure("native_failure"));
-        }
+        generation_result(op, &generated)?;
         let stop = baseline
             .chars()
             .next()
@@ -473,7 +594,7 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
         request.stops = &stops;
         let stopped = model
             .prepare(&request, &cancel, |_| {})
-            .map_err(|_| failure("native_failure"))?
+            .map_err(|e| adapter_error(op, &e))?
             .generate(
                 &cancel,
                 |text| {
@@ -485,16 +606,25 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
                 },
                 |_| {},
             );
-        confirm_generation_cleanup(&stopped)?;
+        let exact_stop = generation_result(op, &stopped).and_then(|()| {
+            if stopped
+                .as_ref()
+                .is_ok_and(|g| g.finish_reason == mnn_adapter::FinishReason::Stop)
+            {
+                Ok(())
+            } else {
+                Err(failure("unexpected_result"))
+            }
+        });
         record(
             op,
             cases,
             "exact_stop_string",
             "adapter",
-            stopped.is_ok_and(|g| g.finish_reason == mnn_adapter::FinishReason::Stop),
+            &exact_stop,
             json!({"stop_source":"first_unicode_scalar_of_same_seed_baseline","stop_text_exported":false}),
         );
-        Ok(())
+        exact_stop
     })();
     if result
         .as_ref()
@@ -523,7 +653,7 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
         checkpoint(op)?;
         let case = format!("adapter_cancel_{name}");
         began(op, &case, "adapter");
-        let cancel = Cancellation::new().map_err(|_| failure("native_failure"))?;
+        let cancel = Cancellation::new().map_err(|e| adapter_error(op, &e))?;
         let controller = cancel.clone();
         op.bind(runtime_core::CancellationHandle::new(move || {
             controller.cancel()
@@ -561,9 +691,8 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
             &mut progress,
         );
         let mut native = None;
-        let mut cleanup_unconfirmed = false;
-        let cancelled = match loaded {
-            Err(e) => e.kind == mnn_adapter::ErrorKind::Cancelled,
+        let observed = match loaded {
+            Err(e) => Err(adapter_observation_error(&e)),
             Ok(m) => {
                 native = Some(m);
                 let messages = [mnn_adapter::Message {
@@ -583,30 +712,29 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
                     .unwrap()
                     .prepare(&request, &cancel, &mut progress)
                 {
-                    Err(e) => e.kind == mnn_adapter::ErrorKind::Cancelled,
-                    Ok(prepared) => prepared
-                        .generate(
-                            &cancel,
-                            |s| {
-                                if op.text(s) {
-                                    TextAction::Continue
-                                } else {
-                                    TextAction::Cancel
-                                }
-                            },
-                            &mut progress,
-                        )
-                        .is_err_and(|e| {
-                            cleanup_unconfirmed = e.cleanup_error.is_some();
-                            e.error.kind == mnn_adapter::ErrorKind::Cancelled
-                        }),
+                    Err(e) => Err(adapter_observation_error(&e)),
+                    Ok(prepared) => generation_observation(&prepared.generate(
+                        &cancel,
+                        |s| {
+                            if op.text(s) {
+                                TextAction::Continue
+                            } else {
+                                TextAction::Cancel
+                            }
+                        },
+                        &mut progress,
+                    )),
                 }
             }
         };
         drop(send);
         let _ = worker.join();
         let returned = requested.map(|t| t.elapsed().as_micros());
-        if cleanup_unconfirmed {
+        if observed
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.code == "cleanup_unconfirmed")
+        {
             std::mem::forget(native);
             std::mem::forget(lease);
             return Err(failure("cleanup_unconfirmed"));
@@ -619,14 +747,16 @@ fn adapter_cases(h: &Arc<Host>, op: &Arc<Operation>, cases: &mut Vec<Value>) -> 
             return Err(failure("cleanup_unconfirmed"));
         }
         op.clear_control();
+        let cancelled = expected_phase_cancel(op, observed, requested.is_some());
         record(
             op,
             cases,
             &case,
             "adapter",
-            cancelled && requested.is_some(),
+            &cancelled,
             json!({"observed_phase":name,"cancel_to_safe_return_us":returned,"cancel_to_close_us":requested.map(|t|t.elapsed().as_micros()),"method":"cross_thread_cancel_at_public_checkpoint","arbitrary_kernel_latency_guarantee":false}),
         );
+        cancelled?;
     }
     drop(lease);
     drop(snapshot);
@@ -702,6 +832,289 @@ fn finish_executor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn native_error(code: runtime_types::ErrorCode) -> runtime_types::RuntimeError {
+        runtime_types::RuntimeError::new(code, "synthetic control evidence")
+    }
+    fn usage() -> runtime_types::Usage {
+        runtime_types::Usage {
+            prompt_tokens: 24,
+            completion_tokens: 0,
+        }
+    }
+    #[test]
+    fn load_prepare_and_generate_cancel_use_observed_error_not_stop_flag() {
+        use runtime_types::ErrorCode;
+        let op = Operation::new("suite", None);
+        op.stop("backgrounded");
+        for (expected, event) in [
+            (
+                Expected::Loaded,
+                ExecutorEvent::Failed(native_error(ErrorCode::RequestCancelled)),
+            ),
+            (
+                Expected::Completed,
+                ExecutorEvent::Failed(native_error(ErrorCode::RequestCancelled)),
+            ),
+            (
+                Expected::Completed,
+                ExecutorEvent::GenerationFailed {
+                    error: native_error(ErrorCode::RequestCancelled),
+                    usage: usage(),
+                },
+            ),
+        ] {
+            assert_eq!(
+                executor_result(&op, &event, expected, false)
+                    .unwrap_err()
+                    .code,
+                "backgrounded"
+            );
+        }
+        let observed_cancel = ExecutorEvent::GenerationFailed {
+            error: native_error(ErrorCode::RequestCancelled),
+            usage: usage(),
+        };
+        assert_eq!(
+            executor_result(&op, &observed_cancel, Expected::Cancelled, true)
+                .unwrap_err()
+                .code,
+            "backgrounded"
+        );
+        assert_eq!(
+            expected_phase_cancel(&op, Err(failure("request_cancelled")), true)
+                .unwrap_err()
+                .code,
+            "backgrounded"
+        );
+        assert_eq!(
+            expected_phase_cancel(&op, Err(failure("native_failure")), true)
+                .unwrap_err()
+                .code,
+            "native_failure"
+        );
+        assert_eq!(
+            executor_result(
+                &op,
+                &ExecutorEvent::GenerationFailed {
+                    error: native_error(ErrorCode::NativeFailure),
+                    usage: usage(),
+                },
+                Expected::Cancelled,
+                true
+            )
+            .unwrap_err()
+            .code,
+            "native_failure"
+        );
+        for event in [
+            ExecutorEvent::Failed(native_error(ErrorCode::NativeFailure)),
+            ExecutorEvent::GenerationFailed {
+                error: native_error(ErrorCode::NativeFailure),
+                usage: usage(),
+            },
+            ExecutorEvent::Faulted(native_error(ErrorCode::NativeFailure)),
+            ExecutorEvent::Faulted(native_error(ErrorCode::RequestCancelled)),
+        ] {
+            let result = executor_result(&op, &event, Expected::Completed, false);
+            assert_eq!(result.as_ref().unwrap_err().code, "native_failure");
+            let mut journal = vec![];
+            record(
+                &op,
+                &mut journal,
+                "english_stream",
+                "executor",
+                &result,
+                json!({}),
+            );
+            assert_eq!(journal[0]["verdict"], "failed");
+        }
+        assert_eq!(
+            executor_result(
+                &op,
+                &ExecutorEvent::Failed(native_error(ErrorCode::NativeProtocol)),
+                Expected::Completed,
+                false
+            )
+            .unwrap_err()
+            .code,
+            "native_protocol_error"
+        );
+        assert_eq!(
+            executor_result(
+                &op,
+                &ExecutorEvent::CleanupUnconfirmed(native_error(
+                    ErrorCode::ExecutorCleanupUnconfirmed
+                )),
+                Expected::Completed,
+                false
+            )
+            .unwrap_err()
+            .code,
+            "cleanup_unconfirmed"
+        );
+    }
+    #[test]
+    fn unsolicited_native_cancellation_is_failed_not_cancelled() {
+        let op = Operation::new("suite", None);
+        let event = ExecutorEvent::GenerationFailed {
+            error: native_error(runtime_types::ErrorCode::RequestCancelled),
+            usage: usage(),
+        };
+        for expected in [Expected::Loaded, Expected::Completed, Expected::Cancelled] {
+            assert_eq!(
+                executor_result(&op, &event, expected, false)
+                    .unwrap_err()
+                    .code,
+                "unexpected_result"
+            );
+        }
+        assert_eq!(
+            adapter_error(
+                &op,
+                &mnn_adapter::Error {
+                    kind: mnn_adapter::ErrorKind::Cancelled
+                }
+            )
+            .code,
+            "unexpected_result"
+        );
+        let generation = mnn_adapter::Generation {
+            prompt_tokens: 24,
+            completion_tokens: 0,
+            resolved_seed: 0,
+            finish_reason: mnn_adapter::FinishReason::Cancelled,
+        };
+        assert_eq!(
+            generation_result(&op, &Ok(generation)).unwrap_err().code,
+            "unexpected_result"
+        );
+        assert_eq!(
+            expected_phase_cancel(&op, Err(failure("request_cancelled")), false)
+                .unwrap_err()
+                .code,
+            "unexpected_result"
+        );
+        assert!(expected_phase_cancel(&op, Err(failure("request_cancelled")), true).is_ok());
+        assert_eq!(
+            expected_phase_cancel(&op, Err(failure("native_failure")), true)
+                .unwrap_err()
+                .code,
+            "native_failure"
+        );
+    }
+    #[test]
+    fn adapter_cancel_and_real_failure_remain_distinct_during_stop() {
+        let op = Operation::new("suite", None);
+        op.stop("backgrounded");
+        // load and prepare share the same exact error mapping.
+        assert_eq!(
+            adapter_error(
+                &op,
+                &mnn_adapter::Error {
+                    kind: mnn_adapter::ErrorKind::Cancelled
+                }
+            )
+            .code,
+            "backgrounded"
+        );
+        assert_eq!(
+            adapter_error(
+                &op,
+                &mnn_adapter::Error {
+                    kind: mnn_adapter::ErrorKind::Native
+                }
+            )
+            .code,
+            "native_failure"
+        );
+        for (kind, cleanup, code) in [
+            (mnn_adapter::ErrorKind::Cancelled, false, "backgrounded"),
+            (mnn_adapter::ErrorKind::Native, false, "native_failure"),
+            (
+                mnn_adapter::ErrorKind::Cancelled,
+                true,
+                "cleanup_unconfirmed",
+            ),
+            (mnn_adapter::ErrorKind::Native, true, "cleanup_unconfirmed"),
+        ] {
+            let observed = Err(mnn_adapter::GenerationFailure {
+                error: mnn_adapter::Error { kind },
+                cleanup_error: cleanup.then_some(mnn_adapter::Error {
+                    kind: mnn_adapter::ErrorKind::Native,
+                }),
+                usage: mnn_adapter::Generation {
+                    prompt_tokens: 24,
+                    completion_tokens: 0,
+                    resolved_seed: 0,
+                    finish_reason: mnn_adapter::FinishReason::Cancelled,
+                },
+            });
+            assert_eq!(generation_result(&op, &observed).unwrap_err().code, code);
+        }
+    }
+    #[test]
+    fn internal_request_cancel_does_not_stop_operation_or_next_request() {
+        struct TwoRequests {
+            flags: Vec<Arc<AtomicBool>>,
+        }
+        impl Executor for TwoRequests {
+            fn start(
+                &mut self,
+                _: ExecutorCommand,
+                events: ExecutionEvents,
+            ) -> std::result::Result<runtime_core::CancellationHandle, runtime_types::RuntimeError>
+            {
+                let flag = Arc::new(AtomicBool::new(false));
+                self.flags.push(flag.clone());
+                let first = self.flags.len() == 1;
+                let worker = flag.clone();
+                std::thread::spawn(move || {
+                    if first {
+                        assert!(events.text_delta("1"));
+                        let start = Instant::now();
+                        while !worker.load(Ordering::Acquire) {
+                            assert!(start.elapsed() < Duration::from_secs(3));
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        events.emit(ExecutorEvent::GenerationFailed {
+                            error: native_error(runtime_types::ErrorCode::RequestCancelled),
+                            usage: usage(),
+                        });
+                    } else {
+                        events.emit(ExecutorEvent::Completed {
+                            usage: usage(),
+                            finish_reason: runtime_types::FinishReason::Length,
+                        });
+                    }
+                });
+                Ok(runtime_core::CancellationHandle::new(move || {
+                    flag.store(true, Ordering::Release)
+                }))
+            }
+        }
+        let op = Operation::new("suite", None);
+        let mut executor = TwoRequests { flags: vec![] };
+        let make = || ExecutorCommand::Generate {
+            request: request(vec![Message::new(Role::User, "control fixture")]),
+        };
+        let (event, metrics) = command(&mut executor, &op, make(), true).unwrap();
+        assert!(
+            executor_result(
+                &op,
+                &event,
+                Expected::Cancelled,
+                !metrics["cancel_to_return_ms"].is_null()
+            )
+            .is_ok()
+        );
+        assert!(checkpoint(&op).is_ok());
+        assert!(op.control.lock().unwrap().is_none());
+        let (event, _) = command(&mut executor, &op, make(), false).unwrap();
+        assert!(executor_result(&op, &event, Expected::Completed, false).is_ok());
+        assert!(executor.flags[0].load(Ordering::Acquire));
+        assert!(!executor.flags[1].load(Ordering::Acquire));
+        assert!(!op.stopped());
+    }
     struct ControlExecutor {
         calls: usize,
         fail_start: bool,

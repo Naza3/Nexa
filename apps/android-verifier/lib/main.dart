@@ -5,6 +5,15 @@ import 'package:flutter/services.dart';
 
 import 'verifier.dart';
 
+// Android inactive may mean only a focus change while still visible.
+// Kotlin onStop remains the independent, direct native cancellation boundary.
+bool lifecycleRequiresCancellation(AppLifecycleState state) => switch (state) {
+  AppLifecycleState.hidden ||
+  AppLifecycleState.paused ||
+  AppLifecycleState.detached => true,
+  AppLifecycleState.inactive || AppLifecycleState.resumed => false,
+};
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const VerifierApp());
@@ -79,7 +88,7 @@ class _VerifierPageState extends State<VerifierPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    visible = state == AppLifecycleState.resumed;
+    visible = !lifecycleRequiresCancellation(state);
     if (!visible) {
       window.clear();
       if (mounted) setState(() {});
@@ -294,7 +303,7 @@ class _VerifierPageState extends State<VerifierPage>
               OutlinedButton.icon(
                 onPressed: exportReport,
                 icon: const Icon(Icons.save_alt),
-                label: const Text('导出脱敏只读报告'),
+                label: const Text('导出报告（TXT，内容为JSON）'),
               ),
             const Divider(),
             const Text(

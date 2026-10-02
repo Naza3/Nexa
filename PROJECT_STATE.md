@@ -130,3 +130,10 @@ T07-A首批源码`e1ecc6e`及工作流语义修复`c1114ee`已推送。后者[An
 c0c0927（tree c12fc577）的两套Android CI已成功，12阶段native与13份prototype报告、source/hash/同次收据均独立复核通过。干净源码重建的设备研究APK27,882,858 bytes，因直接附件大小限制改用12,057,217 bytes ZIP无损包装，于09:05 UTC发送被接受。已收到一加15用户回传的smoke/safety：各17项自动用例通过、6项未测，cleanup confirmed；另有用户观察及报告确认一次后台取消/安全卸载。取消归因和inactive误停修正中，不代表完整设备/生产准入。完整身份与边界见[最终交付记录](docs/verification/2026-10-02-android-device-verifier-delivery.md)。Windows同提交回归36984549760也已成功，50项库存文件/source/hash独立复核通过；原生窗口与长期条件边界不变。
 
 新反馈：自动CPU设备矩阵已收证；App取消/真实故障的归因与失焦边界需修正后复验。B3b私有core研究资格正在按ADR0011独立审查，尚未启用；不修改生产支持矩阵。
+
+
+## 0.1.1+2 取消与报告修正
+
+App内已修复仅失焦inactive被误当后台、未请求原生取消的错误分类、并发停止掩盖真实故障及报告原因覆盖。优先级为清理不确认 > 真实故障 > 有证据的取消 > 正常完成；内部取消用例须有实际发起/检查点证据。Kotlin原生onStop边界保持，Dart只在hidden/paused/detached冗余取消。
+
+18项Rust控制测试、7项Dart/实际生命周期observer测试、clippy/analyze、完整真实host56.38秒通过；预提交0.1.1/code2 APK已检查同证书、三库与16KiB/许可闭包。报告版本单源读取pubspec，默认导出TXT但仍为原始JSON字节。最终安装包须绑定正式提交后重新构建；还需新包smoke、仅失焦不中断、后台取消/卸载及回前台不重放的最短手机补验，旧c0证据不自动迁移。B3b仍未启用。

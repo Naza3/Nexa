@@ -11,6 +11,9 @@ with zipfile.ZipFile(apk) as z,apk.open('rb') as raw:
     names=z.namelist();libs=[n for n in names if n.endswith('.so')]
     assert sorted(libs)==['lib/arm64-v8a/libapp.so','lib/arm64-v8a/libflutter.so','lib/arm64-v8a/libnexa_device_verifier.so']
     assert not any(n.endswith(('.mnn','.mnn.weight','.gguf')) for n in names)
+    dex=b''.join(z.read(name) for name in names if re.fullmatch(r'classes(?:\d+)?\.dex',name))
+    assert b'nexa-device-report.txt' in dex and b'text/plain' in dex
+    assert b'nexa-device-report.json' not in dex
     elfs=[]
     for name in libs:
         entry=z.getinfo(name);assert entry.compress_type==zipfile.ZIP_STORED
@@ -49,6 +52,8 @@ with zipfile.ZipFile(apk) as z,apk.open('rb') as raw:
     notice=z.read('assets/flutter_assets/assets/THIRD_PARTY_NOTICES.txt');assert notice==(app/'assets/THIRD_PARTY_NOTICES.txt').read_bytes();assert 'assets/flutter_assets/NOTICES.Z' in names
 badging=run([sdk/'aapt2','dump','badging',apk]);(out/'badging.txt').write_text(badging)
 assert "name='io.github.naza3.nexa.verifier'" in badging and "minSdkVersion:'28'" in badging and "targetSdkVersion:'36'" in badging
+version=re.search(r'^version: (\d+\.\d+\.\d+)\+(\d+)$',(app/'pubspec.yaml').read_text(),re.M);assert version
+assert "versionName='"+version[1]+"'" in badging and "versionCode='"+version[2]+"'" in badging
 permissions=re.findall(r"uses-permission: name='([^']+)'",badging)
 assert permissions==['io.github.naza3.nexa.verifier.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION']
 manifest=run([sdk/'aapt2','dump','xmltree',apk,'--file','AndroidManifest.xml']);(out/'manifest.txt').write_text(manifest)
@@ -62,5 +67,5 @@ assert 'android:debuggable' not in manifest or re.search(r'android:debuggable[^\
 signature=run([sdk/'apksigner','verify','--verbose','--print-certs',apk]);(out/'signature.txt').write_text(signature)
 assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in signature and 'CN=Android Debug' in signature
 alignment=run([sdk/'zipalign','-c','-P','16','-v','4',apk]);(out/'zipalign.txt').write_text(alignment);assert 'Verification successful' in alignment
-result={'schema_version':1,'apk_sha256':sha(apk.read_bytes()),'apk_bytes':apk.stat().st_size,'application_id':'io.github.naza3.nexa.verifier','build_mode':'release','signing_kind':'internal_debug_key','signer_sha256':re.search(r'certificate SHA-256 digest: (\w+)',signature).group(1),'purpose':'android_device_verification','research_only':True,'production_admitted':False,'device_execution':'not_run','manifest_permissions':permissions,'prebuilt_sha256':pre['sha256'],'native_artifact_sha256':pre['native_artifact_sha256'],'notice_sha256':sha(notice),'source_inputs':pre['inputs'],'elfs':elfs}
+result={'schema_version':1,'apk_sha256':sha(apk.read_bytes()),'apk_bytes':apk.stat().st_size,'application_id':'io.github.naza3.nexa.verifier','version':version[0].removeprefix('version: '),'build_mode':'release','signing_kind':'internal_debug_key','signer_sha256':re.search(r'certificate SHA-256 digest: (\w+)',signature).group(1),'purpose':'android_device_verification','research_only':True,'production_admitted':False,'device_execution':'not_run','report_export':{'filename':'nexa-device-report.txt','mime':'text/plain','payload':'unchanged_json'},'manifest_permissions':permissions,'prebuilt_sha256':pre['sha256'],'native_artifact_sha256':pre['native_artifact_sha256'],'notice_sha256':sha(notice),'source_inputs':pre['inputs'],'elfs':elfs}
 (out/'audit.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps({k:v for k,v in result.items() if k not in ['source_inputs','elfs']}))

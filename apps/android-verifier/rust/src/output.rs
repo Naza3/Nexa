@@ -56,10 +56,18 @@ impl Operation {
         })
     }
     pub fn stop(&self, reason: &'static str) {
-        self.cancelled.store(true, Ordering::Release);
         {
             let mut b = self.output.lock().unwrap();
-            b.reason.get_or_insert(reason);
+            // Keep the first cancellation origin, but an observed transport
+            // fault must dominate cancellation in either arrival order.
+            if b.reason.is_none_or(|previous| {
+                crate::host::is_cancellation_code(previous)
+                    && !crate::host::is_cancellation_code(reason)
+            }) {
+                b.reason = Some(reason);
+            }
+            // Publish the bounded reason before readers can observe stopped.
+            self.cancelled.store(true, Ordering::Release);
             b.pending = None;
             b.discarded_delivery = b
                 .delivered
@@ -72,6 +80,9 @@ impl Operation {
             c.cancel();
         }
         self.changed.notify_all();
+    }
+    pub fn stop_error(&self) -> Option<crate::host::Error> {
+        self.output.lock().unwrap().reason.map(failure)
     }
     pub fn stopped(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
@@ -197,6 +208,28 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn protocol_fault_dominates_stop_in_either_order() {
+        for fault_first in [false, true] {
+            let op = Operation::new("suite", None);
+            if fault_first {
+                assert!(!op.text(&"x".repeat(4097)));
+            }
+            op.stop("backgrounded");
+            if !fault_first {
+                assert!(!op.text(&"x".repeat(4097)));
+            }
+            op.stop("request_cancelled");
+            assert_eq!(op.stop_error().unwrap().code, "native_protocol");
+        }
+        let op = Operation::new("suite", None);
+        op.stop("backgrounded");
+        op.stop("request_cancelled");
+        assert_eq!(op.stop_error().unwrap().code, "backgrounded");
+        op.stop("output_limit");
+        op.stop("native_protocol");
+        assert_eq!(op.stop_error().unwrap().code, "output_limit");
+    }
     #[test]
     fn only_one_poll_can_wait() {
         let op = Operation::new("suite", None);

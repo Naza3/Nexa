@@ -66,3 +66,12 @@ ELF完整区间、源许可闭包、控制层异常修复及本地真实链见[A
 报告暴露两个待修正App问题：Dart对仅失焦的inactive也发取消，超出了“不可见时取消”的既定边界；普通生成被取消时runner泛化成native_failure，封存又覆盖更具体取消原因。正在仅App内修复，并要求真实故障与cleanup_unconfirmed不能被并发取消掩盖。新行为需要定向回归与新构建验证，不能直接继承c0的全部结论；生产resolver准入保持不变。
 
 六项not_run分别保留：手工后台动作、SAF故障、进程重启、外部日志采集、未实现长期稳定性与尚未准入的B3b/core。后台动作另有用户观察与取消报告，不能伪造旧JSON中的自动case标记。
+
+
+## 0.1.1+2 修正片的预提交验证
+
+18项Rust控制测试、7项Dart/实际observer回归、clippy/analyze和56.38秒真实host闭环通过。独立审查另复验6项runner与协议故障顺序测试共7项，均通过。核心规则：普通用例只把具有操作取消上下文的原生Cancelled当取消；预期内部cancel必须实际发起且到达对应检查点；真实故障覆盖先到取消，后到取消不能覆盖故障，cleanup_unconfirmed始终最高优先级。
+
+默认导出`.txt`，内部仍为不可变JSON原字节；未增加上传、分享、日志或权限。pubspec版本0.1.1+2是报告版本单一来源，并加入预构建输入hash，签名与applicationId保持以便覆盖安装。源许可/FRB生成件/锁文件及native构建资产未改变。最终提交包与最短手机补验另行绑定，不把预提交包当作交付版本。
+
+Windows工作流仅新增精确`apps/android-verifier/**`路径排除，与独立Android工作区边界一致；共享core/types、根Cargo、桌面源码与Windows工作流本身仍触发回归。已检查正负路径样例；本次修改工作流自身仍会触发Windows验证。

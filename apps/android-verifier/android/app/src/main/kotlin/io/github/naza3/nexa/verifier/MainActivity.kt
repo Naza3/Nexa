@@ -97,7 +97,7 @@ class MainActivity : FlutterActivity() {
                         launchPicker(reply,Intent(Intent.ACTION_OPEN_DOCUMENT).apply {type="*/*";addCategory(Intent.CATEGORY_OPENABLE);putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true)},PICK)
                     } else {
                         reportToken=call.argument<String>("report_token")
-                        launchPicker(reply,Intent(Intent.ACTION_CREATE_DOCUMENT).apply {type="application/json";addCategory(Intent.CATEGORY_OPENABLE);putExtra(Intent.EXTRA_TITLE,"nexa-device-report.json")},EXPORT)
+                        launchPicker(reply,Intent(Intent.ACTION_CREATE_DOCUMENT).apply {type="text/plain";addCategory(Intent.CATEGORY_OPENABLE);putExtra(Intent.EXTRA_TITLE,"nexa-device-report.txt")},EXPORT)
                     }
                 }
                 "cancel_selection" -> {

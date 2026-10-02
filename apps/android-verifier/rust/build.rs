@@ -1,4 +1,16 @@
 fn main() {
+    println!("cargo:rerun-if-changed=../pubspec.yaml");
+    let pubspec = std::fs::read_to_string("../pubspec.yaml").expect("App pubspec is required");
+    let version = pubspec
+        .lines()
+        .find_map(|line| line.strip_prefix("version: "))
+        .expect("App version is required");
+    assert!(
+        version
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b == b'.' || b == b'+')
+    );
+    println!("cargo:rustc-env=NEXA_APP_VERSION={version}");
     println!("cargo:rerun-if-env-changed=NEXA_LINK_MAP");
     if let Ok(map) = std::env::var("NEXA_LINK_MAP") {
         println!("cargo:rustc-link-arg-cdylib=-Wl,-Map,{map}");
