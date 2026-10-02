@@ -58,7 +58,7 @@ B2实现已推送`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`；[CI36970559016](ht
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；独立Windows 10短验已通过；按当前阶段范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
 | T06 Windows UI | 待验证 | 新目录/诊断源码75e458f的CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包及解压bridge验收通过；产物独立复核通过并已交付；新目录原生UI仍未测 |
-| T07 Android核心 | 进行中 | c0c0927的T07-A/B完整CI和独立证据核验通过；固定MNN CPU模型store/Executor真实链及Android链接完成。B3a研究APK已交付，等待一加15报告；生产模型准入、B3b/core设备门槛及GPU/NPU未通过 |
+| T07 Android核心 | 进行中 | c0c0927的T07-A/B完整CI和独立证据核验通过；固定MNN CPU模型store/Executor真实链及Android链接完成。B3a修复APK07a14d2已交付，固定设备失焦/后台取消/恢复报告已核验，等待无自动重放事实确认；同提交Windows回归成功；生产准入、B3b/core设备门槛及GPU/NPU未通过 |
 | T08 Android App | 未开始 | MNN Chat能力对标目标已确定；首个可用APK需目录/下载/导入/存储、多会话、设置与诊断，依赖T07-B/C安全门槛；无完整产品APK或真机证据，独立B3a研究验证APK另行交付 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | Android后端纳入T07-D～F单列验收；其余扩展未开始，Linux仍仅开发探针 |

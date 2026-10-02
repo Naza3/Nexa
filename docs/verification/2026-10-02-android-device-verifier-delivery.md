@@ -75,3 +75,28 @@ ELF完整区间、源许可闭包、控制层异常修复及本地真实链见[A
 默认导出`.txt`，内部仍为不可变JSON原字节；未增加上传、分享、日志或权限。pubspec版本0.1.1+2是报告版本单一来源，并加入预构建输入hash，签名与applicationId保持以便覆盖安装。源许可/FRB生成件/锁文件及native构建资产未改变。最终提交包与最短手机补验另行绑定，不把预提交包当作交付版本。
 
 Windows工作流仅新增精确`apps/android-verifier/**`路径排除，与独立Android工作区边界一致；共享core/types、根Cargo、桌面源码与Windows工作流本身仍触发回归。已检查正负路径样例；本次修改工作流自身仍会触发Windows验证。
+
+
+## 07a14d2 最终修复包与设备补验
+
+修复实现提交 `07a14d25c3d2c3b109014d7b35c5810f0e1694c2`，tree `13a0069b594875cbece3afc3bc0ecbec8788ced5`。最终干净构建为0.1.1+2，38项源码输入、包内版本、签名与源码身份独立复核通过；签名/applicationId不变。2026-10-02 10:15 UTC直接发送ZIP被接受，后续三份报告均绑定此版本/提交，不能把旧c0报告改记为新包结果。
+
+- APK：27,905,682 bytes，SHA256 `74ec444edc307a6d27ee22bdb08718164428e0a8f808c9bce0ea7af907d07bc0`
+- 单APK ZIP：12,065,487 bytes，SHA256 `0d6dedb4de7f8fda336089ee47facd1e4c319fe33a2aa3f5ca8b160338ab1d35`；CRC及解包字节一致
+- 审计摘要：`a260ff4264e13f56e58f0a5772319e8f7e33dc637052cb097593af86a5887c4d`
+- 包内桥接so：`9b759e156629cfd1fa7dd1d7d8f9024b92d292021e92a2eebf6f00380655d59b`
+- smoke suite摘要：`9eb7c6123608c9b7a913649e41d0eb082a526dc64144ef3f1d26653aad6eace2`，由该提交runner源码独立重算
+
+用户按短暂失焦、切后台、手动恢复的指引回传三份TXT报告。原始报告保留在私有验收材料，不纳入仓库；以下摘要仅供追踪一致性，不构成设备认证。
+
+- focus：17 passed、6 not_run，总体passed、error=null、cleanup=confirmed；支持本次短暂失焦流程。报告文本SHA256 `e8ba89684346932de4a80967b46d791c8f36808ceb72e3a544cc11f3014a785c`
+- background：8 passed、15 not_run，总体cancelled、原因backgrounded、cleanup=confirmed；已不再误记native_failure。此样本在adapter阶段前停止，不能声称精确中断某个原生kernel。摘要 `8d5a166be3ed0d02c43d0a08bcd88797a5e968103d42780c4a46c505c416e234`
+- recovery：13 passed、1 inconclusive、9 not_run，总体cancelled/backgrounded、cleanup=confirmed。重新加载、中英文生成、活动取消恢复等已成功，足以确认本次恢复能力；后续adapter_cancel_template受后台动作打断，不能将整套结果改为passed，也无需为此要求用户重复整套验证。摘要 `1d75a3586831685e4a001765905958d8c66e852b307ae666bad59415a4b1d68a`
+
+回前台没有自动重跑、由手动点击启动新operation的事实确认仍待用户回复。B3b仅完成只读设计，未构建私有准入fixture、未实现或运行core设备套件；生产resolver继续拒绝候选。4KiB单设备CPU证据不扩展为16KiB设备、全部芯片、GPU/NPU或完整安全矩阵。
+
+## 07a14d2 Windows 回归闭环
+
+[Windows CI36993778258](https://github.com/Naza3/Nexa/actions/runs/36993778258)于2026-10-02 10:44:40 UTC成功，attempt1/job110795722582。源码精确绑定上述07a提交；Artifact11222576521下载ZIP为77,358 bytes，SHA256 `f3e165170ebe115df46dcd2fde8959191fa2e50e9fdf56ffbe331ae9c28d0f53`。
+
+下载后独立核对50个indexed文件的大小/hash、封闭库存、source与全部ci_step_outcomes；原生/真实模型、Release产品、解压包及desktop bridge验收成功。desktop acceptance=result pass、package_unchanged=true、native_window_tested=false。两项旧可选/失败路径报告缺失与c0一致，不影响此次通过；未重新交付Windows产品，也不扩大Windows11、无开发工具、离线或长期稳定性结论。
