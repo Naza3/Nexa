@@ -48,10 +48,16 @@
 
 ## 独立CI入口与最终本地复核
 
-新增`.github/workflows/android-mnn-probe.yml`及`ci_verify.py/test_ci_verify.py`，明确下载固定MNN源码、经size/SHA1/SHA256核验的NDK r30和五个固定模型文件；CMake本身不联网。Ubuntu24.04作业分别运行Linux真实六场景与Android交叉构建，不执行Android二进制。当前GitHub CI尚未运行，不能用本地结果代替。
+新增`.github/workflows/android-mnn-probe.yml`及`ci_verify.py/test_ci_verify.py`，明确下载固定MNN源码、经size/SHA1/SHA256核验的NDK r30和五个固定模型文件；CMake本身不联网。Ubuntu24.04作业分别运行Linux真实六场景与Android交叉构建，不执行Android二进制。此处为发布前本地复核；首次GitHub运行及修复另记下节，不能用本地结果代替。
 
 最终主审执行`python3 -m unittest discover -s scripts/android_mnn -p 'test_*.py'`为34项通过（19项探针本体加15项CI辅助），退出0；工具包版本检查及实际ELF检查均退出0。三段LOAD均16KiB对齐，GNU_RELRO起点3586128、长度67504、结束3653632（0x37c000）也满足16KiB对齐；拒绝可写可执行段/可执行栈和额外动态依赖。原生依赖只有libandroid/libc/libdl/liblog/libm。
 
 CI脱敏上传采用固定JSON清单。只有完整构建身份、全部必需报告、六场景及预期超预算负例一致时才允许成功；CI源码不洁净或缺少证据会保留失败状态并返回失败。原始日志、正文、token序列、模型、SDK和二进制不上传。ZIP提取覆盖重复成员、链接祖先及完整链接图逃逸负例；官方NDK完整包的10134成员/39链接已实际提取验证。
 
 未剥离Android开发CLI为88,347,296bytes；在独立副本执行NDK`llvm-strip --strip-unneeded`后为3,640,072bytes，SHA256 `88a64d344aed9745c0b13fe9fb1e3921bd5ca1f2da0351c933c8a0cb961f6529`。该数字只描述CPU原型ELF，不含Flutter/Rust/App资源/模型，也不是APK体积或已发布产物；原始验证二进制未改。
+
+## 首次CI配置失败与最小修复
+
+源码`e1ecc6e84464c41039ffe275a159c78cffe80470`的[Android运行36959563179](https://github.com/Naza3/Nexa/actions/runs/36959563179)在作业启动前失败，实际jobs为空；没有模型或Android编译结果。官方actionlint 1.7.7独立复现第29行job级env使用`runner.temp`非法，退出1；该上下文在此位置不可用。改为已忽略的`github.workspace/build/t07a/inputs`后同一linter退出0。未读取到GitHub页面annotation，不把本地复现冒充服务端错误正文。
+
+修复仅改变输入暂存位置，不更换SDK/模型或放宽验收。设置`NEXA_ACTIONLINT`后的35项测试全部通过，包含还原非法上下文的语义负例；未提供该本地工具时语义测试明确skip，合法路径断言与其余测试仍运行。actionlint来自官方v1.7.7发布，archive SHA256 `023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757`与官方checksums一致。实际GitHub修复运行仍待验证。

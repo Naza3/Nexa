@@ -26,7 +26,7 @@ jobs:
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
       MNN_SOURCE: ${{ github.workspace }}/build/t07a/mnn
-      INPUTS: ${{ runner.temp }}/nexa-t07a-inputs
+      INPUTS: ${{ github.workspace }}/build/t07a/inputs
       EVIDENCE: ${{ github.workspace }}/artifacts/verification/t07a-ci
       LINUX_BUILD: ${{ github.workspace }}/build/t07a/linux
       ANDROID_BUILD: ${{ github.workspace }}/build/t07a/android

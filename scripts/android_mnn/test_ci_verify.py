@@ -1,5 +1,7 @@
 import io
 import json
+import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -186,6 +188,28 @@ class CiTests(unittest.TestCase):
             self.assertFalse(status['source_clean'])
             self.assertFalse(status['all_required_steps_succeeded'])
 
+    def test_workflow_actionlint_semantics_and_invalid_context_regression(self):
+        # Opt-in external semantic checker, obtained separately from its official release.
+        # No downloads or installs occur in tests. Unlike YAML parsing, actionlint
+        # validates GitHub's context availability before any runner can start.
+        actionlint = os.environ.get("NEXA_ACTIONLINT")
+        if not actionlint:
+            self.skipTest("set NEXA_ACTIONLINT to a verified actionlint executable")
+        workflow = Path(__file__).resolve().parents[2]/'.github/workflows/android-mnn-probe.yml'
+        command = [actionlint, '-shellcheck=', '-pyflakes=']
+        checked = subprocess.run(command + [str(workflow)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        broken = workflow.read_text(encoding='utf-8').replace(
+            'INPUTS: ${{ github.workspace }}/build/t07a/inputs',
+            'INPUTS: ${{ runner.temp }}/nexa-t07a-inputs')
+        self.assertNotEqual(broken, workflow.read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'invalid-context.yml'
+            path.write_text(broken, encoding='utf-8')
+            checked = subprocess.run(command + [str(path)], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(checked.returncode, 0)
+            self.assertIn('context "runner" is not allowed here', checked.stdout + checked.stderr)
+
     def test_workflow_pins_permissions_and_failure_staging(self):
         workflow = Path(__file__).resolve().parents[2]/'.github/workflows/android-mnn-probe.yml'
         content = workflow.read_text(encoding='utf-8')
@@ -196,6 +220,7 @@ class CiTests(unittest.TestCase):
         self.assertIn('cmake==4.4.3 ninja==1.13.2', content)
         self.assertIn('ref: ' + ci.probe.MNN_COMMIT, content)
         self.assertNotIn("sdkmanager", content)
+        self.assertIn('INPUTS: ${{ github.workspace }}/build/t07a/inputs', content)
 
 
 if __name__ == '__main__':
