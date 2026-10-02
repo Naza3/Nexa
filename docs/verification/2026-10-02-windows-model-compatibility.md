@@ -22,3 +22,16 @@ bridge对旧服务缺字段及未来未知枚举保守转为Unknown。UI移除�
 - 云浏览器访问本机Vite被ERR_BLOCKED_BY_CLIENT阻止，未完成像素级预览，不绕过；测试Vite已关闭。组件测试不代替原生Windows窗口
 
 本地检查未运行本片真实GGUF推理或Windows原生UI。需要精确提交的Windows真实模型、打包、解压bridge与产物独立验收；Windows10目录选择、自动名、零复制、剪贴板仍不能由旧版手验追溯证明。无开发工具、实际离线、长期稳定性和Windows11仍保留后期范围。
+
+
+## 最终提交、CI与交付
+
+实现提交 `389eeef327f00a184bb644ceacbfaa310f39f780`，tree `1935158e31c16da7d9b9a44afd2ac02c21809ff8`。30个Windows代码/规范/路线文件，不包含暂停的apps/android-verifier WIP。
+
+[Windows37009292638](https://github.com/Naza3/Nexa/actions/runs/37009292638)于13:29:41 UTC成功（attempt1）。证据artifact11229030777：77,737 bytes，SHA256 `e928a13293ce3c3d1a6c5245aee7763ac80ded1d1823ab5ace674f1b675e2a96`。root独立核对50项库存大小/hash、封闭文件集、精确source与全部成功结果；真实模型/取消恢复/store/worker/HTTP-CLI、Release包和仓库外提取产品/desktop bridge成功，desktop package_unchanged=true、native_window_tested=false。两个原有optional/失败路径报告缺失边界保持。
+
+桌面artifact11228098955：8,774,798 bytes，SHA256 `31ad23895e20eb416ae093651c47c6233737822facd3b711e710d0bff91e68cc`。其中实际产品ZIP为9,789,508 bytes，SHA256 `45251f28c2eb61a1b6ee5119aab3b0923a8117c677fef4ec91ea680be1b209f0`，750个文件。root逐文件核对manifest/SHA256SUMS、嵌套runtime同source/完整性、6个x64 PE，以及540个桌面Rust、6个npm、186个runtime许可记录摘要。Linux复核时只将原验证函数的路径排序适配为PureWindowsPath顺序，未修改产物或放宽库存/hash检查。
+
+以 `Nexa-Windows-x64-389eeef.zip` 原字节交付，2026-10-02 13:36 UTC附件发送被接受；这不等于用户已下载或运行。提示退出旧UI及服务后解压到新文件夹。包不包含模型，Windows10新界面/目录/剪贴板手验仍待完成，既有后期条件不扩张。
+
+共享runtime-types新增兼容枚举自动触发的[原生回归37009292518](https://github.com/Naza3/Nexa/actions/runs/37009292518)于13:17:24 UTC成功。artifact11228028490：13,249 bytes，SHA256 `18132cfca0815719c73e829ed3d4331f7f8cdad1eb9de90ec1abbc5a6c937767`；root独立检查12阶段、7原文proof与同次receipt/4项B2，Git源码snapshot `bd58a160e8fbabc82e9ea994e37bdf54bceed01dbea63c745970853c8dba09ab`一致，receipt `01bdde92d816d4db9e5ede556f5179d2f15359f959504f8f4fb0ed4240b210ac`。android_run=false；只是共享类型兼容回归，不恢复暂停的Android App开发。

@@ -159,3 +159,10 @@ B3b此前开始实现验证器内部共享Runtime接入、原EventLease贯穿ack
 ## Windows 当前实施片：模型兼容性可见性
 
 不重造已有模型列表/聊天补全API。补充API→desktop bridge→模型页一致的兼容性原因，区分登记元数据、当前架构范围与精确矩阵准入，保留所有现有load与external文件完整性门槛。修正手工HTTP示例让两个终端使用同一data-dir；此前各自新GUID会误读不存在令牌。实现与自动回归进行中，新Windows安装包和原生UI仍待后续验收。
+
+
+## Windows兼容性版本已交付（13:36 UTC）
+
+389eeef源码已通过Windows37009292638全部真实模型与完整包/bridge回归；共享类型原生回归37009292518成功并独立收尾。root已核验50份证据、750个桌面包文件/嵌套runtime/6个PE/许可摘要，产品ZIP9,789,508bytes以Nexa-Windows-x64-389eeef.zip直接附件发送被接受。参见[最终验收](docs/verification/2026-10-02-windows-model-compatibility.md#最终提交ci与交付)。
+
+当前等待用户方便时进行Windows10新界面/目录/剪贴板手工验收；已知支持仍固定Qwen3-0.6B Q8_0，不将Qwen3.5或任意GGUF标记通过。独立Android App未提交WIP继续暂停并保留，没有混入此产品。用户另行要求编译官方Qualcomm GenieX示例，属于独立项目，不改变Nexa上述状态。
