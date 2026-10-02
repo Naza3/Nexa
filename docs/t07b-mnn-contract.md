@@ -190,6 +190,8 @@ close只在core确认无活跃操作及卸载后关闭mailbox并join owner；若
 
 已审定共享DTO限制：成功、普通取消、可恢复参数/预算及显式callback失败传递准确已知usage。不可恢复native/protocol/callback-panic错误在owner确认清理后只发一次 `ExecutorEvent::Faulted`，不能先GenerationFailed再Faulted；需要显式reload。现有Faulted无usage字段，所以core只能保留Prepared的prompt计数，最终completion无法传入共享终态，默认0不是精确失败用量证明。本片不为补该字段改Windows公共DTO。清理不确认则CleanupUnconfirmed并永久不可用，保守pin lease/句柄，绝不虚报Unloaded。
 
+共享core在普通取消与真实失败竞态中保留真实非控制错误，不能将Faulted或GenerationFailed中的native错误降为Cancelled；已有deadline与PC控制ACK语义保持。shutdown期间的新真实故障独立保存，close仍必须执行，cleanup未确认优先级最高；此规则不追溯改写已经终结的加载请求，也不把历史已恢复故障带入下一次正常关闭。详见[执行规格6.3](../ai-runtime-v0.1-execution-spec.md#63-取消与背压)。
+
 本地真实背压测试在首个MNN text callback内注入明确合成压力填满原core 256KiB账本，4KiB分片/default 10秒无消费时限、取消唤醒、断流/恢复已覆盖，不宣称模型自然生成256KiB。真实load checkpoint测试屏障证明30秒deadline不提前确认清理，非测得30秒kernel耗时。Prefill屏障期间close拒绝，Drop<1秒返回且lease继续固定generation；owner返回并由测试观察join后才可删除。产品Drop不join、不强杀kernel。
 
 限制：输入/渲染/token vector、piece、stop pending、core output各有上限；MNN内部history/output vectors受logical context/max_tokens约束，controlled hook关闭generate_str。模型、KV、算子临时内存仍由原生图决定，不把256KiB输出账本宣传为总内存限额。第一片仅已测context≤2048、max_tokens≤context预算；提到131072只是公共参数解析范围，不是该模型准入能力。

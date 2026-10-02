@@ -52,6 +52,9 @@ impl Pending {
 struct Controlled {
     sender: mpsc::Sender<Pending>,
     auto_load: bool,
+    auto_unload: bool,
+    close_error: Option<RuntimeError>,
+    closed: Arc<AtomicBool>,
     current: Arc<Mutex<Option<ExecutionEvents>>>,
 }
 impl Executor for Controlled {
@@ -61,7 +64,7 @@ impl Executor for Controlled {
         events: ExecutionEvents,
     ) -> Result<CancellationHandle, RuntimeError> {
         *self.current.lock().unwrap() = Some(events.clone());
-        if matches!(command, ExecutorCommand::Unload) {
+        if self.auto_unload && matches!(command, ExecutorCommand::Unload) {
             events.emit(ExecutorEvent::Unloaded);
             return Ok(CancellationHandle::noop());
         }
@@ -82,17 +85,31 @@ impl Executor for Controlled {
             flag.store(true, Ordering::SeqCst);
         }))
     }
+    fn close(&mut self) -> Result<(), RuntimeError> {
+        self.closed.store(true, Ordering::SeqCst);
+        self.close_error.clone().map_or(Ok(()), Err)
+    }
 }
 struct Harness {
     runtime: Option<Runtime>,
     handle: RuntimeHandle,
     commands: mpsc::Receiver<Pending>,
+    closed: Arc<AtomicBool>,
     current: Arc<Mutex<Option<ExecutionEvents>>>,
 }
 impl Harness {
     fn new(config: RuntimeConfig, auto_load: bool) -> Self {
+        Self::with_shutdown(config, auto_load, true, None)
+    }
+    fn with_shutdown(
+        config: RuntimeConfig,
+        auto_load: bool,
+        auto_unload: bool,
+        close_error: Option<RuntimeError>,
+    ) -> Self {
         let (sender, commands) = mpsc::channel();
         let current = Arc::new(Mutex::new(None));
+        let closed = Arc::new(AtomicBool::new(false));
         let resolver = |id: &ModelId| {
             Ok(ResolvedModel {
                 id: id.clone(),
@@ -108,6 +125,9 @@ impl Harness {
             Controlled {
                 sender,
                 auto_load,
+                auto_unload,
+                close_error,
+                closed: closed.clone(),
                 current: current.clone(),
             },
         )
@@ -117,6 +137,7 @@ impl Harness {
             runtime: Some(runtime),
             handle,
             commands,
+            closed,
             current,
         }
     }
@@ -124,6 +145,17 @@ impl Harness {
         self.commands
             .recv_timeout(Duration::from_secs(2))
             .expect("executor operation")
+    }
+    fn begin_shutdown(
+        &mut self,
+    ) -> (
+        mpsc::Receiver<Result<(), RuntimeError>>,
+        thread::JoinHandle<()>,
+    ) {
+        let runtime = self.runtime.take().unwrap();
+        let (done, result) = mpsc::channel();
+        let shutdown = thread::spawn(move || done.send(runtime.shutdown()).unwrap());
+        (result, shutdown)
     }
     fn finish(mut self) {
         self.runtime.take().unwrap().shutdown().unwrap();
@@ -606,6 +638,336 @@ fn executor_fault_terminates_active_and_queue_and_never_replays() {
     }
     assert_eq!(h.handle.status().unwrap().state, ModelState::Faulted);
     assert!(h.commands.try_recv().is_err());
+    h.finish();
+}
+
+fn native_failure(faulted: bool) -> ExecutorEvent {
+    let error = RuntimeError::new(ErrorCode::NativeFailure, "controlled native failure");
+    if faulted {
+        ExecutorEvent::Faulted(error)
+    } else {
+        ExecutorEvent::GenerationFailed {
+            error,
+            usage: Usage {
+                prompt_tokens: 8,
+                completion_tokens: 1,
+            },
+        }
+    }
+}
+
+#[test]
+fn genuine_failure_after_cancellation_is_not_hidden_by_either_executor_event_kind() {
+    for faulted in [false, true] {
+        let h = Harness::new(config(), true);
+        let req = request();
+        let receiver = h.handle.submit(req.clone()).unwrap();
+        let pending = h.pending();
+        pending.prepared();
+        h.handle.cancel(req.request_id).unwrap();
+        assert!(pending.cancelled.load(Ordering::SeqCst));
+        assert!(pending.events.emit(native_failure(faulted)));
+        assert!(matches!(
+            terminal(&receiver),
+            RequestEventKind::Failed { error, usage, .. }
+                if error.code == ErrorCode::NativeFailure
+                    && error.message == "controlled native failure"
+                    && usage.prompt_tokens == 8
+                    && usage.completion_tokens == u32::from(!faulted)
+        ));
+        assert_eq!(
+            h.handle.status().unwrap().state,
+            if faulted {
+                ModelState::Faulted
+            } else {
+                ModelState::Ready
+            }
+        );
+        h.finish();
+    }
+}
+
+#[test]
+fn genuine_failure_before_late_cancellation_remains_the_only_terminal() {
+    for faulted in [false, true] {
+        let h = Harness::new(config(), true);
+        let req = request();
+        let receiver = h.handle.submit(req.clone()).unwrap();
+        let pending = h.pending();
+        pending.prepared();
+        assert!(pending.events.emit(native_failure(faulted)));
+        assert!(matches!(
+            terminal(&receiver),
+            RequestEventKind::Failed { error, .. } if error.code == ErrorCode::NativeFailure
+        ));
+        assert_eq!(
+            h.handle.cancel(req.request_id).unwrap_err().code,
+            ErrorCode::RequestNotFound
+        );
+        assert!(receiver.recv().is_none());
+        h.finish();
+    }
+}
+
+#[test]
+fn shutdown_cancellation_cannot_hide_native_failure_and_waits_for_ack() {
+    for faulted in [false, true] {
+        let mut h = Harness::new(config(), true);
+        let receiver = h.handle.submit(request()).unwrap();
+        let pending = h.pending();
+        pending.prepared();
+        let (result, shutdown) = h.begin_shutdown();
+        wait(|| pending.cancelled.load(Ordering::SeqCst));
+        assert!(h.handle.status().unwrap().stopping);
+        assert!(
+            result.try_recv().is_err(),
+            "shutdown must wait for native cleanup"
+        );
+        assert!(pending.events.emit(native_failure(faulted)));
+        assert!(matches!(
+            terminal(&receiver),
+            RequestEventKind::Failed { error, .. } if error.code == ErrorCode::NativeFailure
+        ));
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap_err()
+                .code,
+            ErrorCode::NativeFailure
+        );
+        shutdown.join().unwrap();
+        assert!(h.closed.load(Ordering::SeqCst));
+    }
+}
+
+#[test]
+fn shutdown_reports_late_load_failure_without_rewriting_cancelled_request() {
+    for faulted in [false, true] {
+        let mut h = Harness::new(config(), false);
+        let req = request();
+        let receiver = h.handle.submit(req.clone()).unwrap();
+        let pending = h.pending();
+        h.handle.cancel(req.request_id).unwrap();
+        assert!(matches!(
+            terminal(&receiver),
+            RequestEventKind::Cancelled {
+                reason: ErrorCode::RequestCancelled,
+                ..
+            }
+        ));
+        let (result, shutdown) = h.begin_shutdown();
+        wait(|| h.handle.status().unwrap().stopping);
+        assert!(result.try_recv().is_err());
+        let error = RuntimeError::new(ErrorCode::NativeFailure, "late load failure");
+        assert!(pending.events.emit(if faulted {
+            ExecutorEvent::Faulted(error)
+        } else {
+            ExecutorEvent::Failed(error)
+        }));
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap_err()
+                .code,
+            ErrorCode::NativeFailure
+        );
+        shutdown.join().unwrap();
+        assert!(h.closed.load(Ordering::SeqCst));
+        assert!(
+            receiver.recv().is_none(),
+            "cancelled load must not terminate twice"
+        );
+    }
+}
+
+#[test]
+fn abandoned_load_native_failure_faults_instead_of_being_treated_as_cancel_ack() {
+    let h = Harness::new(config(), false);
+    let req = request();
+    let receiver = h.handle.submit(req.clone()).unwrap();
+    let pending = h.pending();
+    h.handle.cancel(req.request_id).unwrap();
+    terminal(&receiver);
+    assert!(pending.events.emit(ExecutorEvent::Failed(RuntimeError::new(
+        ErrorCode::NativeFailure,
+        "late load failure",
+    ))));
+    wait(|| h.handle.status().unwrap().state == ModelState::Faulted);
+    assert_eq!(
+        h.handle.status().unwrap().last_error.unwrap().code,
+        ErrorCode::NativeFailure
+    );
+    assert!(receiver.recv().is_none());
+    h.finish();
+}
+
+#[test]
+fn normal_load_and_generation_cancellation_keep_successful_shutdown() {
+    for loading in [false, true] {
+        for faulted in [false, true] {
+            let mut h = Harness::new(config(), !loading);
+            let receiver = h.handle.submit(request()).unwrap();
+            let pending = h.pending();
+            let (result, shutdown) = h.begin_shutdown();
+            wait(|| pending.cancelled.load(Ordering::SeqCst));
+            let error =
+                RuntimeError::new(ErrorCode::RequestCancelled, "controlled cancellation ACK");
+            assert!(pending.events.emit(if faulted {
+                // PC cancellation grace expiry can safely reap the worker and
+                // acknowledge with Faulted(RequestCancelled).
+                ExecutorEvent::Faulted(error)
+            } else {
+                ExecutorEvent::Failed(error)
+            }));
+            assert!(matches!(
+                terminal(&receiver),
+                RequestEventKind::Cancelled {
+                    reason: ErrorCode::RuntimeShutdown,
+                    ..
+                }
+            ));
+            result
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap();
+            shutdown.join().unwrap();
+            assert!(h.closed.load(Ordering::SeqCst));
+        }
+    }
+}
+
+#[test]
+fn shutdown_reports_unload_failure_without_an_active_request() {
+    let mut h = Harness::with_shutdown(config(), true, false, None);
+    h.handle
+        .load(ModelId::new("qa-small").unwrap(), LoadOptions::default())
+        .unwrap();
+    let (result, shutdown) = h.begin_shutdown();
+    let pending = h.pending();
+    assert!(matches!(pending.command, ExecutorCommand::Unload));
+    assert!(result.try_recv().is_err());
+    assert!(pending.events.emit(ExecutorEvent::Failed(RuntimeError::new(
+        ErrorCode::NativeFailure,
+        "controlled unload failure",
+    ))));
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::NativeFailure
+    );
+    shutdown.join().unwrap();
+    assert!(h.closed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn shutdown_keeps_first_real_failure_but_close_failure_takes_precedence() {
+    for close_fails in [false, true] {
+        let close_error =
+            close_fails.then(|| RuntimeError::new(ErrorCode::ExecutorUnavailable, "close failure"));
+        let mut h = Harness::with_shutdown(config(), true, false, close_error);
+        let receiver = h.handle.submit(request()).unwrap();
+        let pending = h.pending();
+        let (result, shutdown) = h.begin_shutdown();
+        wait(|| pending.cancelled.load(Ordering::SeqCst));
+        assert!(pending.events.emit(native_failure(false)));
+        assert!(
+            matches!(terminal(&receiver), RequestEventKind::Failed { error, .. } if error.code == ErrorCode::NativeFailure)
+        );
+        let unload = h.pending();
+        assert!(matches!(unload.command, ExecutorCommand::Unload));
+        assert!(unload.events.emit(ExecutorEvent::Failed(RuntimeError::new(
+            ErrorCode::NativeProtocol,
+            "later unload failure"
+        ))));
+        let error = result
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            if close_fails {
+                ErrorCode::ExecutorUnavailable
+            } else {
+                ErrorCode::NativeFailure
+            }
+        );
+        shutdown.join().unwrap();
+        assert!(h.closed.load(Ordering::SeqCst));
+    }
+}
+
+#[test]
+fn shutdown_cleanup_unconfirmed_outranks_earlier_native_and_close_failures() {
+    let mut h = Harness::with_shutdown(
+        config(),
+        true,
+        false,
+        Some(RuntimeError::new(
+            ErrorCode::ExecutorUnavailable,
+            "close failure",
+        )),
+    );
+    let receiver = h.handle.submit(request()).unwrap();
+    let pending = h.pending();
+    let (result, shutdown) = h.begin_shutdown();
+    wait(|| pending.cancelled.load(Ordering::SeqCst));
+    assert!(pending.events.emit(native_failure(false)));
+    assert!(
+        matches!(terminal(&receiver), RequestEventKind::Failed { error, .. } if error.code == ErrorCode::NativeFailure)
+    );
+    let unload = h.pending();
+    assert!(
+        unload
+            .events
+            .emit(ExecutorEvent::CleanupUnconfirmed(RuntimeError::new(
+                ErrorCode::ExecutorCleanupUnconfirmed,
+                "controlled cleanup failure",
+            )))
+    );
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::ExecutorCleanupUnconfirmed
+    );
+    shutdown.join().unwrap();
+    assert!(h.closed.load(Ordering::SeqCst));
+    assert!(receiver.recv().is_none());
+}
+
+#[test]
+fn recovered_historical_native_fault_does_not_poison_later_shutdown() {
+    let h = Harness::new(config(), true);
+    let receiver = h.handle.submit(request()).unwrap();
+    assert!(h.pending().events.emit(native_failure(true)));
+    assert!(
+        matches!(terminal(&receiver), RequestEventKind::Failed { error, .. } if error.code == ErrorCode::NativeFailure)
+    );
+    h.handle
+        .load(ModelId::new("qa-small").unwrap(), LoadOptions::default())
+        .unwrap();
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Ready);
+    assert!(h.handle.status().unwrap().last_error.is_none());
+    h.finish();
+}
+
+#[test]
+fn disconnect_before_native_fault_never_forces_terminal_delivery() {
+    let h = Harness::new(config(), true);
+    let receiver = h.handle.submit(request()).unwrap();
+    let pending = h.pending();
+    receiver.disconnect_handle().disconnect();
+    wait(|| pending.cancelled.load(Ordering::SeqCst));
+    assert!(pending.events.emit(native_failure(true)));
+    wait(|| h.handle.status().unwrap().state == ModelState::Faulted);
+    assert!(receiver.recv().is_none());
     h.finish();
 }
 

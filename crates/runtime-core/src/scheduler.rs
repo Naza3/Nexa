@@ -86,6 +86,9 @@ impl Runtime {
     pub fn handle(&self) -> RuntimeHandle {
         self.handle.clone()
     }
+    /// Wait for cleanup and close the executor. Cleanup/close errors take
+    /// precedence, then the first non-control failure observed during shutdown.
+    /// An error therefore does not by itself mean cleanup was unconfirmed.
     pub fn shutdown(mut self) -> Result<(), RuntimeError> {
         let result = self.handle.shutdown();
         if let Some(thread) = self.thread.take() {
@@ -128,6 +131,7 @@ impl RuntimeHandle {
     pub fn reserve_registry(&self) -> Result<RegistryLease, RuntimeError> {
         self.ask(Command::ReserveRegistry)
     }
+    /// Request the same cleanup and error-reporting semantics as [`Runtime::shutdown`].
     pub fn shutdown(&self) -> Result<(), RuntimeError> {
         self.ask(|reply| Command::Shutdown(Some(reply)))
     }
@@ -137,6 +141,22 @@ fn stopped() -> RuntimeError {
 }
 fn error(code: ErrorCode) -> RuntimeError {
     RuntimeError::new(code, code.as_str())
+}
+fn is_cancellation(code: ErrorCode) -> bool {
+    matches!(
+        code,
+        ErrorCode::RequestCancelled
+            | ErrorCode::ConsumerStopped
+            | ErrorCode::SlowConsumer
+            | ErrorCode::RuntimeShutdown
+    )
+}
+fn is_control_termination(code: ErrorCode) -> bool {
+    is_cancellation(code)
+        || matches!(
+            code,
+            ErrorCode::QueueTimeout | ErrorCode::LoadTimeout | ErrorCode::ExecutionTimeout
+        )
 }
 struct Job {
     request: GenerationRequest,
@@ -180,14 +200,18 @@ impl Job {
             self.usage = usage;
         }
         let timings = self.timings();
-        let kind = if let Some(reason) = self.output.reason() {
-            if !matches!(
-                reason,
-                ErrorCode::RequestCancelled
-                    | ErrorCode::ConsumerStopped
-                    | ErrorCode::SlowConsumer
-                    | ErrorCode::RuntimeShutdown
-            ) {
+        // Cancellation intent must not hide an actual executor failure. Keep
+        // existing deadline/protocol causes and control-only cleanup ACKs: a PC
+        // force-kill can legitimately report Faulted(RequestCancelled).
+        let failed = result
+            .as_ref()
+            .is_err_and(|err| !is_control_termination(err.code));
+        let reason = self
+            .output
+            .reason()
+            .filter(|reason| !is_cancellation(*reason) || !failed);
+        let kind = if let Some(reason) = reason {
+            if !is_cancellation(reason) {
                 RequestEventKind::Failed {
                     error: error(reason),
                     usage: self.usage,
@@ -255,6 +279,7 @@ struct Actor {
     last_error: Option<RuntimeError>,
     poison: Option<RuntimeError>,
     cleanup_error: Option<RuntimeError>,
+    shutdown_error: Option<RuntimeError>,
     idle_since: Instant,
     stopping: bool,
     registry: Option<Arc<RegistryLeaseState>>,
@@ -286,6 +311,7 @@ impl Actor {
             last_error: None,
             poison: None,
             cleanup_error: None,
+            shutdown_error: None,
             idle_since: Instant::now(),
             stopping: false,
             registry: None,
@@ -318,7 +344,10 @@ impl Actor {
                 && matches!(self.state, ModelState::Unloaded | ModelState::Faulted)
             {
                 let closed = self.executor.close();
-                let result = self.cleanup_error.clone().map_or(closed, Err);
+                let result = self.cleanup_error.clone().map_or_else(
+                    || closed.and_then(|()| self.shutdown_error.clone().map_or(Ok(()), Err)),
+                    Err,
+                );
                 for reply in self.shutdown_replies.drain(..) {
                     let _ = reply.send(result.clone());
                 }
@@ -930,8 +959,8 @@ impl Actor {
         }
         self.state = ModelState::Faulted;
         self.last_error = Some(error.clone());
-        // Ordinary termination prioritizes a prior cancellation reason. Here
-        // failure to confirm stopping MUST remain visible as a failure instead.
+        // Unconfirmed cleanup outranks all cancellation/deadline causes and
+        // earlier failures, independently of the ordinary termination policy.
         for mut job in self.active.take().into_iter().chain(self.queue.drain(..)) {
             let timings = job.timings();
             let usage = job.usage;
@@ -961,7 +990,7 @@ impl Actor {
                 if let Some(reply) = reply {
                     let _ = reply.send(Err(err.clone()));
                 }
-                if abandoned && !timeout {
+                if abandoned && !timeout && is_control_termination(err.code) {
                     self.state = ModelState::Unloaded;
                     if self.active.is_some() {
                         self.start_active();
@@ -973,6 +1002,7 @@ impl Actor {
                 }
             }
             Some(Operation::Generate { .. }) => {
+                self.remember_shutdown_error(&err);
                 if let Some(job) = self.active.take() {
                     job.terminate(Err(err));
                 }
@@ -1012,12 +1042,21 @@ impl Actor {
             cancel.cancel();
         }
     }
+    fn remember_shutdown_error(&mut self, err: &RuntimeError) {
+        // This shutdown may already have ended a loading request, leaving no
+        // stream on which to report a later real failure. Do not pull in an
+        // unrelated historical fault or treat a cancellation ACK as a failure.
+        if self.stopping && !is_control_termination(err.code) {
+            self.shutdown_error.get_or_insert_with(|| err.clone());
+        }
+    }
     fn fault(&mut self, mut err: RuntimeError) {
         // A transport sees only the cancellation flag for Load. Preserve the
         // actor's original deadline cause after the child has been reaped.
         if matches!(self.operation, Some(Operation::Load { timeout: true, .. })) {
             err = error(ErrorCode::LoadTimeout);
         }
+        self.remember_shutdown_error(&err);
         self.poison = None;
         if let Some(operation) = self.operation.take() {
             match operation {
@@ -1135,6 +1174,86 @@ mod ledger_tests {
             _: ExecutionEvents,
         ) -> Result<CancellationHandle, RuntimeError> {
             Ok(CancellationHandle::noop())
+        }
+    }
+    #[test]
+    fn termination_priority_distinguishes_real_errors_from_control_acknowledgments() {
+        let cancellations = [
+            ErrorCode::RequestCancelled,
+            ErrorCode::ConsumerStopped,
+            ErrorCode::SlowConsumer,
+            ErrorCode::RuntimeShutdown,
+        ];
+        let deadlines = [
+            ErrorCode::QueueTimeout,
+            ErrorCode::LoadTimeout,
+            ErrorCode::ExecutionTimeout,
+        ];
+        let real_errors = [
+            ErrorCode::NativeFailure,
+            ErrorCode::NativeProtocol,
+            ErrorCode::ExecutorUnavailable,
+            ErrorCode::ContextLengthExceeded,
+        ];
+        for reason in cancellations
+            .into_iter()
+            .chain(deadlines)
+            .chain([ErrorCode::NativeProtocol])
+        {
+            for failure in cancellations
+                .into_iter()
+                .chain(deadlines)
+                .chain(real_errors)
+                .map(Some)
+                .chain([None])
+            {
+                let output = Output::new(Duration::from_secs(10));
+                output.cancel(reason);
+                let receiver = EventReceiver {
+                    output: output.clone(),
+                };
+                let job = Job {
+                    request: GenerationRequest {
+                        request_id: RequestId::new(),
+                        model: ModelId::new("qa-small").unwrap(),
+                        messages: vec![Message::new(Role::User, "synthetic")],
+                        options: GenerationOptions::default(),
+                    },
+                    output,
+                    seq: 0,
+                    enqueued: Instant::now(),
+                    load_started: None,
+                    execution_started: None,
+                    timings: RequestTimings::default(),
+                    usage: Usage::default(),
+                    started: false,
+                    waiting: false,
+                };
+                job.terminate(
+                    failure.map_or(Ok((Usage::default(), FinishReason::Stop)), |code| {
+                        Err(error(code))
+                    }),
+                );
+                let terminal = receiver.recv().unwrap();
+                let real_failure = failure.filter(|code| real_errors.contains(code));
+                if cancellations.contains(&reason) && real_failure.is_some() {
+                    assert!(
+                        matches!(terminal.kind, RequestEventKind::Failed { error, .. }
+                        if Some(error.code) == real_failure)
+                    );
+                } else if cancellations.contains(&reason) {
+                    assert!(
+                        matches!(terminal.kind, RequestEventKind::Cancelled { reason: actual, .. }
+                        if actual == reason)
+                    );
+                } else {
+                    assert!(
+                        matches!(terminal.kind, RequestEventKind::Failed { error, .. }
+                        if error.code == reason)
+                    );
+                }
+                assert!(receiver.recv().is_none());
+            }
         }
     }
     #[test]

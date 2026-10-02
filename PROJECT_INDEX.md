@@ -133,3 +133,5 @@
 - [设备研究 App](apps/android-verifier/README.md)：固定 CPU 验证、导入与报告；不是完整聊天产品
 - [一加15首轮安装与模型/报告验收](docs/android-device-verifier-acceptance.md)
 - [c0c0927最终研究APK与Android CI交付记录](docs/verification/2026-10-02-android-device-verifier-delivery.md)
+
+- [共享core取消与真实故障修正](docs/verification/2026-10-02-core-cancellation-faults.md)：普通取消不掩盖真实错误、shutdown当次故障保留及226项控制回归
