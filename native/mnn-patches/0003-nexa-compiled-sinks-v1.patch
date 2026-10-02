@@ -1,0 +1,472 @@
+diff --git a/source/core/ConvolutionCommon.cpp b/source/core/ConvolutionCommon.cpp
+index 85b395f..d5181a3 100644
+--- a/source/core/ConvolutionCommon.cpp
++++ b/source/core/ConvolutionCommon.cpp
+@@ -26,7 +26,7 @@ static int ReadBlobDim(BaseLoader* myfile, unsigned int* shape, int shapeBufCnt,
+     uint8_t uSize = 0;
+     myfile->read((char*)&uSize, 1);
+     if (uSize > 4) {
+-        printf("Read shape error!\n");
++        MNN_PRINT("Read shape error!\n");
+         return 0;
+     }
+     int copyLength = uSize;
+diff --git a/transformers/llm/engine/src/embedding.cpp b/transformers/llm/engine/src/embedding.cpp
+index e3a1725..447331a 100644
+--- a/transformers/llm/engine/src/embedding.cpp
++++ b/transformers/llm/engine/src/embedding.cpp
+@@ -53,11 +53,13 @@ bool Embedding::load() {
+     }
+ 
+     initRuntime();
+-    printf("load tokenizer\n");
++    MNN_PRINT("load tokenizer\n");
++#if !defined(NEXA_MNN_SILENT_LOGS)
+     std::cout << mConfig->tokenizer_file() << std::endl;
++#endif
+     // 1. load vocab
+     mTokenizer.reset(Tokenizer::createTokenizer(mConfig->tokenizer_file()));
+-    printf("load tokenizer Done\n");
++    MNN_PRINT("load tokenizer Done\n");
+     mDiskEmbedding.reset(new DiskEmbedding(mConfig));
+     setChatTemplate();
+     // 2. load model
+diff --git a/transformers/llm/engine/src/omni.cpp b/transformers/llm/engine/src/omni.cpp
+index beac99b..80636ca 100644
+--- a/transformers/llm/engine/src/omni.cpp
++++ b/transformers/llm/engine/src/omni.cpp
+@@ -966,8 +966,12 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
+         if (currentPosition < info.length()) {
+             file_info.append(info.substr(currentPosition));
+         }
++#if !defined(NEXA_MNN_SILENT_LOGS)
+         // std::cout << "hw: " << mVisionHeight << ", " << mVisionWidth << std::endl;
++#endif
++#if !defined(NEXA_MNN_SILENT_LOGS)
+         // std::cout << "file: " << file_info << std::endl;
++#endif
+     }
+ #ifdef LLM_SUPPORT_HTTP_RESOURCE
+     if (file_info.substr(0, 4) == "http") {
+@@ -978,7 +982,9 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
+             host = url_match_result[1].str();
+             path = url_match_result[2].str();
+         }
++#if !defined(NEXA_MNN_SILENT_LOGS)
+         // std::cout << host << "#" << path << std::endl;
++#endif
+         httplib::Client cli(host);
+         auto res  = cli.Get(path);
+         file_info = "downloaded_file";
+@@ -986,13 +992,19 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
+             std::ofstream file(file_info, std::ios::binary);
+             if (file.is_open()) {
+                 file.write(res->body.c_str(), res->body.size());
++#if !defined(NEXA_MNN_SILENT_LOGS)
+                 std::cout << "File has been downloaded successfully." << std::endl;
++#endif
+                 file.close();
+             } else {
++#if !defined(NEXA_MNN_SILENT_LOGS)
+                 std::cerr << "Unable to open file to write." << std::endl;
++#endif
+             }
+         } else {
++#if !defined(NEXA_MNN_SILENT_LOGS)
+             std::cerr << "Failed to download file. Status code: " << (res ? res->status : 0) << std::endl;
++#endif
+         }
+     }
+ #endif
+@@ -1258,11 +1270,11 @@ VARP Omni::gen_position_ids(int seq_len) {
+         }
+     }
+     // // dump position ids
+-    // printf("position_ids = [");
++    // MNN_PRINT("position_ids = [");
+     // for (int i = 0; i < seq_len; i++) {
+-    //     printf("%d ", ptr[i]);
++    //     MNN_PRINT("%d ", ptr[i]);
+     // }
+-    // printf("]\n");
++    // MNN_PRINT("]\n");
+     return positionIds;
+ }
+ 
+@@ -1442,18 +1454,18 @@ void Omni::responseInterleaved(const std::vector<int>& input_ids, std::ostream*
+         float talker_decode_s = ctx->decode_us / 1e6;
+         float token2wav_s = ctx->audio_us / 1e6;
+         float audio_duration = ctx->gen_seq_len / 50.0;
+-        printf("\n#################################\n");
+-        printf(" [interleaved mode]\n");
+-        printf("  thinker tokens num = %d\n", thinker_tokens);
+-        printf("   talker tokens num = %d\n", ctx->gen_seq_len);
+-        printf("    thinker prefill = %.2f s\n", thinker_prefill_s);
+-        printf("     thinker decode = %.2f s\n", thinker_decode_s);
+-        printf("     talker prefill = %.2f s\n", talker_prefill_s);
+-        printf("      talker decode = %.2f s\n", talker_decode_s);
+-        printf("       ttfa (total) = %.2f s\n", ttfa_s);
+-        printf("      token2wav     = %.2f s\n", token2wav_s);
+-        printf("       tts rtf      = %.2f \n", (talker_decode_s + token2wav_s) / audio_duration);
+-        printf("##################################\n");
++        MNN_PRINT("\n#################################\n");
++        MNN_PRINT(" [interleaved mode]\n");
++        MNN_PRINT("  thinker tokens num = %d\n", thinker_tokens);
++        MNN_PRINT("   talker tokens num = %d\n", ctx->gen_seq_len);
++        MNN_PRINT("    thinker prefill = %.2f s\n", thinker_prefill_s);
++        MNN_PRINT("     thinker decode = %.2f s\n", thinker_decode_s);
++        MNN_PRINT("     talker prefill = %.2f s\n", talker_prefill_s);
++        MNN_PRINT("      talker decode = %.2f s\n", talker_decode_s);
++        MNN_PRINT("       ttfa (total) = %.2f s\n", ttfa_s);
++        MNN_PRINT("      token2wav     = %.2f s\n", token2wav_s);
++        MNN_PRINT("       tts rtf      = %.2f \n", (talker_decode_s + token2wav_s) / audio_duration);
++        MNN_PRINT("##################################\n");
+     }
+ #endif
+ }
+@@ -1497,20 +1509,20 @@ void Omni::generateWavform() {
+                 tts_s += decode_s;
+             }
+             float audio_duration = context->gen_seq_len / 50.0;
+-            printf("\n#################################\n");
+-            printf("prompt tokens num = %d\n", context->prompt_len);
+-            printf("decode tokens num = %d\n", context->gen_seq_len);
+-            printf("  prefill time = %.2f s\n", prefill_s);
+-            printf("   decode time = %.2f s\n", decode_s);
+-            printf("      ttfa time = %.2f s\n", ttfa_s);
+-            printf("      dit time = %.2f s\n", dit_s);
+-            printf("token2wav time = %.2f s\n", token2wav_s);
+-            printf("      tts time = %.2f s\n", tts_s);
+-            printf("  prefill speed = %.2f tok/s\n", context->prompt_len / prefill_s);
+-            printf("   decode speed = %.2f tok/s\n", context->gen_seq_len / decode_s);
+-            printf("token2wav speed = %.2f tok/s\n", context->gen_seq_len / token2wav_s);
+-            printf("      tts rtf   = %.2f \n", tts_s / audio_duration);
+-            printf("##################################\n");
++            MNN_PRINT("\n#################################\n");
++            MNN_PRINT("prompt tokens num = %d\n", context->prompt_len);
++            MNN_PRINT("decode tokens num = %d\n", context->gen_seq_len);
++            MNN_PRINT("  prefill time = %.2f s\n", prefill_s);
++            MNN_PRINT("   decode time = %.2f s\n", decode_s);
++            MNN_PRINT("      ttfa time = %.2f s\n", ttfa_s);
++            MNN_PRINT("      dit time = %.2f s\n", dit_s);
++            MNN_PRINT("token2wav time = %.2f s\n", token2wav_s);
++            MNN_PRINT("      tts time = %.2f s\n", tts_s);
++            MNN_PRINT("  prefill speed = %.2f tok/s\n", context->prompt_len / prefill_s);
++            MNN_PRINT("   decode speed = %.2f tok/s\n", context->gen_seq_len / decode_s);
++            MNN_PRINT("token2wav speed = %.2f tok/s\n", context->gen_seq_len / token2wav_s);
++            MNN_PRINT("      tts rtf   = %.2f \n", tts_s / audio_duration);
++            MNN_PRINT("##################################\n");
+ #endif
+         }
+     }
+diff --git a/transformers/llm/engine/src/speculative_decoding/dflash.cpp b/transformers/llm/engine/src/speculative_decoding/dflash.cpp
+index 3825298..19bb0df 100644
+--- a/transformers/llm/engine/src/speculative_decoding/dflash.cpp
++++ b/transformers/llm/engine/src/speculative_decoding/dflash.cpp
+@@ -101,16 +101,16 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
+                 if (hsPtr[i] == 0.0f) zeroCount++;
+             }
+         }
+-        printf("fcForward input: dims=[");
++        MNN_PRINT("fcForward input: dims=[");
+         for (int d = 0; d < hsInfo->dim.size(); d++) {
+-            printf("%d%s", hsInfo->dim[d], d < hsInfo->dim.size()-1 ? ", " : "");
++            MNN_PRINT("%d%s", hsInfo->dim[d], d < hsInfo->dim.size()-1 ? ", " : "");
+         }
+-        printf("], range=[%.4f, %.4f], nanCount=%d, zeroCount=%d/%d, type=%d\n",
++        MNN_PRINT("], range=[%.4f, %.4f], nanCount=%d, zeroCount=%d/%d, type=%d\n",
+                minV, maxV, nanCount, zeroCount, total, hsInfo->type.code);
+         // Print first few values
+-        printf("  first 10 values: ");
+-        for (int i = 0; i < std::min(10, total); i++) printf("%.4f ", hsPtr[i]);
+-        printf("\n");
++        MNN_PRINT("  first 10 values: ");
++        for (int i = 0; i < std::min(10, total); i++) MNN_PRINT("%.4f ", hsPtr[i]);
++        MNN_PRINT("\n");
+     }
+ #endif
+     std::vector<VARP> inputs = {hidden_states};
+@@ -132,15 +132,15 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
+                 if (rPtr[i] == 0.0f) zeroCount++;
+             }
+         }
+-        printf("fcForward output: dims=[");
++        MNN_PRINT("fcForward output: dims=[");
+         for (int d = 0; d < rInfo->dim.size(); d++) {
+-            printf("%d%s", rInfo->dim[d], d < rInfo->dim.size()-1 ? ", " : "");
++            MNN_PRINT("%d%s", rInfo->dim[d], d < rInfo->dim.size()-1 ? ", " : "");
+         }
+-        printf("], range=[%.4f, %.4f], nanCount=%d, zeroCount=%d/%d, type=%d\n",
++        MNN_PRINT("], range=[%.4f, %.4f], nanCount=%d, zeroCount=%d/%d, type=%d\n",
+                minV, maxV, nanCount, zeroCount, total, rInfo->type.code);
+-        printf("  first 10 values: ");
+-        for (int i = 0; i < std::min(10, total); i++) printf("%.4f ", rPtr[i]);
+-        printf("\n");
++        MNN_PRINT("  first 10 values: ");
++        for (int i = 0; i < std::min(10, total); i++) MNN_PRINT("%.4f ", rPtr[i]);
++        MNN_PRINT("\n");
+     }
+ #endif
+     // Sanitize: replace NaN values with 0 to prevent propagation
+@@ -157,7 +157,7 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
+ #if DFLASH_DEBUG
+             int pos = i / hiddenDim;
+             int dim = i % hiddenDim;
+-            printf("  NaN at pos=%d, dim=%d (value=%f)\n", pos, dim, ptr[i]);
++            MNN_PRINT("  NaN at pos=%d, dim=%d (value=%f)\n", pos, dim, ptr[i]);
+ #endif
+         }
+     }
+@@ -224,9 +224,9 @@ VARP DFlashGeneration::dflashForward(const std::vector<int>& block_ids, VARP con
+                 if (std::isnan(hsPtr[i]) || std::isinf(hsPtr[i])) nanCount++;
+                 else { if (hsPtr[i] < minV) minV = hsPtr[i]; if (hsPtr[i] > maxV) maxV = hsPtr[i]; }
+             }
+-            printf("dflashForward hidden_states: dims=[");
+-            for (int d = 0; d < hsInfo->dim.size(); d++) printf("%d%s", hsInfo->dim[d], d < hsInfo->dim.size()-1 ? ", " : "");
+-            printf("], range=[%.4f, %.4f], nanCount=%d/%d\n", minV, maxV, nanCount, total);
++            MNN_PRINT("dflashForward hidden_states: dims=[");
++            for (int d = 0; d < hsInfo->dim.size(); d++) MNN_PRINT("%d%s", hsInfo->dim[d], d < hsInfo->dim.size()-1 ? ", " : "");
++            MNN_PRINT("], range=[%.4f, %.4f], nanCount=%d/%d\n", minV, maxV, nanCount, total);
+         }
+ #endif
+         auto lm_outputs = mLmHeadModule->onForward({hidden_states_out});
+@@ -239,14 +239,14 @@ VARP DFlashGeneration::dflashForward(const std::vector<int>& block_ids, VARP con
+             for (auto d : lInfo->dim) total *= d;
+             int vocab = lInfo->dim[lInfo->dim.size()-1];
+             // Check argmax for first few positions
+-            printf("lm_head logits: dims=[");
+-            for (int d = 0; d < lInfo->dim.size(); d++) printf("%d%s", lInfo->dim[d], d < lInfo->dim.size()-1 ? ", " : "");
+-            printf("], vocab=%d\n", vocab);
++            MNN_PRINT("lm_head logits: dims=[");
++            for (int d = 0; d < lInfo->dim.size(); d++) MNN_PRINT("%d%s", lInfo->dim[d], d < lInfo->dim.size()-1 ? ", " : "");
++            MNN_PRINT("], vocab=%d\n", vocab);
+             for (int pos = 0; pos < std::min(3, lInfo->dim[1]); pos++) {
+                 const float* row = lPtr + pos * vocab;
+                 int bestIdx = 0; float bestVal = row[0];
+                 for (int j = 1; j < vocab; j++) { if (row[j] > bestVal) { bestVal = row[j]; bestIdx = j; } }
+-                printf("  pos %d: argmax=%d (val=%.4f), row[0]=%.4f, row[1]=%.4f\n", pos, bestIdx, bestVal, row[0], row[1]);
++                MNN_PRINT("  pos %d: argmax=%d (val=%.4f), row[0]=%.4f, row[1]=%.4f\n", pos, bestIdx, bestVal, row[0], row[1]);
+             }
+         }
+ #endif
+@@ -297,7 +297,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
+                 if (std::isnan(hsPtr[i]) || std::isinf(hsPtr[i])) hsNanCount++;
+                 else { if (hsPtr[i] < hsMin) hsMin = hsPtr[i]; if (hsPtr[i] > hsMax) hsMax = hsPtr[i]; }
+             }
+-            printf("DFlash prefill hidden_states: [1, %d, %d], range=[%.4f, %.4f], nanCount=%d/%d\n",
++            MNN_PRINT("DFlash prefill hidden_states: [1, %d, %d], range=[%.4f, %.4f], nanCount=%d/%d\n",
+                    seq_len, hiddenDim, hsMin, hsMax, hsNanCount, hsTotal);
+ #endif
+         }
+@@ -315,11 +315,11 @@ void DFlashGeneration::generate(GenerationParams& param) {
+                 if (ctxPtr[i] < minV) minV = ctxPtr[i];
+                 if (ctxPtr[i] > maxV) maxV = ctxPtr[i];
+             }
+-            printf("DFlash mContextHidden after fc: dims=[");
++            MNN_PRINT("DFlash mContextHidden after fc: dims=[");
+             for (int d = 0; d < ctxInfo->dim.size(); d++) {
+-                printf("%d%s", ctxInfo->dim[d], d < ctxInfo->dim.size()-1 ? ", " : "");
++                MNN_PRINT("%d%s", ctxInfo->dim[d], d < ctxInfo->dim.size()-1 ? ", " : "");
+             }
+-            printf("], range=[%.4f, %.4f], nanCount=%d/%d\n", minV, maxV, nanCount, total);
++            MNN_PRINT("], range=[%.4f, %.4f], nanCount=%d/%d\n", minV, maxV, nanCount, total);
+         }
+ #endif
+         mInitialized = true;
+@@ -354,21 +354,21 @@ void DFlashGeneration::generate(GenerationParams& param) {
+         // Phase 2: DFlash forward - get draft logits
+ #if DFLASH_DEBUG
+         if (len < 30) {
+-            printf("\n--- MNN Step %d ---\n", len / 1 + 1);
+-            printf("block_output_ids (before draft): [");
+-            for (int i = 0; i < mBlockSize; i++) printf("%d%s", block_ids[i], i < mBlockSize-1 ? ", " : "");
+-            printf("]\n");
++            MNN_PRINT("\n--- MNN Step %d ---\n", len / 1 + 1);
++            MNN_PRINT("block_output_ids (before draft): [");
++            for (int i = 0; i < mBlockSize; i++) MNN_PRINT("%d%s", block_ids[i], i < mBlockSize-1 ? ", " : "");
++            MNN_PRINT("]\n");
+             auto ctxInfo = mContextHidden->getInfo();
+             auto ctxPtr = mContextHidden->readMap<float>();
+-            printf("context_hidden shape: [%d, %d, %d]\n", ctxInfo->dim[0], ctxInfo->dim[1], ctxInfo->dim[2]);
+-            printf("context_hidden[0,0,:5]: [%.6f, %.6f, %.6f, %.6f, %.6f]\n",
++            MNN_PRINT("context_hidden shape: [%d, %d, %d]\n", ctxInfo->dim[0], ctxInfo->dim[1], ctxInfo->dim[2]);
++            MNN_PRINT("context_hidden[0,0,:5]: [%.6f, %.6f, %.6f, %.6f, %.6f]\n",
+                    ctxPtr[0], ctxPtr[1], ctxPtr[2], ctxPtr[3], ctxPtr[4]);
+             int pos_start = mContext->all_seq_len - ctxInfo->dim[1];
+-            printf("all_seq_len=%d, pos_start=%d\n", mContext->all_seq_len, pos_start);
+-            printf("q_position_ids: [");
+-            for (int i = 0; i < mBlockSize; i++) printf("%d%s", pos_start + ctxInfo->dim[1] + i, i < mBlockSize-1 ? ", " : "");
+-            printf("]\n");
+-            printf("k_position_ids: [%d, ..., %d] (len=%d)\n", pos_start, pos_start + ctxInfo->dim[1] + mBlockSize - 1, ctxInfo->dim[1] + mBlockSize);
++            MNN_PRINT("all_seq_len=%d, pos_start=%d\n", mContext->all_seq_len, pos_start);
++            MNN_PRINT("q_position_ids: [");
++            for (int i = 0; i < mBlockSize; i++) MNN_PRINT("%d%s", pos_start + ctxInfo->dim[1] + i, i < mBlockSize-1 ? ", " : "");
++            MNN_PRINT("]\n");
++            MNN_PRINT("k_position_ids: [%d, ..., %d] (len=%d)\n", pos_start, pos_start + ctxInfo->dim[1] + mBlockSize - 1, ctxInfo->dim[1] + mBlockSize);
+         }
+ #endif
+ #ifdef DUMP_PROFILE_INFO
+@@ -408,7 +408,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
+ 
+ #if DFLASH_DEBUG
+             if (len < 30) {
+-                printf("draft_logits top5 per position:\n");
++                MNN_PRINT("draft_logits top5 per position:\n");
+                 for (int pos = 1; pos < std::min(mBlockSize, 4); pos++) {
+                     const float* row = logitsPtr + pos * vocab_size;
+                     // Find top 5
+@@ -423,13 +423,13 @@ void DFlashGeneration::generate(GenerationParams& param) {
+                             }
+                         }
+                     }
+-                    printf("  pos %d top5: tokens=[%d,%d,%d,%d,%d], scores=[%.4f,%.4f,%.4f,%.4f,%.4f]\n",
++                    MNN_PRINT("  pos %d top5: tokens=[%d,%d,%d,%d,%d], scores=[%.4f,%.4f,%.4f,%.4f,%.4f]\n",
+                            pos-1, top5_idx[0], top5_idx[1], top5_idx[2], top5_idx[3], top5_idx[4],
+                            top5_val[0], top5_val[1], top5_val[2], top5_val[3], top5_val[4]);
+                 }
+-                printf("block_output_ids (after draft): [");
+-                for (int i = 0; i < mBlockSize; i++) printf("%d%s", block_ids[i], i < mBlockSize-1 ? ", " : "");
+-                printf("]\n");
++                MNN_PRINT("block_output_ids (after draft): [");
++                for (int i = 0; i < mBlockSize; i++) MNN_PRINT("%d%s", block_ids[i], i < mBlockSize-1 ? ", " : "");
++                MNN_PRINT("]\n");
+             }
+ #endif
+         }
+@@ -471,7 +471,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
+ 
+ #if DFLASH_DEBUG
+                 if (len < 30 && i < 3) {
+-                    printf("  pos %d: draft=%d, target=%d %s\n", i, block_ids[i + 1], target_prediction,
++                    MNN_PRINT("  pos %d: draft=%d, target=%d %s\n", i, block_ids[i + 1], target_prediction,
+                            target_prediction == block_ids[i + 1] ? "✓" : "✗");
+                 }
+ #endif
+diff --git a/transformers/llm/engine/src/speculative_decoding/eagle.cpp b/transformers/llm/engine/src/speculative_decoding/eagle.cpp
+index 805c25c..c47d225 100644
+--- a/transformers/llm/engine/src/speculative_decoding/eagle.cpp
++++ b/transformers/llm/engine/src/speculative_decoding/eagle.cpp
+@@ -82,7 +82,7 @@ std::vector<MNN::Express::VARP> EagleGeneration::eagleForwardRaw(const std::vect
+     int seq_len     = inputs[0]->getInfo()->dim[0];
+     mEagleMeta->add = seq_len;
+ #if EAGLE_DEBUG
+-    printf("pos: "); for (auto i = 0; i < seq_len; i++) printf("%d, ", inputs[3]->readMap<int>()[i]); printf("\n");
++    MNN_PRINT("pos: "); for (auto i = 0; i < seq_len; i++) MNN_PRINT("%d, ", inputs[3]->readMap<int>()[i]); MNN_PRINT("\n");
+ #endif
+     auto outputs    = mEagleModules[0]->onForward(inputs);
+     mEagleMeta->sync();
+@@ -118,7 +118,7 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
+ #if EAGLE_DEBUG
+     for (int i = 0; i < inputIds.size(); i++) {
+         auto token = inputIds[i];
+-        printf("# input-%d: %d, %s\n", i, token, tokenStr(token).c_str());
++        MNN_PRINT("# input-%d: %d, %s\n", i, token, tokenStr(token).c_str());
+     }
+ #endif
+     int sampleToken = inputIds.back();
+@@ -146,7 +146,7 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
+     for (int i = 0; i < topKV[0]->getInfo()->size; i++) {
+         auto token = indices[i];
+         token = token + d2tPtr[token];
+-        printf("# top-%d: %d[%f], %s\n", i, token, scores[i], tokenStr(token).c_str());
++        MNN_PRINT("# top-%d: %d[%f], %s\n", i, token, scores[i], tokenStr(token).c_str());
+     }
+ #endif
+     tokenTree.init(indices, scores);
+@@ -172,38 +172,40 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
+     auto output = tokenTree.finalize(sampleToken, mLlm->mDraftLength);
+ #if EAGLE_DEBUG
+     {
++#if !defined(NEXA_MNN_SILENT_LOGS)
+         std::cout << tokenTree.toString([&](int token){
+             return mLlm->tokenizer_decode(token);
+         });
+-        printf("draftTokens: \n");
++#endif
++        MNN_PRINT("draftTokens: \n");
+         for (auto token : output.draftTokens) {
+-            printf("%d: %s\n", token, tokenStr(token).c_str());
++            MNN_PRINT("%d: %s\n", token, tokenStr(token).c_str());
+         }
+-        printf("positionIds: ");
++        MNN_PRINT("positionIds: ");
+         for (auto id : output.positionIds) {
+-            printf("%d, ", id);
++            MNN_PRINT("%d, ", id);
+         }
+-        printf("\nattentionMask: \n");
++        MNN_PRINT("\nattentionMask: \n");
+         for (auto mask : output.attentionMask) {
+             for (auto m : mask) {
+-                printf("%d, ", (bool)m);
++                MNN_PRINT("%d, ", (bool)m);
+             }
+-            printf("\n");
++            MNN_PRINT("\n");
+         }
+-        printf("retrieveIndices: \n");
++        MNN_PRINT("retrieveIndices: \n");
+         for (auto vec : output.retrieveIndices) {
+             for (auto i : vec) {
+-                printf("%d, ", i);
++                MNN_PRINT("%d, ", i);
+             }
+-            printf(" : ");
++            MNN_PRINT(" : ");
+             for (auto i : vec) {
+-                printf("%d, ", output.draftTokens[i]);
++                MNN_PRINT("%d, ", output.draftTokens[i]);
+             }
+-            printf(" : ");
++            MNN_PRINT(" : ");
+             for (auto i : vec) {
+-                printf("%s, ", tokenStr(output.draftTokens[i]).c_str());
++                MNN_PRINT("%s, ", tokenStr(output.draftTokens[i]).c_str());
+             }
+-            printf("\n");
++            MNN_PRINT("\n");
+         }
+     }
+ #endif
+@@ -271,16 +273,16 @@ EagleGeneration::AcceptInfo EagleGeneration::evaluatePosterior(const EagleGenera
+         acceptTokens[i] = samples[bestCandidate[i]];
+     }
+ #if EAGLE_DEBUG
+-    printf("samples: ");
++    MNN_PRINT("samples: ");
+     for (int i = 0; i < samples.size(); i++) {
+-        printf("%d[%s], ", samples[i], tokenStr(samples[i]).c_str());
++        MNN_PRINT("%d[%s], ", samples[i], tokenStr(samples[i]).c_str());
+     }
+-    printf("\n");
+-    printf("accepted: ");
++    MNN_PRINT("\n");
++    MNN_PRINT("accepted: ");
+     for (int i = 0; i < bestCandidate.size(); i++) {
+-        printf("%d[%d]: %s, ", bestCandidate[i], samples[bestCandidate[i]], tokenStr(samples[bestCandidate[i]]).c_str());
++        MNN_PRINT("%d[%d]: %s, ", bestCandidate[i], samples[bestCandidate[i]], tokenStr(samples[bestCandidate[i]]).c_str());
+     }
+-    printf("\n");
++    MNN_PRINT("\n");
+ #endif
+     AcceptInfo acceptInfo;
+     acceptInfo.sampleTokens  = std::move(samples);
+@@ -395,13 +397,13 @@ void EagleGeneration::generate(GenerationParams& param) {
+         mContext->status = LlmStatus::MAX_TOKENS_FINISHED;
+     }
+ #if EAGLE_DEBUG
+-    printf("\n### Tree Decoding Time: %f s, Eagle Generate Time: %f s\n", (float)treeDecodingTime / 1000000.0, (float)eagleGenerateTime / 1000000.0);
+-    printf("\n### Tree Decoding Avg Time: %f ms, steps: %d\n", (float)treeDecodingTime / 1000.0 / steps, steps);
+-    printf("\n### Compression Ratio: %f\n", (float)newTokens / steps);
++    MNN_PRINT("\n### Tree Decoding Time: %f s, Eagle Generate Time: %f s\n", (float)treeDecodingTime / 1000000.0, (float)eagleGenerateTime / 1000000.0);
++    MNN_PRINT("\n### Tree Decoding Avg Time: %f ms, steps: %d\n", (float)treeDecodingTime / 1000.0 / steps, steps);
++    MNN_PRINT("\n### Compression Ratio: %f\n", (float)newTokens / steps);
+     for (auto acceptLen : accpetLens) {
+-        printf("%d, ", acceptLen);
++        MNN_PRINT("%d, ", acceptLen);
+     }
+-    printf("\n");
++    MNN_PRINT("\n");
+ #endif
+     return;
+ }

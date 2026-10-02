@@ -1,6 +1,6 @@
 # T07-A MNN CPU 探针：开发验证与Android交叉构建
 
-日期：2026-10-02。结论：独立C++ CPU探针已实现；Linux真实模型功能和Android arm64原生构建通过。**T07-A仍进行中，真机与可重复导出身份待验证；没有APK或生产MnnExecutor。** 产品目标另见[对标计划](../android-app-parity.md)。
+日期：2026-10-02。结论：独立C++ CPU探针已实现；Linux真实模型功能和Android arm64原生构建通过。**T07-A仍进行中，真机运行待验证；预转换资产的导出来源未知单独披露；没有APK或生产MnnExecutor。** 产品目标另见[对标计划](../android-app-parity.md)。
 
 ## 实现与身份
 
@@ -9,7 +9,7 @@
 - MNN 3.6.1 commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`，洁净外部checkout、无补丁；构建拒绝错误HEAD/脏源码
 - Linux x86_64 / GNU14.2.0；Android NDK r30 `30.0.16248370` / Clang21.0.0 / arm64-v8a / API28；CMake4.4.3、Ninja1.13.2、Release静态MNN/LLM
 - CPU、text-only、load-time greedy、precision=high、2线程；HTTP资源、OMNI、视觉/音频及GPU/NPU关闭；上游Linux默认SSE/AVX2不构成任意x86兼容承诺
-- 公开预转换Qwen3-0.6B五文件/revision/hash及模板锁见[模型矩阵](../model-matrix.md)；exporter commit与原始Qwen revision尚未闭合，候选不是生产准入包
+- 公开预转换Qwen3-0.6B五文件/revision/hash及模板锁见[模型矩阵](../model-matrix.md)；exporter commit与原始Qwen revision未知，按[ADR0010](../decisions/0010-model-artifact-and-conversion-provenance.md)不宣称转换可复现，但不单独阻塞运行资产准入；生产安全/设备/许可门槛仍未完成，候选不是生产准入包
 - Linux探针SHA256 `555c9127ceec6932313eefe1b62b6246b59f2f53213e27610e3cfcec55883509`
 - Android探针SHA256 `c022f793e4efe84245ef72db117d3269dc5a8c50603f21cba93ada26631f6450`
 
@@ -42,9 +42,9 @@
 - 没有生产C ABI/MnnExecutor、包schema迁移、每请求temperature/top_p/seed、线程安全中途取消、prepared代际、生产UTF-8/stop/usage和背压
 - Linux harness期限/日志轮询与子进程终止仅是开发保护；不能移植为Android强杀线程。输出streambuf上限不限制MNN全部内存；短token输出可能截UTF-8，harness拒绝该结果
 - 16KiB LOAD对齐不证明16KiB设备加载、整APK依赖闭包或运行正确；没有Android模型运行、设备性能/内存/持续负载/后台生命周期记录
-- 导出器/原始模型revision待闭合；Flutter/bridge/JDK/Gradle/AGP未锁，OpenCL/QNN/直接Hexagon未验证。T07-B/C与产品P1均未完成
+- 预转换路径保留导出器/原始模型revision未知，不强制重导出；自行导出才须闭合转换身份。Flutter/bridge/JDK/Gradle/AGP未锁，OpenCL/QNN/直接Hexagon未验证。T07-B/C与产品P1均未完成
 
-下一步：闭合候选资产可重复导出和Android运行证据；并行推进不依赖设备的T07-B契约/实现，保留阶段门槛，不用探针替代产品验收。
+下一步：复核候选来源/许可并闭合Android运行证据；保持已有预转换资产不变，将转换来源未知与运行输入身份分开记录。并行推进不依赖设备的T07-B契约/实现，保留阶段门槛，不用探针替代产品验收。
 
 ## 独立CI入口与最终本地复核
 
@@ -61,3 +61,14 @@ CI脱敏上传采用固定JSON清单。只有完整构建身份、全部必需�
 源码`e1ecc6e84464c41039ffe275a159c78cffe80470`的[Android运行36959563179](https://github.com/Naza3/Nexa/actions/runs/36959563179)在作业启动前失败，实际jobs为空；没有模型或Android编译结果。官方actionlint 1.7.7独立复现第29行job级env使用`runner.temp`非法，退出1；该上下文在此位置不可用。改为已忽略的`github.workspace/build/t07a/inputs`后同一linter退出0。未读取到GitHub页面annotation，不把本地复现冒充服务端错误正文。
 
 修复仅改变输入暂存位置，不更换SDK/模型或放宽验收。设置`NEXA_ACTIONLINT`后的35项测试全部通过，包含还原非法上下文的语义负例；未提供该本地工具时语义测试明确skip，合法路径断言与其余测试仍运行。actionlint来自官方v1.7.7发布，archive SHA256 `023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757`与官方checksums一致。实际GitHub修复运行仍待验证。
+
+## 修复后Android基础CI通过及证据复核
+
+源码`c1114eeda3ad4a79587fd0c332f0af5422c85b02`、tree `87b8a470a4d0a155f2e0a4469aaf0d7c160b1004`的[Android CI36960074245](https://github.com/Naza3/Nexa/actions/runs/36960074245)于03:40:08 UTC成功，job`110691601352`。全部步骤通过；Linux真实六场景（含预期超预算拒绝）和重复一致为pass，Android arm64/API28交叉构建及ELF检查通过。报告明确`android_run=false`，不代表手机执行。
+
+下载artifact `11207669112`，9,332bytes，SHA256 `acbddf611fc468eed3905c79284eed5122f2b7b21685342f3792f7e400e5cf26`，与GitHub digest一致；解压仅13份JSON。主审独立调用完整报告校验器并核对source commit/tree/clean、六项步骤成功、`evidence_verified=true`、全部模型文件与工具身份，均通过。证据保留`artifacts/verification/t07a-ci36960074245/`，没有二进制或模型发行包。
+
+该CI Linux编译器为GNU13.3.0，Android仍Clang21.0.0；Android未剥离ELF为88,159,208bytes，SHA256 `aed123cc14b29176cbbc2d4f35d2af1d94c872b05082ebe48ee57aa717cfa802`。其LOAD/RELRO和系统依赖检查通过；构建宿主/路径不同导致二进制hash及调试段体积与本地结果不同，不声称字节级可复现构建。模型运行输入与构建身份可重取不等于最终二进制完全相同。Android真机、生产Executor、安全取消及APK仍待完成；同源码Windows回归另行跟踪。
+
+
+同源码[Windows CI36960074287](https://github.com/Naza3/Nexa/actions/runs/36960074287)于04:11:59 UTC成功，job`110691633652`；全部生产构建/真实模型/存储调度/worker/HTTP/CLI/解压包及桌面bridge门槛通过。独立下载脱敏证据artifact`11209230562`，77,339bytes，SHA256 `ffdfde479592e9c755a0584d6ba52e841b04554df8e98f855e3247e330b143d0`与GitHub一致；50项索引文件的集合/长度/hash均复核，桌面acceptance为pass、external16项全true、native_window_tested=false。此轮仅复核回归报告，没有再次下载/交付Windows产品ZIP，不替代已交付75e458f目录版的待办原生UI验收。

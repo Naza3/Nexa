@@ -63,7 +63,7 @@ A20与长期稳定性证据仍未验证；其后期验收要求、原始报告sk
 
 ### Android MNN 切片顺序
 
-[执行计划](t07-android-mnn-plan.md)给出逐项验收和源码入口，T07-A已有独立探针/Linux真实模型/Android原生构建，尚缺导出身份与真机；其余切片仍待实施：
+[执行计划](t07-android-mnn-plan.md)给出逐项验收和源码入口，T07-A已有独立探针/Linux真实模型/Android原生构建，尚缺真机；预转换资产的导出来源未知按[ADR0010](decisions/0010-model-artifact-and-conversion-provenance.md)单列，非独立阻塞；其余切片仍待实施：
 
 | 切片 | 依赖与交付 |
 | --- | --- |
@@ -118,7 +118,7 @@ A20与长期稳定性证据仍未验证；其后期验收要求、原始报告sk
 ## 7. 证据与产物约定
 
 - 可审查验证摘要放 `docs/verification/`，详细本机日志放 `artifacts/verification/`。
-- 报告包含项目/对应引擎及导出器 commit、工具链、模型文件/包与模板 hash、设备、参数、实际后端/回退、命令及退出码、pass/fail/skipped/unavailable。
+- 报告包含项目/对应引擎commit、资产来源路径与转换来源（预转换可显式unknown，自导出须精确commit）、工具链、模型文件/包与模板 hash、设备、参数、实际后端/回退、命令及退出码、pass/fail/skipped/unavailable。
 - 当前无 Git 时 commit 写 unavailable；没有模型或设备实测时不写通过。
 - 真实模型自动 smoke 验证非空文本、预算、终态和资源；跨设备不要求逐字一致。
 - 纯文档只检查内容、链接和变更，不运行尚未实现的工程命令或编造性能测试。

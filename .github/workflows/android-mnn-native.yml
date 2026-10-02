@@ -1,0 +1,96 @@
+name: Android MNN native C ABI and Rust adapter verification
+
+on:
+  push:
+    branches: ['codex/nexa-native-baseline']
+    paths:
+      - 'native/mnn-probe/**'
+      - 'native/mnn-shim/**'
+      - 'native/mnn-patches/**'
+      - 'scripts/android_mnn/**'
+      - 'mobile/**'
+      - '.github/workflows/android-mnn-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-mnn-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-adapter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      WORK: ${{ github.workspace }}/build/t07b1
+      EVIDENCE: ${{ github.workspace }}/artifacts/verification/t07b1-ci
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      RUSTUP_TOOLCHAIN: '1.98.1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check out exact pristine upstream MNN
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: alibaba/MNN
+          ref: d407447ed56c4121a11ccbd266dc184ca1ead0c2
+          path: build/t07b1/mnn
+          persist-credentials: false
+      - name: Install and verify fixed tools and helper tests
+        id: tools
+        run: |
+          set -euo pipefail
+          python -m pip install cmake==4.4.3 ninja==1.13.2
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy --target aarch64-linux-android
+          python scripts/android_mnn/b1_ci.py run tools --work "$WORK" --evidence "$EVIDENCE"
+      - name: Explicit hash-locked NDK model and Cargo dependency setup
+        id: inputs
+        run: python scripts/android_mnn/b1_ci.py run inputs --work "$WORK" --evidence "$EVIDENCE"
+      - name: Apply exact private patch copy and verify postimages
+        id: patch
+        run: python scripts/android_mnn/b1_ci.py run patch --work "$WORK" --evidence "$EVIDENCE"
+      - name: Build independent pristine Linux T07-A probe
+        id: baseline
+        run: python scripts/android_mnn/b1_ci.py run baseline --work "$WORK" --evidence "$EVIDENCE"
+      - name: Build Linux C ABI sampler stream and logging audit
+        id: linux_native
+        run: python scripts/android_mnn/b1_ci.py run linux_native --work "$WORK" --evidence "$EVIDENCE"
+      - name: Verify real native requests independent upstream comparison privacy and cancellation
+        id: native_real
+        run: python scripts/android_mnn/b1_ci.py run native_real --work "$WORK" --evidence "$EVIDENCE"
+      - name: Verify Rust fmt clippy unit compile-fail artifact negatives and real model
+        id: rust_linux
+        run: python scripts/android_mnn/b1_ci.py run rust_linux --work "$WORK" --evidence "$EVIDENCE"
+      - name: Cross-build Android C ABI and export pinned static link closure
+        id: android_native
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' && steps.inputs.outcome == 'success' && steps.patch.outcome == 'success' }}
+        run: python scripts/android_mnn/b1_ci.py run android_native --work "$WORK" --evidence "$EVIDENCE"
+      - name: Link Android Rust test ELFs check clippy ABI and artifact negatives
+        id: rust_android
+        if: ${{ !cancelled() && steps.android_native.outcome == 'success' }}
+        run: python scripts/android_mnn/b1_ci.py run rust_android --work "$WORK" --evidence "$EVIDENCE"
+      - name: Verify all three final Android ELFs 16KiB LOAD RELRO and system dependencies
+        id: elf
+        if: ${{ !cancelled() && steps.rust_android.outcome == 'success' }}
+        run: python scripts/android_mnn/b1_ci.py run elf --work "$WORK" --evidence "$EVIDENCE"
+      - name: Gate complete evidence and preserve sanitized failure reports
+        if: ${{ always() }}
+        run: |
+          python scripts/android_mnn/b1_ci.py stage --evidence "$EVIDENCE" --destination artifacts/t07b1-upload \
+            --outcomes 'tools:${{ steps.tools.outcome }},inputs:${{ steps.inputs.outcome }},patch:${{ steps.patch.outcome }},baseline:${{ steps.baseline.outcome }},linux_native:${{ steps.linux_native.outcome }},native_real:${{ steps.native_real.outcome }},rust_linux:${{ steps.rust_linux.outcome }},android_native:${{ steps.android_native.outcome }},rust_android:${{ steps.rust_android.outcome }},elf:${{ steps.elf.outcome }}'
+      - name: Upload only sanitized JSON evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-android-mnn-native-${{ github.sha }}
+          path: artifacts/t07b1-upload/*.json
+          if-no-files-found: error
+          retention-days: 7

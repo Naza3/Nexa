@@ -18,14 +18,18 @@
 | [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md) | Windows llama保持、Android MNN主引擎、多文件包与分后端验收 |
 | [Android MNN计划](docs/t07-android-mnn-plan.md) | T07-A～F版本/CPU、契约、APK、OpenCL、QNN与直接Hexagon；实际状态见验证报告 |
 | [ADR0009](docs/decisions/0009-android-mnn-chat-product.md) / [Android 产品计划](docs/android-app-parity.md) | MNN Chat 对标、App/runtime边界、首个可用APK与后续能力 |
+| [ADR0010](docs/decisions/0010-model-artifact-and-conversion-provenance.md) | 公开预转换资产与自行导出两条路径，运行输入复现和转换复现分别声明 |
 | [T07-A验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md) / [CPU探针](native/mnn-probe/README.md) | Linux真实模型、Android原生交叉构建及未验范围 |
 | [文档基线验证](docs/verification/2026-09-30-document-baseline.md) | 本轮文档检查及未验证范围 |
 
 `.codex/config.toml` 和 `.codex/agents/*.toml` 是现有开发代理配置，不属于 Nexa 产品运行时，也不是产品依赖锁。
 
+| [T07-B契约](docs/t07b-mnn-contract.md) / [B1 CI](scripts/android_mnn/B1_CI.md) | C ABI/Rust实际接口、生产store/Executor后续门槛 |
+| [MNN原生](native/mnn-shim/README.md) / [Rust适配](mobile/runtime/README.md) | 固定补丁、构建与真实请求验证，独立移动workspace |
+
 ## 当前工程入口
 
-已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/runtime-api/`、`crates/runtime-cli/`、`crates/desktop-bridge/`、`apps/desktop/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`native/mnn-probe/`、`scripts/android_mnn/`、`xtask/`、`tests/fixtures/`。
+已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/runtime-api/`、`crates/runtime-cli/`、`crates/desktop-bridge/`、`apps/desktop/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`native/mnn-probe/`、`native/mnn-shim/`、`native/mnn-patches/`、`mobile/runtime/`、`scripts/android_mnn/`、`xtask/`、`tests/fixtures/`。
 
 - [构建锁](docs/build-lock.md)：固定上游/工具链、实际编译参数与限制
 - [模型矩阵](docs/model-matrix.md)：真实模型与模板 hash

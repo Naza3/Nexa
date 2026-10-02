@@ -3,6 +3,21 @@ name: Windows CPU native and runtime verification
 on:
   push:
     branches: ['codex/nexa-native-baseline']
+    # Only known isolated Android/docs paths are excluded; unknown paths still trigger.
+    paths-ignore:
+      - 'native/mnn-probe/**'
+      - 'native/mnn-shim/**'
+      - 'native/mnn-patches/**'
+      - 'scripts/android_mnn/**'
+      - 'mobile/**'
+      - '.github/workflows/android-mnn-probe.yml'
+      - '.github/workflows/android-mnn-native.yml'
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'PROJECT_INDEX.md'
+      - 'PROJECT_STATE.md'
+      - 'README.md'
+      - 'ai-runtime-v0.1-execution-spec.md'
   workflow_dispatch:
 
 permissions:

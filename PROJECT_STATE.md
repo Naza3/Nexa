@@ -13,7 +13,7 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 ## 已有工程事实
 
 - 原始远程提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168` 已通过 GitHub 原始对象精确重建本地 Git；初始 tree/commit SHA 一致，未创建替代历史
-- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建/桌面诊断/完整Release bridge已通过，旧包原生启动/导入/聊天/停止生成及两种关闭已有独立手工验收确认，剪贴板等其余分支待验证；仍无移动工程
+- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建/桌面诊断/完整Release bridge已通过，旧包原生启动/导入/聊天/停止生成及两种关闭已有独立手工验收确认，剪贴板等其余分支待验证；已有独立mobile/runtime原生适配workspace，尚无移动App工程
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
@@ -32,7 +32,17 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 
 ## T07-A 本轮事实
 
-新增独立 `native/mnn-probe/` 与 `scripts/android_mnn/` 包含6个探针本体文件（CI辅助另计），未修改Windows链路/公共Rust契约。MNN 3.6.1精确源码与公开预转换Qwen3-0.6B五文件/hash已锁；仅load-time greedy、同步CPU原型。缺生产C ABI/MnnExecutor、每请求采样、线程安全取消、生产包schema、APK与Android运行证据；候选模型不可标为准入产品资产。详见[T07-A报告](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md)。
+新增独立 `native/mnn-probe/` 与 `scripts/android_mnn/` 包含6个探针本体文件（CI辅助另计），未修改Windows链路/公共Rust契约。MNN 3.6.1精确源码与公开预转换Qwen3-0.6B五文件/hash已锁；仅load-time greedy、同步CPU原型。该探针本身不提供生产C ABI/MnnExecutor、每请求采样、线程安全取消、生产包schema、APK与Android运行证据；B1后续实现见下节；候选模型不可标为准入产品资产；预转换运行输入身份已锁，原始Qwen/exporter未知不等于运行输入不可复现，也不授予转换可复现结论。详见[T07-A报告](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md)。
+
+## T07-B1 本轮事实
+
+新增独立 `native/mnn-shim/`、精确可重放 `native/mnn-patches/` 与 `mobile/runtime/`，不改变根Cargo锁、Windows公共DTO或worker依赖图。已实现ABI1每请求采样、精确模板预算、单owner生命周期、独立atomic取消、UTF-8/stop与按调用借用的回调；Rust安全适配已完成真实CPU推理、取消/恢复、seed隔离与回调失败验证。
+
+2026-10-02本地复验：59项CI helper测试（含实际actionlint，无skip）、native CTest3/3、Rust6单测/4编译失败文档测试、clippy与显式真实模型集成均通过。原生9组日志canary及未补丁上游对照通过；Android最终三个Rust→shim→MNN ELF完成链接，LOAD与RELRO均16KiB对齐。详见[原生记录](native/mnn-shim/VERIFICATION.md)、[Rust记录](mobile/runtime/VERIFICATION.md)、[CI门禁](scripts/android_mnn/B1_CI.md)与[契约](docs/t07b-mnn-contract.md)。新B1 GitHub工作流尚待执行，不以本地结果代替Ubuntu配置验收。
+
+同轮修复旧llama流缓冲遇到stop前残缺UTF-8时静默丢字节的问题；纯stream回归与ASan/UBSan已通过，新的Windows CI尚待验证。此前c1114ee的Windows成功不覆盖此修改。Windows工作流仅对明确Android/文档路径免触发；本轮包含llama改动，仍需完整Windows回归。
+
+B2生产模型store、MnnExecutor/core联动、APK、Android真机与GPU/NPU尚未完成。原生kernel不可抢占，检查点取消样本不是任意时刻停机保证。JDK/Flutter/Android SDK APK工具链安装与相应许可待确认；该等待不阻止B1或独立B2开发。
 
 ## 任务状态
 
@@ -46,7 +56,7 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；独立Windows 10短验已通过；按当前阶段范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
 | T06 Windows UI | 待验证 | 新目录/诊断源码75e458f的CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包及解压bridge验收通过；产物独立复核通过并已交付；新目录原生UI仍未测 |
-| T07 Android核心 | 进行中 | T07-A独立CPU探针已实现：Linux真实4类输入/重复/预算边界通过，Python19/CTest2通过；NDK r30/API28/arm64原生交叉构建与16KiB LOAD对齐通过。导出器身份、生产适配和真机门槛未完成，见[T07-A验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md) |
+| T07 Android核心 | 进行中 | T07-A独立CPU探针已实现：Linux真实4类输入/重复/预算边界通过，Python19/CTest2通过；NDK r30/API28/arm64原生交叉构建与16KiB LOAD对齐通过。公开预转换资产运行身份已锁，导出来源未知单独披露；生产适配和真机门槛未完成，见[T07-A验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md) |
 | T08 Android App | 未开始 | MNN Chat能力对标目标已确定；首个可用APK需目录/下载/导入/存储、多会话、设置与诊断，依赖T07-B/C安全门槛；无APK或真机证据 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | Android后端纳入T07-D～F单列验收；其余扩展未开始，Linux仍仅开发探针 |
@@ -67,7 +77,7 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 2. T05源码6a7e9d0的Windows CI36829233039已通过，产品/工具ZIP已独立复核；另有Windows 10独立手工短验通过，不能替代尚未完成的A20条件
 3. 新源码75e458f的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功；下载产物已独立核验并交付，证据见[T06最终目录版记录](docs/verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。新目录原生UI仍未测，剪贴板等原生分支继续待验
 4. 无开发工具、实际离线和长期稳定性列为后期验证；Windows11/Android另行实测，不泛化当前支持证据
-5. Android继续闭合T07-A导出器/原始模型身份与真机门槛；可并行推进T07-B契约设计和受控实现，但不能以Linux结果宣称Android通过。NDK r30原生构建已验证；JDK/Gradle/Flutter等仍待锁。首个可用APK依[产品计划](docs/android-app-parity.md)，新依赖/许可仍分别核验
+5. Android按[ADR0010](docs/decisions/0010-model-artifact-and-conversion-provenance.md)沿公开预转换路径推进，运行资产可复现与转换可复现分开；导出来源未知不单独阻塞T07-A，来源/许可审查和真机门槛继续待验；T07-B1 C ABI/Rust受控实现与本地验证已完成，下一步闭合远端CI并推进B2生产store/Executor，但不能以Linux结果宣称Android通过。NDK r30原生构建已验证；JDK/Gradle/Flutter等仍待锁。首个可用APK依[产品计划](docs/android-app-parity.md)，新依赖/许可仍分别核验
 6. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
 
 ## T05 收口与后期验证
@@ -98,3 +108,5 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 ## Android MNN 文档迁移
 
 [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)已记录方向并同步架构/规格/路线；[计划](docs/t07-android-mnn-plan.md)拆为CPU原型、MnnExecutor/包/安全契约、前台APK、OpenCL、QNN v79/v81、直接Hexagon六切片。当前只是文档完成；MNN3.6.1完整commit为研究候选，未进入实际构建锁，所有Android实现和设备门槛均未开始。新schema/ABI/profile字段未冻结，不新增外部协议承诺。Windows源码与当前CI状态独立，不因本迁移改变。
+
+T07-A首批源码`e1ecc6e`及工作流语义修复`c1114ee`已推送。后者[Android CI36960074245](https://github.com/Naza3/Nexa/actions/runs/36960074245)成功；13份脱敏报告独立下载/hash/source/完整性复核通过，证明Linux真实六场景及Android arm64/API28构建与16KiB ELF检查。`android_run=false`，无APK或设备支持结论；同源码[Windows回归36960074287](https://github.com/Naza3/Nexa/actions/runs/36960074287)也已通过，详见[T07-A记录](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md)。

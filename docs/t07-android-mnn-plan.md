@@ -40,7 +40,7 @@ Windows `llama/GGUF` 与 Android `MNN/package` 分开；独立MNN探针已有源
 
 [MNN 3.6.1 发布页](https://github.com/alibaba/MNN/releases/tag/3.6.1)提供直接 Hexagon 后端和 CPU/OpenCL 等路线的研究依据。发布页对应[候选 commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`](https://github.com/alibaba/MNN/commit/d407447ed56c4121a11ccbd266dc184ca1ead0c2)。这是已用于T07-A独立探针的精确构建身份（外部洁净checkout、无补丁），生产适配仍待验；不得用“3.6.1”标签或文档网站的版本页眉代替精确依赖身份。
 
-T07-A 必须复核 tag→完整 commit、子模块/第三方依赖、许可证、导出器和运行时是否同源，选定可构建组合后记录：MNN commit、Nexa shim ABI、补丁集及 hash、编译选项、NDK/Clang/CMake/Ninja、Android API 级别、Rust target、JDK/Gradle/AGP、Flutter/bridge 版本。更换 commit 或模型导出器须重新验证，不自动跟随 master。GPU/NPU 可因必要修复选择后续精确版本，但作为独立升级记录，不能污染已固定的 CPU 对照。
+T07-A必须复核tag→完整commit、子模块/第三方依赖及许可证；按[ADR0010](decisions/0010-model-artifact-and-conversion-provenance.md)区分固定预转换资产与自行导出。预转换资产以来源/许可、精确revision及完整hash验证运行兼容，不能强求与runtime同源；自行导出另锁原始revision/exporter/参数。选定可构建组合后记录：MNN commit、Nexa shim ABI、补丁集及 hash、编译选项、NDK/Clang/CMake/Ninja、Android API 级别、Rust target、JDK/Gradle/AGP、Flutter/bridge 版本。更换 commit 或模型导出器须重新验证，不自动跟随 master。GPU/NPU 可因必要修复选择后续精确版本，但作为独立升级记录，不能污染已固定的 CPU 对照。
 
 ### 3.2 公共参考设备
 
@@ -103,13 +103,15 @@ MNN 模型不是 GGUF 的改扩展名形式。[官方 LLM 文档](https://mnn-do
 
 | 字段组 | 内容与校验 |
 | --- | --- |
-| 身份 | schema_version、model_id、format=`mnn_package`、原模型来源/revision/许可、architecture、精确导出器 commit/参数 |
+| 身份 | schema_version、model_id、format=`mnn_package`、资产路径类别、发布者/来源/revision/许可、architecture；预转换包的原始模型/exporter来源可显式unknown，自导出须精确原始revision/exporter commit/参数 |
 | 文件表 | 每项规范化相对路径、角色、实际长度、SHA-256；完整 graph/weights/tokenizer/embedding/模型配置/template/固定 context 配置，以及该变体需要的 NPU 图文件 |
 | 引用关系 | 已验证入口配置、各配置/图引用的目标文件、必需与可选角色、引用闭包；不允许隐式读取表外文件 |
 | 量化与变体 | 权重/激活位宽、对称性、block/group、校准数据公开身份或合成样本 hash、图布局；CPU/OpenCL/QNN/Hexagon 变体分开标识 |
 | 兼容范围 | 引擎 commit/ABI、SoC/Hexagon 架构、必要 runtime/驱动条件、逻辑上下文上限、验证证据 ID；未知条件不推定兼容 |
 | 完整性 | 文件级 hash 加规范化内容清单整体 hash；定义排序/编码和参与字段，不包含整体 hash 自身，避免自引用 |
 | 验证状态 | 未验证/探针/特定设备已验证，绑定 exact package hash、后端、设备档、参数和报告；导入方的自述不能授予 validated |
+
+预转换路径的运行必需格式/目标兼容信息仍须校验；仅转换来源信息（如原始revision、exporter或历史校准过程）缺失时按ADR0010记录unknown，不伪造、也不将其自动解释为文件闭包或运行安全失败。自行导出须完整记录转换/量化/校准身份。
 
 Windows GGUF schema 1、其单文件 hash 和原证据保持原含义；不能把 MNN 包 hash 填进 `validated_llama_commit` 或 `gguf_file_type`。未来 schema 迁移需覆盖旧 managed/external 注册表读写、未知版本拒绝及中断恢复，不破坏已发布桌面输入。
 
@@ -126,13 +128,13 @@ Windows GGUF schema 1、其单文件 hash 和原证据保持原含义；不能�
 
 ## 6. 按最小可验收切片推进
 
-T07-A为**进行中**：独立探针/Linux真实功能/Android原生交叉构建已有证据，导出器与真机门槛未闭合；B～F及App仍未开始。先完成 T07-A～C 的 CPU 纵向链，再将已稳定的同一契约推广到后端。表中“实现命令/报告”是后续交付要求，不代表今天已有 Android xtask。
+T07-A为**进行中**：独立探针/Linux真实功能/Android原生交叉构建已有证据，真机运行门槛未闭合；预转换资产的未知导出来源单独披露，不作为独立阻塞；B～F及App仍未开始。先完成 T07-A～C 的 CPU 纵向链，再将已稳定的同一契约推广到后端。表中“实现命令/报告”是后续交付要求，不代表今天已有 Android xtask。
 
 ### T07-A：锁定版本并运行 MNN CPU 原型
 
 **前置：** 第 1.1 节迁移决策已同步；继续核验授权工具链，所需新许可批准后才获取对应依赖。
 
-**最小交付：** 精确 MNN/导出器/工具链构建锁；一个文本小模型候选包（优先研究 Qwen3-0.6B，实际文件/来源/许可/转换结果另锁）；独立 native CPU 探针；可重复构建和运行的真实命令。先使用公开或合成输入，不添加应用业务。
+**最小交付：** 精确MNN/工具链与运行资产身份锁；一个文本小模型候选包（优先研究Qwen3-0.6B，发布者/来源/许可/revision/完整hash另锁；自行导出时再锁原始revision/exporter/转换参数）；独立 native CPU 探针；可重复构建和运行的真实命令。先使用公开或合成输入，不添加应用业务。
 
 **通过门槛：**
 
@@ -184,7 +186,7 @@ T07-A为**进行中**：独立探针/Linux真实功能/Android原生交叉构建
 
 ### T07-E：QNN NPU v79 / v81
 
-**前置：** CPU 基础可用、GPU 对照可取得；合法工具链/依赖已经取得，模型量化和目标图导出可复现。
+**前置：** CPU 基础可用、GPU 对照可取得；合法工具链/依赖已经取得，模型量化/目标图运行身份与目标兼容已锁；自行导出时转换流程可复现，预转换图按ADR0010准入。
 
 **最小交付：** 两个独立 QNN 能力档及包变体：SM8750/v79 与 SM8850/v81。以实际首测设备档优先执行 v81，v79 有设备后再验收；顺序不意味着两者互相兼容。先完成 CPU fallback 资产和选择语义，再启用 NPU 自动选择。
 
@@ -240,7 +242,7 @@ T07-A为**进行中**：独立探针/Linux真实功能/Android原生交叉构建
 
 ## 9. 下一条可执行动作与本轮检查
 
-下一步闭合T07-A候选模型导出器/原始revision与真实Android运行证据，并推进T07-B安全契约；无设备时可进行不依赖设备的设计/实现，但不将A整体标完成。App按产品计划推进，不另建Android llama引擎；新增移动工具链/许可另行核验，不能把已验证NDK构建视为整个APK工具链就绪。
+下一步沿公开预转换路径补齐T07-A候选来源/许可审查与真实Android运行证据，并推进T07-B安全契约；导出器/原始revision未知明确保留，不强制重导出旧资产。无设备时可进行不依赖设备的设计/实现，但不将A整体标完成。App按产品计划推进，不另建Android llama引擎；新增移动工具链/许可另行核验，不能把已验证NDK构建视为整个APK工具链就绪。
 
 历史说明：初始方向文档阶段仅修改本计划、ADR0008及相关规范/入口，检查链接、围栏、空白和引用；该阶段没有运行Android/MNN构建、模型转换、APK、性能或真机测试，也没有获取SDK。后续T07-A已使用NDK r30完成原生交叉构建与Linux真实模型探针，当前事实以[T07-A报告](verification/2026-10-02-t07a-mnn-cpu-probe.md)和[构建锁](build-lock.md)为准，不能沿用初始阶段的“未构建”描述。Windows目录版源码及CI独立跟踪，本迁移不改变其结论。
 

@@ -1,3 +1,5 @@
+// Derived from native/llama-shim/src/stream_buffer.h at Nexa c1114ee.
+// Independent copy preserves the Windows implementation and UTF-8/stop goldens.
 #pragma once
 #include <algorithm>
 #include <stdexcept>

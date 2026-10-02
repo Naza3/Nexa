@@ -29,7 +29,7 @@
 
 ### P0：内部工程基线（T07-A/B）
 
-独立CPU探针→生产C ABI/MnnExecutor/资产schema/模板与精确预算/每请求采样/安全取消。Linux、交叉构建、Android运行分层记录；缺导出器身份、原始模型revision或设备证据时不能授予生产支持。无设备可继续独立设计/实现，但依赖门槛不消失。
+独立CPU探针→生产C ABI/MnnExecutor/资产schema/模板与精确预算/每请求采样/安全取消。Linux、交叉构建、Android运行分层记录；资产按[ADR0010](decisions/0010-model-artifact-and-conversion-provenance.md)分公开预转换和自行导出：前者允许明确未知的exporter/原始revision，仍须来源/许可、完整hash/闭包、安全与设备准入；后者另需完整转换身份。缺生产安全或设备证据不能授予生产支持。无设备可继续独立设计/实现，但依赖门槛不消失。
 
 ### P1：首个日常可用文本APK（T07-C/T08）
 

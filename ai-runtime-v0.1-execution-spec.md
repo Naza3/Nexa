@@ -134,7 +134,7 @@ Flutter 通过 Rust 桥提交请求与接收事件。MnnExecutor 在专用线程
 | `xtask/` | 构建、打包、验收命令 |
 | `tests/contract/` | HTTP、SSE、IPC、错误协议测试 |
 | `tests/fixtures/` | 小型输入文本、畸形文件；不提交大型模型 |
-| `docs/build-lock.md` | 工具版本、对应引擎/导出器 commit、构建选项、设备信息 |
+| `docs/build-lock.md` | 工具版本、对应引擎commit、按资产路径记录的转换来源、构建选项、设备信息 |
 | `docs/model-matrix.md` | 模型文件/包 hash、模板、变体/后端与验证结果 |
 | `docs/decisions/` | 需要改变本规格的技术决策记录 |
 | `artifacts/verification/` | 测试与性能报告，不提交聊天正文 |
@@ -546,7 +546,7 @@ Flutter 的推理事件流订阅不代替取消句柄：初始化得到 runtime 
 |---|---|
 | Rust | rust-toolchain.toml 精确版本；Cargo.lock 提交 |
 | llama.cpp | Windows submodule 精确 commit；不能只有分支名 |
-| MNN（T07-A） | 探针commit/无补丁/NDK与构建选项已锁；导出器、生产ABI和APK依赖仍待闭合，见build-lock |
+| MNN（T07-A） | 探针commit/无补丁/NDK与构建选项已锁；生产ABI和APK依赖仍待闭合；预转换资产允许显式未知导出来源，自导出锁精确转换身份，见build-lock/ADR0010 |
 | C/C++ | Windows MSVC、CMake、Ninja 的版本；统一运行库设置 |
 | 桌面前端 | Node、包管理器精确版本；前端锁文件；Tauri 版本 |
 | 移动 | Flutter SDK、Dart、bridge/codegen、JDK、Gradle、NDK 版本 |
@@ -803,7 +803,7 @@ PC 包装层对稳定 decode 吞吐的额外损耗以不超过基线约 10% 为�
 
 空闲无模型时应事件驱动、无忙循环。默认日志不记录 prompt、回复正文、令牌或完整用户路径，只记录请求 ID、模型 ID、状态、耗时、token 数、后端与错误码。需要诊断内容时使用用户主动开启的本地诊断方式。
 
-验收报告固定字段：项目 commit、对应引擎/导出器 commit及补丁hash、工具链、OS/设备/驱动、模型 hash、加载参数、用例结果、性能值、已知限制。测不到的值写 unavailable，不能写 0。
+验收报告固定字段：项目commit、对应引擎commit及补丁hash、资产来源路径、转换来源（预转换可明确unknown，自导出须精确commit/参数）、工具链、OS/设备/驱动、模型 hash、加载参数、用例结果、性能值、已知限制。测不到的值写 unavailable，不能写 0。
 
 ## 14. runtime 第一版完成标准
 

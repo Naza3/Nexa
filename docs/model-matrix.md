@@ -36,13 +36,13 @@
 | 模板SHA256 | `87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5` |
 | MNN | `d407447ed56c4121a11ccbd266dc184ca1ead0c2`，无补丁 |
 | 配置 | CPU / precision high / 2线程 / load-time greedy / enable_thinking=false；功能输出预算16，边界预算8 |
-| 身份缺口 | 精确exporter commit、原始Qwen模型revision及可重复转换尚未闭合；模型许可/发行闭包须在生产准入复核 |
+| 来源路径与限制 | [ADR0010](decisions/0010-model-artifact-and-conversion-provenance.md)公开预转换路径；exporter commit/原始Qwen revision未知，不宣称转换可复现，不因这两项未知单独否决运行资产准入；发布者/模型许可/发行闭包仍须复核 |
 | Linux x86_64 | 4类真实合成输入、重复一致、36/35预算边界通过；详见[T07-A](verification/2026-10-02-t07a-mnn-cpu-probe.md) |
 | Android arm64 CPU | 原生CLI交叉构建/16KiB LOAD对齐通过；模型加载/生成/真机性能与生命周期未验 |
 
 | 后端 | 资产与验收待办 | 当前状态 |
 | --- | --- | --- |
-| CPU生产资产 | 导出身份、包schema/引用闭包、生产Executor与设备准入 | 未完成；研究候选不能称正式支持 |
+| CPU生产资产 | 来源/许可、包schema/引用闭包、生产Executor与设备准入；运行输入锁与转换来源分别记录 | 未完成；研究候选不能称正式支持 |
 | OpenCL | 兼容变体、CPU对照、驱动/profile/fallback、生命周期 | 未开始 |
 | QNN v79/v81 | 各SoC图、量化/校准、SDK/runtime/图hash及兼容CPU资产 | 未开始 |
 | 直接Hexagon | 独立W4对称/C4候选、Host/DSP库、v79/v81分别验收 | 未开始；不能继承QNN结果 |

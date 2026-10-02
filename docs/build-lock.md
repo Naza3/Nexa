@@ -25,7 +25,7 @@
 | --- | --- |
 | MNN | 3.6.1 commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`；外部洁净checkout、无补丁，Linux/Android独立CPU探针已构建，不自动跟随master |
 | 原生适配 | MnnExecutor/C ABI未实现；ABI版本、补丁集/hash与线程/取消契约在T07-B冻结 |
-| 模型导出 | 公开预转换候选revision/五文件hash/模板已锁；精确导出器commit、原模型revision与可重复导出仍待闭合；不沿用GGUF身份 |
+| 模型运行输入/转换 | 按[ADR0010](decisions/0010-model-artifact-and-conversion-provenance.md)分开：公开预转换候选revision/五文件hash/模板已锁，exporter/原始Qwen revision未知且不宣称可重复转换；自行导出路径才强制闭合转换身份。许可/生产准入仍待验，不沿用GGUF身份 |
 | Android构建 | 原生CLI已构建：NDK r30/30.0.16248370、Clang21.0.0、CMake4.4.3/Ninja1.13.2、arm64-v8a/API28、LOAD对齐16KiB；Rust移动target/JDK/Gradle/AGP/Flutter/bridge与APK待锁 |
 | OpenCL | 后端构建、驱动探测、profile、缓存身份与真实fallback未验证 |
 | QNN | QAIRT/QNN精确版本、Host/HTP依赖、SM8750/v79与SM8850/v81目标图分别锁定；尚无SDK/产物验证 |
@@ -135,3 +135,12 @@ Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package 
 外部目录扩展的独立Tauri锁仅新增desktop-bridge→model-store、nexa-desktop→已存在的windows-sys 0.61.2两条依赖边；后者用于只读GetDriveTypeW本地盘类型检查，不升级registry版本或更换框架。新目录版Windows CI及产物独立复核已通过，原生目录UI仍待验；依赖图保持不含native推理crate。
 
 2026-10-02，目录/诊断功能源码`75e458f60cbbfc2b136d8396d7e824c3fc07f23e`的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功，native job`110657335010`含真实模型/runtime/HTTP/CLI、桌面包构建和解压后bridge验收通过。下载产物独立完整性复核已通过并交付：原ZIP9,785,013bytes，SHA256 `1d4f89eeb9c03b14aecaa7199c847413ee85b215cd44ee8bf9436bbb14596858`，source tree `8cec0b3be1d8c4f3442d72f2c27f87f8506d9523`、dirty=false。实际750文件、两层manifest/hash、6个PE/依赖闭包及许可均核验，根/壳锁按该提交Windows CRLF字节复核；原始构建工作树未独立重建。新目录原生UI仍未测，不将CI/包核验等同完整桌面验收，精确结果见[T06记录](verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。Android文档迁移不改变该提交的工具链。
+
+
+## T07-B1 MNN独立构建锁
+
+原生三补丁、13个修改文件的before/after与patch-set/policy身份由[lock.json](../native/mnn-patches/lock.json)精确锁定；不修改pristine MNN。ABI1头文件与全部静态archive、真实编译器/NDK/API绑定在导出artifact.json，Rust再次核验并公开完整manifest SHA256。独立mobile/runtime锁不修改Windows根workspace/lock。
+
+本地已验证Debian GCC14.2.0；Ubuntu24.04 GCC13.3.0为新CI候选，远端门禁通过前不声明已验证。Rust1.98.1、CMake4.4.3、Ninja发行包1.13.2、Android NDKr30/Clang21/API28/arm64-v8a保持固定。Android完整链接同时设置max-page-size与common-page-size为16384并检查LOAD/RELRO，不只检查静态库或cargo check。详见[原生验证](../native/mnn-shim/VERIFICATION.md)、[Rust验证](../mobile/runtime/VERIFICATION.md)与[CI说明](../scripts/android_mnn/B1_CI.md)。
+
+当前仅研究CPU文本profile，未授予模型生产准入或Android运行结论。APK的Flutter/JDK/SDK/Gradle组合尚待安装许可与实际构建验证；不得把原生工具链通过写成APK已完成。原生二进制分发仍需补齐第三方notice/许可闭包。
