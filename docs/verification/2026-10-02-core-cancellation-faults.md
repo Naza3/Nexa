@@ -24,3 +24,10 @@
 ## 后续门槛
 
 本片改变共享core行为，必须触发并核验完整Windows与Android MNN native回归，不能按Android-only跳过。B3b验证器另行实现/审查/构建；此记录不宣称其已通过设备验收。
+
+
+## 首次远端回归与路径测试修正
+
+实现提交99aeba44af146a3e8f805d58abbfb0709ddd37ff已推送。Android MNN native运行37004301790在tools/index8失败，尚未进入模型或编译阶段；下载失败证据Artifact11225486323（1,382 bytes，SHA256 cc0c0e098386624d6c6b97ece602b16c5af34af3b3c186532cbf70855a19ff74）后本地精确复现：Windows路径过滤helper测试期望未同步07a已批准的apps/android-verifier/**隔离项。
+
+修正只更新该测试期望，保留严格列表核对并补真实runtime-core/types、相邻目录和App+core混合变更反例，没有扩大工作流忽略范围或放宽native门禁。失败原运行保留，新提交触发Android重验；Windows99a运行独立继续。

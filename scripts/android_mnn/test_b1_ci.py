@@ -549,15 +549,19 @@ class WorkflowFilterTests(unittest.TestCase):
         block = text.split('    paths-ignore:\n', 1)[1].split('  workflow_dispatch:', 1)[0]
         patterns = [line.strip()[3:-1] for line in block.splitlines() if line.strip().startswith("- '")]
         expected = ['native/mnn-probe/**', 'native/mnn-shim/**', 'native/mnn-patches/**', 'scripts/android_mnn/**', 'mobile/**',
-                    '.github/workflows/android-mnn-probe.yml', '.github/workflows/android-mnn-native.yml', 'docs/**',
+                    'apps/android-verifier/**', '.github/workflows/android-mnn-probe.yml', '.github/workflows/android-mnn-native.yml', 'docs/**',
                     'AGENTS.md', 'PROJECT_INDEX.md', 'PROJECT_STATE.md', 'README.md', 'ai-runtime-v0.1-execution-spec.md']
         self.assertEqual(patterns, expected)
         ignored = lambda path: any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
-        for path in ('packaging/windows/manifest.json', 'crates/core/src/lib.rs', 'native/llama-shim/src/shim.cpp',
+        for path in ('packaging/windows/manifest.json', 'crates/runtime-core/src/lib.rs', 'crates/runtime-types/src/lib.rs', 'native/llama-shim/src/shim.cpp',
                      'Cargo.toml', 'Cargo.lock', 'CMakeLists.txt', '.github/workflows/native-windows.yml', 'new-path/file'):
             self.assertFalse(ignored(path), path)
         self.assertTrue(ignored('docs/new/file.md'))
         self.assertTrue(ignored('mobile/runtime/Cargo.lock'))
+        self.assertTrue(ignored('apps/android-verifier/rust/src/host.rs'))
+        self.assertFalse(ignored('apps/android-verifier-other/src/lib.rs'))
+        self.assertFalse(all(ignored(p) for p in ['apps/android-verifier/lib/main.dart',
+                                                 'crates/runtime-core/src/scheduler.rs']))
         # GitHub paths-ignore skips only when every changed path is ignored.
         self.assertFalse(all(ignored(p) for p in ['docs/file.md', 'native/llama-shim/src/stream_buffer.h']))
 
