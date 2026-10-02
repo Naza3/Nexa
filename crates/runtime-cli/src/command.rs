@@ -276,8 +276,11 @@ pub async fn execute(options: Options) -> Result<()> {
                 let value = tokio::task::spawn_blocking(move || -> Result<Value> {
                     let _lock = lock;
                     let store = ModelStore::open(&root)?;
-                    let models: Vec<_> =
-                        store.list()?.into_iter().map(ModelSummary::from).collect();
+                    let models: Vec<_> = store
+                        .list()?
+                        .into_iter()
+                        .map(|m| ModelSummary::from_store(m, &store))
+                        .collect();
                     Ok(json!({"object":"list","data":models}))
                 })
                 .await??;
@@ -423,7 +426,7 @@ async fn serve(root: &Path) -> Result<()> {
     let shutdown = state.shutdown.clone();
     if let Err(error) = state.initialize_registry().await {
         shutdown.begin();
-        let cleanup = shutdown.wait().await;
+        let cleanup = state.wait_shutdown().await;
         cleanup?;
         return Err(error.into());
     }
@@ -431,7 +434,7 @@ async fn serve(root: &Path) -> Result<()> {
         Discovery::current(instance_id, listen).and_then(|discovery| lock.publish(&discovery));
     if let Err(error) = publication {
         shutdown.begin();
-        shutdown.wait().await?;
+        state.wait_shutdown().await?;
         return Err(error.into());
     }
     let app = runtime_api::router(state.clone(), security);
@@ -441,7 +444,7 @@ async fn serve(root: &Path) -> Result<()> {
         tokio::select! {result=&mut serving=>result,signal=&mut interrupt.0=>{shutdown.begin();let result=serving.await;match signal { Ok(signal)=>signal.and(result),Err(_)=>Err(io::Error::other("interrupt handler failed")) }}}
     };
     shutdown.begin();
-    let cleanup = shutdown.wait().await;
+    let cleanup = state.wait_shutdown().await;
     // Even startup/transport failure follows the same reaping path. A failed
     // cleanup keeps its marker and produces a nonzero exit code.
     cleanup?;

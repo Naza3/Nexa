@@ -6,6 +6,7 @@ import type {
   ModelSummary,
   RuntimeStatus,
   Snapshot,
+  LibraryOperation,
 } from "../src/types";
 export const model: ModelSummary = {
   id: "qwen",
@@ -17,11 +18,14 @@ export const model: ModelSummary = {
   available: true,
   validated: true,
   context_size: 2048,
+  storage: "managed",
+  availability_error: null,
 };
 export function runtime(): RuntimeStatus {
   return {
     state: "ready",
     selected_model: model.id,
+    selected_model_display_name: model.display_name,
     load_options: { context_size: 2048, threads: 2, batch_size: 128 },
     active_request: null,
     queued_jobs: 0,
@@ -40,6 +44,7 @@ export function snapshot(): Snapshot {
     api_address: "http://127.0.0.1:12345",
     runtime: runtime(),
     settings: { ...DEFAULT_SETTINGS },
+    model_directory: { configured: null, effective: null, state: "default" },
   };
 }
 export function deferred<T>() {
@@ -54,9 +59,37 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
   return {
     snapshot: vi.fn(async () => snapshot()),
     start: vi.fn(async () => snapshot()),
-    pickModel: vi.fn(async () => null),
-    importModel: vi.fn(async () => model),
-    modelsPage: vi.fn(async () => ({ data: [model], next_after: null })),
+    pickDirectory: vi.fn(async () => null),
+    applyDirectory: vi.fn(async () => ({ operation_id: "library-1" })),
+    scanModels: vi.fn(async () => ({ operation_id: "library-1" })),
+    libraryNext: vi.fn(
+      async (): Promise<LibraryOperation> => ({
+        operation_id: "library-1",
+        status: "completed",
+        phase: "finished",
+        examined_entries: 1,
+        candidate_files: 1,
+        verified_files: 1,
+        terminal: true,
+        result: {
+          directory_id: "directory-1",
+          library_generation: "generation-2",
+          registered_files: 1,
+          available_files: 1,
+        },
+        error: null,
+        failed_file_name: null,
+      }),
+    ),
+    libraryCancel: vi.fn(async (operation_id: string) => ({
+      operation_id,
+      status: "stopping" as const,
+    })),
+    modelsPage: vi.fn(async () => ({
+      data: [model],
+      next_after: null,
+      generation: "generation-1",
+    })),
     loadModel: vi.fn(async () => runtime()),
     unloadModel: vi.fn(async () => ({
       ...runtime(),

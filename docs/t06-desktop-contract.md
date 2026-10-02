@@ -1,6 +1,6 @@
 # T06 Windows 最小桌面契约
 
-2026-10-01。实施定界，不是完成报告。以执行规格 8.2 为基础；用户已完成 Win10 build19044 / i5-8400 本地 T05 短验，并明确把无开发工具、离线及长期稳定性留待后续。Windows 11 后续，不更换 Tauri 2 + React/TypeScript/Vite，不扩 Telegram、模型或 runtime 架构。
+2026-10-01。实施定界，不是完成报告。以执行规格8.2为基础；T05已有固定Windows Release CI与独立Windows 10手工短验，无开发工具、离线及长期稳定性仍待后期验证。Windows 10优先，Windows 11后续，不更换Tauri 2 + React/TypeScript/Vite，不扩Telegram、模型或runtime架构。
 
 ## 1. 三个工位与唯一写入范围
 
@@ -30,11 +30,12 @@
 
 命令为下列 snake_case 名；所有业务 DTO 字段也为 snake_case。有参数时统一 `invoke(name, { request: ... })`。只暴露固定用途命令，不提供任意 URL、HTTP 路径、进程命令、文件读写或 token getter。
 
-- `desktop_snapshot()` → `{ initialized, connection, api_address, runtime, settings }`。`connection` 为 `stopped | connecting | connected | error`；runtime 为现有安全 status DTO 或 null。`settings` 含 `context_size, threads, batch_size, max_output_tokens, idle_unload_seconds, close_runtime_on_exit`；CPU 固定。错误使用受控 `code/message`，不回传 token、完整原始异常或请求正文。
+- `desktop_snapshot()` → `{ initialized, connection, api_address, runtime, settings, model_directory }`。`connection` 为 `stopped | connecting | connected | error`；runtime 为现有安全 status DTO 或 null。`settings` 含 `context_size, threads, batch_size, max_output_tokens, idle_unload_seconds, close_runtime_on_exit`；CPU 固定。`model_directory`区分配置目录与同TCP proof后服务实际采用的目录，不用本地配置伪称已生效。错误使用受控 `code/message`，不回传 token、完整原始异常或请求正文。
 - `runtime_start({ initialize_if_missing: boolean })` → snapshot。首次初始化必须来自用户显式“初始化并启动”动作，复用幂等 init，不轮换既有 token。自动启动已初始化实例可复用此入口并传 false。
 - `model_pick()` → null 或 `{ selection_id, file_name, size_bytes, destination }`。原生壳保存选中路径，前端只传一次性选择 ID；取消选择不改变当前模型。`destination` 是供用户确认的管理目录显示文本。
 - `model_import({ selection_id, model_id })` → 安全 ModelSummary。壳将受控路径交 bridge，后者走现有 `/runtime/models/import`；同一选择不能并发提交。失败时不自动重试，特别是 `import_committed_durability_unconfirmed` 必须先刷新模型列表。
-- `models_page({ after: string|null })` → `{ data: ModelSummary[], next_after: string|null }`。固定页大小 64；前端最多保留当前页，不聚合无限页。
+- `models_page({ after: string|null, generation: UUID|null })` → `{ generation, data: ModelSummary[], next_after: string|null }`。第一页两个参数均null；后续携带generation，陈旧页拒绝并从第一页重新取。固定页大小64，前端只保留当前页。ModelSummary增加managed/external来源与安全不可用原因，显示名为主；选中模型显示名来自实际服务，不依赖当前页。
+- 新桌面主流程使用`model_directory_pick()`、`model_directory_apply({selection_id})`、`models_scan()`、`model_library_next({operation_id})`、`model_library_cancel({operation_id})`五个固定命令，完整DTO/预算/取消与停止条件见[外部目录契约](t06-model-directory-contract.md)。原生目录选择允许支持的本地可读目录，不写源目录；JS只有一次性选择ID与只读展示路径，绝不提交自由路径。仅bridge真正接纳apply后消费ID，busy拒绝保留选择。新流程自动命名/生成内部ID、不复制已有GGUF，原model_pick/import及公开复制API只保留兼容。
 - `model_load({ model_id, context_size, threads, batch_size })` → runtime status，固定 `backend=cpu,gpu_layers=0`。已加载参数与 UI 参数不同必须明确展示；不静默换模型。`model_unload()` → runtime status。
 - `chat_start({ model_id, messages, max_output_tokens })` → `{ request_id }`。messages 只含受控 role/content。bridge 原子占用本 UI 唯一生成槽，先创建并登记 UUID，然后返回；后台发送 HTTP，并在同一请求带 `X-Request-ID`。重复发送返回 `desktop_busy`，不排出第二条本 UI 生成任务。模型加载通过独立 model_load 完成，UI 未就绪时不误称已开始生成。
 - `chat_next({ request_id })` → `{ request_id, events, terminal }`。单一未完成消费者、长轮询至事件或最多 1 秒心跳；顺序与上次连续。event 为 `{ type:"started" }`、`{ type:"delta", text }`、`{ type:"completed", finish_reason, usage }`、`{ type:"cancelled" }` 或 `{ type:"failed", code, message }`。终态后保留一个小型终态记录，重复读取返回同一终态摘要、无重复文本。
@@ -70,10 +71,13 @@
 ## 7. 首包与验证门槛
 
 - 私有开发 `desktop-windows` ZIP：Tauri EXE/嵌入前端 + `runtime/`下完整匹配T05产品包及其manifest/许可；额外桌面依赖按实际PE闭包补齐。模型仍外部导入，不复制用户数据/token；UI与runtime大小分开统计。
-- 本轮用已安装的Evergreen WebView2，不自动下载、安装或改变系统权限。缺失时在WebView建立前给原生可读错误及微软官方安装入口；不能只做网页内错误（网页根本无法启动）。检测实际版本并纳入验证证据，Win10 build19044或装有Edge都不等于WebView2一定存在。
+- 发行 ZIP 继续严格无模型、文件集合与 manifest/SHA256SUMS 一致。用户解压后的程序根目录，以及固定`model/`、`models/`目录允许直接普通`.gguf`输入，扩展名大小写不敏感、只读四字节GGUF头、保持symlink/reparse拒绝；不hash整个输入、不计产品清单或体积、不自动导入。两个固定目录可为空，不允许未知文件或嵌套目录；runtime/licenses等其他位置、未声明EXE/DLL/脚本继续严格拒绝，全部声明文件hash/来源校验不变。原生选择其他包内目录时立即明确拒绝，不等重启；选包内允许目录时在pick/apply/重扫前复用layout校验，以拒绝UI打开后新增的不合法文件。重扫validator使用bridge持实例锁时确定的实际目录/索引，不能从display_path读取授权。包外任意受支持目录不属于产品库存。包校验不读取用户配置决定豁免，四字节识别不代替注册/加载的完整核验。
+- 启动包校验保留固定错误码到原生中文提示与 `--diagnose` schema 2；不回显用户绝对路径或任意错误文本。CI wrapper 与 evidence stager 对成功/失败报告执行同一闭合字段/错误码白名单，非零退出的合法失败报告也保存。
+- 本轮用已安装的Evergreen WebView2，不自动下载、安装或改变系统权限。缺失时在WebView建立前给原生可读错误及微软官方安装入口；不能只做网页内错误（网页根本无法启动）。检测实际版本并纳入验证证据，Windows 10或装有Edge都不等于WebView2一定存在。
 - 不新增fixed WebView2；微软当前文档说明Win10非打包Win32使用fixed v120+涉及AppContainer目录ACL要求，不适合本轮未经批准的系统权限变化。
 - 自动验证：根回归；bridge假服务恶意proof/redirect/丢帧/大帧/取消竞态/慢消费者/终态一次；Linux真实模型import→load→流→cancel→再次生成→unload→stop；Windows相同宿主链及实际Tauri构建/PE闭包/中文空格路径。
-- Windows关闭语义须用真实子进程验证：默认关UI后必须证明同实例API仍可调用；同时退出后实例锁/记录释放、worker回收。正常关闭自身UI与外部宿主终止整个Job/会话分开，不以启动探针代替完整生命周期证据。关闭中重复点击、连接既有runtime、异协议/proof失败、端口占用、取消在started前后均覆盖。bridge harness不能冒充已验证原生窗口事件；壳若暂不能自动驱动，明确保留Win10用户操作验收。
+- 既有 Windows 桌面解压验收步骤另用实际 EXE 检查：同级真实 GGUF 输入允许；未声明 DLL 与改动 manifest 均拒绝；只清理测试独占创建的输入，恢复清单原字节后重新严格核验产品 payload。此项不建立窗口、不替代独立原生UI验收。
+- Windows关闭语义须用真实子进程验证：默认关UI后必须证明同实例API仍可调用；同时退出后实例锁/记录释放、worker回收。正常关闭自身UI与外部宿主终止整个Job/会话分开，不以启动探针代替完整生命周期证据。关闭中重复点击、连接既有runtime、异协议/proof失败、端口占用、取消在started前后均覆盖。bridge harness不能冒充已验证原生窗口事件；壳若暂不能自动驱动，明确保留Windows 10独立手工操作验收。
 - 前端单测/浏览器检查三页、键盘/中文输入、无模型/忙碌/失败/清空/重复点击/切页；mock只证明UI。T06完成仍需Windows UI实际导入、真实聊天、停止和关闭两种语义，不用截图代替生成。
 
 ## 8. 官方核对来源
@@ -82,6 +86,6 @@
 - [Tauri capabilities](https://v2.tauri.app/security/capabilities/)：本地窗口能力及自定义命令默认行为。
 - [Tauri Rust→前端](https://v2.tauri.app/develop/calling-frontend/)：Channel提供有序事件，但不替代应用自己的有界消费设计；本轮采用单消费者pull。
 - [Tauri外部二进制](https://v2.tauri.app/develop/sidecar/)：externalBin/架构命名约定；本轮可用原生Command维持既有产品目录和独立生命周期。
-- [Tauri Windows发行](https://v2.tauri.app/distribute/windows-installer/)与[微软WebView2分发](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)：WebView2实际检测、Evergreen/Fixed分发及Win10限制。目标用户环境需实测，不从文档平台列表推导验收通过。
+- [Tauri Windows发行](https://v2.tauri.app/distribute/windows-installer/)与[微软WebView2分发](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)：WebView2实际检测、Evergreen/Fixed分发及Win10限制。目标环境需实测，不从文档平台列表推导验收通过。
 
 当前没有必须先让用户决定的新产品分叉。WebView2存在性、Windows壳实际行为和依赖精确版本属于待验证工程事实；无开发工具/离线/长期稳定性与Win11继续分层保留，不阻塞已授权T06开发。

@@ -6,10 +6,13 @@
 //! The data directory must be private to the application. The process lock
 //! coordinates cooperative clients, not hostile writers with the same OS account.
 mod gguf;
+pub mod library;
 mod manifest;
 mod store;
 
-pub use manifest::{Capabilities, ImportRequest, ModelManifest, ModelSource, ValidationEvidence};
+pub use manifest::{
+    Capabilities, ImportRequest, ModelManifest, ModelSource, ModelStorage, ValidationEvidence,
+};
 pub use store::{ImportCancellation, ModelStore};
 
 pub type Result<T> = std::result::Result<T, runtime_types::RuntimeError>;

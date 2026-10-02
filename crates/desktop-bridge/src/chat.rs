@@ -320,6 +320,11 @@ impl DesktopBridge {
         remaining: usize,
     ) {
         let result = self.stream_chat(&session, model, body, remaining).await;
+        if session.phase.load(Ordering::Acquire) == 1 {
+            // A cold external-model chat may still own preflight work before
+            // response headers. Closing this UI must observe that lease drain.
+            self.load_disconnected.store(true, Ordering::Release);
+        }
         // stream_chat owns and drops the verified connection before this point.
         // Cleanup stays out of the UI work lock and cannot lose an early cancel.
         let event = match result {

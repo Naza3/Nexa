@@ -669,6 +669,7 @@ version = "0.1.0"
 dependencies = [
  "http-body-util",
  "hyper",
+ "model-store",
  "runtime-api",
  "runtime-cli",
  "runtime-types",
@@ -2077,6 +2078,7 @@ dependencies = [
  "tauri-build",
  "tempfile",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

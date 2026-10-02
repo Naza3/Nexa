@@ -1,5 +1,7 @@
 //! Explicit acceptance executable: uniquely-created temporary credentials only.
 //! Both success and failure stdout are closed, sanitized JSON protocols.
+#[path = "harness/external.rs"]
+mod external;
 #[path = "harness/lifecycle.rs"]
 mod lifecycle;
 use lifecycle::lifecycle_child;
@@ -203,10 +205,11 @@ async fn run(
     let data_shape = path_shape(&root);
     let runtime_shape = path_shape(&runtime);
     let model_shape = path_shape(&model);
+    let external_model_path = model.clone();
     let outcome:Result<Value>=async {
         at!(stage,"create_private_directory",create_private_dir(&root));
         at!(stage,"initialize_token",init_private_token(&root));
-        let mut config=Config::default();config.api.listen=std::net::SocketAddr::from(([127,0,0,1],0));
+        let mut config=Config::default();config.api.listen=std::net::SocketAddr::from(([127,0,0,1],0));config.inference.context_size=2048;config.inference.threads=Some(2);config.inference.batch_size=128;
         let text=config.to_toml().map_err(|_|Fault::new("configuration_error"))?;
         at!(stage,"write_config",write_private_new(&root.join("config.toml"),text.as_bytes()));
         let bridge=Arc::new(at!(stage,"construct_bridge",DesktopBridge::new(root.clone(),runtime.clone())));
@@ -221,7 +224,7 @@ async fn run(
         at!(stage,"close_attached_window",attached.close_ui_only().await);
         let model=at!(stage,"import_model",bridge.import_model(model,"desktop-qa".into()).await);
         ensure(model.available)?;
-        let page=at!(stage,"list_models",bridge.models_page(None).await);
+        let page=at!(stage,"list_models",bridge.models_page(None, None).await);
         ensure(page.data.len()==1&&page.data[0].id.as_str()=="desktop-qa")?;
         stage="reject_running_idle_change";
         match bridge.save_idle(600).await {Err(error) if error.code=="runtime_running"=>(),Err(error)=>return Err(error.into()),Ok(_)=>return Err(Fault::new("assertion_failed"))}
@@ -255,7 +258,8 @@ async fn run(
         ensure(saved.settings.idle_unload_seconds==600)?;
         at!(stage,"restart_runtime",start(&stopped).await);
         at!(stage,"stop_runtime",stopped.stop().await);
-        Ok(json!({"success":true,"real_model":true,"threads":2,"context_size":2048,"batch_size":128,"first_output_bytes":first_bytes,"cancel_partial_bytes":cancel_bytes,"repeat_output_bytes":repeat_bytes,"first_usage_tokens":usage,"model_size_bytes":model.size_bytes,"model_sha256":model.sha256,"data_dir_path_shape":data_shape,"runtime_path_shape":runtime_shape,"model_path_shape":model_shape,"same_instance_attach":true,"default_close_kept_runtime":true,"actual_process_exit_kept_runtime":true,"actual_process_close_runtime_reaped":true,"repeated_close":true,"close_runtime_released_instance":true,"runtime_setting_rejected_while_running":true,"runtime_setting_persisted_stopped":true}))
+        let external_library = external::run(&root, &runtime, &external_model_path, &mut stage).await?;
+        Ok(json!({"external_library":external_library,"success":true,"real_model":true,"threads":2,"context_size":2048,"batch_size":128,"first_output_bytes":first_bytes,"cancel_partial_bytes":cancel_bytes,"repeat_output_bytes":repeat_bytes,"first_usage_tokens":usage,"model_size_bytes":model.size_bytes,"model_sha256":model.sha256,"data_dir_path_shape":data_shape,"runtime_path_shape":runtime_shape,"model_path_shape":model_shape,"same_instance_attach":true,"default_close_kept_runtime":true,"actual_process_exit_kept_runtime":true,"actual_process_close_runtime_reaped":true,"repeated_close":true,"close_runtime_released_instance":true,"runtime_setting_rejected_while_running":true,"runtime_setting_persisted_stopped":true}))
     }.await;
     // Cleanup is independent evidence, never a replacement for the first cause.
     let mut cleanup = if bridge_created {

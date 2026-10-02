@@ -20,6 +20,7 @@ runtime-api = { path = "../../../crates/runtime-api" }
 tauri = { package = "tauri", version = "=2.12.1", features = [] }
 rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
 clipboard-win = "=5.4.1"
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [build-dependencies]
 tauri-build = { version = "=2.7.1", features = [] }

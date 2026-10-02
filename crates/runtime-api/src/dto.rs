@@ -386,6 +386,8 @@ impl LoadRequest {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelSummary {
+    pub storage: model_store::ModelStorage,
+    pub availability_error: Option<String>,
     pub id: ModelId,
     pub display_name: String,
     pub size_bytes: u64,
@@ -399,6 +401,8 @@ pub struct ModelSummary {
 impl From<ModelManifest> for ModelSummary {
     fn from(model: ModelManifest) -> Self {
         Self {
+            storage: model.storage,
+            availability_error: None,
             id: model.id,
             display_name: model.display_name,
             size_bytes: model.size_bytes,
@@ -409,6 +413,18 @@ impl From<ModelManifest> for ModelSummary {
             available: model.validated && model.capabilities.chat,
             context_size: model.validation.map(|e| e.context_size),
         }
+    }
+}
+
+impl ModelSummary {
+    pub fn from_store(model: ModelManifest, store: &model_store::ModelStore) -> Self {
+        let unavailable = store.external_availability(&model.id);
+        let mut summary = Self::from(model);
+        if let Some(code) = unavailable {
+            summary.available = false;
+            summary.availability_error = Some(code.as_str().into());
+        }
+        summary
     }
 }
 

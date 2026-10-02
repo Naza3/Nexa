@@ -259,6 +259,19 @@ pub enum ErrorCode {
     SlowConsumer,
     ExecutorUnavailable,
     ExecutorCleanupUnconfirmed,
+    ModelDirectoryRequired,
+    ModelDirectoryUnavailable,
+    ModelDirectoryUnsupported,
+    ModelLibraryUnsupported,
+    ModelLibraryLimit,
+    ModelLibraryChanged,
+    ModelListChanged,
+    ModelScanTimeout,
+    ModelScanCancelled,
+    ModelFileChanged,
+    ModelFileUnavailable,
+    ModelFileInUse,
+    ModelLibraryWriteFailed,
 }
 
 impl ErrorCode {
@@ -292,6 +305,19 @@ impl ErrorCode {
             Self::SlowConsumer => "slow_consumer",
             Self::ExecutorUnavailable => "executor_unavailable",
             Self::ExecutorCleanupUnconfirmed => "executor_cleanup_unconfirmed",
+            Self::ModelDirectoryRequired => "model_directory_required",
+            Self::ModelDirectoryUnavailable => "model_directory_unavailable",
+            Self::ModelDirectoryUnsupported => "model_directory_unsupported",
+            Self::ModelLibraryUnsupported => "model_library_unsupported",
+            Self::ModelLibraryLimit => "model_library_limit",
+            Self::ModelLibraryChanged => "model_library_changed",
+            Self::ModelListChanged => "model_list_changed",
+            Self::ModelScanTimeout => "model_scan_timeout",
+            Self::ModelScanCancelled => "model_scan_cancelled",
+            Self::ModelFileChanged => "model_file_changed",
+            Self::ModelFileUnavailable => "model_file_unavailable",
+            Self::ModelFileInUse => "model_file_in_use",
+            Self::ModelLibraryWriteFailed => "model_library_write_failed",
         }
     }
 }

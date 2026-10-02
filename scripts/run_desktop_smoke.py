@@ -6,6 +6,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -30,6 +31,9 @@ FAILURE_STAGES = frozenset({
     "restart_runtime", "stop_runtime", "cleanup_stop", "remove_temporary_data",
     "child_arguments", "child_construct_bridge", "child_start", "child_save_preferences",
     "child_close",
+    "external_apply", "external_rescan", "external_start", "external_list", "external_direct_chat",
+    "external_cancel_prepare", "external_unload", "external_stop", "external_preexisting_writer",
+    "external_source_changed", "external_final_stop",
 })
 FAILURE_CODES = frozenset({
     "bridge_error", "io_error", "invalid_arguments", "configuration_error",
@@ -51,6 +55,12 @@ BRIDGE_CODES = frozenset({
     "load_timeout", "runtime_faulted", "worker_lost", "runtime_shutdown",
     "model_load_failed", "insufficient_storage", "internal_error", "response_too_large",
     "import_committed_durability_unconfirmed", "api_error", "unrecognized",
+    "model_directory_required", "model_directory_unavailable", "model_directory_unsupported",
+    "model_library_unsupported", "model_library_limit", "model_library_changed", "model_list_changed",
+    "model_scan_timeout", "model_scan_cancelled", "model_file_changed", "model_file_unavailable",
+    "model_file_in_use", "model_library_write_failed",
+    "model_load_interrupted",
+    "invalid_manifest", "invalid_argument",
 })
 CLEANUP_STATUSES = frozenset({"not_needed", "confirmed", "unconfirmed"})
 LOCK_STATES = frozenset({"free", "held", "unavailable", "not_checked"})
@@ -63,6 +73,25 @@ PROBE_KEYS = frozenset({"schema_version", "kind", "success", "code", "os_error",
                         "signal_state", "signal_os_error", "cleanup_confirmed", "strategy", "parent_in_job", "child_in_job",
                         "parent_job_os_error", "child_job_os_error"})
 PROBE_REPORTS = {"breakaway": "launch-probe-breakaway.json", "inherit_job": "launch-probe-inherit-job.json"}
+DIAGNOSTIC_REPORTS = ("diagnostics.json", "diagnostics-root-model.json", "diagnostics-model-directory.json",
+                      "diagnostics-models-directory.json", "diagnostics-unlisted-dll.json", "diagnostics-tampered-manifest.json")
+DIAGNOSTIC_KEYS = frozenset({"schema_version", "package_verified", "package_error_code", "project_commit", "project_dirty", "webview2_version", "native_window_tested"})
+PACKAGE_ERROR_CODES = frozenset({
+    "current_executable_unavailable", "desktop_executable_name_invalid", "package_root_unavailable",
+    "selected_path_invalid", "selected_path_indirect", "selected_file_invalid", "selected_file_unavailable",
+    "package_directory_unavailable", "package_file_unavailable", "package_manifest_unavailable",
+    "package_manifest_too_large", "package_manifest_invalid", "package_identity_invalid", "package_inventory_invalid",
+    "package_path_invalid", "package_indirect_path", "package_file_hash_mismatch", "package_checksum_invalid",
+    "package_checksum_mismatch", "package_unlisted_file", "package_external_model_header_invalid",
+    "runtime_source_identity_mismatch", "package_validation_failed",
+})
+EXTERNAL_LIBRARY_KEYS = frozenset({
+    "supported", "catalog_registered_without_copy", "source_unchanged", "automatic_display_name",
+    "stable_id_rescan", "legacy_managed_preserved", "effective_directory_verified", "direct_chat_prepared",
+    "owned_preparation_cancelled", "write_access_blocked_while_loaded", "delete_access_blocked_while_loaded",
+    "guard_retained_after_unload", "guard_released_after_stop", "preexisting_writer_rejected",
+    "failed_preparation_updates_list", "changed_identity_rejected",
+})
 
 
 def unique_object(pairs):
@@ -141,6 +170,35 @@ def launch_probe_report(raw, expected_strategy=None):
     return report
 
 
+def startup_diagnostic(raw):
+    report = json_report(raw, MAX_FAILURE_BYTES)
+    if (set(report) != DIAGNOSTIC_KEYS or type(report["schema_version"]) is not int or report["schema_version"] != 2
+            or type(report["package_verified"]) is not bool or report["native_window_tested"] is not False):
+        raise ValueError("desktop diagnostic schema rejected")
+    if report["package_verified"]:
+        if (report["package_error_code"] is not None or type(report["project_commit"]) is not str
+                or re.fullmatch(r"[0-9a-f]{40}", report["project_commit"]) is None
+                or type(report["project_dirty"]) is not bool):
+            raise ValueError("desktop diagnostic identity rejected")
+    elif (type(report["package_error_code"]) is not str or report["package_error_code"] not in PACKAGE_ERROR_CODES
+          or report["project_commit"] is not None or report["project_dirty"] is not None):
+        raise ValueError("desktop diagnostic failure rejected")
+    version = report["webview2_version"]
+    if version is not None and (type(version) is not str or len(version) > 128
+                               or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(?: (?:beta|dev|canary))?", version) is None):
+        raise ValueError("desktop diagnostic WebView version rejected")
+    return report
+
+
+def external_library_report(value, *, require_windows=False):
+    if (type(value) is not dict or set(value) != EXTERNAL_LIBRARY_KEYS
+            or any(type(item) is not bool for item in value.values())):
+        raise ValueError("external library acceptance schema rejected")
+    if require_windows and not all(value.values()):
+        raise ValueError("Windows external library acceptance incomplete")
+    return value
+
+
 @contextmanager
 def extraction_root():
     root = Path(tempfile.mkdtemp(prefix="Nexa T06 中文 空格 "))
@@ -188,7 +246,7 @@ def bounded_process(command, cwd, env, timeout):
     return subprocess.CompletedProcess(command, process.returncode, raw.decode("utf-8", errors="strict"))
 
 
-def checked_json(command, cwd, env, timeout, *, phase, failure_file=None):
+def checked_json(command, cwd, env, timeout, *, phase, failure_file=None, diagnostic_file=None):
     if phase not in {"desktop_diagnose", "bridge_harness", "launch_probe"}:
         raise ValueError("unknown desktop acceptance phase")
     try:
@@ -201,6 +259,18 @@ def checked_json(command, cwd, env, timeout, *, phase, failure_file=None):
         raise ValueError(f"{phase} launch or output decoding failed") from None
     except ValueError:
         raise ValueError(f"{phase} report exceeded bounded size") from None
+    if phase == "desktop_diagnose":
+        try:
+            report = startup_diagnostic(result.stdout)
+        except (ValueError, UnicodeError):
+            raise ValueError("desktop_diagnose structured diagnostic report rejected") from None
+        if diagnostic_file is not None:
+            desktop.base.write_json(diagnostic_file, report)
+        if result.returncode:
+            raise ValueError(f"desktop_diagnose process failed: exit {result.returncode}")
+        if not report["package_verified"] or report["webview2_version"] is None:
+            raise ValueError("desktop_diagnose success declaration rejected")
+        return report
     if result.returncode:
         # Never echo stderr, raw JSON or arbitrary messages. A nonzero harness
         # result remains a failure even when its structured evidence is valid.
@@ -218,6 +288,88 @@ def checked_json(command, cwd, env, timeout, *, phase, failure_file=None):
         return json_report(result.stdout, MAX_JSON_BYTES)
     except (ValueError, UnicodeError):
         raise ValueError(f"{phase} success report rejected") from None
+
+
+def expect_package_rejection(executable, cwd, env, expected_code, diagnostic_file):
+    try:
+        result = bounded_process([str(executable), "--diagnose"], cwd, env, 60)
+        report = startup_diagnostic(result.stdout)
+    except (ChildExitUnconfirmed, OSError, subprocess.TimeoutExpired, ValueError, UnicodeError):
+        raise ValueError("negative desktop input diagnostic did not return a valid bounded report") from None
+    desktop.base.write_json(diagnostic_file, report)
+    if result.returncode != 1 or report["package_verified"] or report["package_error_code"] != expected_code:
+        raise ValueError("negative desktop input diagnostic did not reject the expected condition")
+
+
+def package_input_checks(package, model, cwd, env, evidence, manifest, checks):
+    """Exercise the actual EXE; mutate only a newly extracted CI-owned package."""
+    executable = package / "nexa-desktop.exe"
+    root_model = package / "验收 同级外置模型.GGUF"
+    owned_model = root_model
+    owned_directories = []
+    extra_dll = package / "nexa-test-unlisted.dll"
+    # Exclusive creation: never overwrite an existing input or payload file.
+    model_created = False
+    try:
+        with root_model.open("xb") as destination:
+            model_created = True
+            with desktop.base.regular(model).open("rb") as source:
+                shutil.copyfileobj(source, destination)
+        observed = checked_json([executable, "--diagnose"], cwd, env, 60, phase="desktop_diagnose",
+                                diagnostic_file=evidence / "diagnostics-root-model.json")
+        if observed["project_commit"] != manifest["project_commit"] or observed["project_dirty"] != manifest["project_dirty"]:
+            raise ValueError("same-directory model changed package identity")
+        checks["root_gguf_accepted"] = True
+
+        for directory_name in ("model", "models"):
+            directory = package / directory_name
+            directory.mkdir()  # Exclusive: never adopt a preexisting directory.
+            owned_directories.append(directory)
+            target = directory / "验收 中文 模型.GGUF"
+            owned_model.rename(target)
+            owned_model = target
+            observed = checked_json([executable, "--diagnose"], cwd, env, 60, phase="desktop_diagnose",
+                                    diagnostic_file=evidence / f"diagnostics-{directory_name}-directory.json")
+            if observed["project_commit"] != manifest["project_commit"] or observed["project_dirty"] != manifest["project_dirty"]:
+                raise ValueError("program-side model directory changed package identity")
+            checks[directory_name + "_directory_gguf_accepted"] = True
+            owned_model.rename(root_model)
+            owned_model = root_model
+            directory.rmdir()
+            owned_directories.pop()
+
+        dll_created = False
+        try:
+            with extra_dll.open("xb") as destination:
+                dll_created = True
+                destination.write(b"MZsynthetic unlisted file; never executed")
+            expect_package_rejection(executable, cwd, env, "package_unlisted_file",
+                                     evidence / "diagnostics-unlisted-dll.json")
+            checks["unlisted_dll_rejected"] = True
+        finally:
+            if dll_created:
+                extra_dll.unlink()
+
+        manifest_file = desktop.base.regular(package / "manifest.json")
+        original = manifest_file.read_bytes()
+        try:
+            # Keep JSON valid, but change the declared manifest byte identity.
+            manifest_file.write_bytes(original + b"\n ")
+            expect_package_rejection(executable, cwd, env, "package_checksum_mismatch",
+                                     evidence / "diagnostics-tampered-manifest.json")
+            checks["tampered_manifest_rejected"] = True
+        finally:
+            manifest_file.write_bytes(original)
+    finally:
+        if model_created:
+            owned_model.unlink()
+            for directory in reversed(owned_directories):
+                directory.rmdir()
+            checks["owned_model_input_removed"] = True
+    # Shipping verification remains exact: the external input must not enter
+    # manifests, checksums, licenses, size accounting, or the uploaded ZIP.
+    desktop.verify(package, manifest)
+    checks["package_payload_restored"] = True
 
 
 def run_launch_probe(harness, evidence, strategy="breakaway"):
@@ -273,11 +425,17 @@ def run(archive, model, harness, evidence):
             env["TEMP"] = str(cwd)
             env["TMP"] = str(cwd)
             report["last_stage"] = "desktop_diagnose"
-            observed = checked_json([package / "nexa-desktop.exe", "--diagnose"], cwd, env, 60, phase="desktop_diagnose")
-            # Persist this useful read-only observation even if real bridge fails.
-            desktop.base.write_json(evidence / "diagnostics.json", observed)
+            observed = checked_json([package / "nexa-desktop.exe", "--diagnose"], cwd, env, 60, phase="desktop_diagnose",
+                                    diagnostic_file=evidence / "diagnostics.json")
+            # The checked diagnostic is persisted on both success and failure.
             if observed.get("package_verified") is not True or not observed.get("webview2_version") or observed.get("project_commit") != manifest["project_commit"] or observed.get("native_window_tested") is not False:
                 raise ValueError("desktop executable observations differ from package")
+            report["last_stage"] = "desktop_input_compatibility"
+            report["input_compatibility"] = {name: False for name in (
+                "root_gguf_accepted", "model_directory_gguf_accepted", "models_directory_gguf_accepted",
+                "unlisted_dll_rejected", "tampered_manifest_rejected",
+                "owned_model_input_removed", "package_payload_restored")}
+            package_input_checks(package, local_model, cwd, env, evidence, manifest, report["input_compatibility"])
             report["last_stage"] = "bridge_harness"
             bridge = checked_json([harness, "--runtime", package / "runtime/ai-runtime.exe", "--model", local_model], cwd, env, 600,
                                   phase="bridge_harness", failure_file=evidence / "bridge-failure.json")
@@ -285,7 +443,11 @@ def run(archive, model, harness, evidence):
             # missing pass declaration is never silently promoted to a pass here.
             if bridge.get("success") is not True:
                 raise ValueError("desktop real bridge did not report pass")
+            # An old managed-only harness or unsupported-platform observation
+            # cannot stand in for the real Windows external-source assertions.
+            external_library_report(bridge.get("external_library"))
             desktop.base.write_json(evidence / "bridge-real.json", bridge)
+            external_library_report(bridge["external_library"], require_windows=True)
             report["last_stage"] = "package_unchanged"
             desktop.verify(package, manifest)
             shapes = {key: {"contains_non_ascii": any(ord(c) > 127 for c in str(path)), "contains_space": " " in str(path)} for key, path in

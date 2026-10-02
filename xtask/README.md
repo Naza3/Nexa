@@ -75,7 +75,7 @@ cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
 
 默认产品在工具目录旁`../windows-x64-cpu`，可显式`--package DIR`；模型与报告必须提供。CI显式传解压产品目录，验收器核对后将包内真实CLI传给共用api-smoke，不依赖xtask位置猜测。发行必测CLI缺失直接失败。`api-smoke`开发入口新增`--cli ABS_PATH --release-acceptance true`供这一严格路径使用；一般T04入口保留其已有范围。独立验收默认五次断流恢复，`--disconnect-cycles 1..50`可显式指定；T05 Release CI明确传50，原有T04 debug CI也保留50次。
 
-所有产品进程在自有空临时CWD和仅系统目录PATH启动，不能借验收器自身DLL补产品依赖；工具也仅持有短命测试凭据。退出0只表示短程包检查过，A20/Win10实际build/无开发工具/VC预装/实际离线证据分别记录，skipped/unverified不视为通过；当前T05/T06门槛以用户批准的范围调整和状态记录为准。
+所有产品进程在自有空临时CWD和仅系统目录PATH启动，不能借验收器自身DLL补产品依赖；工具也仅持有短命测试凭据。退出0只表示短程包检查过，A20/Win10实际build/无开发工具/VC预装/实际离线证据分别记录，skipped/unverified不视为通过；当前T05/T06门槛以阶段范围和状态记录为准。
 
 独立开发检查（不要求目标机执行）：
 
@@ -88,7 +88,7 @@ python scripts/stage_ci_evidence.py
 
 Windows独立identity测试程序后缀为`.exe`。证据stage只接受闭合已审查报告，保留状态、参数、身份与脱敏前后hash；上游合成正文只留hash/字节数/fixture关联。拒绝内容产生安全失败report并exit1，不上传原始整个目录。真正Windows/目标机结果见[T05记录](../docs/verification/2026-10-01-t05-windows-package.md)。
 
-2026-10-01，源码6a7e9d0的[Windows Release CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)已完成上述打包与解压后的真实独立验收：包检查16pass/2范围skip，HTTP89pass/9skip，50次断流全部实际执行并恢复。四类路径含中文/空格，受限PATH/空CWD、服务回收与自有data清理通过；用户Windows10 build19044 / i5-8400短验随后通过：16项包检查、HTTP44pass/9skip、5/5/5断流；产品EXE/源模型含中文但无空格，临时CWD/data含中文与空格。用户声明已有开发工具且测试联网，用户批准将A20无开发工具/离线与长期稳定性留作后期验证，T05按当前范围收口并继续T06。
+2026-10-01，源码6a7e9d0的[Windows Release CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)已完成上述打包与解压后的真实独立验收：包检查16pass/2范围skip，HTTP89pass/9skip，50次断流全部实际执行并恢复。四类路径含中文/空格，受限PATH/空CWD、服务回收与自有data清理通过。另有独立Windows 10手工短验通过，与CI工程证据分层记录；A20无开发工具/离线与长期稳定性留作后期验证，T05按当前范围收口并继续T06。
 
 
 ## T06 桌面构建与分层验收
@@ -118,3 +118,5 @@ python scripts/package_desktop_windows.py
 
 
 2026-10-01源码`bc43e0f3`的[Windows CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)已实际通过上述Tauri/桌面打包及Release bridge全链：原生诊断、中文空格路径、真实导入/聊天/取消/再次生成、独立UI宿主退出保留runtime、同时退出回收均已留证。该结果只证明真实bridge和产品包，不代表Tauri原生窗口事件、选模对话框或剪贴板已实测；T06当前待用户Win10手工UI验收。
+
+外部模型目录扩展见[专门契约](../docs/t06-model-directory-contract.md)：原生选择可读本地目录，元数据留AppData、GGUF零复制及自动名称；应用/扫描前显式停止服务。桌面step24保留原T05/bridge门槛，并用实际EXE检查root/model/models直接GGUF正例与未声明DLL/清单篡改负例；外部源只读、lease和停止后可改由真实bridge验收证明，不以包四字节检查或Linux模拟代替。

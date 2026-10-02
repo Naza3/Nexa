@@ -33,6 +33,30 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("token_copy", undefined);
     await nativeApi.snapshot();
     expect(invoke).toHaveBeenLastCalledWith("desktop_snapshot", undefined);
+    await nativeApi.pickDirectory();
+    expect(invoke).toHaveBeenLastCalledWith("model_directory_pick", undefined);
+    await nativeApi.applyDirectory("selection-only");
+    expect(invoke).toHaveBeenLastCalledWith("model_directory_apply", {
+      request: { selection_id: "selection-only" },
+    });
+    await nativeApi.scanModels();
+    expect(invoke).toHaveBeenLastCalledWith("models_scan", undefined);
+    await nativeApi.libraryNext("operation-only");
+    expect(invoke).toHaveBeenLastCalledWith("model_library_next", {
+      request: { operation_id: "operation-only" },
+    });
+    await nativeApi.libraryCancel("operation-only");
+    expect(invoke).toHaveBeenLastCalledWith("model_library_cancel", {
+      request: { operation_id: "operation-only" },
+    });
+    await nativeApi.modelsPage(null, null);
+    expect(invoke).toHaveBeenLastCalledWith("models_page", {
+      request: { after: null, generation: null },
+    });
+    await nativeApi.modelsPage("cursor", "version");
+    expect(invoke).toHaveBeenLastCalledWith("models_page", {
+      request: { after: "cursor", generation: "version" },
+    });
   });
   it("never falls back to mock when native desktop is missing", async () => {
     isTauri.mockReturnValue(false);

@@ -1,4 +1,6 @@
 use crate::{
+    diagnostics,
+    directory_selection::{AdmissionError, DirectorySelection, PickedDirectory},
     layout,
     selection::{PickedModel, Selection},
 };
@@ -19,12 +21,20 @@ type Result<T> = std::result::Result<T, BridgeError>;
 struct Shell {
     bridge: Arc<DesktopBridge>,
     data_dir: PathBuf,
+    package_root: PathBuf,
     selection: Mutex<Option<Selection>>,
+    directory_selection: Mutex<Option<DirectorySelection>>,
     picking: AtomicBool,
     closing: AtomicBool,
     closed: AtomicBool,
 }
 fn error(code: &str) -> BridgeError {
+    if diagnostics::PACKAGE_ERROR_CODES.contains(&code) {
+        return BridgeError {
+            code: diagnostics::safe_code(code).into(),
+            message: diagnostics::package_operation_message(code),
+        };
+    }
     BridgeError {
         code: code.into(),
         message: match code {
@@ -32,7 +42,14 @@ fn error(code: &str) -> BridgeError {
             "desktop_busy" => "操作正在进行，请等待。",
             "clipboard_unavailable" => "无法写入系统剪贴板，请稍后重试。",
             "token_unavailable" => "令牌文件未初始化或安全校验失败。",
-            "selection_expired" => "所选文件已过期，请重新选择。",
+            "selection_expired" => "所选项目已过期，请重新选择。",
+            "model_directory_unavailable" => "所选模型目录当前不可访问，请检查后重新选择。",
+            "model_directory_unsupported" => {
+                "请选择支持的本地普通目录，不使用网络、设备、链接或重解析路径。"
+            }
+            "model_directory_inside_package_unsupported" => {
+                "程序包内只能选程序根、model 或 models 目录；也可选择程序包外目录。"
+            }
             "unauthorized_window" => "此窗口无权调用本机操作。",
             _ => "操作无法安全完成，请刷新状态后重试。",
         }
@@ -67,6 +84,17 @@ struct StartRequest {
 #[serde(deny_unknown_fields)]
 struct PageRequest {
     after: Option<String>,
+    generation: Option<Uuid>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectoryRequest {
+    selection_id: Uuid,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LibraryRequest {
+    operation_id: Uuid,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -156,13 +184,104 @@ async fn model_import(
     state.bridge.import_model(path, request.model_id).await
 }
 #[tauri::command]
+async fn model_directory_pick(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<Option<PickedDirectory>> {
+    guard(&window, &state)?;
+    if state.picking.swap(true, Ordering::AcqRel) {
+        return Err(error("desktop_busy"));
+    }
+    struct Picking<'a>(&'a AtomicBool);
+    impl Drop for Picking<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let _picking = Picking(&state.picking);
+    let picked = rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .set_title("选择现有 GGUF 模型目录（只读使用，不复制或移动）")
+        .pick_folder()
+        .await;
+    guard(&window, &state)?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    desktop_bridge::validate_model_directory_path(picked.path())?;
+    let (selection, dto) =
+        DirectorySelection::new(picked.path(), &state.package_root).map_err(error)?;
+    *state
+        .directory_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))? = Some(selection);
+    Ok(Some(dto))
+}
+#[tauri::command]
+async fn model_directory_apply(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: DirectoryRequest,
+) -> Result<LibraryOperationHandle> {
+    guard(&window, &state)?;
+    let mut selection = state
+        .directory_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))?;
+    if state.bridge.library_active().is_some() {
+        return Err(error("desktop_busy"));
+    }
+    DirectorySelection::admit(
+        &mut selection,
+        request.selection_id,
+        &state.package_root,
+        |path| {
+            desktop_bridge::validate_model_directory_path(&path)?;
+            state.bridge.directory_apply(path)
+        },
+    )
+    .map_err(|failure| match failure {
+        AdmissionError::Selection(code) => error(code),
+        AdmissionError::Rejected(error) => error,
+    })
+}
+#[tauri::command]
+async fn models_scan(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<LibraryOperationHandle> {
+    guard(&window, &state)?;
+    state.bridge.models_scan()
+}
+#[tauri::command]
+async fn model_library_next(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: LibraryRequest,
+) -> Result<LibraryOperationState> {
+    guard(&window, &state)?;
+    state.bridge.library_next(request.operation_id).await
+}
+#[tauri::command]
+async fn model_library_cancel(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: LibraryRequest,
+) -> Result<LibraryStopping> {
+    guard(&window, &state)?;
+    state.bridge.library_cancel(request.operation_id).await
+}
+#[tauri::command]
 async fn models_page(
     window: WebviewWindow,
     state: State<'_, Arc<Shell>>,
     request: PageRequest,
 ) -> Result<ModelsPage> {
     guard(&window, &state)?;
-    state.bridge.models_page(request.after).await
+    state
+        .bridge
+        .models_page(request.after, request.generation)
+        .await
 }
 #[tauri::command]
 async fn model_load(
@@ -305,8 +424,8 @@ pub fn run() {
         .ok()
         .filter(|v| !v.trim().is_empty());
     let layout = std::env::current_exe()
-        .ok()
-        .and_then(|exe| layout::validate(&exe).ok());
+        .map_err(|_| "current_executable_unavailable")
+        .and_then(|exe| layout::validate(&exe));
     // Diagnostic mode does not create a WebView, change user data, or launch the
     // runtime. CI reads only these controlled observations from an extracted ZIP.
     if std::env::args_os()
@@ -315,9 +434,13 @@ pub fn run() {
     {
         println!(
             "{}",
-            serde_json::json!({"schema_version":1,"package_verified":layout.is_some(),"project_commit":layout.as_ref().map(|p| &p.project_commit),"project_dirty":layout.as_ref().map(|p| p.project_dirty),"webview2_version":version,"native_window_tested":false})
+            serde_json::to_string(&diagnostics::StartupDiagnostic::new(
+                &layout,
+                version.as_deref()
+            ))
+            .expect("fixed startup diagnostic is serializable")
         );
-        std::process::exit(if layout.is_some() && version.is_some() {
+        std::process::exit(if layout.is_ok() && version.is_some() {
             0
         } else {
             1
@@ -333,18 +456,23 @@ pub fn run() {
         );
         return;
     }
-    let Some(layout) = layout else {
-        failure(
-            "桌面包或 runtime 子目录缺失、来源不匹配或文件校验失败。\n请完整重新解压同一 desktop-windows ZIP，保留 runtime 子目录及 manifest / SHA256SUMS。不要混用其他版本或单独移动 EXE。",
-        );
-        return;
+    let layout = match layout {
+        Ok(layout) => layout,
+        Err(code) => {
+            failure(&diagnostics::package_message(code));
+            return;
+        }
     };
     let Ok(data_dir) = desktop_bridge::default_data_dir() else {
         failure("无法确定受控的本地 Nexa 数据目录。");
         return;
     };
+    let validation_root = layout.package_root.clone();
     let bridge = match DesktopBridge::new(data_dir.clone(), layout.runtime_executable) {
-        Ok(bridge) => Arc::new(bridge),
+        Ok(bridge) => Arc::new(bridge.with_directory_validator(move |path| {
+            desktop_bridge::validate_model_directory_path(path)?;
+            crate::directory_selection::preflight_directory(path, &validation_root).map_err(error)
+        })),
         Err(_) => {
             failure("本地配置或凭据未通过安全校验。未启动、覆盖或替换 runtime。");
             return;
@@ -353,7 +481,9 @@ pub fn run() {
     let state = Arc::new(Shell {
         bridge,
         data_dir,
+        package_root: layout.package_root,
         selection: Mutex::new(None),
+        directory_selection: Mutex::new(None),
         picking: AtomicBool::new(false),
         closing: AtomicBool::new(false),
         closed: AtomicBool::new(false),
@@ -365,6 +495,11 @@ pub fn run() {
             runtime_start,
             model_pick,
             model_import,
+            model_directory_pick,
+            model_directory_apply,
+            models_scan,
+            model_library_next,
+            model_library_cancel,
             models_page,
             model_load,
             model_unload,

@@ -24,6 +24,7 @@ export interface RuntimeStatus {
     | "unloading"
     | "faulted";
   selected_model: string | null;
+  selected_model_display_name: string | null;
   load_options: LoadOptions | null;
   active_request: string | null;
   queued_jobs: number;
@@ -54,6 +55,7 @@ export interface Snapshot {
   api_address: string | null;
   runtime: RuntimeStatus | null;
   settings: Settings;
+  model_directory: ModelDirectory;
 }
 export interface ModelSummary {
   id: string;
@@ -65,16 +67,52 @@ export interface ModelSummary {
   validated: boolean;
   available: boolean;
   context_size: number | null;
+  storage: "managed" | "external";
+  availability_error: string | null;
 }
-export interface ModelSelection {
+export interface DirectoryIdentity {
+  directory_id: string;
+  display_path: string;
+  library_generation: string;
+}
+export interface ModelDirectory {
+  configured: DirectoryIdentity | null;
+  effective: DirectoryIdentity | null;
+  state:
+    | "default"
+    | "ready"
+    | "stopped"
+    | "stale"
+    | "missing"
+    | "unavailable"
+    | "unsupported";
+}
+export interface DirectorySelection {
   selection_id: string;
-  file_name: string;
-  size_bytes: number;
-  destination: string;
+  display_path: string;
+}
+export interface LibraryResult {
+  library_generation: string;
+  directory_id: string;
+  registered_files: number;
+  available_files: number;
+}
+export interface LibraryOperation {
+  operation_id: string;
+  status: "running" | "completed" | "cancelled" | "failed";
+  phase: "checking" | "enumerating" | "verifying" | "committing" | "finished";
+  examined_entries: number;
+  candidate_files: number;
+  verified_files: number;
+  terminal: boolean;
+  result: LibraryResult | null;
+  error: SafeError | null;
+  failed_file_name: string | null;
 }
 export interface ModelPage {
   data: ModelSummary[];
   next_after: string | null;
+  generation: string;
 }
 export interface WireMessage {
   role: "user" | "assistant" | "system";
@@ -104,9 +142,17 @@ export interface ChatRequest {
 export interface DesktopApi {
   snapshot(): Promise<Snapshot>;
   start(initialize_if_missing: boolean): Promise<Snapshot>;
-  pickModel(): Promise<ModelSelection | null>;
-  importModel(selection_id: string, model_id: string): Promise<ModelSummary>;
-  modelsPage(after: string | null): Promise<ModelPage>;
+  pickDirectory(): Promise<DirectorySelection | null>;
+  applyDirectory(selection_id: string): Promise<{ operation_id: string }>;
+  scanModels(): Promise<{ operation_id: string }>;
+  libraryNext(operation_id: string): Promise<LibraryOperation>;
+  libraryCancel(
+    operation_id: string,
+  ): Promise<{ operation_id: string; status: "stopping" }>;
+  modelsPage(
+    after: string | null,
+    generation: string | null,
+  ): Promise<ModelPage>;
   loadModel(model_id: string, options: LoadOptions): Promise<RuntimeStatus>;
   unloadModel(): Promise<RuntimeStatus>;
   chatStart(request: ChatRequest): Promise<{ request_id: string }>;

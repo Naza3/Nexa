@@ -25,3 +25,6 @@ ai-runtime version --json
 stop仅在HTTP确认实际core/worker清理且原实例锁/记录释放后成功。历史清理未确认不能因进程消失而冒充停止；失败返回非零。不猜PID、不杀无关进程、不自动重连或跟随重定向。
 
 测试都使用临时目录和凭据。普通fixture测试不表示真实模型推理；真实模型/HTTP/Windows证据见项目验证记录。
+
+
+T06外部模型目录由同一data root下的model-library.json描述，serve启动只读索引和有界元数据，离线list合并旧managed与external。旧import仍是用户明确请求的受管理复制导入，外部注册不会令它变成隐式移动。API shutdown、Ctrl+C和serve结束都要确认runtime/worker清理后才释放外部源guard；未确认时不宣称停止，沿用失败标记与非零退出。产品每进程只执行一次serve，未知外部cleanup后不在同进程重建catalog。

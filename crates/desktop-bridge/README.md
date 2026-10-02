@@ -52,3 +52,14 @@ Harness 仅新建唯一临时目录、临时凭据与 listen=0 配置，使用�
 输出 kind 为 `nexa-desktop-launch-probe`、`schema_version=2`，明确记录 `strategy`、父/子 `in_job`（bool/null）和各自查询的 OS 数值错误，绝不输出 Job 句柄或名称。在 250ms 窗口内观察 `tokio::signal::ctrl_c()` 是 pending、收到事件还是返回真实 OS 错误。父端观察至多 10 秒，异常后额外至多 1 秒确认自己的探针子进程退出；未确认回收时保留私有目录并报告 `cleanup_confirmed=false`。已无子进程或退出已确认，才清理有界私有报告。合法观察报告就 exit 0；`success=true` 仅限 pending、child exit 0、所有 OS 错误空、父/子 Job 查询已确认且清理已确认。非 Windows 对两个策略分别报告 `unsupported_platform`。此探针不证明 runtime/worker 生命周期，更不替代 Windows UI 或真实推理验收。继承外部 Job 的子进程仍受其生命周期限制，不能声称超过外部宿主寿命。
 
 所有协议 key、stage/code 和枚举在 `src/bin/harness/report.rs`；Python wrapper 通过源码一致性测试防止白名单漂移。Windows CI 36854351971 的单变量对照已观察到：同 exe 的 breakaway 创建返回 OS 5；inherit_job 父子均在 Job 内且成功创建，`ctrl_c` 在 250ms 窗口内 pending、无错误。当前产品据此选择继承策略，CLI `ctrl_c` 逻辑保持不变。探针不是完整 runtime 启动、真实推理或进程退出后的存活证明，后者仍由完整 Windows 验收判定。
+
+
+## 外部模型目录与自动名称
+
+新桌面流程由原生目录选择产生一次性 selection_id，bridge 将目录扫描与单一 model-library.json 原子发布放在停止状态的实例锁内。库操作登记 operation_id 后通过有界 next/cancel 接口观察；只读源 GGUF，不复制、移动、改名或删除。旧 managed 模型仍在原位置，显示名与内部 ID 分离，外部文件默认按文件名去掉 .gguf 显示，ID 自动生成并按文件名/内容身份稳定复用。
+
+配置、token、索引继续在 AppData；选中目录只有读取要求。路径上限 32KiB UTF-8/64 components，扫描非递归、1024目录项/64 GGUF、单16GiB/总32GiB，300秒协作预算与64KiB取消检查。单次OS文件I/O不能被Rust强制抢断时，关闭继续报告清理未确认/保留窗口，不假装已取消；源文件始终不写。详细字段见 [冻结契约](../../docs/t06-model-directory-contract.md)。
+
+Windows 首次load或直接chat自动加载前，在blocking准备任务取得只读共享文件/目录guard并完整核验SHA与身份。启动只读索引/元数据，不重hash整库。API断流与关停取消准备；registry lease保留到blocking任务实际结束。guard一直保留到runtime/worker确认停止，卸载不释放。未知cleanup会保留有界guard到进程退出并永久禁止本进程重建catalog；产品CLI每进程只serve一次。普通写入/替换保护与预存可写mapping观察分开验收，不能称任意写者下绝对不可修改。Linux外部推理明确unsupported，仅开发扫描/契约回归。
+
+模型分页generation来自实际服务，旧服务缺字段提示重启匹配版本；snapshot区分configured/effective且stale/unsupported优先于missing。rename已成功但目录fsync失败保留settings_durability_unconfirmed，必须刷新真实generation后再决定下一步。失败文件名只在原生授权UI显示受控basename，不写harness/CI报告。

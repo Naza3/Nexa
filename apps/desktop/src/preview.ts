@@ -7,12 +7,15 @@ import type {
   ModelSummary,
   RuntimeStatus,
   Snapshot,
+  DirectoryIdentity,
+  LibraryOperation,
 } from "./types";
 export function createPreviewApi(): DesktopApi {
   const scenario = new URLSearchParams(window.location.search).get("scenario");
   const runtime: RuntimeStatus = {
     state: "ready",
     selected_model: "qwen3-0.6b-q8",
+    selected_model_display_name: "Qwen3 0.6B",
     load_options: { context_size: 2048, threads: 2, batch_size: 128 },
     active_request: null,
     queued_jobs: 0,
@@ -39,6 +42,7 @@ export function createPreviewApi(): DesktopApi {
           : "connected",
     api_address: "http://127.0.0.1:18181",
     settings: { ...DEFAULT_SETTINGS },
+    model_directory: { configured: null, effective: null, state: "default" },
     runtime,
   };
   let models: ModelSummary[] =
@@ -55,11 +59,14 @@ export function createPreviewApi(): DesktopApi {
             validated: true,
             available: true,
             context_size: 2048,
+            storage: "managed",
+            availability_error: null,
           },
         ];
   if (scenario === "empty" || scenario === "initial") {
     runtime.state = "unloaded";
     runtime.selected_model = null;
+    runtime.selected_model_display_name = null;
     runtime.load_options = null;
   }
   if (scenario === "faulted") {
@@ -74,6 +81,34 @@ export function createPreviewApi(): DesktopApi {
     cancel = false;
   let lastTerminal: ChatEvent | null = null;
   const clone = () => structuredClone(snapshot);
+  let catalogGeneration = "00000000-0000-4000-8000-000000000001";
+  let libraryId = 0;
+  let libraryPolls = 0;
+  let libraryCancelled = false;
+  let libraryTerminal: LibraryOperation | null = null;
+  let pendingDirectory: DirectoryIdentity | null = null;
+  const pick = {
+    selection_id: "preview-directory-selection",
+    display_path: "D:\\本地模型\\Qwen 模型（模拟目录）",
+  };
+  function startLibrary(apply: boolean) {
+    if (snapshot.connection !== "stopped")
+      throw new DesktopError("runtime_running", "请先显式停止运行服务。");
+    if (!apply && !snapshot.model_directory.configured)
+      throw new DesktopError("model_directory_required", "请先选择目录。");
+    libraryId++;
+    libraryPolls = 0;
+    libraryCancelled = false;
+    libraryTerminal = null;
+    pendingDirectory = apply
+      ? {
+          directory_id: "00000000-0000-4000-8000-000000000002",
+          display_path: pick.display_path,
+          library_generation: "00000000-0000-4000-8000-000000000003",
+        }
+      : snapshot.model_directory.configured;
+    return { operation_id: `preview-library-${libraryId}` };
+  }
   return {
     snapshot: async () => {
       await wait(60);
@@ -86,24 +121,54 @@ export function createPreviewApi(): DesktopApi {
       snapshot.initialized = true;
       snapshot.connection = "connected";
       snapshot.runtime = runtime;
+      snapshot.model_directory.effective = snapshot.model_directory.configured;
+      snapshot.model_directory.state = snapshot.model_directory.configured
+        ? "ready"
+        : "default";
       return clone();
     },
-    pickModel: async () => ({
-      selection_id: "preview-selection",
-      file_name: "Qwen3-0.6B-Q8_0.gguf",
-      size_bytes: 639898240,
-      destination: "%LOCALAPPDATA%\\Nexa\\models（模拟目录）",
-    }),
-    importModel: async (_, id) => {
-      await wait(1600);
-      if (models.some((model) => model.id === id))
-        throw new DesktopError(
-          "model_exists",
-          "模型 ID 已存在，请更换 ID 后重新选择文件。",
-        );
-      const model: ModelSummary = {
-        id,
-        display_name: id,
+    pickDirectory: async () => pick,
+    applyDirectory: async () => startLibrary(true),
+    scanModels: async () => startLibrary(false),
+    libraryNext: async (operation_id) => {
+      await wait(70);
+      if (libraryTerminal) return libraryTerminal;
+      libraryPolls++;
+      const base = {
+        operation_id,
+        examined_entries: 2,
+        candidate_files: 1,
+        verified_files: libraryPolls > 1 ? 1 : 0,
+        result: null,
+        error: null,
+        failed_file_name: null,
+      };
+      if (libraryCancelled) {
+        libraryTerminal = {
+          ...base,
+          status: "cancelled",
+          phase: "finished",
+          terminal: true,
+        };
+        return libraryTerminal;
+      }
+      if (libraryPolls === 1)
+        return {
+          ...base,
+          status: "running",
+          phase: "verifying",
+          terminal: false,
+        };
+      const identity = pendingDirectory!;
+      snapshot.model_directory = {
+        configured: identity,
+        effective: null,
+        state: "stopped",
+      };
+      catalogGeneration = identity.library_generation;
+      const external: ModelSummary = {
+        id: "ext-00000000000040008000000000000004",
+        display_name: "Qwen3 中文 0.6B Q8_0",
         size_bytes: 639898240,
         sha256: "preview-only",
         architecture: "qwen3",
@@ -111,19 +176,44 @@ export function createPreviewApi(): DesktopApi {
         validated: true,
         available: true,
         context_size: 2048,
+        storage: "external",
+        availability_error: null,
       };
-      models = [...models, model];
-      return model;
+      models = [
+        ...models.filter((model) => model.storage === "managed"),
+        external,
+      ];
+      libraryTerminal = {
+        ...base,
+        verified_files: 1,
+        status: "completed",
+        phase: "finished",
+        terminal: true,
+        result: {
+          library_generation: identity.library_generation,
+          directory_id: identity.directory_id,
+          registered_files: 1,
+          available_files: 1,
+        },
+      };
+      return libraryTerminal;
+    },
+    libraryCancel: async (operation_id) => {
+      libraryCancelled = true;
+      return { operation_id, status: "stopping" };
     },
     modelsPage: async () => ({
       data: structuredClone(models),
       next_after: null,
+      generation: catalogGeneration,
     }),
     loadModel: async (id, options) => {
       runtime.state = "loading";
       await wait(1000);
       runtime.state = "ready";
       runtime.selected_model = id;
+      runtime.selected_model_display_name =
+        models.find((model) => model.id === id)?.display_name ?? null;
       runtime.load_options = options;
       return structuredClone(runtime);
     },
@@ -132,6 +222,7 @@ export function createPreviewApi(): DesktopApi {
       await wait(500);
       runtime.state = "unloaded";
       runtime.selected_model = null;
+      runtime.selected_model_display_name = null;
       runtime.load_options = null;
       return structuredClone(runtime);
     },
@@ -202,6 +293,15 @@ export function createPreviewApi(): DesktopApi {
     },
     stop: async () => {
       await wait(600);
+      runtime.state = "unloaded";
+      runtime.selected_model = null;
+      runtime.selected_model_display_name = null;
+      runtime.load_options = null;
+      snapshot.model_directory = {
+        ...snapshot.model_directory,
+        effective: null,
+        state: snapshot.model_directory.configured ? "stopped" : "default",
+      };
       snapshot = {
         ...snapshot,
         connection: "stopped",

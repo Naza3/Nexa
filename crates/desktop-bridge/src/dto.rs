@@ -77,6 +77,7 @@ pub struct DesktopSnapshot {
     pub api_address: Option<String>,
     pub runtime: Option<RuntimeStatus>,
     pub settings: DesktopSettings,
+    pub model_directory: ModelDirectorySnapshot,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +93,10 @@ pub enum RuntimeState {
 pub struct RuntimeStatus {
     pub state: RuntimeState,
     pub selected_model: Option<ModelId>,
+    #[serde(default)]
+    pub selected_model_display_name: Option<String>,
+    #[serde(default)]
+    pub model_library: Option<ModelLibraryObservation>,
     pub load_options: Option<LoadOptions>,
     pub active_request: Option<Uuid>,
     pub queued_jobs: usize,
@@ -122,6 +127,10 @@ pub struct MemoryStatus {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelSummary {
+    #[serde(default)]
+    pub storage: model_store::ModelStorage,
+    #[serde(default)]
+    pub availability_error: Option<String>,
     pub id: ModelId,
     pub display_name: String,
     pub size_bytes: u64,
@@ -134,6 +143,7 @@ pub struct ModelSummary {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelsPage {
+    pub generation: Uuid,
     pub data: Vec<ModelSummary>,
     pub next_after: Option<String>,
 }
@@ -193,4 +203,81 @@ pub struct Stopping {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Stopped {
     pub stopped: bool,
+}
+
+/// Read-only path display. Native selection IDs, never this string, authorize writes.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelDirectoryInfo {
+    pub directory_id: Uuid,
+    pub display_path: String,
+    pub library_generation: Uuid,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelDirectoryState {
+    Default,
+    Ready,
+    Stopped,
+    Stale,
+    Missing,
+    Unavailable,
+    Unsupported,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelDirectorySnapshot {
+    pub configured: Option<ModelDirectoryInfo>,
+    pub effective: Option<ModelDirectoryInfo>,
+    pub state: ModelDirectoryState,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryOperationHandle {
+    pub operation_id: Uuid,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryOperationStatus {
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryOperationPhase {
+    Checking,
+    Enumerating,
+    Verifying,
+    Committing,
+    Finished,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryOperationResult {
+    pub library_generation: Uuid,
+    pub directory_id: Uuid,
+    pub registered_files: usize,
+    pub available_files: usize,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryOperationState {
+    pub operation_id: Uuid,
+    pub status: LibraryOperationStatus,
+    pub phase: LibraryOperationPhase,
+    pub examined_entries: usize,
+    pub candidate_files: usize,
+    pub verified_files: usize,
+    pub failed_file_name: Option<String>,
+    pub terminal: bool,
+    pub result: Option<LibraryOperationResult>,
+    pub error: Option<crate::BridgeError>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LibraryStopping {
+    pub operation_id: Uuid,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelLibraryObservation {
+    pub supported: bool,
+    pub directory: Option<ModelDirectoryInfo>,
 }

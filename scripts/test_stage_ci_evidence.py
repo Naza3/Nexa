@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from stage_ci_evidence import MAX_REPORT_BYTES, read_regular, stage
+from run_desktop_smoke import DIAGNOSTIC_REPORTS, EXTERNAL_LIBRARY_KEYS
 
 
 class EvidenceStagingTests(unittest.TestCase):
@@ -109,6 +110,45 @@ class EvidenceStagingTests(unittest.TestCase):
     def test_desktop_failure_requires_its_exact_closed_schema(self):
         self.put("windows-desktop/bridge-failure.json", json.dumps({"stage": "private text", "success": False}))
         self.assert_rejected("windows-desktop/bridge-failure.json")
+
+    def test_desktop_startup_failure_preserves_only_closed_diagnostic(self):
+        report = {"schema_version": 2, "package_verified": False, "package_error_code": "package_unlisted_file",
+                  "project_commit": None, "project_dirty": None, "webview2_version": "131.0.2903.86", "native_window_tested": False}
+        self.put("windows-desktop/diagnostics.json", json.dumps(report))
+        self.assertEqual(self.run_stage()["result"], "pass")
+        self.assertEqual(json.loads((self.out / "windows-desktop/diagnostics.json").read_text(encoding="utf-8")), report)
+
+    def test_desktop_startup_diagnostic_unknown_field_is_rejected(self):
+        report = {"schema_version": 2, "package_verified": False, "package_error_code": "package_unlisted_file",
+                  "project_commit": None, "project_dirty": None, "webview2_version": None, "native_window_tested": False,
+                  "detail": "unreviewed private data"}
+        self.put("windows-desktop/diagnostics.json", json.dumps(report))
+        self.assert_rejected("windows-desktop/diagnostics.json")
+
+    def test_native_ui_failure_filename_is_never_ci_evidence(self):
+        self.put("windows-desktop/bridge-real.json", json.dumps({"success": False, "external_library": {name: True for name in EXTERNAL_LIBRARY_KEYS}, "failed_file_name": "private model name.gguf"}))
+        self.assert_rejected("windows-desktop/bridge-real.json")
+        self.assertNotIn("private model", (self.out / "staging-failure.json").read_text(encoding="utf-8"))
+
+    def test_external_platform_negative_is_preserved_without_becoming_pass(self):
+        report = {"success": True, "external_library": {name: False for name in EXTERNAL_LIBRARY_KEYS}}
+        self.put("windows-desktop/bridge-real.json", json.dumps(report))
+        self.assertEqual(self.run_stage()["result"], "pass")
+        self.assertEqual(json.loads((self.out / "windows-desktop/bridge-real.json").read_text(encoding="utf-8")), report)
+
+    def test_external_unknown_data_fields_are_not_staged(self):
+        report = {"success": True, "external_library": {**{name: True for name in EXTERNAL_LIBRARY_KEYS}, "file_name": "private"}}
+        self.put("windows-desktop/bridge-real.json", json.dumps(report))
+        self.assert_rejected("windows-desktop/bridge-real.json")
+
+    def test_all_fixed_input_diagnostics_are_staged_with_the_same_schema(self):
+        report = {"schema_version": 2, "package_verified": True, "package_error_code": None,
+                  "project_commit": "a" * 40, "project_dirty": False, "webview2_version": "131.0.2903.86", "native_window_tested": False}
+        for name in DIAGNOSTIC_REPORTS:
+            self.put("windows-desktop/" + name, json.dumps(report))
+        result = self.run_stage()
+        self.assertEqual(result["result"], "pass")
+        self.assertEqual({item["path"] for item in result["files"]}, {"windows-desktop/" + name for name in DIAGNOSTIC_REPORTS})
 
     def test_launch_probe_negative_observation_is_preserved(self):
         report = {"schema_version": 2, "kind": "nexa-desktop-launch-probe", "success": False,

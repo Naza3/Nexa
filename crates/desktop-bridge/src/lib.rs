@@ -3,6 +3,7 @@
 mod chat;
 pub mod dto;
 mod error;
+mod library;
 mod settings;
 mod sse;
 pub use dto::*;
@@ -42,13 +43,17 @@ pub struct DesktopBridge {
     startup_diagnostics: Mutex<StartupDiagnostics>,
     root: PathBuf,
     executable: PathBuf,
-    work: AsyncMutex<()>,
+    work: std::sync::Arc<AsyncMutex<()>>,
     snapshot_gate: AsyncMutex<()>,
     close_gate: AsyncMutex<()>,
     closing: AtomicBool,
     close_signal: tokio::sync::Notify,
     import_disconnected: AtomicBool,
+    load_disconnected: AtomicBool,
+    directory_validator: Option<std::sync::Arc<library::DirectoryValidator>>,
     chat: Mutex<chat::ChatSlot>,
+    library: Mutex<library::LibrarySlot>,
+    library_poll: AsyncMutex<()>,
 }
 impl DesktopBridge {
     /// Paths come from the native shell's verified package layout, never invoke.
@@ -68,13 +73,17 @@ impl DesktopBridge {
             startup_diagnostics: Mutex::new(StartupDiagnostics::default()),
             root: data_dir,
             executable: runtime_executable,
-            work: AsyncMutex::new(()),
+            work: std::sync::Arc::new(AsyncMutex::new(())),
             snapshot_gate: AsyncMutex::new(()),
             close_gate: AsyncMutex::new(()),
             closing: AtomicBool::new(false),
             close_signal: tokio::sync::Notify::new(),
             import_disconnected: AtomicBool::new(false),
+            load_disconnected: AtomicBool::new(false),
+            directory_validator: None,
             chat: Mutex::new(chat::ChatSlot::default()),
+            library: Mutex::new(library::LibrarySlot::default()),
+            library_poll: AsyncMutex::new(()),
         })
     }
     pub fn startup_diagnostics(&self) -> StartupDiagnostics {
@@ -120,6 +129,7 @@ impl DesktopBridge {
                 api_address: None,
                 runtime: None,
                 settings: DesktopSettings::default(),
+                model_directory: library::directory_snapshot(&self.root, None)?,
             });
         }
         let config = settings::require_initialized(&self.root)?;
@@ -130,7 +140,11 @@ impl DesktopBridge {
             api_address: Some(format!("http://{}", config.api.listen)),
             runtime: None,
             settings: preferences.with_idle(config.runtime.idle_unload_seconds),
+            model_directory: library::directory_snapshot(&self.root, None)?,
         };
+        if self.library.lock().unwrap().owns_instance() {
+            return Ok(snapshot);
+        }
         if let Some(lock) = InstanceLock::try_acquire(&self.root)
             .map_err(|_| BridgeError::new("instance_unavailable"))?
         {
@@ -145,6 +159,8 @@ impl DesktopBridge {
                 snapshot.api_address = Some(format!("http://{}", discovery.listen));
                 match self.status().await {
                     Ok(status) => {
+                        snapshot.model_directory =
+                            library::directory_snapshot(&self.root, Some(&status))?;
                         snapshot.runtime = Some(status);
                         snapshot.connection = ConnectionState::Connected;
                     }
@@ -271,16 +287,36 @@ impl DesktopBridge {
         }
         Ok(())
     }
-    pub async fn models_page(&self, after: Option<String>) -> Result<ModelsPage> {
+    pub async fn models_page(
+        &self,
+        after: Option<String>,
+        generation: Option<uuid::Uuid>,
+    ) -> Result<ModelsPage> {
         self.open()?;
-        let path = match after.as_deref() {
+        let mut path = match after.as_deref() {
             Some(id) => format!(
                 "/runtime/models?limit=64&after={}",
                 runtime_types::ModelId::new(id).map_err(|_| BridgeError::new("invalid_request"))?
             ),
             None => "/runtime/models?limit=64".into(),
         };
-        let page: ModelsPage = self.json(Method::GET, &path, None).await?;
+        if after.is_some() && generation.is_none() {
+            return Err(BridgeError::new("model_list_changed"));
+        }
+        if let Some(generation) = generation {
+            path.push_str(&format!("&generation={generation}"));
+        }
+        let value: Value = self.json(Method::GET, &path, None).await?;
+        if value.get("generation").is_none() {
+            return Err(BridgeError::new("model_library_unsupported"));
+        }
+        let page: ModelsPage =
+            serde_json::from_value(value).map_err(|_| BridgeError::new("response_invalid"))?;
+        if page.generation.is_nil()
+            || generation.is_some_and(|expected| expected != page.generation)
+        {
+            return Err(BridgeError::new("model_list_changed"));
+        }
         if page.data.len() > 64
             || page.data.windows(2).any(|w| w[0].id >= w[1].id)
             || page
@@ -349,7 +385,15 @@ impl DesktopBridge {
         }
         .validate()
         .map_err(|_| BridgeError::new("settings_invalid"))?;
-        self.json(Method::POST,"/runtime/load",Some(&json!({"model":id,"backend":"cpu","gpu_layers":0,"context_size":request.context_size,"threads":request.threads,"batch_size":request.batch_size}))).await
+        let body = json!({"model":id,"backend":"cpu","gpu_layers":0,"context_size":request.context_size,"threads":request.threads,"batch_size":request.batch_size});
+        tokio::select! {
+            biased;
+            _ = self.closing_requested() => {
+                self.load_disconnected.store(true, Ordering::Release);
+                Err(BridgeError::new("model_load_interrupted"))
+            }
+            result = self.json(Method::POST,"/runtime/load",Some(&body)) => result,
+        }
     }
     pub async fn unload_model(&self) -> Result<RuntimeStatus> {
         self.open()?;
@@ -464,14 +508,24 @@ impl DesktopBridge {
         self.close_signal.notify_waiters();
         let result = async {
             self.close_chat().await?;
+            self.close_library().await?;
             let _work = tokio::time::timeout(Duration::from_secs(10), self.work.lock())
                 .await
                 .map_err(|_| BridgeError::new("desktop_busy"))?;
-            if self.import_disconnected.load(Ordering::Acquire) {
+            if self.import_disconnected.load(Ordering::Acquire)
+                || self.load_disconnected.load(Ordering::Acquire)
+            {
+                let load_disconnected = self.load_disconnected.load(Ordering::Acquire);
                 tokio::time::timeout(Duration::from_secs(10), async {
                     loop {
                         let status = self.status().await?;
-                        if !status.registry_busy {
+                        if !status.registry_busy
+                            && !(load_disconnected
+                                && matches!(
+                                    status.state,
+                                    RuntimeState::Loading | RuntimeState::Unloading
+                                ))
+                        {
                             return Ok::<_, BridgeError>(());
                         }
                         // Registry ownership is not exposed. A competing
@@ -480,8 +534,15 @@ impl DesktopBridge {
                     }
                 })
                 .await
-                .map_err(|_| BridgeError::new("import_cleanup_unconfirmed"))??;
+                .map_err(|_| {
+                    BridgeError::new(if load_disconnected {
+                        "desktop_busy"
+                    } else {
+                        "import_cleanup_unconfirmed"
+                    })
+                })??;
                 self.import_disconnected.store(false, Ordering::Release);
+                self.load_disconnected.store(false, Ordering::Release);
             }
             let stop = !ui_only
                 && self.root.join("config.toml").exists()
@@ -505,19 +566,11 @@ fn runtime_creation_flags() -> u32 {
     // UI-owned kill-on-close Job, or claim survival beyond an external Job.
     CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
 }
-#[cfg(all(test, windows))]
-mod windows_launch_tests {
-    #[test]
-    fn runtime_flags_detach_console_but_respect_inherited_job() {
-        use windows_sys::Win32::System::Threading::{
-            CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        };
-        let flags = super::runtime_creation_flags();
-        assert_eq!(flags, CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
-        assert_eq!(flags & CREATE_BREAKAWAY_FROM_JOB, 0);
-    }
+/// Native directory picker preflight. Does not expose a path-taking invoke.
+pub fn validate_model_directory_path(path: &Path) -> Result<()> {
+    model_store::library::validate_directory_candidate(path)
+        .map_err(|error| BridgeError::new(error.code.as_str()))
 }
-
 pub fn default_data_dir() -> Result<PathBuf> {
     runtime_cli::command::parse(vec!["status".into()])
         .map(|o| o.data_dir)
@@ -549,4 +602,17 @@ fn local_source(path: &Path) -> Result<PathBuf> {
         return Err(BridgeError::new("invalid_model_source"));
     }
     Ok(canonical)
+}
+
+#[cfg(all(test, windows))]
+mod windows_launch_tests {
+    #[test]
+    fn runtime_flags_detach_console_but_respect_inherited_job() {
+        use windows_sys::Win32::System::Threading::{
+            CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
+        };
+        let flags = super::runtime_creation_flags();
+        assert_eq!(flags, CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+        assert_eq!(flags & CREATE_BREAKAWAY_FROM_JOB, 0);
+    }
 }

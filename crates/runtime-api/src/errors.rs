@@ -191,6 +191,24 @@ impl From<RuntimeError> for ApiError {
                 "Insufficient storage for the private model copy.",
                 None,
             ),
+            ModelDirectoryRequired
+            | ModelDirectoryUnavailable
+            | ModelDirectoryUnsupported
+            | ModelLibraryUnsupported
+            | ModelLibraryLimit
+            | ModelLibraryChanged
+            | ModelListChanged
+            | ModelScanTimeout
+            | ModelScanCancelled
+            | ModelFileChanged
+            | ModelFileUnavailable
+            | ModelFileInUse
+            | ModelLibraryWriteFailed => (
+                StatusCode::BAD_REQUEST,
+                value.code.as_str(),
+                "The selected model library could not be used safely. Refresh its state before retrying.",
+                Some("model_library"),
+            ),
             Io | WrongThread | NativeProtocol => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",

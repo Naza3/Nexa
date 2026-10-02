@@ -28,6 +28,7 @@ struct FileIdentity {
 }
 
 pub struct ProductLayout {
+    pub package_root: PathBuf,
     pub runtime_executable: PathBuf,
     pub project_commit: String,
     pub project_dirty: bool,
@@ -79,6 +80,7 @@ fn inventory(
     root: &Path,
     directory: &Path,
     out: &mut BTreeSet<String>,
+    directories: &mut BTreeSet<String>,
 ) -> Result<(), &'static str> {
     for entry in fs::read_dir(directory).map_err(|_| "package_directory_unavailable")? {
         let entry = entry.map_err(|_| "package_directory_unavailable")?;
@@ -105,7 +107,19 @@ fn inventory(
             {
                 return Err("package_path_invalid");
             }
-            inventory(root, &path, out)?;
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "package_path_invalid")?
+                .to_str()
+                .ok_or("package_path_invalid")?
+                .replace('\\', "/");
+            if !valid_relative(&relative)
+                || !directories.insert(relative)
+                || directories.len() > MAX_FILES
+            {
+                return Err("package_inventory_invalid");
+            }
+            inventory(root, &path, out, directories)?;
         } else {
             regular_file(&path)?;
             let relative = path
@@ -121,7 +135,38 @@ fn inventory(
     }
     Ok(())
 }
-fn verify(root: &Path, expected_product: &str) -> Result<Manifest, &'static str> {
+fn gguf_header(reader: &mut impl Read) -> bool {
+    let mut magic = [0; 4];
+    reader.read_exact(&mut magic).is_ok() && magic == *b"GGUF"
+}
+
+fn external_root_model(root: &Path, relative: &str) -> Result<bool, &'static str> {
+    // Only undeclared direct children of root, model/ or models/ are candidates.
+    // This is not model validation or import, and never hashes the model body.
+    let parts: Vec<_> = relative.split('/').collect();
+    let allowed_location = parts.len() == 1
+        || (parts.len() == 2
+            && (parts[0].eq_ignore_ascii_case("model") || parts[0].eq_ignore_ascii_case("models")));
+    if !allowed_location
+        || !Path::new(relative)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+    {
+        return Ok(false);
+    }
+    let path = regular_file(&root.join(relative))?;
+    let mut file = fs::File::open(path).map_err(|_| "package_file_unavailable")?;
+    if !gguf_header(&mut file) {
+        return Err("package_external_model_header_invalid");
+    }
+    Ok(true)
+}
+
+fn verify(
+    root: &Path,
+    expected_product: &str,
+    allow_external_root_models: bool,
+) -> Result<Manifest, &'static str> {
     let manifest: Manifest = serde_json::from_slice(&bounded_read(&root.join("manifest.json"))?)
         .map_err(|_| "package_manifest_invalid")?;
     if manifest.product != expected_product
@@ -171,10 +216,40 @@ fn verify(root: &Path, expected_product: &str) -> Result<Manifest, &'static str>
         return Err("package_checksum_mismatch");
     }
     let mut actual = BTreeSet::new();
-    inventory(root, root, &mut actual)?;
+    let mut directories = BTreeSet::new();
+    inventory(root, root, &mut actual, &mut directories)?;
     actual.remove("SHA256SUMS");
-    if actual != declared.keys().cloned().collect() {
+    let declared_names = declared.keys().cloned().collect::<BTreeSet<_>>();
+    for name in actual.difference(&declared_names) {
+        if !allow_external_root_models || !external_root_model(root, name)? {
+            return Err("package_unlisted_file");
+        }
+    }
+    if !declared_names.is_subset(&actual) {
         return Err("package_unlisted_file");
+    }
+    let mut declared_directories = BTreeSet::new();
+    for name in &declared_names {
+        for parent in Path::new(name)
+            .ancestors()
+            .skip(1)
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            declared_directories.insert(
+                parent
+                    .to_str()
+                    .ok_or("package_path_invalid")?
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    for directory in directories.difference(&declared_directories) {
+        if !(allow_external_root_models
+            && (directory.eq_ignore_ascii_case("model")
+                || directory.eq_ignore_ascii_case("models")))
+        {
+            return Err("package_unlisted_file");
+        }
     }
     Ok(manifest)
 }
@@ -188,9 +263,9 @@ pub fn validate(executable: &Path) -> Result<ProductLayout, &'static str> {
         return Err("desktop_executable_name_invalid");
     }
     let root = executable.parent().ok_or("package_root_unavailable")?;
-    let desktop = verify(root, "nexa-desktop")?;
+    let desktop = verify(root, "nexa-desktop", true)?;
     let runtime_root = root.join("runtime");
-    let runtime = verify(&runtime_root, "nexa-runtime")?;
+    let runtime = verify(&runtime_root, "nexa-runtime", false)?;
     if runtime.project_commit != desktop.project_commit
         || runtime.project_dirty != desktop.project_dirty
     {
@@ -199,6 +274,7 @@ pub fn validate(executable: &Path) -> Result<ProductLayout, &'static str> {
     let runtime_executable = regular_file(&runtime_root.join("ai-runtime.exe"))?;
     regular_file(&runtime_root.join("ai-runtime-worker.exe"))?;
     Ok(ProductLayout {
+        package_root: root.to_path_buf(),
         runtime_executable,
         project_commit: desktop.project_commit,
         project_dirty: desktop.project_dirty,
@@ -206,15 +282,15 @@ pub fn validate(executable: &Path) -> Result<ProductLayout, &'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     fn fixture(root: &Path, product: &str) {
         let mut items = BTreeSet::new();
-        inventory(root, root, &mut items).unwrap();
+        inventory(root, root, &mut items, &mut BTreeSet::new()).unwrap();
         let files: Vec<_> = items.into_iter().map(|path| serde_json::json!({"sha256": hash(&root.join(&path)).unwrap(), "size_bytes": fs::metadata(root.join(&path)).unwrap().len(), "path": path})).collect();
         fs::write(root.join("manifest.json"), serde_json::to_vec(&serde_json::json!({"product":product,"project_commit":"a".repeat(40),"project_dirty":false,"files":files})).unwrap()).unwrap();
         let mut items = BTreeSet::new();
-        inventory(root, root, &mut items).unwrap();
+        inventory(root, root, &mut items, &mut BTreeSet::new()).unwrap();
         fs::write(
             root.join("SHA256SUMS"),
             items
@@ -224,10 +300,7 @@ mod tests {
         )
         .unwrap();
     }
-    #[test]
-    fn complete_matching_nested_runtime_is_required() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+    pub(crate) fn complete_fixture(root: &Path) {
         fs::create_dir(root.join("runtime")).unwrap();
         for name in ["ai-runtime.exe", "ai-runtime-worker.exe"] {
             fs::write(root.join("runtime").join(name), name).unwrap();
@@ -235,7 +308,14 @@ mod tests {
         fixture(&root.join("runtime"), "nexa-runtime");
         fs::write(root.join("nexa-desktop.exe"), "desktop").unwrap();
         fixture(root, "nexa-desktop");
+    }
+    #[test]
+    fn complete_matching_nested_runtime_is_required() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        complete_fixture(root);
         let result = validate(&root.join("nexa-desktop.exe")).unwrap();
+        assert_eq!(result.package_root, fs::canonicalize(root).unwrap());
         assert!(result.runtime_executable.ends_with("ai-runtime.exe"));
         assert_eq!(result.project_commit.len(), 40);
         assert!(!result.project_dirty);
@@ -246,7 +326,217 @@ mod tests {
         ));
         fs::remove_file(root.join("unlisted.dll")).unwrap();
         fs::write(root.join("runtime/ai-runtime.exe"), "tampered").unwrap();
-        assert!(validate(&root.join("nexa-desktop.exe")).is_err());
+        assert!(matches!(
+            validate(&root.join("nexa-desktop.exe")),
+            Err("package_file_hash_mismatch")
+        ));
+    }
+    #[test]
+    fn additional_nonexecutable_file_has_distinct_code_and_is_not_modified() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        let extra = temp.path().join("desktop.ini");
+        fs::write(&extra, "synthetic harmless extra file").unwrap();
+        assert!(matches!(
+            validate(&temp.path().join("nexa-desktop.exe")),
+            Err("package_unlisted_file")
+        ));
+        assert_eq!(
+            fs::read_to_string(&extra).unwrap(),
+            "synthetic harmless extra file"
+        );
+    }
+    #[test]
+    fn external_root_gguf_is_input_not_declared_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        let executable = temp.path().join("nexa-desktop.exe");
+        let manifest = fs::read(temp.path().join("manifest.json")).unwrap();
+        let sums = fs::read(temp.path().join("SHA256SUMS")).unwrap();
+        for name in ["候选 模型.gguf", "UPPER.GGUF"] {
+            fs::write(temp.path().join(name), b"GGUFsynthetic model input").unwrap();
+        }
+        assert!(validate(&executable).is_ok());
+        assert_eq!(
+            fs::read(temp.path().join("manifest.json")).unwrap(),
+            manifest
+        );
+        assert_eq!(fs::read(temp.path().join("SHA256SUMS")).unwrap(), sums);
+        // Payload integrity is still enforced while external inputs exist.
+        fs::write(temp.path().join("runtime/ai-runtime.exe"), b"changed").unwrap();
+        assert!(matches!(
+            validate(&executable),
+            Err("package_file_hash_mismatch")
+        ));
+    }
+    #[test]
+    fn only_ordinary_root_gguf_inputs_are_exempt() {
+        for (name, content, expected) in [
+            (
+                "unlisted.dll",
+                &b"GGUFnot a model"[..],
+                "package_unlisted_file",
+            ),
+            (
+                "unlisted.exe",
+                &b"GGUFnot a model"[..],
+                "package_unlisted_file",
+            ),
+            (
+                "unlisted.ps1",
+                &b"GGUFnot a model"[..],
+                "package_unlisted_file",
+            ),
+            (
+                "disguised.gguf",
+                &b"MZexecutable"[..],
+                "package_external_model_header_invalid",
+            ),
+            (
+                "short.gguf",
+                &b"GGU"[..],
+                "package_external_model_header_invalid",
+            ),
+            (
+                "runtime/model.gguf",
+                &b"GGUFinput"[..],
+                "package_unlisted_file",
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            complete_fixture(temp.path());
+            fs::write(temp.path().join(name), content).unwrap();
+            assert_eq!(
+                validate(&temp.path().join("nexa-desktop.exe")).err(),
+                Some(expected),
+                "{name}"
+            );
+        }
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        fs::create_dir(temp.path().join("arbitrary")).unwrap();
+        fs::write(temp.path().join("arbitrary/input.gguf"), b"GGUFinput").unwrap();
+        assert!(matches!(
+            validate(&temp.path().join("nexa-desktop.exe")),
+            Err("package_unlisted_file")
+        ));
+    }
+    #[test]
+    fn conventional_input_directories_allow_only_direct_regular_gguf() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        for name in ["model", "models"] {
+            let directory = temp.path().join(name);
+            fs::create_dir(&directory).unwrap();
+            assert!(validate(&temp.path().join("nexa-desktop.exe")).is_ok());
+            fs::write(directory.join("中文 模型.GGUF"), b"GGUFinput").unwrap();
+            assert!(validate(&temp.path().join("nexa-desktop.exe")).is_ok());
+            for extra in ["unknown.dll", "unknown.exe", "index.json", "script.ps1"] {
+                let path = directory.join(extra);
+                fs::write(&path, b"GGUFnot an approved input").unwrap();
+                assert!(matches!(
+                    validate(&temp.path().join("nexa-desktop.exe")),
+                    Err("package_unlisted_file")
+                ));
+                fs::remove_file(path).unwrap();
+            }
+            fs::create_dir(directory.join("nested")).unwrap();
+            assert!(matches!(
+                validate(&temp.path().join("nexa-desktop.exe")),
+                Err("package_unlisted_file")
+            ));
+            fs::remove_dir(directory.join("nested")).unwrap();
+        }
+    }
+
+    #[test]
+    fn unknown_empty_directory_is_not_a_model_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        fs::create_dir(temp.path().join("arbitrary")).unwrap();
+        assert!(matches!(
+            validate(&temp.path().join("nexa-desktop.exe")),
+            Err("package_unlisted_file")
+        ));
+    }
+    #[test]
+    fn model_candidate_read_is_exactly_four_bytes() {
+        struct FourBytes {
+            read: usize,
+        }
+        impl Read for FourBytes {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                assert!(output.len() <= 4 - self.read, "model body must not be read");
+                output.copy_from_slice(&b"GGUF"[self.read..self.read + output.len()]);
+                self.read += output.len();
+                Ok(output.len())
+            }
+        }
+        let mut input = FourBytes { read: 0 };
+        assert!(gguf_header(&mut input));
+        assert_eq!(input.read, 4);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn indirect_external_root_gguf_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("package");
+        fs::create_dir(&root).unwrap();
+        complete_fixture(&root);
+        let model = temp.path().join("outside.gguf");
+        fs::write(&model, b"GGUFinput").unwrap();
+        std::os::unix::fs::symlink(&model, root.join("linked.gguf")).unwrap();
+        assert!(matches!(
+            validate(&root.join("nexa-desktop.exe")),
+            Err("package_indirect_path")
+        ));
+    }
+    #[test]
+    fn missing_file_invalid_manifest_and_checksum_have_distinct_codes() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        let executable = temp.path().join("nexa-desktop.exe");
+        let sums = temp.path().join("SHA256SUMS");
+        fs::write(&sums, "invalid").unwrap();
+        assert!(matches!(
+            validate(&executable),
+            Err("package_checksum_invalid")
+        ));
+        fs::remove_file(temp.path().join("runtime/ai-runtime-worker.exe")).unwrap();
+        assert!(matches!(
+            validate(&executable),
+            Err("selected_file_unavailable")
+        ));
+        fs::write(temp.path().join("manifest.json"), "invalid").unwrap();
+        assert!(matches!(
+            validate(&executable),
+            Err("package_manifest_invalid")
+        ));
+    }
+    #[test]
+    fn parent_directory_name_does_not_enter_package_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("中文 空格 原目录");
+        fs::create_dir(&root).unwrap();
+        complete_fixture(&root);
+        let renamed = temp.path().join("中文 新目录");
+        fs::rename(root, &renamed).unwrap();
+        assert!(validate(&renamed.join("nexa-desktop.exe")).is_ok());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn canonical_verbatim_disk_path_and_original_path_agree() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        let executable = temp.path().join("nexa-desktop.exe");
+        let canonical = fs::canonicalize(&executable).unwrap();
+        assert!(
+            matches!(canonical.components().next(), Some(std::path::Component::Prefix(p)) if matches!(p.kind(), std::path::Prefix::VerbatimDisk(_)))
+        );
+        assert_eq!(
+            validate(&executable).unwrap().project_commit,
+            validate(&canonical).unwrap().project_commit
+        );
     }
     #[test]
     fn unsafe_relative_paths_rejected() {

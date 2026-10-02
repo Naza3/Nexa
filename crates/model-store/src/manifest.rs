@@ -14,6 +14,7 @@ const MODEL_SIZE: u64 = 639_446_688;
 const VALIDATED_CONTEXT: u32 = 2048;
 const RESERVED: &[&str] = &[
     "schema_version",
+    "storage",
     "id",
     "display_name",
     "relative_file",
@@ -136,9 +137,18 @@ pub struct ValidationEvidence {
     pub evidence_url: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelStorage {
+    #[default]
+    Managed,
+    External,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ModelManifest {
     pub schema_version: u32,
+    #[serde(default)]
+    pub storage: ModelStorage,
     pub id: ModelId,
     pub display_name: String,
     pub relative_file: String,
@@ -185,6 +195,7 @@ impl ModelManifest {
         }
         let mut manifest = Self {
             schema_version: 1,
+            storage: ModelStorage::Managed,
             id: request.id,
             display_name: request.display_name,
             relative_file: "model.gguf".into(),
@@ -222,7 +233,10 @@ impl ModelManifest {
     pub fn validate(&self) -> Result<()> {
         validate_portable_id(&self.id)?;
         if self.schema_version != 1
-            || self.relative_file != "model.gguf"
+            || match self.storage {
+                ModelStorage::Managed => self.relative_file != "model.gguf",
+                ModelStorage::External => !crate::library::valid_file_name(&self.relative_file),
+            }
             || self.size_bytes == 0
             || !is_hash(&self.sha256)
             || !is_hash(&self.template_sha256)
@@ -359,6 +373,7 @@ mod tests {
     fn known() -> ModelManifest {
         ModelManifest {
             schema_version: 1,
+            storage: ModelStorage::Managed,
             id: ModelId::new("renamed-known-artifact").unwrap(),
             display_name: "Known artifact".into(),
             relative_file: "model.gguf".into(),

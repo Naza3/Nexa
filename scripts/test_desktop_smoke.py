@@ -12,6 +12,21 @@ import run_desktop_smoke as smoke
 
 
 class DesktopSmokeFailureTests(unittest.TestCase):
+    def test_external_acceptance_requires_exact_booleans_and_all_windows_checks(self):
+        report = {name: True for name in smoke.EXTERNAL_LIBRARY_KEYS}
+        self.assertEqual(smoke.external_library_report(report, require_windows=True), report)
+        for key in smoke.EXTERNAL_LIBRARY_KEYS:
+            unsupported = {**report, key: False}
+            self.assertEqual(smoke.external_library_report(unsupported), unsupported)
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                smoke.external_library_report(unsupported, require_windows=True)
+            for value in (1, "true", None):
+                with self.assertRaisesRegex(ValueError, "schema rejected"):
+                    smoke.external_library_report({**report, key: value})
+        for value in (None, {}, {"success": True}, {**report, "failed_file_name": "private"}, {**report, "extra": True}):
+            with self.assertRaisesRegex(ValueError, "schema rejected"):
+                smoke.external_library_report(value)
+
     def test_failure_protocol_enums_match_rust_source(self):
         source = (smoke.desktop.ROOT / "crates/desktop-bridge/src/bin/harness/report.rs").read_text(encoding="utf-8")
         for name, expected in (("STAGES", smoke.FAILURE_STAGES), ("CODES", smoke.FAILURE_CODES), ("BRIDGE_CODES", smoke.BRIDGE_CODES),
@@ -111,9 +126,175 @@ class DesktopSmokeFailureTests(unittest.TestCase):
     def test_diagnostic_failure_is_separate_and_never_writes_bridge_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "bridge-failure.json"
-            with self.assertRaisesRegex(ValueError, "desktop_diagnose process failed: exit 1"):
+            with self.assertRaisesRegex(ValueError, "desktop_diagnose structured diagnostic report rejected"):
                 self.call(subprocess.CompletedProcess([], 1, "private stdout", "private stderr"), path, "desktop_diagnose")
             self.assertFalse(path.exists())
+
+    def diagnostic(self, verified=False):
+        return {"schema_version": 2, "package_verified": verified,
+                "package_error_code": None if verified else "package_unlisted_file",
+                "project_commit": "a" * 40 if verified else None,
+                "project_dirty": False if verified else None,
+                "webview2_version": "131.0.2903.86", "native_window_tested": False}
+
+    def test_diagnostic_code_whitelist_matches_native_and_covers_validation_errors(self):
+        root = smoke.desktop.ROOT / "apps/desktop/src-tauri/src"
+        source = (root / "diagnostics.rs").read_text(encoding="utf-8")
+        block = re.search(r"pub const PACKAGE_ERROR_CODES: &\[&str\] = &\[(.*?)\];", source, re.DOTALL)
+        self.assertIsNotNone(block)
+        self.assertEqual(set(re.findall(r'"([a-z_]+)"', block[1])), smoke.PACKAGE_ERROR_CODES)
+        for name in ("layout.rs", "selection.rs"):
+            emitted = set(re.findall(r'(?:Err|ok_or)\("([a-z_]+)"\)|map_err\(\|_\| "([a-z_]+)"\)',
+                                     (root / name).read_text(encoding="utf-8")))
+            emitted = {code for pair in emitted for code in pair if code}
+            # Selection-only UI codes cannot reach layout validation.
+            emitted -= {"selected_file_not_gguf", "selected_file_name_invalid", "selection_expired"}
+            self.assertTrue(emitted <= smoke.PACKAGE_ERROR_CODES, emitted - smoke.PACKAGE_ERROR_CODES)
+
+    def test_valid_nonzero_diagnostic_saved_without_overwriting_bridge_failure(self):
+        report = self.diagnostic()
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "diagnostics.json"
+            bridge_path = Path(temporary) / "bridge-failure.json"
+            with mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], 1, json.dumps(report))):
+                with self.assertRaisesRegex(ValueError, "desktop_diagnose process failed: exit 1"):
+                    smoke.checked_json([], Path("."), {}, 1, phase="desktop_diagnose", diagnostic_file=path, failure_file=bridge_path)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), report)
+            self.assertFalse(bridge_path.exists())
+
+    def test_diagnostic_strict_schema_types_and_sensitive_data(self):
+        changes = [("schema_version", True), ("schema_version", 1), ("package_verified", 1),
+                   ("package_error_code", "private path"), ("project_commit", "a" * 40),
+                   ("project_dirty", False), ("native_window_tested", True),
+                   ("webview2_version", "Bearer PRIVATE"), ("path", "private"), ("message", "private")]
+        raws = []
+        for field, value in changes:
+            report = self.diagnostic()
+            report[field] = value
+            raws.append(json.dumps(report))
+        raw = json.dumps(self.diagnostic())
+        raws.extend([raw + " " * smoke.MAX_FAILURE_BYTES, raw[:-1] + ',"schema_version":2}', "{}", "[]"])
+        for raw in raws:
+            with self.subTest(length=len(raw)), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "diagnostics.json"
+                with mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], 1, raw)):
+                    with self.assertRaisesRegex(ValueError, "structured diagnostic report rejected") as error:
+                        smoke.checked_json([], Path("."), {}, 1, phase="desktop_diagnose", diagnostic_file=path)
+                self.assertFalse(path.exists())
+                self.assertNotIn("private", str(error.exception))
+
+    def test_diagnostic_success_and_missing_webview_remain_distinct(self):
+        report = self.diagnostic(True)
+        self.assertEqual(smoke.startup_diagnostic(json.dumps(report)), report)
+        with mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], 0, json.dumps(report))):
+            self.assertEqual(smoke.checked_json([], Path("."), {}, 1, phase="desktop_diagnose"), report)
+        report["webview2_version"] = None
+        with mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], 0, json.dumps(report))):
+            with self.assertRaisesRegex(ValueError, "success declaration rejected"):
+                smoke.checked_json([], Path("."), {}, 1, phase="desktop_diagnose")
+
+    def test_input_compatibility_checks_create_owned_inputs_and_restore_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root / "package"
+            package.mkdir()
+            evidence = root / "evidence"
+            evidence.mkdir()
+            model = root / "source.gguf"
+            model.write_bytes(b"GGUFsynthetic model")
+            original = b'{"synthetic":"manifest"}'
+            (package / "manifest.json").write_bytes(original)
+            checks = {}
+
+            def positive(*args, **kwargs):
+                paths = [package / "验收 同级外置模型.GGUF", package / "model/验收 中文 模型.GGUF", package / "models/验收 中文 模型.GGUF"]
+                existing = [path for path in paths if path.exists()]
+                self.assertEqual(len(existing), 1)
+                self.assertEqual(existing[0].read_bytes(), model.read_bytes())
+                self.assertIn(kwargs["diagnostic_file"].name, smoke.DIAGNOSTIC_REPORTS)
+                return self.diagnostic(True)
+
+            def negative(executable, cwd, env, code, output):
+                self.assertTrue((package / "验收 同级外置模型.GGUF").exists())
+                if code == "package_unlisted_file":
+                    self.assertTrue((package / "nexa-test-unlisted.dll").exists())
+                else:
+                    self.assertEqual(code, "package_checksum_mismatch")
+                    self.assertEqual((package / "manifest.json").read_bytes(), original + b"\n ")
+
+            with mock.patch.object(smoke, "checked_json", side_effect=positive), mock.patch.object(smoke, "expect_package_rejection", side_effect=negative), mock.patch.object(smoke.desktop, "verify") as verify:
+                smoke.package_input_checks(package, model, root, {}, evidence, {"project_commit": "a" * 40, "project_dirty": False}, checks)
+            self.assertEqual(set(checks), {"root_gguf_accepted", "model_directory_gguf_accepted", "models_directory_gguf_accepted", "unlisted_dll_rejected", "tampered_manifest_rejected", "owned_model_input_removed", "package_payload_restored"})
+            self.assertTrue(all(checks.values()))
+            self.assertEqual((package / "manifest.json").read_bytes(), original)
+            self.assertEqual(set(item.name for item in package.iterdir()), {"manifest.json"})
+            self.assertTrue(model.exists())
+            verify.assert_called_once()
+
+    def test_input_probe_never_overwrites_or_removes_preexisting_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            existing = root / "验收 同级外置模型.GGUF"
+            existing.write_bytes(b"GGUFexisting user input")
+            with self.assertRaises(FileExistsError):
+                smoke.package_input_checks(root, root / "unused", root, {}, root, {}, {})
+            self.assertEqual(existing.read_bytes(), b"GGUFexisting user input")
+
+    def test_input_probe_restores_manifest_on_unexpected_negative_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "source.gguf"
+            model.write_bytes(b"GGUFsynthetic")
+            original = b"original manifest bytes"
+            (root / "manifest.json").write_bytes(original)
+            with mock.patch.object(smoke, "checked_json", return_value=self.diagnostic(True)), mock.patch.object(smoke, "expect_package_rejection", side_effect=[None, ValueError("synthetic probe failure")]):
+                with self.assertRaisesRegex(ValueError, "synthetic probe failure"):
+                    smoke.package_input_checks(root, model, root, {}, root, {"project_commit": "a" * 40, "project_dirty": False}, {})
+            self.assertEqual((root / "manifest.json").read_bytes(), original)
+            self.assertFalse((root / "验收 同级外置模型.GGUF").exists())
+            self.assertFalse((root / "nexa-test-unlisted.dll").exists())
+            self.assertTrue(model.exists())
+
+    def test_model_directory_probe_failure_removes_only_its_owned_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "source.gguf"
+            model.write_bytes(b"GGUFsynthetic")
+            manifest = {"project_commit": "a" * 40, "project_dirty": False}
+            with mock.patch.object(smoke, "checked_json", side_effect=[self.diagnostic(True), ValueError("synthetic directory diagnostic failure")]):
+                with self.assertRaisesRegex(ValueError, "directory diagnostic failure"):
+                    smoke.package_input_checks(root, model, root, {}, root, manifest, {})
+            self.assertEqual({entry.name for entry in root.iterdir()}, {"source.gguf"})
+            self.assertEqual(model.read_bytes(), b"GGUFsynthetic")
+
+    def test_input_probe_does_not_adopt_preexisting_model_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "source.gguf"
+            model.write_bytes(b"GGUFsynthetic")
+            directory = root / "model"
+            directory.mkdir()
+            existing = directory / "already present.gguf"
+            existing.write_bytes(b"GGUFexisting")
+            with mock.patch.object(smoke, "checked_json", return_value=self.diagnostic(True)):
+                with self.assertRaises(FileExistsError):
+                    smoke.package_input_checks(root, model, root, {}, root, {"project_commit": "a" * 40, "project_dirty": False}, {})
+            self.assertEqual(existing.read_bytes(), b"GGUFexisting")
+            self.assertFalse((root / "验收 同级外置模型.GGUF").exists())
+
+    def test_negative_package_probe_requires_exit_one_and_exact_code(self):
+        for code, exit_code, accepted in (("package_unlisted_file", 1, True), ("package_unlisted_file", 0, False), ("package_checksum_mismatch", 1, False)):
+            with self.subTest(code=code, exit_code=exit_code), tempfile.TemporaryDirectory() as temporary:
+                report = self.diagnostic()
+                report["package_error_code"] = code
+                path = Path(temporary) / "diagnostic.json"
+                with mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], exit_code, json.dumps(report))):
+                    if accepted:
+                        smoke.expect_package_rejection("fixed", Path("."), {}, "package_unlisted_file", path)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "did not reject the expected condition"):
+                            smoke.expect_package_rejection("fixed", Path("."), {}, "package_unlisted_file", path)
+                self.assertEqual(json.loads(path.read_text(encoding="utf-8")), report)
 
     def test_timeout_launch_and_decode_errors_are_phase_labeled_without_raw_output(self):
         failures = [subprocess.TimeoutExpired(["private path"], 10, output="private output"),
@@ -133,7 +314,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
                   "stdin=subprocess.DEVNULL,stdout=sys.stdout,stderr=subprocess.DEVNULL,close_fds=True); "
                   "print('{\"success\":true}',flush=True)")
         started = time.monotonic()
-        observed = smoke.checked_json([sys.executable, "-c", script], Path.cwd(), None, 5, phase="desktop_diagnose")
+        observed = smoke.checked_json([sys.executable, "-c", script], Path.cwd(), None, 5, phase="bridge_harness")
         self.assertEqual(observed, {"success": True})
         self.assertLess(time.monotonic() - started, 2.5)
 
@@ -187,7 +368,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
     def test_success_report_must_be_strict_bounded_json(self):
         for raw in ("[]", "{private", '{"a":1,"a":2}', '{"a":NaN}', " " * (smoke.MAX_JSON_BYTES + 1)):
             with self.subTest(length=len(raw)), self.assertRaisesRegex(ValueError, "success report rejected"):
-                self.call(subprocess.CompletedProcess([], 0, raw, ""), None, "desktop_diagnose")
+                self.call(subprocess.CompletedProcess([], 0, raw, ""), None, "bridge_harness")
 
     def probe(self):
         return {"schema_version": 2, "kind": "nexa-desktop-launch-probe", "success": False,

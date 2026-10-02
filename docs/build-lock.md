@@ -1,6 +1,6 @@
 # 开发与 Windows 包构建锁
 
-日期：2026-10-01。此文件记录Linux开发与固定Windows CI构建组合；精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，用户i5-8400的T05 Win10短验已通过，桌面UI、无开发工具/离线/长期稳定性及Android真机仍待验。
+日期：2026-10-01。此文件记录Linux开发与固定Windows CI构建组合；精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，T05另有独立Windows 10手工短验通过；T06新目录版与剩余原生UI分支、无开发工具/离线/长期稳定性及Android真机仍待验。
 
 ## 固定输入
 
@@ -47,7 +47,7 @@ ctest --test-dir build/native-release --output-on-failure
 - 原生回调是同步借用，允许decode步骤间共享256KiB预算内可取消、有时限等待；T02已实现4KiB分片、10秒慢消费者和三类deadline。T03已实现独立worker、单一信用账本与消费lease，固定Windows Job/强杀验收通过；详见ADR0004和T03报告
 - 目前仅接入 Qwen3 架构及能明确关闭思考的模板；验收支持以精确模型矩阵为准
 - seed `UINT32_MAX` 沿用锁定上游的随机哨兵，其他 seed 在相同环境尽力复现；不承诺跨设备逐字相同
-- 原生GGUF的非ASCII路径由上游`ggml_fopen`转为宽字符；T05 Release CI已用中文/空格源模型及受控导入目录实际加载，用户Win10另实测含中文但无空格的源路径与中文/空格导入目录。T03的worker可执行文件及参数路径验证仍单独留证
+- 原生GGUF的非ASCII路径由上游`ggml_fopen`转为宽字符；T05 Release CI已用中文/空格源模型及受控导入目录实际加载，T03的worker可执行文件及参数路径验证仍单独留证
 
 ## Windows CI
 
@@ -62,7 +62,7 @@ ctest --test-dir build/native-release --output-on-failure
 诊断阶段测试线程显式受控：CI通过NEXA_TEST_THREADS传递min(4,runner可用逻辑CPU)，Python上游与Rust example/集成测试采用同值；可用--threads作明确对照，超过可用CPU会在报告标识，不静默夹紧。此变更只调整验证配置，不修改生产LoadOptions默认值。上游额外1/4线程短诊断仍保留失败状态并单列diagnostic_result，所选线程的正常基线决定验收退出码；不通过延长总超时掩盖异常。
 
 
-2026-09-30 23:45 UTC，[固定提交 d3d7cf2 的 Windows CI](https://github.com/Naza3/Nexa/actions/runs/36791679663) 全部通过。选定 2 线程 / 2 逻辑 CPU 配置的上游生成、五次 bench、自有 suite 和真实恢复测试通过；探索性 4 线程配置仍超时。具体统计、模型与 artifact 校验见本轮验证记录；不把 CI 配置推广为 i5-8400 或任意线程数性能保证。
+2026-09-30 23:45 UTC，[固定提交 d3d7cf2 的 Windows CI](https://github.com/Naza3/Nexa/actions/runs/36791679663) 全部通过。选定 2 线程 / 2 逻辑 CPU 配置的上游生成、五次 bench、自有 suite 和真实恢复测试通过；探索性 4 线程配置仍超时。具体统计、模型与 artifact 校验见本轮验证记录；不把 CI 配置推广为任意目标硬件或线程数的性能保证。
 
 
 2026-10-01 00:37 UTC，T02实现提交`bc316da6a66eb52a24ee7a5cb56d8f8c45d1ad37`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36796147278)全部通过：原生/整体Rust检查、固定模型身份、上游与native suite、三项adapter真实回归和store→actor→host真实链路。shim2的mid-prefill观察取消3.4101ms，经actor取消至公共终态15.7851ms（各单次功能测量）。精确artifact完整性与边界见[T02报告](verification/2026-10-01-t02-runtime.md)。
@@ -88,10 +88,10 @@ manifest/SHA256SUMS、许可原文/清单、ZIP/hash分别核对。包内不包�
 
 T05源码6a7e9d0的Cargo.lock LF SHA-256为`4c7533fa5c496faafc6c74bf4b222120d6dd7331dcfe80ec230337e02a8ecf20`；Windows checkout的CRLF hash为`826a1be2f952d934a85c525c240780f0223755f8390e64e58da9fa506f2883cb`，已从同一LF源换行转换精确复算。以上T04的锁hash只指其历史基线。CI证据通过`scripts/stage_ci_evidence.py`闭合允许列表输出，保留模型/模板/fixture/工具/失败身份，不再上传任意artifacts目录正文。
 
-第五轮[CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)实际成功组合：Server2022 build10.0.20348.5622 / image20260927.320.1 / AMD EPYC7763 / 2逻辑CPU；VS2022 Enterprise17.14.37710.0、MSVC19.44.35229.0、VCTools14.44.35207、SDK10.0.26100.0。CRT来自所选实例Redist14.44.35112，DLL文件版14.44.35211.0，产品3个/工具1个app-local DLL均由固定系统PowerShell5.1验证Valid/Microsoft。产品/工具源manifest均6a7e9d0、tree498d0a9、dirty=false；详细hash/体积/真实Release验收见T05报告。此CI安装环境不代表用户拥有相同VS edition，也不代替Win10无开发工具/离线验收。
+第五轮[CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)实际成功组合：Server2022 build10.0.20348.5622 / image20260927.320.1 / AMD EPYC7763 / 2逻辑CPU；VS2022 Enterprise17.14.37710.0、MSVC19.44.35229.0、VCTools14.44.35207、SDK10.0.26100.0。CRT来自所选实例Redist14.44.35112，DLL文件版14.44.35211.0，产品3个/工具1个app-local DLL均由固定系统PowerShell5.1验证Valid/Microsoft。产品/工具源manifest均6a7e9d0、tree498d0a9、dirty=false；详细hash/体积/真实Release验收见T05报告。此CI安装环境不代替Windows 10无开发工具/离线验收。
 
 
-## T06 桌面依赖与构建隔离（Windows完整构建/桌面包/Release bridge已过，用户UI待验）
+## T06 桌面依赖与构建隔离（Windows完整构建/桌面包/Release bridge已过，新目录版待验）
 
 实际registry精确锁与本地验证组合：Node24.19.0/npm11.9.0，React/ReactDOM19.3.0、Tauri JS API/CLI2.12.1、Vite8.3.1、TypeScript5.9.3、Vitest5.0.3、ESLint10.11.0。`apps/desktop/package-lock.json`独立管理前端；`npm ci`、typecheck/lint、36tests、生产build与audit0已实际通过。生产JS260464bytes、CSS17539bytes、HTML457bytes；构建排除了显式preview mock，未验证的浏览器交互和原生UI仍分层保留。
 
@@ -110,4 +110,6 @@ Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package 
 第五轮源码c8dff8的CI36855675437保留同一工具链与依赖锁，真正Tauri Release/源码clean/桌面诊断和T05完整解压验收通过；最终桌面bridge步骤被15分钟平台时限终止，未完成产品验收。当前修复仅涉及harness私有文件报告及Python直接子进程有界等待，不升级依赖、不改变生产启动flags或延长时限；完整证据与未通过项见T06记录。
 
 
-第六轮源码`bc43e0f3ac215d41e5d93cccf670ab43d67d41c0`的[CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)于13:31:29 UTC已确认completed/success，依赖/工具链锁保持原组合。真正Tauri Release、早期Windows无模型传输回归、T05与T06完整解压/真实模型bridge均通过；桌面ZIP9,507,755bytes（SHA256 `2ea95591ddabc4e7ae930ea166e6343f6aad275fa01975d3eb7bebbef0546fe9`），manifest SHA256 `c8a259d2ba20fa90c5dac7e21d8e13e7c22fd28e091d11c7b037ecb2cdc34673`，完整下载包的库存/hash/许可/PE闭包已独立复核。用户Win10原生窗口操作仍未验证，详见T06记录。
+第六轮源码`bc43e0f3ac215d41e5d93cccf670ab43d67d41c0`的[CI36864041027](https://github.com/Naza3/Nexa/actions/runs/36864041027)于13:31:29 UTC已确认completed/success，依赖/工具链锁保持原组合。真正Tauri Release、早期Windows无模型传输回归、T05与T06完整解压/真实模型bridge均通过；桌面ZIP9,507,755bytes（SHA256 `2ea95591ddabc4e7ae930ea166e6343f6aad275fa01975d3eb7bebbef0546fe9`），manifest SHA256 `c8a259d2ba20fa90c5dac7e21d8e13e7c22fd28e091d11c7b037ecb2cdc34673`，完整下载包的库存/hash/许可/PE闭包已独立复核。该CI未驱动原生窗口；另有独立手工验收确认旧包核心UI与两种关闭通过，新目录选择/零复制/自动名称另需构建与实测，详见T06记录。
+
+外部目录扩展的独立Tauri锁仅新增desktop-bridge→model-store、nexa-desktop→已存在的windows-sys 0.61.2两条依赖边；后者用于只读GetDriveTypeW本地盘类型检查，不升级registry版本或更换框架。完整新功能仍待对应Windows CI，依赖图保持不含native推理crate。

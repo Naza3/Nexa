@@ -101,6 +101,10 @@ const stateNames: Record<RuntimeStatus["state"], string> = {
 function statusLabel(state: ViewState) {
   if (state.booting) return "正在连接";
   if (state.operation) return state.operation;
+  if (state.library_phase === "starting") return "正在提交模型库操作";
+  if (state.library_phase === "running") return "正在核验模型目录";
+  if (state.library_phase === "stopping") return "正在取消模型库操作";
+  if (state.library_phase === "recovery") return "模型库操作待确认";
   if (state.chat_phase === "stopping") return "正在停止生成";
   if (state.chat_phase === "recovery") return "连接中断 · 待确认";
   const snapshot = state.snapshot;
@@ -224,7 +228,7 @@ function RuntimeBanner({
         </div>
         <button
           className="primary"
-          disabled={!!state.operation}
+          disabled={!!state.operation || state.library_phase !== "idle"}
           onClick={() => void controller.start(true)}
         >
           {state.operation ? <Spinner /> : <Icon name="power" size={16} />}
@@ -251,7 +255,7 @@ function RuntimeBanner({
         </div>
         <button
           className="primary"
-          disabled={!!state.operation}
+          disabled={!!state.operation || state.library_phase !== "idle"}
           onClick={() =>
             void (snapshot.connection === "error"
               ? controller.refresh()
@@ -277,21 +281,286 @@ function RuntimeBanner({
     );
   return null;
 }
+function availabilityMessage(code: string) {
+  const labels: Record<string, string> = {
+    model_file_changed: "源文件已变动，请停止服务后重新扫描",
+    model_file_unavailable: "源文件已失踪或无法读取",
+    model_file_in_use: "源文件被写入程序占用，请释放后重试",
+    unsupported_model: "模型不在当前支持范围",
+    model_directory_unavailable: "源目录无法读取",
+    model_library_unsupported: "请停止服务后启动匹配版本",
+  };
+  return labels[code] ?? "模型当前不可用，请检查源文件后重试";
+}
+function DirectoryStateNotice({ state }: { state: ViewState }) {
+  const directory = state.snapshot?.model_directory;
+  if (!directory) return null;
+  const explanations = {
+    default: "未设置外部目录，原有管理模型保持可用。",
+    ready: "当前运行服务已采用所选模型目录。",
+    stopped: "已保存目录，启动运行服务后读取模型。",
+    stale:
+      "已保存目录与运行实例不一致。请显式停止服务，再启动匹配配置；不会自动切换模型。",
+    missing:
+      "已保存的模型目录已失踪。请检查路径或在停止服务后重新选择；原有管理模型保留。",
+    unavailable:
+      "无法读取已保存的模型目录。请检查本地目录权限；目录仅需可读，无需可写。",
+    unsupported: "当前运行服务不支持所选目录，请先停止，再启动匹配版本。",
+  };
+  return (
+    <div
+      className={`directory-state ${["stale", "missing", "unavailable", "unsupported"].includes(directory.state) ? "warning-text" : ""}`}
+      role="status"
+    >
+      <p>{explanations[directory.state]}</p>
+      {directory.effective && (
+        <p>
+          当前服务使用：
+          <span className="directory-path">
+            {directory.effective.display_path}
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+function LibraryProgress({
+  state,
+  controller,
+}: {
+  state: ViewState;
+  controller: DesktopController;
+}) {
+  if (state.library_phase === "idle") return null;
+  const phases = {
+    checking: "检查停止状态与目录",
+    enumerating: "枚举目录条目",
+    verifying: "核验 GGUF 文件",
+    committing: "保存模型库索引",
+    finished: "操作已结束",
+  };
+  const progress = state.library;
+  return (
+    <section className="library-progress" aria-label="模型库操作">
+      <div>
+        <div className="progress-heading">
+          <Spinner />
+          <strong>
+            {state.library_phase === "recovery"
+              ? "模型库操作终态尚未确认"
+              : state.library_phase === "stopping"
+                ? "正在取消，等待实际操作结束"
+                : progress
+                  ? phases[progress.phase]
+                  : "正在提交模型库操作"}
+          </strong>
+        </div>
+        {progress && (
+          <p>
+            已检查 {progress.examined_entries} 个目录条目 · 发现{" "}
+            {progress.candidate_files} 个 GGUF · 已核验{" "}
+            {progress.verified_files} 个文件
+          </p>
+        )}
+        <p>
+          {state.library_phase === "recovery"
+            ? "不会自动重做扫描或宣称保存成功，请重新确认终态。"
+            : "模型文件只读核验，不复制；取消需等待实际终态，停止确认不代表已经结束。"}
+        </p>
+      </div>
+      {state.library_phase === "recovery" ? (
+        <button onClick={() => void controller.recoverLibrary()}>
+          重新确认模型库操作
+        </button>
+      ) : (
+        <button
+          disabled={state.library_phase === "stopping" && !state.error}
+          onClick={() => void controller.cancelLibrary()}
+        >
+          {state.library_phase === "stopping"
+            ? "等待取消确认"
+            : "取消模型库操作"}
+        </button>
+      )}
+    </section>
+  );
+}
+function DirectorySettings({
+  state,
+  controller,
+}: {
+  state: ViewState;
+  controller: DesktopController;
+}) {
+  const [confirm, setConfirm] = useState<"apply" | "scan" | "stop" | null>(
+    null,
+  );
+  const directory = state.snapshot!.model_directory;
+  const stopped = state.snapshot?.connection === "stopped";
+  const running =
+    state.snapshot?.connection === "connected" ||
+    state.snapshot?.connection === "connecting";
+  const busy =
+    !!state.operation ||
+    state.library_phase !== "idle" ||
+    state.chat_phase !== "idle";
+  return (
+    <section
+      className="settings-card directory-settings"
+      aria-labelledby="directory-title"
+    >
+      <div className="card-heading">
+        <div>
+          <h2 id="directory-title">模型目录</h2>
+          <p>
+            直接使用已有 GGUF 文件，不复制到 AppData；原有管理模型仍然保留。
+          </p>
+        </div>
+        <span className="subtle-pill">只读文件</span>
+      </div>
+      <div className="directory-value">
+        <span>
+          {state.library?.error?.code === "settings_durability_unconfirmed" &&
+          state.snapshot?.connection === "error"
+            ? "上次读取目录（当前配置尚未确认）"
+            : "已保存目录"}
+        </span>
+        <output className="directory-path">
+          {directory.configured?.display_path ?? "未选择"}
+        </output>
+      </div>
+      <DirectoryStateNotice state={state} />
+      <div className="directory-actions">
+        <button disabled={busy} onClick={() => void controller.pickDirectory()}>
+          <Icon name="file" size={16} />
+          选择模型目录
+        </button>
+        <button
+          disabled={busy || !stopped || !directory.configured}
+          onClick={() => setConfirm("scan")}
+        >
+          <Icon name="refresh" size={15} />
+          重新扫描目录
+        </button>
+      </div>
+      {state.directory_selection && (
+        <div className="directory-pending">
+          <strong>待应用目录</strong>
+          <p className="directory-path">
+            {state.directory_selection.display_path}
+          </p>
+          <p>名称自动取 GGUF 文件名，保留中文与空格，不需要填写模型 ID。</p>
+          <div className="directory-actions">
+            <button
+              className="primary"
+              disabled={busy || !stopped}
+              onClick={() => setConfirm("apply")}
+            >
+              使用此目录
+            </button>
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={controller.discardDirectorySelection}
+            >
+              取消选择
+            </button>
+          </div>
+        </div>
+      )}
+      {!stopped && (
+        <div className="directory-stop">
+          <p>
+            应用目录或重新扫描前，须先显式停止运行服务；仅卸载模型不够。不会自动停止其他客户端。
+          </p>
+          <button
+            className="danger-outline"
+            disabled={!running || busy}
+            onClick={() => setConfirm("stop")}
+          >
+            先停止运行服务
+          </button>
+        </div>
+      )}
+      <div className="directory-guidance">
+        <p>
+          可选择程序旁的 model
+          目录，也可选择其他支持的本地目录；目录仅需可读。只扫描直接子级，不递归，也不移动、重命名或删除源文件。
+        </p>
+        <p>
+          单次最多 1024 个条目、64 个 GGUF；单文件 16 GiB、候选合计 32
+          GiB、总核验时间 300 秒。超限会明确失败，原目录与索引保持不变。
+        </p>
+        <p className="warning-text">
+          已在运行服务中使用过的外部模型，替换或重命名前须停止整个运行服务；卸载模型不会释放源文件保护。
+        </p>
+      </div>
+      {confirm && (
+        <Modal
+          title={
+            confirm === "stop"
+              ? "停止所有客户端的运行任务？"
+              : confirm === "apply"
+                ? "使用选定的模型目录？"
+                : "重新核验当前目录？"
+          }
+          confirm={
+            confirm === "stop"
+              ? "停止运行服务"
+              : confirm === "apply"
+                ? "应用并核验目录"
+                : "开始核验"
+          }
+          danger={confirm === "stop"}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => {
+            const action = confirm;
+            setConfirm(null);
+            void (action === "stop"
+              ? controller.stop()
+              : action === "apply"
+                ? controller.applyDirectory()
+                : controller.scanModels());
+          }}
+        >
+          {confirm === "stop" ? (
+            <p>
+              将停止运行服务及所有客户端任务，确认实例与 worker
+              清理后才可应用目录。原文件不会移动或删除。
+            </p>
+          ) : (
+            <p>
+              {confirm === "apply"
+                ? "只读核验待应用目录内的直接子级 GGUF；成功后一次保存新目录与索引。"
+                : "只读重新核验已保存目录；重命名或内容变化会产生新的内部 ID。"}
+              提交前失败或取消会保留原目录与索引。若提交后的持久化确认失败，将重新读取实际配置，不假定已回滚。不会自动启动运行服务，也不会复制或删除模型文件。
+            </p>
+          )}
+        </Modal>
+      )}
+    </section>
+  );
+}
 function ModelsPage({
   state,
   controller,
   goChat,
+  goSettings,
 }: {
   state: ViewState;
   controller: DesktopController;
   goChat: () => void;
+  goSettings: () => void;
 }) {
-  const [modelId, setModelId] = useState("");
   const runtime = state.snapshot?.runtime;
   const settings = state.snapshot?.settings ?? DEFAULT_SETTINGS;
   const connected = state.snapshot?.connection === "connected";
   const busy =
     !!state.operation ||
+    state.library_phase !== "idle" ||
+    ["stale", "unsupported"].includes(
+      state.snapshot?.model_directory.state ?? "",
+    ) ||
     state.chat_phase !== "idle" ||
     !!runtime?.registry_busy ||
     !!runtime?.stopping ||
@@ -308,7 +577,7 @@ function ModelsPage({
         <div>
           <span className="eyebrow">本机模型库</span>
           <h1>模型</h1>
-          <p>导入你的 GGUF 模型，在这台电脑上运行。</p>
+          <p>直接读取本地 GGUF，模型文件留在你选择的目录。</p>
         </div>
         <span className="subtle-pill">
           <Icon name="shield" size={15} />
@@ -321,7 +590,12 @@ function ModelsPage({
         </div>
         <div className="runtime-card-main">
           <span className="overline">当前加载</span>
-          <h2>{runtime?.selected_model ?? "尚未加载模型"}</h2>
+          <h2>
+            {runtime?.selected_model_display_name ??
+              (runtime?.selected_model
+                ? "已加载模型（名称暂不可用）"
+                : "尚未加载模型")}
+          </h2>
           <p>
             {runtime?.load_options
               ? `上下文 ${runtime.load_options.context_size} · ${runtime.load_options.threads} 线程 · 批次 ${runtime.load_options.batch_size}`
@@ -353,83 +627,34 @@ function ModelsPage({
           )}
         </div>
       </section>
-      <section className="import-card" aria-labelledby="import-title">
+      <section className="directory-summary" aria-label="模型来源目录">
         <div className="import-icon">
           <Icon name="file" size={26} />
         </div>
         <div className="import-copy">
-          <h2 id="import-title">导入本地模型</h2>
-          <p>选择 .gguf 文件，Nexa 会复制到本机模型管理目录。</p>
+          <h2>模型目录</h2>
+          <p className="directory-path">
+            {state.snapshot?.model_directory.configured?.display_path ??
+              "尚未选择外部目录，现有管理模型仍可使用"}
+          </p>
+          <p>直接读取本层 GGUF，不复制、不递归扫描，也不移动原有模型。</p>
         </div>
-        <button
-          disabled={!connected || busy}
-          onClick={() => void controller.pick()}
-        >
-          <Icon name="plus" size={17} />
-          选择 GGUF 文件
+        <button onClick={goSettings}>
+          前往目录设置
+          <Icon name="chevron" size={16} />
         </button>
-        {state.selection && (
-          <form
-            className="import-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void controller.importModel(modelId);
-            }}
-          >
-            <div className="selected-file">
-              <Icon name="file" size={19} />
-              <strong>{state.selection.file_name}</strong>
-              <span>{formatSize(state.selection.size_bytes)}</span>
-            </div>
-            <p className="path-line">
-              复制到：<span>{state.selection.destination}</span>
-            </p>
-            <label htmlFor="model-id">
-              模型 ID{" "}
-              <span className="label-hint">小写字母、数字、.、_ 或 -</span>
-            </label>
-            <div className="input-action">
-              <input
-                id="model-id"
-                value={modelId}
-                maxLength={64}
-                placeholder="例如 qwen3-0.6b-q8"
-                disabled={busy}
-                onChange={(event) => setModelId(event.target.value)}
-              />
-              <button
-                type="submit"
-                className="primary"
-                disabled={busy || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(modelId)}
-              >
-                {state.operation === "正在导入模型" ? (
-                  <Spinner />
-                ) : (
-                  <Icon name="plus" size={16} />
-                )}
-                {state.operation === "正在导入模型" ? "正在导入…" : "确认导入"}
-              </button>
-              <button
-                type="button"
-                className="text-button"
-                disabled={busy}
-                onClick={controller.discardSelection}
-              >
-                取消
-              </button>
-            </div>
-            {state.operation === "正在导入模型" && (
-              <p role="status">
-                正在复制并校验文件，请稍候。服务未提供字节进度。
-              </p>
-            )}
-          </form>
-        )}
       </section>
+      <DirectoryStateNotice state={state} />
+      {state.snapshot?.connection !== "connected" &&
+        state.models.data.length > 0 && (
+          <p className="stale-models-note" role="status">
+            以下为上次读取的列表，当前不可加载。启动服务后会刷新。
+          </p>
+        )}
       <section className="library" aria-labelledby="library-title">
         <div className="section-heading">
           <h2 id="library-title">
-            已导入模型 <span className="count">{state.models.data.length}</span>
+            可查看模型 <span className="count">{state.models.data.length}</span>
           </h2>
           <button
             className="text-button"
@@ -450,7 +675,11 @@ function ModelsPage({
           <div className="empty-models">
             <Icon name="models" size={32} />
             <h3>你的模型库还是空的</h3>
-            <p>选择上方的 GGUF 文件，添加第一个模型。</p>
+            <p>
+              {state.snapshot?.connection === "stopped"
+                ? "启动运行服务后，读取当前模型列表。"
+                : "在设置中选择已有 GGUF 的目录，停止服务后应用。"}
+            </p>
             <span>模型文件由你提供，不会自动下载</span>
           </div>
         ) : (
@@ -471,7 +700,11 @@ function ModelsPage({
                       <h3>{model.display_name}</h3>
                       {current && <span className="mini-label">已加载</span>}
                     </div>
-                    <p>{model.id}</p>
+                    <p className="model-source">
+                      {model.storage === "external"
+                        ? "外部目录 · 直接读取"
+                        : "原有管理模型"}
+                    </p>
                     <div className="model-meta">
                       <span>{model.quantization || "量化未知"}</span>
                       <span>{model.architecture || "架构未知"}</span>
@@ -480,9 +713,25 @@ function ModelsPage({
                     </div>
                     <details>
                       <summary>模型信息</summary>
+                      <p className="hash">API ID：{model.id}</p>
                       <p className="hash">SHA-256：{model.sha256}</p>
                       <p>模型上下文：{model.context_size ?? "未知"}</p>
                     </details>
+                    {model.availability_error && (
+                      <p className="warning-text small-note">
+                        {availabilityMessage(model.availability_error)}（
+                        {model.availability_error}）
+                      </p>
+                    )}
+                    {state.models.data.filter(
+                      (entry) => entry.display_name === model.display_name,
+                    ).length > 1 && (
+                      <p className="small-note">
+                        同名区分：
+                        {model.storage === "external" ? "目录" : "管理"} ·{" "}
+                        {model.id.slice(-8)}
+                      </p>
+                    )}
                     {mustUnload && (
                       <p className="small-note">加载前请先卸载当前模型</p>
                     )}
@@ -576,7 +825,15 @@ function ChatPage({
     (message) => message.state === "incomplete",
   );
   const canSend =
-    ready && !active && !state.operation && !!draft.trim() && !incomplete;
+    ready &&
+    !active &&
+    !state.operation &&
+    state.library_phase === "idle" &&
+    !["stale", "unsupported"].includes(
+      state.snapshot?.model_directory.state ?? "",
+    ) &&
+    !!draft.trim() &&
+    !incomplete;
   const [confirmClear, setConfirmClear] = useState(false);
   const latest = state.messages.at(-1)?.content;
   useEffect(() => {
@@ -595,7 +852,10 @@ function ChatPage({
           <span className="eyebrow">本地推理会话</span>
           <h1>聊天</h1>
           <p>
-            {state.snapshot?.runtime?.selected_model ?? "尚未加载模型"}
+            {state.snapshot?.runtime?.selected_model_display_name ??
+              (state.snapshot?.runtime?.selected_model
+                ? "已加载模型（名称暂不可用）"
+                : "尚未加载模型")}
             <span className="inline-dot">·</span>会话仅保留在当前窗口
           </p>
         </div>
@@ -884,6 +1144,7 @@ function SettingsPage({
           <p>明确何时生效，让本地运行保持可控。</p>
         </div>
       </div>
+      <DirectorySettings state={state} controller={controller} />
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -969,7 +1230,11 @@ function SettingsPage({
           <button
             type="submit"
             className="primary"
-            disabled={!!state.operation || !!validation}
+            disabled={
+              !!state.operation ||
+              state.library_phase !== "idle" ||
+              !!validation
+            }
           >
             {state.operation === "正在保存偏好" && <Spinner />}保存偏好
           </button>
@@ -1002,6 +1267,7 @@ function SettingsPage({
             disabled={
               !stopped ||
               !!state.operation ||
+              state.library_phase !== "idle" ||
               !Number.isSafeInteger(idle) ||
               idle < 1 ||
               idle > 86400
@@ -1035,7 +1301,11 @@ function SettingsPage({
             <span>请勿粘贴到聊天或分享给他人，使用后及时清除。</span>
           </p>
           <button
-            disabled={!state.snapshot?.initialized || !!state.operation}
+            disabled={
+              !state.snapshot?.initialized ||
+              !!state.operation ||
+              state.library_phase !== "idle"
+            }
             onClick={() => setModal("token")}
           >
             <Icon name="copy" size={16} />
@@ -1051,7 +1321,10 @@ function SettingsPage({
         <button
           className="danger-outline"
           disabled={
-            !running || !!state.operation || state.chat_phase !== "idle"
+            !running ||
+            !!state.operation ||
+            state.library_phase !== "idle" ||
+            state.chat_phase !== "idle"
           }
           onClick={() => setModal("stop")}
         >
@@ -1210,11 +1483,33 @@ export default function App({
           }
         >
           <RuntimeBanner state={state} controller={controller} />
+          {(["stale", "unsupported"].includes(
+            state.snapshot?.model_directory.state ?? "",
+          ) ||
+            state.error?.code === "model_library_unsupported") && (
+            <div className="notice-band warning">
+              <div>
+                <strong>当前模型库尚不可使用</strong>
+                <p>
+                  已保存目录与当前服务不匹配，或当前服务不支持模型库版本。请先显式停止，再启动匹配版本；不会自动重发聊天。
+                </p>
+              </div>
+              <button onClick={() => setPage("settings")}>查看运行设置</button>
+            </div>
+          )}
           {state.error && (
             <div className="error-banner" role="alert">
               <div>
                 <strong>操作未完成</strong>
                 <p>{state.error.message}</p>
+                {state.library?.status === "failed" &&
+                  state.library.error?.code === state.error.code &&
+                  state.library.failed_file_name && (
+                    <p className="failed-file-name">
+                      失败文件：
+                      <strong>{state.library.failed_file_name}</strong>
+                    </p>
+                  )}
                 <span>{state.error.code}</span>
               </div>
               <button
@@ -1226,6 +1521,24 @@ export default function App({
               </button>
             </div>
           )}
+          {state.library?.status === "failed" &&
+            state.library.error?.code === "settings_durability_unconfirmed" && (
+              <div className="notice-band warning" role="alert">
+                <div>
+                  <strong>模型目录持久化尚未确认</strong>
+                  <p>
+                    目录索引可能已经替换，不能保证旧目录仍在，也不代表已回滚。请核对设置中的已保存目录；若状态读取失败，请先重新检查。不会自动重新应用目录。
+                  </p>
+                </div>
+                <button
+                  disabled={!!state.operation}
+                  onClick={() => void controller.refresh()}
+                >
+                  重新读取配置
+                </button>
+              </div>
+            )}
+          <LibraryProgress state={state} controller={controller} />
           {state.notice && (
             <div className="success-notice" role="status">
               {state.notice}
@@ -1236,6 +1549,7 @@ export default function App({
               state={state}
               controller={controller}
               goChat={() => setPage("chat")}
+              goSettings={() => setPage("settings")}
             />
           )}
           {page === "chat" && (

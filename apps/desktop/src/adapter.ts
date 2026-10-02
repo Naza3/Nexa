@@ -45,10 +45,14 @@ export const nativeApi: DesktopApi = {
   snapshot: () => call("desktop_snapshot"),
   start: (initialize_if_missing) =>
     call("runtime_start", { initialize_if_missing }),
-  pickModel: () => call("model_pick"),
-  importModel: (selection_id, model_id) =>
-    call("model_import", { selection_id, model_id }),
-  modelsPage: (after) => call("models_page", { after }),
+  pickDirectory: () => call("model_directory_pick"),
+  applyDirectory: (selection_id) =>
+    call("model_directory_apply", { selection_id }),
+  scanModels: () => call("models_scan"),
+  libraryNext: (operation_id) => call("model_library_next", { operation_id }),
+  libraryCancel: (operation_id) =>
+    call("model_library_cancel", { operation_id }),
+  modelsPage: (after, generation) => call("models_page", { after, generation }),
   loadModel: (model_id, options) =>
     call("model_load", { model_id, ...options }),
   unloadModel: () => call("model_unload"),

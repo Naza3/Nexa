@@ -13,6 +13,11 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+struct RegistrySnapshot {
+    models: Vec<ModelSummary>,
+    generation: uuid::Uuid,
+}
+
 #[derive(Clone)]
 pub struct ApiState {
     pub runtime: RuntimeHandle,
@@ -20,7 +25,7 @@ pub struct ApiState {
     pub shutdown: ServiceShutdown,
     pub diagnostics: Option<ProcessDiagnostics>,
     store: Arc<ModelStore>,
-    registry: Arc<RwLock<Vec<ModelSummary>>>,
+    registry: Arc<RwLock<RegistrySnapshot>>,
     thread_selection: Arc<RwLock<Option<(LoadOptions, &'static str)>>>,
     requests: Arc<Semaphore>,
     controls: Arc<Semaphore>,
@@ -42,7 +47,10 @@ impl ApiState {
             shutdown: ServiceShutdown::new(runtime, import_cancel.clone()),
             diagnostics,
             store,
-            registry: Arc::new(RwLock::new(Vec::new())),
+            registry: Arc::new(RwLock::new(RegistrySnapshot {
+                models: Vec::new(),
+                generation: uuid::Uuid::new_v4(),
+            })),
             thread_selection: Arc::new(RwLock::new(None)),
             requests: Arc::new(Semaphore::new(32)),
             controls: Arc::new(Semaphore::new(8)),
@@ -61,9 +69,20 @@ impl ApiState {
     }
     pub async fn initialize_registry(&self) -> Result<(), ApiError> {
         let store = self.store.clone();
-        let models = self.storage(move || store.list()).await?;
-        *self.registry.write().map_err(|_| ApiError::internal())? =
-            models.into_iter().map(ModelSummary::from).collect();
+        let models = self
+            .storage(move || {
+                store.list().map(|models| {
+                    models
+                        .into_iter()
+                        .map(|model| ModelSummary::from_store(model, &store))
+                        .collect()
+                })
+            })
+            .await?;
+        *self.registry.write().map_err(|_| ApiError::internal())? = RegistrySnapshot {
+            models,
+            generation: uuid::Uuid::new_v4(),
+        };
         Ok(())
     }
     pub fn models_page(
@@ -71,9 +90,20 @@ impl ApiState {
         limit: usize,
         after: Option<&runtime_types::ModelId>,
         available_only: bool,
-    ) -> Result<(Vec<ModelSummary>, Option<runtime_types::ModelId>), ApiError> {
+        expected_generation: Option<uuid::Uuid>,
+    ) -> Result<
+        (
+            Vec<ModelSummary>,
+            Option<runtime_types::ModelId>,
+            uuid::Uuid,
+        ),
+        ApiError,
+    > {
         let registry = self.registry.read().map_err(|_| ApiError::internal())?;
-        let mut models = registry.iter().filter(|model| {
+        if expected_generation.is_some_and(|g| g != registry.generation) {
+            return Err(model_store::library::library_error(ErrorCode::ModelListChanged).into());
+        }
+        let mut models = registry.models.iter().filter(|model| {
             (!available_only || model.available) && after.is_none_or(|after| model.id > *after)
         });
         let page: Vec<_> = models.by_ref().take(limit).cloned().collect();
@@ -82,7 +112,79 @@ impl ApiState {
         } else {
             None
         };
-        Ok((page, next_after))
+        Ok((page, next_after, registry.generation))
+    }
+    pub fn model_library_info(&self) -> Option<model_store::library::LibraryDirectoryInfo> {
+        self.store.library_info()
+    }
+    pub fn selected_display_name(&self, id: Option<&ModelId>) -> Option<String> {
+        let id = id?;
+        self.registry
+            .read()
+            .ok()?
+            .models
+            .iter()
+            .find(|model| &model.id == id)
+            .map(|model| model.display_name.clone())
+    }
+    pub async fn wait_shutdown(&self) -> Result<(), RuntimeError> {
+        self.shutdown.wait().await?;
+        self.store.release_external_after_shutdown();
+        Ok(())
+    }
+    async fn prepare_external(&self, id: ModelId) -> Result<(), ApiError> {
+        match self.store.needs_external_preparation(&id) {
+            Ok(false) => return Ok(()),
+            Ok(true) => (),
+            Err(error) => {
+                publish_preparation_result(&self.registry, &id, &Err(error.clone()))?;
+                return Err(error.into());
+            }
+        }
+        let store = self.store.clone();
+        let requested = id.clone();
+        self.prepare_guarded(id, move |control| {
+            store.prepare_external(&requested, &control)
+        })
+        .await
+    }
+    async fn prepare_guarded<F>(&self, id: ModelId, action: F) -> Result<(), ApiError>
+    where
+        F: FnOnce(Arc<model_store::library::ScanControl>) -> Result<(), RuntimeError>
+            + Send
+            + 'static,
+    {
+        let permit = self
+            .storage
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ApiError::busy())?;
+        let lease = self.control(|runtime| runtime.reserve_registry()).await?;
+        let control = Arc::new(model_store::library::ScanControl::default());
+        let shutdown = self.shutdown.clone();
+        let shutdown_control = control.clone();
+        let watcher = tokio::spawn(async move {
+            shutdown.requested().await;
+            shutdown_control.cancel();
+        });
+        let mut guard = PreparationGuard {
+            control: control.clone(),
+            watcher,
+            finished: false,
+        };
+        let registry = self.registry.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _lease = lease; // Remains reserved through cancellation and cleanup.
+            let result = action(control);
+            publish_preparation_result(&registry, &id, &result)?;
+            result
+        })
+        .await
+        .map_err(|_| ApiError::internal())?;
+        guard.finished = true;
+        result?;
+        self.ensure_running()
     }
     pub fn ensure_running(&self) -> Result<(), ApiError> {
         if self.shutdown.is_stopping() {
@@ -98,6 +200,7 @@ impl ApiState {
         explicit_threads: bool,
     ) -> Result<(), ApiError> {
         self.ensure_running()?;
+        self.prepare_external(model.clone()).await?;
         let source = if explicit_threads {
             "request"
         } else if self.config.inference.threads.is_some() {
@@ -144,6 +247,7 @@ impl ApiState {
     }
     pub async fn submit(&self, request: GenerationRequest) -> Result<EventReceiver, ApiError> {
         self.ensure_running()?;
+        self.prepare_external(request.model.clone()).await?;
         self.execute(move |runtime| runtime.submit(request)).await
     }
     pub async fn execute<T, F>(&self, action: F) -> Result<T, ApiError>
@@ -214,7 +318,9 @@ impl ApiState {
                 && store.resolve(&request.id).is_ok_and(|model| model.validated);
             let outcome = import_outcome(&request.id, was_missing, imported, observed, executable);
             if let Some(summary) = &outcome.observed {
-                let mut models = registry.write().map_err(|_| ApiError::internal())?;
+                let mut snapshot = registry.write().map_err(|_| ApiError::internal())?;
+                snapshot.generation = uuid::Uuid::new_v4();
+                let models = &mut snapshot.models;
                 if let Some(previous) = models.iter_mut().find(|model| model.id == summary.id) {
                     *previous = summary.clone();
                 } else {
@@ -250,6 +356,54 @@ where
 
 /// Future cancellation (including disconnect) cancels only this import. The
 /// blocking task retains its reservation until the store has removed partials.
+fn publish_preparation_result(
+    registry: &RwLock<RegistrySnapshot>,
+    id: &ModelId,
+    result: &Result<(), RuntimeError>,
+) -> Result<(), RuntimeError> {
+    if result.as_ref().is_err_and(|error| {
+        matches!(
+            error.code,
+            ErrorCode::ModelScanCancelled | ErrorCode::ModelScanTimeout
+        )
+    }) {
+        return Ok(());
+    }
+    let mut registry = registry
+        .write()
+        .map_err(|_| RuntimeError::new(ErrorCode::RuntimeFaulted, "model registry unavailable"))?;
+    let Some(model) = registry.models.iter_mut().find(|model| &model.id == id) else {
+        return Err(RuntimeError::new(
+            ErrorCode::ModelNotFound,
+            "model registration unavailable",
+        ));
+    };
+    let code = result
+        .as_ref()
+        .err()
+        .map(|error| error.code.as_str().to_owned());
+    let available = result.is_ok() && model.validated;
+    if model.available != available || model.availability_error != code {
+        model.available = available;
+        model.availability_error = code;
+        registry.generation = uuid::Uuid::new_v4();
+    }
+    Ok(())
+}
+
+struct PreparationGuard {
+    control: Arc<model_store::library::ScanControl>,
+    watcher: tokio::task::JoinHandle<()>,
+    finished: bool,
+}
+impl Drop for PreparationGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.control.cancel();
+        }
+        self.watcher.abort();
+    }
+}
 struct ImportGuard {
     cancel: ImportCancellation,
     watcher: tokio::task::JoinHandle<()>,
@@ -311,9 +465,10 @@ fn import_outcome(
 #[cfg(test)]
 mod import_outcome_tests {
     use super::*;
-    fn model() -> ModelManifest {
+    pub(super) fn model() -> ModelManifest {
         ModelManifest {
             schema_version: 1,
+            storage: model_store::ModelStorage::Managed,
             id: ModelId::new("new-model").unwrap(),
             display_name: "Synthetic metadata".into(),
             relative_file: "model.gguf".into(),
@@ -397,3 +552,7 @@ mod import_outcome_tests {
         assert!(success.error.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "state/preparation_tests.rs"]
+mod preparation_tests;

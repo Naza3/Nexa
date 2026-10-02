@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+model-store = { path = "../model-store" }
 runtime-cli = { path = "../runtime-cli" }
 runtime-api = { path = "../runtime-api" }
 runtime-types = { path = "../runtime-types" }

@@ -63,14 +63,18 @@ async fn available_models(
     query: Result<Query<PageQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let query = page_query(query)?;
-    let (models, next_after) =
-        state.models_page(query.limit.unwrap_or(64), query.after.as_ref(), true)?;
+    let (models, next_after, generation) = state.models_page(
+        query.limit.unwrap_or(64),
+        query.after.as_ref(),
+        true,
+        query.generation,
+    )?;
     let data: Vec<_> = models
         .into_iter()
         .map(|model| json!({"id":model.id,"object":"model","owned_by":"local"}))
         .collect();
     Ok(Json(
-        json!({"object":"list","data":data,"next_after":next_after}),
+        json!({"object":"list","data":data,"next_after":next_after,"generation":generation}),
     ))
 }
 #[derive(Deserialize)]
@@ -78,6 +82,7 @@ async fn available_models(
 struct PageQuery {
     limit: Option<usize>,
     after: Option<ModelId>,
+    generation: Option<uuid::Uuid>,
 }
 fn page_query(query: Result<Query<PageQuery>, QueryRejection>) -> Result<PageQuery, ApiError> {
     let Query(query) = query.map_err(|error| {
@@ -107,10 +112,14 @@ async fn models(
     query: Result<Query<PageQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let query = page_query(query)?;
-    let (data, next_after) =
-        state.models_page(query.limit.unwrap_or(64), query.after.as_ref(), false)?;
+    let (data, next_after, generation) = state.models_page(
+        query.limit.unwrap_or(64),
+        query.after.as_ref(),
+        false,
+        query.generation,
+    )?;
     Ok(Json(
-        json!({"object":"list","data":data,"next_after":next_after}),
+        json!({"object":"list","data":data,"next_after":next_after,"generation":generation}),
     ))
 }
 fn state_name(state: ModelState) -> &'static str {
@@ -128,7 +137,8 @@ fn status_json(state: &ApiState, status: RuntimeStatus) -> Value {
     let available = std::thread::available_parallelism().ok().map(|n| n.get());
     let threads = status.load_options.map(|options| options.threads);
     json!({
-        "state":state_name(status.state), "selected_model":status.selected_model,
+        "state":state_name(status.state), "selected_model_display_name":state.selected_display_name(status.selected_model.as_ref()), "selected_model":status.selected_model,
+        "model_library":{"supported":true,"directory":state.model_library_info()},
         "load_options":status.load_options, "active_request":status.active_request,
         "queued_jobs":status.queued_jobs, "stopping":status.stopping, "registry_busy":status.registry_busy,
         "configured_backend":state.config.inference.backend, "backend":null,
@@ -253,6 +263,6 @@ async fn shutdown(
 ) -> Result<Json<Value>, ApiError> {
     empty_body(request, state.config.api.max_body_bytes).await?;
     state.shutdown.begin();
-    state.shutdown.wait().await?;
+    state.wait_shutdown().await?;
     Ok(Json(json!({"status":"stopped"})))
 }

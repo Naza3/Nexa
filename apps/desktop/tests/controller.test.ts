@@ -274,56 +274,19 @@ describe("single streaming owner", () => {
   });
 });
 describe("controlled model and settings actions", () => {
-  it("preserves current selection when native picker is cancelled", async () => {
-    const selection = {
-      selection_id: "one",
-      file_name: "a.gguf",
-      size_bytes: 10,
-      destination: "managed",
-    };
-    const api = makeApi({
-      pickModel: vi
-        .fn()
-        .mockResolvedValueOnce(selection)
-        .mockResolvedValueOnce(null),
-    });
-    const controller = await ready(api);
-    await controller.pick();
-    await controller.pick();
-    expect(controller.getSnapshot().selection).toEqual(selection);
-  });
-  it("blocks repeated imports, discards consumed selection, refreshes ambiguous durability errors", async () => {
-    const importing = deferred<typeof model>();
-    const api = makeApi({
-      pickModel: vi.fn(async () => ({
-        selection_id: "one",
-        file_name: "a.gguf",
-        size_bytes: 10,
-        destination: "managed",
-      })),
-      importModel: vi.fn(() => importing.promise),
-    });
-    const controller = await ready(api);
-    await controller.pick();
-    const first = controller.importModel("new");
-    await controller.importModel("new");
-    expect(api.importModel).toHaveBeenCalledTimes(1);
-    importing.reject({
-      code: "import_committed_durability_unconfirmed",
-      message: "请刷新",
-    });
-    await first;
-    expect(api.modelsPage).toHaveBeenCalledTimes(2);
-    expect(controller.getSnapshot().selection).toBeNull();
-  });
   it("retains only the current model page", async () => {
     const api = makeApi({
       modelsPage: vi
         .fn()
-        .mockResolvedValueOnce({ data: [model], next_after: "qwen" })
+        .mockResolvedValueOnce({
+          data: [model],
+          next_after: "qwen",
+          generation: "generation-1",
+        })
         .mockResolvedValueOnce({
           data: [{ ...model, id: "second" }],
           next_after: null,
+          generation: "generation-1",
         }),
     });
     const controller = await ready(api);

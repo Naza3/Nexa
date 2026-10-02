@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-from run_desktop_smoke import PROBE_REPORTS, bridge_failure, launch_probe_report
+from run_desktop_smoke import DIAGNOSTIC_REPORTS, PROBE_REPORTS, bridge_failure, external_library_report, launch_probe_report, startup_diagnostic
 
 JSON_REPORTS = (
     "windows-baseline.json", "windows-native-smoke.json", "upstream-bench.json",
@@ -25,7 +25,7 @@ JSON_REPORTS = (
     "windows-package/build-result.json", "windows-package/pe-inspection.json",
     "windows-package/package-acceptance.json",
     "windows-desktop/build-result.json", "windows-desktop/pe-inspection.json",
-    "windows-desktop/diagnostics.json", "windows-desktop/bridge-real.json",
+    *("windows-desktop/" + name for name in DIAGNOSTIC_REPORTS), "windows-desktop/bridge-real.json",
     "windows-desktop/bridge-failure.json",
     "windows-desktop/launch-probe-breakaway.json", "windows-desktop/launch-probe-inherit-job.json",
     "windows-desktop/acceptance.json",
@@ -36,6 +36,7 @@ LOG_REPORTS = tuple(f"windows-{name}.log" for name in (
     "native-build", "native-identity-tests", "ctest", "rustfmt", "rust-tests", "clippy", "real-model",
     "real-runtime", "worker-real-credit", "real-process-runtime",
     "desktop-dependencies", "desktop-rust-tests", "desktop-clippy", "desktop-build", "desktop-source-status", "desktop-transport-tests",
+    "desktop-external-store-tests", "desktop-external-guard-tests", "desktop-mapping-observation",
 ))
 # These files are never copied, but their byte identities keep synthetic baseline
 # validation auditable when generated text and raw upstream stderr are omitted.
@@ -48,6 +49,7 @@ FORBIDDEN_FIELDS = frozenset((
     "token", "api_token", "api-token", "password", "secret", "credentials",
     "authorization", "bearer", "messages", "content", "prompt_text",
     "generated_text", "response_body", "completion_text", "text",
+    "failed_file_name",
 ))
 SECRET_VALUE = re.compile(
     r"(?i)(?:\bbearer\s+[A-Za-z0-9_+/=.-]{8,}|"
@@ -137,10 +139,14 @@ def stage(source, destination, repo, environment=None):
                 if name.endswith(".json"):
                     if name == "windows-desktop/bridge-failure.json":
                         bridge_failure(text)
+                    if name in {"windows-desktop/" + file for file in DIAGNOSTIC_REPORTS}:
+                        startup_diagnostic(text)
                     for strategy, filename in PROBE_REPORTS.items():
                         if name == "windows-desktop/" + filename:
                             launch_probe_report(text, expected_strategy=strategy)
                     value = json.loads(text, object_pairs_hook=unique_object, parse_constant=lambda _: (_ for _ in ()).throw(ValueError("non-finite JSON value")))
+                    if name == "windows-desktop/bridge-real.json":
+                        external_library_report(value.get("external_library") if isinstance(value, dict) else None)
                     output = (json.dumps(clean(value, roots), ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
                 else:
                     output = scrub(text, roots).encode("utf-8")

@@ -135,7 +135,11 @@ describe("desktop React interaction", () => {
     initial.runtime = null;
     const api = makeApi({
       snapshot: vi.fn(async () => initial),
-      modelsPage: vi.fn(async () => ({ data: [], next_after: null })),
+      modelsPage: vi.fn(async () => ({
+        data: [],
+        next_after: null,
+        generation: "generation-1",
+      })),
     });
     render(<App controller={new DesktopController(api)} />);
     const init = await screen.findByRole("button", { name: "初始化并启动" });
@@ -146,33 +150,6 @@ describe("desktop React interaction", () => {
     await waitFor(() =>
       expect(api.start).toHaveBeenCalledExactlyOnceWith(true),
     );
-  });
-  it("shows real import busy state without fake percentage and suppresses duplicate submits", async () => {
-    const importing = deferred<typeof model>();
-    const { user, api } = await mount({
-      pickModel: vi.fn(async () => ({
-        selection_id: "one",
-        file_name: "文件.gguf",
-        size_bytes: 1000,
-        destination: "managed",
-      })),
-      importModel: vi.fn(() => importing.promise),
-    });
-    await user.click(screen.getByRole("button", { name: "选择 GGUF 文件" }));
-    await user.type(
-      screen.getByRole("textbox", { name: /模型 ID/ }),
-      "my-model",
-    );
-    const confirm = screen.getByRole("button", { name: "确认导入" });
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
-    expect(
-      await screen.findByRole("button", { name: "正在导入…" }),
-    ).toBeDisabled();
-    expect(screen.getByText(/服务未提供字节进度/)).toBeInTheDocument();
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-    expect(api.importModel).toHaveBeenCalledTimes(1);
-    await act(async () => importing.resolve(model));
   });
   it("saves preferences separately from runtime idle config, disclosing activation and shutdown scope", async () => {
     const { user, api } = await mount();

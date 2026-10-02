@@ -38,6 +38,9 @@ impl BridgeError {
             }
             "consumer_busy" => "Only one pending output read is allowed.",
             "request_not_owned" => "This request does not belong to this window.",
+            "model_load_interrupted" => {
+                "This window's model request was disconnected. Preparation is cancelling; native loading, if already admitted, must finish cleanup."
+            }
             "import_interrupted" => {
                 "The import connection was closed. Refresh the model list before retrying; a completed copy may already exist."
             }
@@ -50,7 +53,8 @@ impl BridgeError {
             "settings_durability_unconfirmed" => {
                 "The setting was published but disk durability was not confirmed. Refresh before retrying."
             }
-            "settings_invalid" | "invalid_request" => {
+            "invalid_manifest" => "The selected GGUF structure or model registration is invalid.",
+            "settings_invalid" | "invalid_request" | "invalid_argument" => {
                 "The supplied settings or request are invalid."
             }
             "packaged_runtime_missing" => {
@@ -100,6 +104,19 @@ impl BridgeError {
             "insufficient_storage",
             "internal_error",
             "response_too_large",
+            "model_library_unsupported",
+            "model_directory_required",
+            "model_directory_unavailable",
+            "model_directory_unsupported",
+            "model_library_limit",
+            "model_library_changed",
+            "model_list_changed",
+            "model_scan_timeout",
+            "model_scan_cancelled",
+            "model_file_changed",
+            "model_file_unavailable",
+            "model_file_in_use",
+            "model_library_write_failed",
             "import_committed_durability_unconfirmed",
         ];
         Self::new(code.filter(|s| KNOWN.contains(s)).unwrap_or("api_error"))

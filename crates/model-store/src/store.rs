@@ -13,9 +13,15 @@ use runtime_types::{ErrorCode, ModelId, ResolvedModel, RuntimeError};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::library::{
+    LibraryDirectoryInfo, ModelLibrary, PreparedExternal, ScanControl, library_error,
+};
 use crate::manifest::validate_portable_id;
-use crate::{ImportRequest, ModelManifest, Result, gguf, invalid_manifest, io_error};
+use crate::{ImportRequest, ModelManifest, ModelStorage, Result, gguf, invalid_manifest, io_error};
 
+// A failed external cleanup permanently poisons this process's catalog owner.
+// This bounds fail-closed retained leases instead of accumulating rebuilt stores.
+static EXTERNAL_CLEANUP_UNCONFIRMED: AtomicBool = AtomicBool::new(false);
 const COPY_BUFFER: usize = 64 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const SPACE_RESERVE: u64 = 1024 * 1024;
@@ -51,9 +57,14 @@ pub struct ModelStore {
     _process_lock: fs::File,
     gate: Mutex<()>,
     verified: Mutex<BTreeMap<ModelId, VerifiedModel>>,
+    library: Option<ModelLibrary>,
+    external_prepared: Mutex<BTreeMap<ModelId, PreparedExternal>>,
 }
 impl ModelStore {
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self> {
+        if EXTERNAL_CLEANUP_UNCONFIRMED.load(Ordering::Acquire) {
+            return Err(library_error(ErrorCode::ExecutorCleanupUnconfirmed));
+        }
         let root_path = prepare_root(data_dir.as_ref())?;
         let root =
             Dir::open_ambient_dir(&root_path, cap_std::ambient_authority()).map_err(io_error)?;
@@ -83,15 +94,21 @@ impl ModelStore {
         })?;
         ensure_directory(&root, Path::new("models"))?;
         ensure_directory(&root, Path::new("imports"))?;
+        let library = ModelLibrary::read(&root_path)?;
         let store = Self {
             root_path,
             root,
             _process_lock: lock,
             gate: Mutex::new(()),
             verified: Mutex::new(BTreeMap::new()),
+            library,
+            external_prepared: Mutex::new(BTreeMap::new()),
         };
         store.recover_imports()?;
-        for manifest in store.list()? {
+        for manifest in store.list_managed()? {
+            if store.is_external(&manifest.id) {
+                return Err(library_error(ErrorCode::ModelLibraryChanged));
+            }
             store.verify(&manifest.id)?;
         }
         Ok(store)
@@ -107,6 +124,12 @@ impl ModelStore {
     ) -> Result<ModelManifest> {
         request.validate()?;
         cancel.check()?;
+        if self.is_external(&request.id) {
+            return Err(RuntimeError::new(
+                ErrorCode::AlreadyExists,
+                "model ID already registered externally",
+            ));
+        }
         #[cfg(windows)]
         validate_local_source_path(source.as_ref())?;
         let metadata = fs::symlink_metadata(source.as_ref()).map_err(io_error)?;
@@ -175,6 +198,12 @@ impl ModelStore {
     ) -> Result<ModelManifest> {
         request.validate()?;
         cancel.check()?;
+        if self.is_external(&request.id) {
+            return Err(RuntimeError::new(
+                ErrorCode::AlreadyExists,
+                "model ID already registered externally",
+            ));
+        }
         let _gate = self.acquire()?;
         cancel.check()?;
         self.check_layout()?;
@@ -284,7 +313,7 @@ impl ModelStore {
     /// Returns a coherent manifest-derived index. This verifies metadata and file
     /// sizes, not all model hashes. Import/open/verify establish hash integrity;
     /// resolve checks that the cached verified identity has not visibly changed.
-    pub fn list(&self) -> Result<Vec<ModelManifest>> {
+    fn list_managed(&self) -> Result<Vec<ModelManifest>> {
         let _gate = self.acquire()?;
         self.check_layout()?;
         let mut models = Vec::new();
@@ -302,7 +331,79 @@ impl ModelStore {
         Ok(models)
     }
 
+    pub fn list(&self) -> Result<Vec<ModelManifest>> {
+        let mut models = self.list_managed()?;
+        if let Some(library) = &self.library {
+            models.extend(library.models.iter().map(|m| m.manifest.clone()));
+        }
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(models)
+    }
+    /// Trusted lifecycle owner only: call after Runtime shutdown and confirmed
+    /// worker cleanup. Unload is deliberately insufficient.
+    pub fn release_external_after_shutdown(&self) {
+        self.external_prepared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+    pub fn library_info(&self) -> Option<LibraryDirectoryInfo> {
+        self.library.as_ref().map(ModelLibrary::info)
+    }
+    pub fn is_external(&self, id: &ModelId) -> bool {
+        self.library.as_ref().is_some_and(|l| l.entry(id).is_some())
+    }
+    pub fn external_availability(&self, id: &ModelId) -> Option<ErrorCode> {
+        let library = self.library.as_ref()?;
+        let entry = library.entry(id)?;
+        if !cfg!(windows) {
+            return Some(ErrorCode::ModelDirectoryUnsupported);
+        }
+        library.availability(entry)
+    }
+    pub fn needs_external_preparation(&self, id: &ModelId) -> Result<bool> {
+        if !self.is_external(id) {
+            return Ok(false);
+        }
+        let prepared = self.external_prepared.lock().map_err(|_| cache_error())?;
+        match prepared.get(id) {
+            Some(model) => {
+                model.resolve()?;
+                Ok(false)
+            }
+            None => Ok(true),
+        }
+    }
+    pub fn prepare_external(&self, id: &ModelId, control: &ScanControl) -> Result<()> {
+        let Some(library) = &self.library else {
+            return Ok(());
+        };
+        let Some(entry) = library.entry(id) else {
+            return Ok(());
+        };
+        control.check()?;
+        if !entry.manifest.validated {
+            return Err(library_error(ErrorCode::UnsupportedModel));
+        }
+        let _gate = self
+            .gate
+            .try_lock()
+            .map_err(|_| library_error(ErrorCode::RuntimeBusy))?;
+        if !self.needs_external_preparation(id)? {
+            return Ok(());
+        }
+        let prepared = PreparedExternal::prepare(library, entry, control)?;
+        control.check()?;
+        self.external_prepared
+            .lock()
+            .map_err(|_| cache_error())?
+            .insert(id.clone(), prepared);
+        Ok(())
+    }
     pub fn get(&self, id: &ModelId) -> Result<ModelManifest> {
+        if let Some(entry) = self.library.as_ref().and_then(|l| l.entry(id)) {
+            return Ok(entry.manifest.clone());
+        }
         let _gate = self.acquire()?;
         self.check_layout()?;
         self.read_manifest(id)
@@ -316,6 +417,15 @@ impl ModelStore {
     /// Keep the store alive while using the result and coordinate remove/unload in
     /// the scheduler; a bare path is not a model lease.
     pub fn resolve(&self, id: &ModelId) -> Result<ResolvedModel> {
+        if self.is_external(id) {
+            return self
+                .external_prepared
+                .lock()
+                .map_err(|_| cache_error())?
+                .get(id)
+                .ok_or_else(|| library_error(ErrorCode::ModelFileUnavailable))?
+                .resolve();
+        }
         let _gate = self.gate.try_lock().map_err(|error| match error {
             std::sync::TryLockError::WouldBlock => RuntimeError::new(
                 ErrorCode::RuntimeBusy,
@@ -533,6 +643,11 @@ impl ModelStore {
         let manifest: ModelManifest = serde_json::from_slice(&bytes)
             .map_err(|_| invalid_manifest("invalid model manifest JSON"))?;
         manifest.validate()?;
+        if manifest.storage != ModelStorage::Managed {
+            return Err(invalid_manifest(
+                "external registrations cannot be stored as managed copies",
+            ));
+        }
         if manifest.id != *id {
             return Err(invalid_manifest("manifest ID differs from directory name"));
         }
@@ -582,6 +697,16 @@ impl ModelStore {
 
 impl Drop for ModelStore {
     fn drop(&mut self) {
+        let prepared = self
+            .external_prepared
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        if !prepared.is_empty() {
+            EXTERNAL_CLEANUP_UNCONFIRMED.store(true, Ordering::Release);
+            // Keep bounded file/directory guards alive until OS process teardown.
+            // Never turn an unknown worker cleanup into a source-unlock claim.
+            std::mem::forget(std::mem::take(prepared));
+        }
         // Explicit unlock also releases the open-file-description lock if an
         // unrelated concurrent process spawn briefly inherited this descriptor.
         let _ = FileExt::unlock(&self._process_lock);
@@ -856,5 +981,83 @@ mod tests {
             payload
         );
         assert!(store.root.read_dir("imports").unwrap().next().is_none());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod external_guard_lifetime_tests {
+    use super::*;
+    #[test]
+    fn probe_child() {
+        let Some(root) = std::env::var_os("NEXA_EXTERNAL_GUARD_PROBE_ROOT").map(PathBuf::from)
+        else {
+            return;
+        };
+        let released =
+            std::env::var_os("NEXA_EXTERNAL_GUARD_PROBE_MODE").is_some_and(|v| v == "released");
+        let store = ModelStore::open(root.join("data")).unwrap();
+        let file = root.join("source.gguf");
+        let guard = crate::library::prepared_guard_fixture(&file).unwrap();
+        store
+            .external_prepared
+            .lock()
+            .unwrap()
+            .insert(ModelId::new("fixture").unwrap(), guard);
+        assert!(fs::OpenOptions::new().write(true).open(&file).is_err());
+        if released {
+            store.release_external_after_shutdown();
+        }
+        drop(store);
+        if released {
+            assert!(fs::OpenOptions::new().write(true).open(&file).is_ok());
+            assert!(ModelStore::open(root.join("other")).is_ok());
+        } else {
+            assert!(fs::OpenOptions::new().write(true).open(&file).is_err());
+            assert_eq!(
+                ModelStore::open(root.join("other")).err().unwrap().code,
+                ErrorCode::ExecutorCleanupUnconfirmed
+            );
+        }
+    }
+    #[test]
+    fn windows_external_guard_release_and_unknown_cleanup_are_process_isolated() {
+        for mode in ["released", "retained"] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source.gguf");
+            fs::write(&source, b"ownership fixture, not a model").unwrap();
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "store::external_guard_lifetime_tests::probe_child",
+                    "--nocapture",
+                ])
+                .env("NEXA_EXTERNAL_GUARD_PROBE_ROOT", temp.path())
+                .env("NEXA_EXTERNAL_GUARD_PROBE_MODE", mode)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if std::time::Instant::now() >= deadline {
+                    child.kill().expect("owned fixture kill request failed");
+                    let reap_deadline =
+                        std::time::Instant::now() + std::time::Duration::from_secs(1);
+                    while child.try_wait().unwrap().is_none()
+                        && std::time::Instant::now() < reap_deadline
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    panic!("owned guard fixture exceeded its deadline");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            assert!(status.success(), "owned guard fixture failed");
+            assert!(fs::OpenOptions::new().write(true).open(&source).is_ok());
+        }
     }
 }

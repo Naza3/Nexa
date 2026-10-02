@@ -156,6 +156,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "model-store",
  "runtime-api",
  "runtime-cli",
  "runtime-types",

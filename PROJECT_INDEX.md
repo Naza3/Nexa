@@ -51,6 +51,7 @@
 - `scripts/stage_ci_evidence.py` / `scripts/test_stage_ci_evidence.py`：闭合允许列表脱敏证据，保留失败及合成输出hash链
 
 - [T06契约](docs/t06-desktop-contract.md)、[T06壳决策](docs/decisions/0007-t06-desktop-shell-boundary.md)、[T06验证](docs/verification/2026-10-01-t06-desktop.md)：固定IPC、界面与真实验收分层
+- [T06外部模型目录/自动名称契约](docs/t06-model-directory-contract.md)：原生只读目录选择、零复制注册、稳定ID、有效目录身份与文件保护
 - `crates/desktop-bridge/`：native-free安全客户端、bounded SSE、实例/偏好/取消/关闭；`nexa-desktop-harness`验证真实模型与独立进程生命周期
 - `apps/desktop/`：React/TypeScript/Vite前端与npm锁；`apps/desktop/src-tauri/`独立Rust workspace、锁、ACL和原生Windows壳
 - [桌面包使用/手工UI验收](packaging/desktop-windows/README.md)：与CLI包分开的完整桌面ZIP、WebView2先决条件
@@ -107,7 +108,7 @@
 
 ## 验证入口的真实性
 
-当前已有 Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及用户Win10 build19044 / i5-8400短验已通过，T05按用户缩定范围完成，A20无开发工具/离线与长期稳定性延后验证、T06已通过bc43e0f3的Windows CI36864041027与完整Release bridge/独立桌面包核验，状态为待用户原生UI验收；执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
+当前已有Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及独立Windows 10手工短验已通过，T05按当前阶段范围完成，A20无开发工具/离线与长期稳定性延后验证。T06已通过bc43e0f3的Windows CI36864041027与完整Release bridge/独立桌面包核验，另有独立手工验收确认旧包启动/导入/聊天/停止与两种关闭；最新外部目录零复制/自动名称功能仍待新Windows CI和原生操作验收。执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。

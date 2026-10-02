@@ -1283,3 +1283,140 @@ h3 {
   align-items: center;
   gap: 8px;
 }
+
+.directory-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 20px 23px;
+  background: white;
+  margin-bottom: 12px;
+}
+.directory-path {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.directory-state {
+  font-size: 11px;
+  color: #6b7586;
+  margin: 10px 0 18px;
+  line-height: 1.8;
+}
+.directory-value {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+}
+.directory-value > span {
+  color: #6b7586;
+  font-size: 11px;
+}
+.directory-value output {
+  padding: 11px 13px;
+  background: #f5f6fa;
+  border: 1px solid #e8eaf1;
+  border-radius: 6px;
+}
+.directory-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.directory-pending {
+  margin-top: 19px;
+  padding: 16px;
+  border: 1px solid #dcd9f1;
+  background: #f7f6ff;
+  border-radius: 7px;
+}
+.directory-pending strong {
+  font-size: 12px;
+}
+.directory-pending p {
+  font-size: 11px;
+  color: #6b7586;
+  margin-top: 6px;
+}
+.directory-stop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--border);
+  margin-top: 18px;
+  padding-top: 17px;
+}
+.directory-stop p {
+  font-size: 11px;
+  color: #88632f;
+}
+.directory-guidance {
+  border-top: 1px solid var(--border);
+  padding-top: 15px;
+  margin-top: 18px;
+  font-size: 11px;
+  color: #6b7586;
+  line-height: 1.85;
+}
+.directory-guidance p + p {
+  margin-top: 8px;
+}
+.library-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid #deddf3;
+  background: #f3f2fd;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-size: 12px;
+}
+.library-progress p {
+  font-size: 11px;
+  color: #726d8f;
+  margin-top: 7px;
+}
+.progress-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #5d568e;
+}
+.stale-models-note {
+  background: #fff8e9;
+  color: #8a6836;
+  padding: 10px 13px;
+  border-radius: 6px;
+  font-size: 11px;
+  margin-bottom: 15px;
+}
+.model-source {
+  color: #6b7586 !important;
+}
+@media (max-width: 1050px) {
+  .directory-stop {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .library-progress {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+.failed-file-name {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.failed-file-name strong {
+  font-weight: 550;
+}

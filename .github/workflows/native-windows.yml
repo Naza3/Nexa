@@ -55,6 +55,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Independent launch-observation harness build failed' }
           cargo test --locked -p desktop-bridge --bin nexa-desktop-harness lifecycle::tests:: -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-transport-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'Bounded desktop harness report transport tests failed' }
+          cargo test --locked -p model-store --test external -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-external-store-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'External model catalog and source access tests failed' }
+          cargo test --locked -p model-store --lib store::external_guard_lifetime_tests:: -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-external-guard-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'External model guard lifetime tests failed' }
+          # Records both positive and negative platform observations. A mapping
+          # remaining writable is not silently described as source protection.
+          cargo test --locked -p model-store --test windows_external_mapping windows_preexisting_writable_mapping_observation -- --exact --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-mapping-observation.log
+          if ($LASTEXITCODE -ne 0) { throw 'Bounded writable-mapping observation failed' }
           # This records platform observations only. It neither starts the
           # product runtime nor substitutes for the real Release/UI gates.
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --probe-launch breakaway --harness target/debug/nexa-desktop-harness.exe

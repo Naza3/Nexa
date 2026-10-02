@@ -24,10 +24,7 @@ pub fn regular_file(path: &Path) -> Result<PathBuf, &'static str> {
         return Err("selected_path_invalid");
     }
     #[cfg(windows)]
-    if !matches!(path.components().next(), Some(std::path::Component::Prefix(p)) if matches!(p.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)))
-    {
-        return Err("selected_path_invalid");
-    }
+    crate::local_path::require_local_disk(path)?;
     for part in path.ancestors() {
         let metadata = fs::symlink_metadata(part).map_err(|_| "selected_file_unavailable")?;
         if metadata.file_type().is_symlink() {
@@ -45,7 +42,10 @@ pub fn regular_file(path: &Path) -> Result<PathBuf, &'static str> {
     if !metadata.is_file() {
         return Err("selected_file_invalid");
     }
-    fs::canonicalize(path).map_err(|_| "selected_file_unavailable")
+    let canonical = fs::canonicalize(path).map_err(|_| "selected_file_unavailable")?;
+    #[cfg(windows)]
+    crate::local_path::require_local_disk(&canonical)?;
+    Ok(canonical)
 }
 
 impl Selection {

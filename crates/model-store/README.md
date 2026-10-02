@@ -41,3 +41,12 @@ Unix 同步文件与可 fsync 的目录；Windows 文件在 rename 前同步，�
 ## 验证入口
 
 `cargo test --locked -p model-store` 与 `cargo clippy --locked -p model-store --all-targets -- -D warnings`。本 crate 测试仅使用合成 GGUF，覆盖存储、边界、完整性、取消、原子可见性、并发重名、进程锁和恢复，不伪装真实模型推理。真实跨模块测试由 `engine-host/tests/real_runtime.rs` 所属执行器验证提供。
+
+
+## 外部目录（T06）
+
+ModelStore保留现有managed布局，同时从data root的model-library.json读取独立external注册。外部记录显式storage=external，relative_file仅为直接子级安全文件名；managed目录拒绝external标记，复制import的ID与external碰撞会明确拒绝，remove不会删除外部源。显示名默认保留GGUF文件名中的中文与空格，内部ModelId仍严格且由Rust自动生成。
+
+读取旧索引只校验结构及路径语法，拔掉外置盘不会阻止旧managed使用；访问外部源时再只读核查DriveType、祖先/文件reparse和OS身份。首次实际加载重hash并保留Windows source guard到已确认shutdown，actor resolve不hash。外部扫描/读取从不向所选目录写文件；持久化由可信应用在data root持实例锁原子完成。上限与取消/生命周期契约见 [目录契约](../../docs/t06-model-directory-contract.md)。
+
+Windows合成共享访问与预存可写mapping测试仅证明各自观察，Linux不能冒称拥有Windows强制共享保证。未确认cleanup的prepared guard有界保留到进程退出，进程随后拒绝重新open catalog；正常调用者必须在worker确认停止后显式release_external_after_shutdown。

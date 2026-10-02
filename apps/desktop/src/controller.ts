@@ -4,7 +4,8 @@ import type {
   ChatRequest,
   DesktopApi,
   ModelPage,
-  ModelSelection,
+  DirectorySelection,
+  LibraryOperation,
   Preferences,
   RuntimeStatus,
   SafeError,
@@ -51,10 +52,12 @@ export interface ViewState {
   error: SafeError | null;
   notice: string | null;
   operation: string | null;
-  models: ModelPage;
+  models: Omit<ModelPage, "generation"> & { generation: string | null };
   page_after: string | null;
   models_loading: boolean;
-  selection: ModelSelection | null;
+  directory_selection: DirectorySelection | null;
+  library: LibraryOperation | null;
+  library_phase: "idle" | "starting" | "running" | "stopping" | "recovery";
   messages: SessionMessage[];
   chat_phase: ChatPhase;
   clear_pending: boolean;
@@ -123,10 +126,12 @@ export class DesktopController {
     error: null,
     notice: null,
     operation: null,
-    models: { data: [], next_after: null },
+    models: { data: [], next_after: null, generation: null },
     page_after: null,
     models_loading: false,
-    selection: null,
+    directory_selection: null,
+    library: null,
+    library_phase: "idle",
     messages: [],
     chat_phase: "idle",
     clear_pending: false,
@@ -146,6 +151,14 @@ export class DesktopController {
     capped: boolean;
     incompleteReason: string | null;
   } | null = null;
+  private libraryTask: {
+    id: string | null;
+    cancel: boolean;
+    cancelSent: boolean;
+    reading: boolean;
+    lastPull: number;
+  } | null = null;
+  private modelsEpoch = 0;
   private nextMessage = 0;
   private modelsLoaded = false;
   constructor(readonly api: DesktopApi) {}
@@ -179,6 +192,7 @@ export class DesktopController {
       this.mounted = false;
       clearTimeout(this.poll);
       void this.cancel();
+      void this.cancelLibrary();
     };
   };
   refresh = (): Promise<void> => {
@@ -188,9 +202,26 @@ export class DesktopController {
       try {
         const snapshot = await this.api.snapshot();
         if (epoch !== this.snapshotEpoch) return;
+        const previous = this.state.snapshot;
+        if (
+          previous &&
+          (previous.connection !== snapshot.connection ||
+            JSON.stringify(previous.model_directory) !==
+              JSON.stringify(snapshot.model_directory))
+        ) {
+          ++this.modelsEpoch;
+          this.modelsLoaded = false;
+          if (["stale", "unsupported"].includes(snapshot.model_directory.state))
+            this.update({
+              models: { data: [], next_after: null, generation: null },
+              page_after: null,
+            });
+        }
         this.update({ snapshot, booting: false });
         if (
           snapshot.connection === "connected" &&
+          !["stale", "unsupported"].includes(snapshot.model_directory.state) &&
+          !this.libraryTask &&
           !this.modelsLoaded &&
           !this.state.models_loading
         )
@@ -214,8 +245,14 @@ export class DesktopController {
     label: string,
     task: () => Promise<void>,
     allowChat = false,
+    allowLibrary = false,
   ) {
-    if (this.state.operation || (!allowChat && this.stream)) return;
+    if (
+      this.state.operation ||
+      (!allowChat && this.stream) ||
+      (!allowLibrary && this.libraryTask)
+    )
+      return;
     ++this.snapshotEpoch;
     this.update({ operation: label, error: null, notice: null });
     try {
@@ -230,24 +267,56 @@ export class DesktopController {
   start = (initialize: boolean) =>
     this.action(initialize ? "正在初始化并启动" : "正在启动服务", async () => {
       this.update({ snapshot: await this.api.start(initialize) });
+      ++this.modelsEpoch;
       this.modelsLoaded = false;
+      if (this.modelsPromise) await this.modelsPromise;
+      await this.loadPage(null);
       await this.refresh();
     });
   loadPage = (after: string | null): Promise<void> => {
     if (this.modelsPromise) return this.modelsPromise;
+    if (
+      this.state.snapshot?.connection !== "connected" ||
+      this.libraryTask ||
+      ["stale", "unsupported"].includes(
+        this.state.snapshot.model_directory.state,
+      )
+    )
+      return Promise.resolve();
+    const epoch = this.modelsEpoch;
     this.update({ models_loading: true });
     this.modelsPromise = (async () => {
+      let cursor = after;
+      let generation = after ? this.state.models.generation : null;
       try {
-        const models = await this.api.modelsPage(after);
-        if (models.data.length > 64)
-          throw new DesktopError(
-            "invalid_model_page",
-            "模型列表超过单页上限。",
-          );
-        this.modelsLoaded = true;
-        this.update({ models, page_after: after });
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const models = await this.api.modelsPage(cursor, generation);
+            if (epoch !== this.modelsEpoch) return;
+            if (models.data.length > 64 || !models.generation)
+              throw new DesktopError(
+                "invalid_model_page",
+                "模型列表缺少有效版本或超过单页上限。",
+              );
+            this.modelsLoaded = true;
+            this.update({ models, page_after: cursor });
+            return;
+          } catch (error) {
+            if (epoch !== this.modelsEpoch) return;
+            if (safeError(error).code !== "model_list_changed" || attempt === 1)
+              throw error;
+            this.modelsLoaded = false;
+            this.update({
+              models: { data: [], next_after: null, generation: null },
+              page_after: null,
+              notice: "模型列表已变化，已重新读取第一页。",
+            });
+            cursor = null;
+            generation = null;
+          }
+        }
       } catch (error) {
-        this.report(error);
+        if (epoch === this.modelsEpoch) this.report(error);
       } finally {
         this.modelsPromise = null;
         this.update({ models_loading: false });
@@ -255,44 +324,183 @@ export class DesktopController {
     })();
     return this.modelsPromise;
   };
-  private async refreshModelsAfterImport() {
-    // Finish a previous page read, then fetch a post-import snapshot.
-    if (this.modelsPromise) await this.modelsPromise;
-    await this.loadPage(null);
-  }
-  pick = () =>
-    this.action("正在选择文件", async () => {
-      const selection = await this.api.pickModel();
-      if (selection) this.update({ selection });
+  pickDirectory = () =>
+    this.action("正在选择模型目录", async () => {
+      const selection = await this.api.pickDirectory();
+      if (selection) this.update({ directory_selection: selection });
     });
-  discardSelection = () => {
-    if (!this.state.operation) this.update({ selection: null });
+  discardDirectorySelection = () => {
+    if (!this.state.operation && !this.libraryTask)
+      this.update({ directory_selection: null });
   };
-  importModel = (modelId: string) =>
-    this.action("正在导入模型", async () => {
-      const selection = this.state.selection;
-      if (!selection) return;
-      if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(modelId))
-        throw new DesktopError(
-          "invalid_model_id",
-          "模型 ID 须为 1–64 位小写字母、数字、点、下划线或短横线，且以字母或数字开头。",
-        );
-      try {
-        await this.api.importModel(selection.selection_id, modelId);
-        this.update({
-          selection: null,
-          notice: "模型已导入。加载后即可开始聊天。",
-        });
-        await this.refreshModelsAfterImport();
-      } catch (error) {
-        // A native selection is single-use. Never silently retry an import.
-        this.update({ selection: null });
-        if (safeError(error).code === "import_committed_durability_unconfirmed")
-          await this.refreshModelsAfterImport();
-        throw error;
-      }
-      await this.refresh();
+  applyDirectory = () => this.beginLibrary("apply");
+  scanModels = () => this.beginLibrary("scan");
+  private async beginLibrary(kind: "apply" | "scan") {
+    if (this.libraryTask || this.state.operation || this.stream) return;
+    if (this.state.snapshot?.connection !== "stopped") {
+      this.report(
+        new DesktopError(
+          "runtime_running",
+          "请先显式停止运行服务，再应用目录或重新扫描。仅卸载模型不够。",
+        ),
+      );
+      return;
+    }
+    const selection = this.state.directory_selection;
+    if (kind === "apply" && !selection) return;
+    if (kind === "scan" && !this.state.snapshot.model_directory.configured) {
+      this.report(
+        new DesktopError(
+          "model_directory_required",
+          "请先选择并应用模型目录。",
+        ),
+      );
+      return;
+    }
+    const task = {
+      id: null as string | null,
+      cancel: false,
+      cancelSent: false,
+      reading: false,
+      lastPull: -Infinity,
+    };
+    this.libraryTask = task;
+    ++this.snapshotEpoch;
+    ++this.modelsEpoch;
+    this.update({
+      library: null,
+      library_phase: "starting",
+      error: null,
+      notice: null,
     });
+    try {
+      const handle =
+        kind === "apply"
+          ? await this.api.applyDirectory(selection!.selection_id)
+          : await this.api.scanModels();
+      if (!handle.operation_id)
+        throw new DesktopError(
+          "invalid_library_operation",
+          "模型库操作未返回有效标识。",
+        );
+      task.id = handle.operation_id;
+      if (kind === "apply") this.update({ directory_selection: null });
+      this.update({ library_phase: task.cancel ? "stopping" : "running" });
+      if (task.cancel) void this.sendLibraryCancel();
+      void this.consumeLibrary();
+    } catch (error) {
+      this.libraryTask = null;
+      ++this.snapshotEpoch;
+      this.update({ library_phase: "idle" });
+      this.report(error);
+    }
+  }
+  cancelLibrary = async () => {
+    if (!this.libraryTask) return;
+    this.libraryTask.cancel = true;
+    if (this.state.library_phase !== "recovery")
+      this.update({ library_phase: "stopping" });
+    await this.sendLibraryCancel();
+  };
+  private async sendLibraryCancel() {
+    const task = this.libraryTask;
+    if (!task?.id || task.cancelSent) return;
+    task.cancelSent = true;
+    try {
+      await this.api.libraryCancel(task.id);
+    } catch (error) {
+      if (this.libraryTask === task) {
+        task.cancelSent = false;
+        this.report(error);
+      }
+    }
+  }
+  recoverLibrary = async () => {
+    if (!this.libraryTask?.id || this.libraryTask.reading) return;
+    this.update({ library_phase: "stopping", error: null });
+    this.libraryTask.cancel = true;
+    await this.sendLibraryCancel();
+    void this.consumeLibrary();
+  };
+  private async consumeLibrary() {
+    const task = this.libraryTask;
+    if (!task?.id || task.reading) return;
+    task.reading = true;
+    try {
+      while (this.libraryTask === task) {
+        await wait(
+          Math.max(0, Math.ceil(1000 - (performance.now() - task.lastPull))),
+        );
+        if (this.libraryTask !== task) return;
+        if (performance.now() - task.lastPull < 1000) continue;
+        task.lastPull = performance.now();
+        const progress = await this.api.libraryNext(task.id);
+        if (this.libraryTask !== task) return;
+        const terminal = progress.status !== "running";
+        if (
+          progress.operation_id !== task.id ||
+          progress.terminal !== terminal ||
+          (terminal && progress.phase !== "finished") ||
+          (progress.status === "completed" &&
+            (!progress.result || progress.error)) ||
+          (progress.status === "failed" && !progress.error)
+        )
+          throw new DesktopError(
+            "invalid_library_operation",
+            "模型库终态数据不完整，尚未确认操作结束。",
+          );
+        this.update({ library: progress });
+        if (!terminal) continue;
+        this.libraryTask = null;
+        ++this.snapshotEpoch;
+        const durabilityUnconfirmed =
+          progress.status === "failed" &&
+          progress.error?.code === "settings_durability_unconfirmed";
+        if (durabilityUnconfirmed) {
+          // Rename may already have committed a different generation. Old pages are no longer authoritative.
+          ++this.modelsEpoch;
+          this.modelsLoaded = false;
+          this.update({
+            models: { data: [], next_after: null, generation: null },
+            page_after: null,
+          });
+        }
+        if (progress.status === "completed") {
+          ++this.modelsEpoch;
+          this.modelsLoaded = false;
+          this.update({
+            models: { data: [], next_after: null, generation: null },
+            page_after: null,
+            notice: `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个可用。请启动运行服务读取实际模型列表。`,
+          });
+        } else if (progress.status === "cancelled")
+          this.update({ notice: "模型库操作已取消，原目录与索引保持不变。" });
+        else this.report(progress.error);
+        this.update({
+          library_phase: "idle",
+          operation: "正在重新读取模型目录",
+        });
+        // Do not coalesce the authoritative post-terminal read with a pre-commit poll.
+        // In particular, rename can commit even when durability confirmation fails.
+        try {
+          if (this.snapshotPromise) await this.snapshotPromise;
+          await this.refresh();
+        } finally {
+          this.update({ operation: null });
+        }
+        return;
+      }
+    } catch (error) {
+      if (this.libraryTask === task) {
+        this.update({ library_phase: "recovery" });
+        this.report(error);
+        task.cancel = true;
+        void this.sendLibraryCancel();
+      }
+    } finally {
+      task.reading = false;
+    }
+  }
   private setRuntime(runtime: RuntimeStatus) {
     if (this.state.snapshot)
       this.update({ snapshot: { ...this.state.snapshot, runtime } });
@@ -354,6 +562,7 @@ export class DesktopController {
   stop = () =>
     this.action("正在停止运行服务", async () => {
       await this.api.stop();
+      ++this.modelsEpoch;
       this.modelsLoaded = false;
       this.update({
         snapshot: this.state.snapshot
@@ -375,12 +584,15 @@ export class DesktopController {
         await this.api.close();
       },
       true,
+      true,
     );
   send = async (text: string): Promise<boolean> => {
-    if (this.stream || this.state.operation || !text.trim()) return false;
+    if (this.stream || this.libraryTask || this.state.operation || !text.trim())
+      return false;
     const snapshot = this.state.snapshot;
     if (
       snapshot?.connection !== "connected" ||
+      ["stale", "unsupported"].includes(snapshot.model_directory.state) ||
       snapshot.runtime?.state !== "ready" ||
       snapshot.runtime.stopping ||
       snapshot.runtime.registry_busy ||

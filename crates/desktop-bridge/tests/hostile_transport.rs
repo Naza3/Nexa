@@ -36,6 +36,8 @@ enum Mode {
     OverHistory,
     PendingImport,
     SlowLoad,
+    PendingPreparation,
+    PendingChatPreparation,
 }
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -179,9 +181,24 @@ impl Fixture {
                         || request.starts_with("POST /runtime/load ")
                     {
                         if request.starts_with("POST /runtime/load ") {
+                            if matches!(mode, Mode::PendingPreparation) {
+                                let mut byte = [0];
+                                let _ = socket.read(&mut byte).await;
+                                dc.fetch_add(1, Ordering::SeqCst);
+                                return;
+                            }
                             g.notified().await;
+                            dc.fetch_add(1, Ordering::SeqCst);
                         }
-                        let body=json!({"state":"unloaded","selected_model":null,"load_options":null,"active_request":null,"queued_jobs":0,"stopping":false,"registry_busy":false,"configured_backend":"cpu","backend":null,"backend_observation":"unavailable","last_error":null,"threads_source":null,"available_parallelism":2,"threads_exceed_available_parallelism":null,"worker":{"pid":null,"sessions_started":0,"sessions_reaped":0},"memory":{"api_private_bytes":null,"worker_private_bytes":null,"gpu_bytes":null,"observation":"unavailable"}}).to_string();
+                        let state =
+                            if matches!(mode, Mode::SlowLoad) && dc.load(Ordering::SeqCst) == 0 {
+                                "loading"
+                            } else {
+                                "unloaded"
+                            };
+                        let busy = matches!(mode, Mode::PendingPreparation)
+                            && dc.load(Ordering::SeqCst) == 0;
+                        let body=json!({"state":state,"selected_model":null,"load_options":null,"active_request":null,"queued_jobs":0,"stopping":false,"registry_busy":busy,"configured_backend":"cpu","backend":null,"backend_observation":"unavailable","last_error":null,"threads_source":null,"available_parallelism":2,"threads_exceed_available_parallelism":null,"worker":{"pid":null,"sessions_started":0,"sessions_reaped":0},"memory":{"api_private_bytes":null,"worker_private_bytes":null,"gpu_bytes":null,"observation":"unavailable"}}).to_string();
                         let _ = socket
                             .write_all(
                                 format!(
@@ -212,9 +229,10 @@ impl Fixture {
                         let _=socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/stolen\r\nContent-Length: 2\r\n\r\n{}").await;
                         return;
                     }
-                    if matches!(mode, Mode::Pending) {
+                    if matches!(mode, Mode::Pending | Mode::PendingChatPreparation) {
                         let mut b = [0; 1];
                         let _ = socket.read(&mut b).await;
+                        dc.fetch_add(1, Ordering::SeqCst);
                         return;
                     }
                     let actual = header(&request, "x-request-id").unwrap();
@@ -568,7 +586,17 @@ async fn close_waits_for_control_and_keeps_window_open_after_bounded_failure() {
     }
     assert_eq!(f.bridge.close().await.unwrap_err().code, "desktop_busy");
     f.gate.notify_one();
-    load.await.unwrap().unwrap();
+    assert_eq!(
+        load.await.unwrap().unwrap_err().code,
+        "model_load_interrupted"
+    );
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while f.disconnected.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert!(matches!(
         f.bridge.snapshot().await.unwrap().connection,
         desktop_bridge::ConnectionState::Connected
@@ -603,4 +631,52 @@ async fn absent_frontend_consumption_disconnects_stream_and_sends_owned_cancel()
     );
     assert_eq!(f.chats.load(Ordering::SeqCst), 1);
     assert_eq!(f.cancels.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn close_disconnects_owned_load_preparation_and_waits_for_registry_release() {
+    let f = Fixture::new(Mode::PendingPreparation).await;
+    let bridge = f.bridge.clone();
+    let load = tokio::spawn(async move {
+        bridge
+            .load_model(desktop_bridge::LoadModelRequest {
+                model_id: "a".into(),
+                context_size: 2048,
+                threads: 2,
+                batch_size: 128,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while f.auth.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    f.bridge.close().await.unwrap();
+    assert_eq!(
+        load.await.unwrap().unwrap_err().code,
+        "model_load_interrupted"
+    );
+    assert_eq!(f.disconnected.load(Ordering::SeqCst), 1);
+    assert_eq!(f.cancels.load(Ordering::SeqCst), 0);
+    assert_eq!(f.chats.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn close_during_chat_preparation_drops_stream_and_waits_for_registry_release() {
+    let f = Fixture::new(Mode::PendingChatPreparation).await;
+    let id = f.start();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while f.chats.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    f.bridge.close().await.unwrap();
+    assert_eq!(f.disconnected.load(Ordering::SeqCst), 1);
+    assert!(f.bridge.chat_next(id).await.unwrap().terminal);
+    assert_eq!(f.chats.load(Ordering::SeqCst), 1);
 }
