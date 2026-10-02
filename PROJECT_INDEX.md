@@ -132,3 +132,4 @@
 - [CI 研究证据收据决策](docs/decisions/0012-ci-research-evidence-receipts.md)
 - [设备研究 App](apps/android-verifier/README.md)：固定 CPU 验证、导入与报告；不是完整聊天产品
 - [一加15首轮安装与模型/报告验收](docs/android-device-verifier-acceptance.md)
+- [c0c0927最终研究APK与Android CI交付记录](docs/verification/2026-10-02-android-device-verifier-delivery.md)

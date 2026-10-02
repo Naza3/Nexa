@@ -6,11 +6,13 @@
 
 从固定 [Qwen3-0.6B-MNN revision](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/tree/34dfccda1187ded6e07ea06426da576b0b793c6b) 下载以下五文件到手机可由系统文件选择器访问的位置（例如 Downloads 下的独立目录）：
 
-- config.json
-- llm_config.json
-- llm.mnn
-- llm.mnn.weight
-- tokenizer.txt
+- [config.json](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/resolve/34dfccda1187ded6e07ea06426da576b0b793c6b/config.json?download=true)
+- [llm_config.json](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/resolve/34dfccda1187ded6e07ea06426da576b0b793c6b/llm_config.json?download=true)
+- [llm.mnn](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/resolve/34dfccda1187ded6e07ea06426da576b0b793c6b/llm.mnn?download=true)
+- [llm.mnn.weight](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/resolve/34dfccda1187ded6e07ea06426da576b0b793c6b/llm.mnn.weight?download=true)
+- [tokenizer.txt](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/resolve/34dfccda1187ded6e07ea06426da576b0b793c6b/tokenizer.txt?download=true)
+
+也可以解压对话中提供的四文件ZIP，再单独放入同一固定版本的 llm.mnn.weight；四文件ZIP不包含权重，不能单独运行。
 
 总计 454,470,710 bytes。不要改名或混用其他 revision；程序逐文件核对固定大小及 SHA256，完整预期值见 [候选锁](../scripts/android_mnn/candidate-model.json)。此严格校验用于固定测试基线，不是未来所有用户模型的命名要求。
 

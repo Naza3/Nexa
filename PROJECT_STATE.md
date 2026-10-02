@@ -58,8 +58,8 @@ B2实现已推送`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`；[CI36970559016](ht
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；独立Windows 10短验已通过；按当前阶段范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
 | T06 Windows UI | 待验证 | 新目录/诊断源码75e458f的CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包及解压bridge验收通过；产物独立复核通过并已交付；新目录原生UI仍未测 |
-| T07 Android核心 | 进行中 | T07-A独立CPU探针已实现：Linux真实4类输入/重复/预算边界通过，Python19/CTest2通过；NDK r30/API28/arm64原生交叉构建与16KiB LOAD对齐通过。公开预转换资产运行身份已锁，导出来源未知单独披露；生产适配和真机门槛未完成，见[T07-A验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md) |
-| T08 Android App | 未开始 | MNN Chat能力对标目标已确定；首个可用APK需目录/下载/导入/存储、多会话、设置与诊断，依赖T07-B/C安全门槛；无APK或真机证据 |
+| T07 Android核心 | 进行中 | c0c0927的T07-A/B完整CI和独立证据核验通过；固定MNN CPU模型store/Executor真实链及Android链接完成。B3a研究APK已交付，等待一加15报告；生产模型准入、B3b/core设备门槛及GPU/NPU未通过 |
+| T08 Android App | 未开始 | MNN Chat能力对标目标已确定；首个可用APK需目录/下载/导入/存储、多会话、设置与诊断，依赖T07-B/C安全门槛；无完整产品APK或真机证据，独立B3a研究验证APK另行交付 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | Android后端纳入T07-D～F单列验收；其余扩展未开始，Linux仍仅开发探针 |
 | S00–S04 摘要 | 未开始 | 来源/触发/样本/质量目标及接口契约仍待冻结 |
@@ -123,3 +123,10 @@ T07-A首批源码`e1ecc6e`及工作流语义修复`c1114ee`已推送。后者[An
 当前设备验证源码与预提交构建记录见[App验证](apps/android-verifier/VERIFICATION.md)，手机验收步骤见[首轮指引](docs/android-device-verifier-acceptance.md)。研究验证器不计为T08完整聊天产品完成。
 
 同轮新原生修改标记、收据与cleanup修复已完成12阶段完整本地链及root归档复核；本地dirty不冒充clean CI通过。App预提交静态审查已完成。下一步为批量中文提交、精确新提交GitHub门禁、clean源码APK重建与一加15手工验收。
+
+
+## 最新交付：c0c0927 Android 研究验证器
+
+c0c0927（tree c12fc577）的两套Android CI已成功，12阶段native与13份prototype报告、source/hash/同次收据均独立复核通过。干净源码重建的设备研究APK27,882,858 bytes，因直接附件大小限制改用12,057,217 bytes ZIP无损包装，于09:05 UTC发送被接受。已收到一加15用户回传的smoke/safety：各17项自动用例通过、6项未测，cleanup confirmed；另有用户观察及报告确认一次后台取消/安全卸载。取消归因和inactive误停修正中，不代表完整设备/生产准入。完整身份与边界见[最终交付记录](docs/verification/2026-10-02-android-device-verifier-delivery.md)。Windows同提交回归36984549760也已成功，50项库存文件/source/hash独立复核通过；原生窗口与长期条件边界不变。
+
+新反馈：自动CPU设备矩阵已收证；App取消/真实故障的归因与失焦边界需修正后复验。B3b私有core研究资格正在按ADR0011独立审查，尚未启用；不修改生产支持矩阵。
