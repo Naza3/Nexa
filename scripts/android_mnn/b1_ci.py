@@ -25,6 +25,100 @@ STAGES = ('tools', 'inputs', 'patch', 'baseline', 'linux_native', 'native_real',
 TARGET = 'aarch64-linux-android'
 SHA = re.compile(r'[0-9a-f]{64}')
 
+# Fixed B2 public unit-test targets. These are cfg(test) research checks, not a
+# production admission switch. Every ignored test must actually execute once.
+B2_REAL_CASES = {
+    'negative_tests::real_store_lease_reopen_tamper_and_interruption': ('mnn-model-store', 'b2_store_safe_copy'),
+    'tests::real_store_core_lifecycle': ('mnn-executor', 'b2_core_lifecycle'),
+    'tests::real_owner_backpressure_cancel_disconnect_shutdown': ('mnn-executor', 'b2_backpressure_cleanup'),
+    'tests::real_owner_fault_reload_load_timeout_and_idle': ('mnn-executor', 'b2_fault_reload_deadlines'),
+}
+ANDROID_TARGETS = {
+    'mnn_adapter': ('mnn-adapter', 'lib', 'lib', True, 'src/lib.rs'),
+    'real_model': ('mnn-adapter', 'test', 'bin', True, 'tests/real_model.rs'),
+    'build_identity': ('mnn-adapter', 'example', 'bin', False, 'examples/build_identity.rs'),
+    'mnn_model_store': ('mnn-model-store', 'lib', 'lib', True, 'src/lib.rs'),
+    'mnn_executor': ('mnn-executor', 'lib', 'lib', True, 'src/lib.rs'),
+}
+
+ARCHIVE_NAMES = ('nexa-mnn-shim', 'MNN', 'c++_static', 'c++abi', 'unwind', 'clang_rt_builtins')
+
+
+class ArchiveInputError(ValueError):
+    def __init__(self, failure_case, name=None):
+        self.failure_case = failure_case
+        self.name = name if name in ARCHIVE_NAMES else None
+        super().__init__(failure_case)
+
+
+def archive_objects(path, name, machine, boundary):
+    """Stream fixed-size ar/ELF headers; never read an archive body into memory."""
+    if not path.is_file():
+        raise ArchiveInputError('export_archive_missing', name)
+    if not path.resolve().is_relative_to(boundary.resolve()):
+        raise ArchiveInputError('export_archive_path_mismatch', name)
+    count = 0
+    try:
+        with path.open('rb') as archive:
+            length = os.fstat(archive.fileno()).st_size
+            if archive.read(8) != b'!<arch>\n':
+                raise ValueError('archive')
+            position = 8
+            while position < length:
+                header = archive.read(60)
+                if len(header) != 60 or header[58:] != b'`\n':
+                    raise ValueError('header')
+                size = int(header[48:58].decode('ascii').strip())
+                if size < 0 or position + 60 + size > length:
+                    raise ValueError('size')
+                prefix = archive.read(min(size, 20))
+                if prefix.startswith(b'\x7fELF'):
+                    if len(prefix) < 20 or prefix[4:6] != bytes([2, 1]) or int.from_bytes(prefix[18:20], 'little') != machine:
+                        raise ArchiveInputError('export_archive_architecture', name)
+                    count += 1
+                elif header[:16].decode('ascii').strip() not in ('/', '//', '/SYM64/'):
+                    raise ValueError('non-ELF member')
+                position += 60 + size + size % 2
+                if position > length:
+                    raise ValueError('padding')
+                archive.seek(position)
+            if count == 0:
+                raise ValueError('no objects')
+    except ArchiveInputError:
+        raise
+    except (ValueError, OSError):
+        raise ArchiveInputError('export_invalid_archive', name) from None
+    return count
+
+
+def android_runtime_archives(toolchain, resource_output):
+    """NDK r30 Clang21 resource tree only; never glob host/musl alternatives."""
+    resource = Path(resource_output.strip())
+    if (len(resource_output.splitlines()) != 1 or not resource.is_absolute()
+            or not resource.is_dir() or resource.resolve() != (toolchain / 'lib/clang/21').resolve()
+            or not resource.resolve().is_relative_to(toolchain.resolve())):
+        raise ArchiveInputError('export_resource_dir_mismatch')
+    lib = toolchain / 'sysroot/usr/lib/aarch64-linux-android'
+    archives = {'c++_static': lib / 'libc++_static.a', 'c++abi': lib / 'libc++abi.a',
+        'unwind': resource / 'lib/linux/aarch64/libunwind.a',
+        'clang_rt_builtins': resource / 'lib/linux/libclang_rt.builtins-aarch64-android.a'}
+    for name, path in archives.items():
+        if path.resolve() != toolchain.resolve() / path.relative_to(toolchain):
+            raise ArchiveInputError('export_archive_path_mismatch', name)
+    counts = {name: archive_objects(path, name, 183, toolchain) for name, path in archives.items()}
+    return archives, counts
+
+
+def missing_archive_name(output):
+    names = {'lib' + name + '.a': name for name in ARCHIVE_NAMES}
+    names['libclang_rt.builtins-aarch64-android.a'] = 'clang_rt_builtins'
+    for line in output.splitlines():
+        if line.startswith('missing archive '):
+            basename = Path(line.removeprefix('missing archive ')).name
+            if basename in names:
+                return names[basename]
+    return None
+
 
 def require(value):
     if not value:
@@ -71,7 +165,7 @@ MAX_PRIVATE_LOG = 16 * 1024 * 1024
 MAX_OUTPUT_READ = 256 * 1024
 MAX_DIAGNOSTIC_BYTES = 4096
 BUILD_CATEGORIES = {'configure', 'compile_link'}
-CATEGORIES = BUILD_CATEGORIES | {'tool', 'native_request', 'privacy', 'comparison', 'verification', 'rust_runtime', 'source_identity', 'candidate_validation', 'artifact_export'}
+CATEGORIES = BUILD_CATEGORIES | {'tool', 'native_request', 'privacy', 'comparison', 'verification', 'rust_runtime', 'source_identity', 'candidate_validation', 'artifact_export', 'b2_real'}
 PRIVACY_CASES = {'corrupt_config', 'corrupt_tokenizer', 'corrupt_graph', 'bad_template', 'missing_tokenizer',
                  'missing_graph', 'unsafe_backend', 'unsafe_option', 'success_en_zh_multi_phase_cancel_callback_recovery'}
 FAILURE_CASES = {'none', 'timeout', 'log_limit', 'cleanup_unconfirmed', 'nonzero_exit', 'spawn_failed',
@@ -91,8 +185,10 @@ FIXED_ERRORS = {
         'missing archive ': 'export_archive_missing', 'expected actual archive:': 'export_invalid_archive',
         'Android toolchain mismatch': 'export_android_toolchain_mismatch'},
 }
+FAILURE_CASES |= {'export_archive_architecture', 'export_archive_path_mismatch', 'export_resource_dir_mismatch'}
 FAILURE_CASES |= {value for mapping in FIXED_ERRORS.values() for value in mapping.values()}
-STAGE_FAILURE_CASES = FAILURE_CASES | {'stage_validation_failed', 'previous_cleanup_unconfirmed'}
+FAILURE_CASES |= {case_id for _, case_id in B2_REAL_CASES.values()}
+STAGE_FAILURE_CASES = FAILURE_CASES | {'stage_validation_failed', 'previous_cleanup_unconfirmed', 'b2_test_inventory_mismatch'}
 
 
 def command_category(command):
@@ -103,6 +199,8 @@ def command_category(command):
     if exe in ('gcc-13', 'g++-13', 'aarch64-linux-android28-clang') and '-o' in args:
         return 'compile_link'
     if exe == 'cargo':
+        if '--ignored' in args and '--exact' in args and any(name in args for name in B2_REAL_CASES):
+            return 'b2_real'
         return 'compile_link' if args[1] == 'clippy' or '--no-run' in args else 'rust_runtime'
     for helper, category in (('mnn-patches/identity.py', 'source_identity'), ('prepare_research_config.py', 'candidate_validation'), ('export_artifact.py', 'artifact_export')):
         if any(arg.endswith(helper) for arg in args):
@@ -225,6 +323,11 @@ def bounded_command(command, log, env, timeout, log_limit=MAX_PRIVATE_LOG, reap_
                         if isinstance(case, dict) and case.get('case') in PRIVACY_CASES and case.get('passed') is False:
                             info['failure_case'] = 'privacy_' + case['case']
                             break
+        elif category == 'b2_real':
+            for name, (_, case_id) in B2_REAL_CASES.items():
+                if name in command:
+                    info['failure_case'] = case_id
+                    break
         elif category in FIXED_ERRORS:
             for line in text.splitlines():
                 for prefix, label in FIXED_ERRORS[category].items():
@@ -239,7 +342,7 @@ class Runner:
         self.work.mkdir(parents=True, exist_ok=True)
         self.evidence.mkdir(parents=True, exist_ok=True)
         self.result = {'schema': 1, 'stage': stage, 'status': 'failed', 'android_run': False,
-                       'exit_codes': [], 'commands': [], 'failure_case': 'stage_validation_failed', 'checks': {}}
+                       'exit_codes': [], 'commands': [], 'failure_case': 'stage_validation_failed', 'missing_archive': None, 'checks': {}}
         self.env = dict(os.environ, RUSTUP_TOOLCHAIN='1.98.1', CARGO_BUILD_JOBS='2',
                         CARGO_INCREMENTAL='0', CMAKE_BUILD_PARALLEL_LEVEL='2')
         self.source = self.work / 'mnn'
@@ -263,6 +366,8 @@ class Runner:
         ci_verify.write(self.evidence / f'{self.stage}.json', self.result)
         if info['failure_case'] != 'none':
             self.result['failure_case'] = info['failure_case']
+            if info['failure_case'] == 'export_archive_missing':
+                self.result['missing_archive'] = missing_archive_name(output)
         require(info['failure_case'] == 'none')
         return output
 
@@ -284,12 +389,15 @@ class Runner:
         compiler = self.toolchain / 'bin/clang++' if android else Path('/usr/bin/g++-13')
         identity = self.run([compiler, '--version']).splitlines()[0]
         args = [directory, '--target', TARGET if android else 'x86_64-unknown-linux-gnu', '--compiler', identity]
+        native_archives = {'nexa-mnn-shim': directory / 'libnexa-mnn-shim.a', 'MNN': directory / 'mnn/libMNN.a'}
+        counts = {name: archive_objects(path, name, 183 if android else 62, directory)
+                  for name, path in native_archives.items()}
         if android:
-            lib = self.toolchain / 'sysroot/usr/lib/aarch64-linux-android'
-            builtins = list((self.toolchain / 'lib/clang').glob('*/lib/linux/libclang_rt.builtins-aarch64-android.a'))
-            require(len(builtins) == 1)
-            args += ['--cxx-static', lib / 'libc++_static.a', '--cxxabi-static', lib / 'libc++abi.a',
-                     '--unwind-static', lib / 'libunwind.a', '--builtins-static', builtins[0]]
+            resource = self.run([compiler, '--print-resource-dir'])
+            runtimes, runtime_counts = android_runtime_archives(self.toolchain, resource)
+            counts.update(runtime_counts)
+            args += ['--cxx-static', runtimes['c++_static'], '--cxxabi-static', runtimes['c++abi'],
+                     '--unwind-static', runtimes['unwind'], '--builtins-static', runtimes['clang_rt_builtins']]
         self.python('native/mnn-shim/export_artifact.py', *args)
         # Full manifest remains local for the Rust gate. Upload only verified identity fields.
         manifest = read(directory / 'artifact/artifact.json')
@@ -309,6 +417,7 @@ class Runner:
         self.result['checks']['artifact']['manifest_sha256'] = digest(directory / 'artifact/artifact.json')
         self.result['checks']['artifact']['compiler_sha256'] = hashlib.sha256(identity.encode()).hexdigest()
         self.result['checks']['artifact']['archives'] = {item['name']: item['sha256'] for item in libraries}
+        self.result['checks']['artifact']['archive_object_counts'] = counts
         audit = read(directory / 'logging-audit.json')
         require(audit['failures'] == [] and audit['compiled_source_count'] > 0 and audit['header_count'] > 0)
         self.result['checks']['logging_audit'] = {key: audit[key] for key in ('compiled_source_count', 'header_count')}
@@ -337,7 +446,9 @@ class Runner:
         require(self.run(['git', '-C', self.source, 'rev-parse', 'HEAD']).strip() == run_probe.MNN_COMMIT)
         require(not self.run(['git', '-C', self.source, 'status', '--porcelain', '--untracked-files=all']).strip())
         self.python('-m', 'unittest', 'discover', '-s', 'scripts/android_mnn', '-p', 'test_*.py')
-        self.result['checks'] = {'source': identity, 'gcc': '13.3.0', 'rust': '1.98.1', 'cmake': '4.4.3', 'ninja': '1.13.2'}
+        self.python('native/mnn-shim/notices/verify.py')
+        self.result['checks'] = {'source': identity, 'gcc': '13.3.0', 'rust': '1.98.1', 'cmake': '4.4.3', 'ninja': '1.13.2',
+                                 'notice_inventory': notice_identity()}
 
     def inputs_stage(self):
         self.python('scripts/android_mnn/ci_verify.py', 'setup', '--destination', self.inputs,
@@ -406,14 +517,7 @@ class Runner:
         env, command = self.cargo('test', *(['--no-run', '--message-format=json'] if android else []), android=android)
         output = self.run(command, env=env)
         if android:
-            binaries = []
-            for line in output.splitlines():
-                if not line.startswith('{'):
-                    continue
-                data = json.loads(line)
-                if data.get('reason') == 'compiler-artifact' and data.get('executable'):
-                    binaries.append({'name': data['target']['name'], 'path': data['executable']})
-            require({entry['name'] for entry in binaries} == {'mnn_adapter', 'real_model', 'build_identity'} and len(binaries) == 3)
+            binaries = parse_android_artifacts(output, self.work / 'rust-android')
             ci_verify.write(self.work / 'android-binaries.private.json', binaries)
         self.python('mobile/runtime/scripts/test_artifact_gate.py', env=env)
         compiler = self.toolchain / 'bin/aarch64-linux-android28-clang' if android else Path('/usr/bin/gcc-13')
@@ -432,6 +536,33 @@ class Runner:
             manifest_path = self.work / 'linux/artifact/artifact.json'
             verify_rust_identity(output, read(manifest_path), digest(manifest_path))
             self.result['checks']['linked_manifest_sha256'] = digest(manifest_path)
+            self.b2_real_tests()
+
+    def b2_real_tests(self):
+        # This only supplies the already hash-locked fixed candidate. Research
+        # admission stays in reviewed cfg(test) code, never an environment grant.
+        self.python('native/mnn-shim/prepare_research_config.py', '--model-root', self.model,
+                    '--output', self.work / 'b2-verified-runtime.json')
+        for package in sorted({package for package, _ in B2_REAL_CASES.values()}):
+            env, command = self.cargo('test', '-p', package, '--lib', '--', '--ignored', '--list')
+            output = self.run(command, env=env)
+            self.result['failure_case'] = 'b2_test_inventory_mismatch'
+            verify_b2_inventory(output, package)
+        passed = {}
+        for name, (package, case_id) in B2_REAL_CASES.items():
+            env, command = self.cargo('test', '-p', package, '--lib', name,
+                                      '--', '--ignored', '--exact', '--test-threads=1')
+            env['NEXA_MNN_TEST_MODEL'] = str(self.model)
+            self.result['failure_case'] = case_id
+            output = self.run(command, env=env, timeout=900)
+            verify_b2_execution(output, name)
+            passed[name] = 'pass'
+        # Tampering scenarios must touch only private copies. Verify original
+        # candidate identity again after the complete real B2 matrix.
+        self.python('native/mnn-shim/prepare_research_config.py', '--model-root', self.model,
+                    '--output', self.work / 'b2-verified-runtime.json')
+        self.result['checks']['b2_real_matrix'] = {'cases': passed, 'research_only': True,
+            'production_admitted': False, 'model_lock_sha256': digest(run_probe.LOCK)}
 
     def android_native(self):
         directory = self.work / 'android'
@@ -441,12 +572,12 @@ class Runner:
     def elf(self):
         reports = {}
         for binary in read(self.work / 'android-binaries.private.json'):
-            require(binary['name'] in ('mnn_adapter', 'real_model', 'build_identity'))
+            require(binary['name'] in ANDROID_TARGETS and binary['name'] not in reports)
             path = Path(binary['path']).resolve(strict=True)
-            require(path.is_relative_to(self.work / 'rust-android'))
+            require(path.is_relative_to(self.work / 'rust-android' / TARGET / 'debug'))
             output = self.run([self.toolchain / 'bin/llvm-readelf', '-h', '-l', '-d', '-W', path])
             reports[binary['name']] = dict(parse_elf(output), sha256=digest(path), size=path.stat().st_size)
-        require(set(reports) == {'mnn_adapter', 'real_model', 'build_identity'})
+        require(set(reports) == set(ANDROID_TARGETS))
         self.result['checks'] = reports
 
     def execute(self):
@@ -462,9 +593,62 @@ class Runner:
                 getattr(self, self.stage)()
             self.result['status'] = 'ok'
             self.result['failure_case'] = 'none'
+        except ArchiveInputError as error:
+            self.result['failure_case'] = error.failure_case
+            if error.failure_case == 'export_archive_missing':
+                self.result['missing_archive'] = error.name
+            raise
         finally:
             ci_verify.write(self.evidence / f'{self.stage}.json', self.result)
         print(json.dumps({'stage': self.stage, 'status': self.result['status']}))
+
+
+def notice_identity():
+    path = ROOT / 'native/mnn-shim/notices/manifest.json'
+    manifest = read(path)
+    return {'manifest_sha256': digest(path), 'components': len(manifest['components']),
+            'files': len(manifest['files']), 'final_apk_verified': False}
+
+
+def parse_android_artifacts(output, target_dir):
+    binaries = {}
+    for line in output.splitlines():
+        if not line.startswith('{'):
+            continue
+        data = json.loads(line)
+        if data.get('reason') != 'compiler-artifact' or not data.get('executable'):
+            continue
+        target = data['target']
+        name = target['name']
+        require(name in ANDROID_TARGETS and name not in binaries)
+        package, kind, crate_type, is_test, source = ANDROID_TARGETS[name]
+        package_root = ROOT / 'mobile/runtime/crates' / package
+        require(data['package_id'] == 'path+' + package_root.as_uri() + '#0.1.0')
+        require(target['kind'] == [kind] and target['crate_types'] == [crate_type])
+        require(data['profile']['test'] is is_test and target['test'] is is_test)
+        require(target['src_path'] == str(package_root / source))
+        executable = Path(data['executable'])
+        require(executable.is_absolute() and executable.resolve().is_relative_to(target_dir.resolve() / TARGET / 'debug'))
+        require(str(executable) in data['filenames'])
+        binaries[name] = {'name': name, 'path': str(executable)}
+    require(set(binaries) == set(ANDROID_TARGETS))
+    require(len({entry['path'] for entry in binaries.values()}) == len(ANDROID_TARGETS))
+    return [binaries[name] for name in sorted(binaries)]
+
+
+def verify_b2_inventory(output, package):
+    expected = {name for name, (owner, _) in B2_REAL_CASES.items() if owner == package}
+    require(expected)
+    listed = re.findall(r'^(\S+): test$', output, re.M)
+    require(len(listed) == len(expected) and set(listed) == expected)
+
+
+def verify_b2_execution(output, name):
+    require(name in B2_REAL_CASES)
+    require(re.findall(r'^running ([0-9]+) tests?$', output, re.M) == ['1'])
+    require(len(re.findall(r'^test result:', output, re.M)) == 1)
+    require(len(re.findall(r'^test ' + re.escape(name) + r' \.\.\. ok$', output, re.M)) == 1)
+    require(len(re.findall(r'^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in [0-9.]+s$', output, re.M)) == 1)
 
 
 def verify_rust_identity(output, manifest, manifest_sha256):
@@ -496,15 +680,15 @@ def parse_cancel_metrics(output):
 CANCEL_KEYS = ({'cancel_load_checkpoint_' + str(x) for x in (0, 2, 3, 4, 5, 6)} |
                {'cancel_prepare_phase_2', 'cancel_prepare_phase_3', 'cancel_phase_4', 'cancel_phase_5'})
 CHECK_KEYS = {
-    'tools': {'source', 'gcc', 'rust', 'cmake', 'ninja'},
+    'tools': {'source', 'gcc', 'rust', 'cmake', 'ninja', 'notice_inventory'},
     'inputs': {'ndk_sha256', 'ndk_revision', 'model_lock_sha256'},
     'patch': {'pristine_source_unchanged'}, 'baseline': {'unpatched_probe_ctest'},
     'linux_native': {'artifact', 'logging_audit', 'ctest_and_stream_sanitizers'},
     'native_real': {'upstream_exact', 'privacy_canaries', 'prompt_tokens', 'completion_tokens', 'cancel_safe_return_ms'},
-    'rust_linux': {'clippy', 'abi_layout', 'artifact_negative', 'unit_compile_fail_and_real_model', 'linked_manifest_sha256'},
+    'rust_linux': {'clippy', 'abi_layout', 'artifact_negative', 'unit_compile_fail_and_real_model', 'linked_manifest_sha256', 'b2_real_matrix'},
     'android_native': {'artifact', 'logging_audit'},
     'rust_android': {'clippy', 'abi_layout', 'artifact_negative', 'final_elf_link'},
-    'elf': {'mnn_adapter', 'real_model', 'build_identity'},
+    'elf': set(ANDROID_TARGETS),
 }
 
 
@@ -525,15 +709,22 @@ def validate_checks(stage, checks):
             require(value == {'gcc': '13.3.0', 'rust': '1.98.1', 'cmake': '4.4.3', 'ninja': '1.13.2',
                 'ndk_revision': ci_verify.NDK['revision'], 'ndk_sha256': ci_verify.NDK['sha256'],
                 'model_lock_sha256': digest(run_probe.LOCK)}[key])
+        elif key == 'notice_inventory':
+            require(value == notice_identity() and value['components'] == 12 and value['final_apk_verified'] is False)
+        elif key == 'b2_real_matrix':
+            require(value == {'cases': {name: 'pass' for name in B2_REAL_CASES}, 'research_only': True,
+                              'production_admitted': False, 'model_lock_sha256': digest(run_probe.LOCK)})
+            require(value['research_only'] is True and value['production_admitted'] is False)
         elif key == 'artifact':
             require(set(value) == {'upstream_commit', 'patch_set_sha256', 'policy_sha256', 'header_sha256',
-                                    'target', 'compiler_sha256', 'manifest_sha256', 'archives'})
+                                    'target', 'compiler_sha256', 'manifest_sha256', 'archives', 'archive_object_counts'})
             require(all(value[k] == lock[k] for k in ('upstream_commit', 'patch_set_sha256', 'policy_sha256')))
             require(value['header_sha256'] == digest(ROOT / 'native/mnn-shim/include/nexa_mnn.h'))
             require(value['target'] == (TARGET if stage == 'android_native' else 'x86_64-unknown-linux-gnu'))
             require(all(isinstance(value[k], str) and SHA.fullmatch(value[k]) for k in ('compiler_sha256', 'manifest_sha256')))
             names = {'nexa-mnn-shim', 'MNN'} | ({'c++_static', 'c++abi', 'unwind', 'clang_rt_builtins'} if stage == 'android_native' else set())
             require(set(value['archives']) == names and all(isinstance(v, str) and SHA.fullmatch(v) for v in value['archives'].values()))
+            require(set(value['archive_object_counts']) == names and all(type(v) is int and v > 0 for v in value['archive_object_counts'].values()))
         elif key == 'linked_manifest_sha256':
             require(isinstance(value, str) and SHA.fullmatch(value))
         elif key == 'logging_audit':
@@ -592,11 +783,13 @@ def validate_commands(commands, exit_codes):
 
 
 def sanitize_report(stage, report):
-    require(set(report) == {'schema', 'stage', 'status', 'android_run', 'exit_codes', 'commands', 'failure_case', 'checks'})
+    require(set(report) == {'schema', 'stage', 'status', 'android_run', 'exit_codes', 'commands', 'failure_case', 'missing_archive', 'checks'})
     require(report['schema'] == 1 and report['stage'] == stage and report['status'] in ('ok', 'failed') and report['android_run'] is False)
     require(isinstance(report['exit_codes'], list) and len(report['exit_codes']) <= 32)
     require(all(type(code) is int and -128 <= code <= 255 for code in report['exit_codes']))
     require(report['failure_case'] in STAGE_FAILURE_CASES)
+    require(report['missing_archive'] is None or report['missing_archive'] in ARCHIVE_NAMES)
+    require(report['missing_archive'] is None or report['failure_case'] == 'export_archive_missing')
     validate_commands(report['commands'], report['exit_codes'])
     if stage not in ('baseline', 'linux_native', 'rust_linux', 'android_native', 'rust_android'):
         require(all(not command['diagnostics'] for command in report['commands']))

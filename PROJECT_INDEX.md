@@ -20,12 +20,12 @@
 | [ADR0009](docs/decisions/0009-android-mnn-chat-product.md) / [Android 产品计划](docs/android-app-parity.md) | MNN Chat 对标、App/runtime边界、首个可用APK与后续能力 |
 | [ADR0010](docs/decisions/0010-model-artifact-and-conversion-provenance.md) | 公开预转换资产与自行导出两条路径，运行输入复现和转换复现分别声明 |
 | [T07-A验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md) / [CPU探针](native/mnn-probe/README.md) | Linux真实模型、Android原生交叉构建及未验范围 |
+| [T07-B验证](docs/verification/2026-10-02-t07b-mnn-runtime.md) | B1远端分阶段证据、保留失败及B2后续验收 |
+| [T07-B契约](docs/t07b-mnn-contract.md) / [B1 CI](scripts/android_mnn/B1_CI.md) | C ABI/Rust实际接口、生产store/Executor后续门槛 |
+| [MNN原生](native/mnn-shim/README.md) / [Rust适配](mobile/runtime/README.md) | 固定补丁、构建与真实请求验证，独立移动workspace |
 | [文档基线验证](docs/verification/2026-09-30-document-baseline.md) | 本轮文档检查及未验证范围 |
 
 `.codex/config.toml` 和 `.codex/agents/*.toml` 是现有开发代理配置，不属于 Nexa 产品运行时，也不是产品依赖锁。
-
-| [T07-B契约](docs/t07b-mnn-contract.md) / [B1 CI](scripts/android_mnn/B1_CI.md) | C ABI/Rust实际接口、生产store/Executor后续门槛 |
-| [MNN原生](native/mnn-shim/README.md) / [Rust适配](mobile/runtime/README.md) | 固定补丁、构建与真实请求验证，独立移动workspace |
 
 ## 当前工程入口
 

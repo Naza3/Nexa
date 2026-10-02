@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "scope": "Native notice source inventory only; not final APK or shared-library closure validation",
+  "mnn_commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+  "ndk_revision": "30.0.16248370",
+  "llvm_android_commit": "9f872551d3c681d06fd303b36f16ed5c274735eb",
+  "components": [
+    {
+      "id": "mnn",
+      "name": "MNN 3.6.1",
+      "license": "Apache-2.0",
+      "license_files": [
+        "licenses/MNN-Apache-2.0.txt"
+      ],
+      "attribution_files": [
+        "attributions/MNN-header.txt"
+      ],
+      "scope_evidence": "libMNN.a and 445 compiled MNN/Express/LLM source files",
+      "revision": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+      "modified": true
+    },
+    {
+      "id": "flatbuffers",
+      "name": "FlatBuffers vendored in MNN",
+      "license": "Apache-2.0",
+      "license_files": [
+        "licenses/FlatBuffers-Apache-2.0.txt"
+      ],
+      "attribution_files": [
+        "attributions/FlatBuffers-2014.txt",
+        "attributions/FlatBuffers-2017.txt"
+      ],
+      "scope_evidence": "Ninja header dependencies and flatbuffers symbols in Android test ELF"
+    },
+    {
+      "id": "half",
+      "name": "half",
+      "license": "MIT",
+      "license_files": [
+        "licenses/half-MIT.txt"
+      ],
+      "attribution_files": [],
+      "scope_evidence": "half.hpp dependencies and half_float tables in test ELF"
+    },
+    {
+      "id": "rapidjson",
+      "name": "RapidJSON",
+      "license": "MIT",
+      "license_files": [
+        "licenses/RapidJSON-MIT.txt"
+      ],
+      "attribution_files": [
+        "attributions/RapidJSON-copyright.txt"
+      ],
+      "scope_evidence": "ujson default RapidJSON headers and emitted rapidjson symbols; JSON_checker and msinttypes not in recorded Android dependencies"
+    },
+    {
+      "id": "skia",
+      "name": "Skia / AOSP derived core image and matrix code",
+      "license": "BSD-3-Clause",
+      "license_files": [
+        "licenses/Skia-BSD.txt"
+      ],
+      "attribution_files": [
+        "attributions/Skia-SkNx.h.txt",
+        "attributions/Skia-SkNx_neon.h.txt",
+        "attributions/Skia-Matrix.h.txt",
+        "attributions/Skia-Rect.h.txt",
+        "attributions/Skia-Matrix_CV.cpp.txt"
+      ],
+      "scope_evidence": "Core source/cv remains compiled despite MNN_BUILD_OPENCV=OFF; MNN::CV::Matrix symbols present"
+    },
+    {
+      "id": "tensorflow",
+      "name": "TensorFlow-derived CPU code",
+      "license": "Apache-2.0",
+      "license_files": [
+        "licenses/TensorFlow-Apache-2.0.txt"
+      ],
+      "attribution_files": [
+        "attributions/TensorFlow-CPUNonMaxSuppressionV2.cpp.txt",
+        "attributions/TensorFlow-OptimizedComputer.cpp.txt"
+      ],
+      "scope_evidence": "Both sources compiled; CPUNonMaxSuppression symbols emitted"
+    },
+    {
+      "id": "jinja",
+      "name": "jinja.cpp header version 0.0.1",
+      "license": "Apache-2.0",
+      "license_files": [
+        "licenses/MNN-Apache-2.0.txt"
+      ],
+      "attribution_files": [
+        "attributions/Jinja-header.txt"
+      ],
+      "scope_evidence": "tokenizer dependency and jinja symbols; not Python Jinja2; header provides no copyright year",
+      "upstream_url": "https://github.com/wangzhaode/jinja.cpp"
+    },
+    {
+      "id": "llvm-compiler-rt",
+      "name": "LLVM compiler-rt builtins",
+      "license": "Apache-2.0 WITH LLVM-exception; legacy license text retained",
+      "license_files": [
+        "licenses/llvm-compiler-rt.txt"
+      ],
+      "attribution_files": [],
+      "scope_evidence": "Explicit static archive in actual artifact manifest and Rust build output"
+    },
+    {
+      "id": "llvm-libcxx",
+      "name": "LLVM libc++",
+      "license": "Apache-2.0 WITH LLVM-exception; legacy license text retained",
+      "license_files": [
+        "licenses/llvm-libcxx.txt"
+      ],
+      "attribution_files": [],
+      "scope_evidence": "Explicit static archive in actual artifact manifest and Rust build output"
+    },
+    {
+      "id": "llvm-libcxxabi",
+      "name": "LLVM libc++abi",
+      "license": "Apache-2.0 WITH LLVM-exception; legacy license text retained",
+      "license_files": [
+        "licenses/llvm-libcxxabi.txt"
+      ],
+      "attribution_files": [],
+      "scope_evidence": "Explicit static archive in actual artifact manifest and Rust build output"
+    },
+    {
+      "id": "llvm-libunwind",
+      "name": "LLVM libunwind",
+      "license": "Apache-2.0 WITH LLVM-exception; legacy license text retained",
+      "license_files": [
+        "licenses/llvm-libunwind.txt"
+      ],
+      "attribution_files": [],
+      "scope_evidence": "artifact library SHA256 matches NDK aarch64 library; _Unwind symbols present",
+      "archive_sha256": "bfbe474acf75b59fd2f19f0b7210588aa662410d5d8d0996812fe50e9e0143ab"
+    },
+    {
+      "id": "unicode",
+      "name": "Unicode data tables",
+      "license": "Unicode-3.0",
+      "license_files": [
+        "licenses/Unicode-License-v3.txt"
+      ],
+      "attribution_files": [
+        "attributions/Unicode-15.0.0-ReadMe.txt",
+        "attributions/Unicode-SpecialCasing-header.txt"
+      ],
+      "scope_evidence": "unicode_data.cpp compiled; UCD15.0.0 category and full single-character lowercase reconstruction matches all entries",
+      "historical_generation_environment": "unknown",
+      "verified_data_equivalence": {
+        "ucd_version": "15.0.0",
+        "category_ranges": 4007,
+        "lower_entries": 1432,
+        "hpp_byte_equal": true,
+        "cpp_difference": "one additional blank line before final namespace closings in upstream"
+      },
+      "terms_url": "https://www.unicode.org/terms_of_use.html",
+      "terms_verification": "Current terms apply Unicode License v3 to Data Files/Software unless specifically indicated otherwise. This is current retrieval evidence, not historical MNN licensing evidence."
+    }
+  ],
+  "files": [
+    {
+      "path": "licenses/MNN-Apache-2.0.txt",
+      "sha256": "a830d59c4f98d110e0540d0581efada06192ba6e798434307d1794b07a290302",
+      "bytes": 11346,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "LICENSE.txt"
+      },
+      "source_sha256": "a830d59c4f98d110e0540d0581efada06192ba6e798434307d1794b07a290302",
+      "extraction": "complete file"
+    },
+    {
+      "path": "attributions/MNN-header.txt",
+      "sha256": "3415b4c4937ed6cd5b3d1b7a620efeeee7ebda0540c7c392d0b7a888ca6fbe4b",
+      "bytes": 120,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "include/MNN/MNNDefine.h"
+      },
+      "source_sha256": "481f2ff7a4dd29ce779384b8f5169c8b1aee8ebd8f0a9ca4c2f8444de45f9b6f",
+      "extraction": "lines 1-7 inclusive; leading copyright comment bytes retained"
+    },
+    {
+      "path": "licenses/FlatBuffers-Apache-2.0.txt",
+      "sha256": "7ec9661a8afafab1eee3523d6f1a193eff76314a5ab10b4ce96aefd87621b0c3",
+      "bytes": 11342,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/flatbuffers/LICENSE.txt"
+      },
+      "source_sha256": "7ec9661a8afafab1eee3523d6f1a193eff76314a5ab10b4ce96aefd87621b0c3",
+      "extraction": "complete file"
+    },
+    {
+      "path": "attributions/FlatBuffers-2014.txt",
+      "sha256": "aa77062a506014d06a5361c8d63d69390ff60300c5ccf91ccb1762647e9e3b6e",
+      "bytes": 615,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/flatbuffers/include/flatbuffers/flatbuffers.h"
+      },
+      "source_sha256": "d9e0c69271deef11382b1e5991f281ba723987752b2491d06eda924d984cb948",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "attributions/FlatBuffers-2017.txt",
+      "sha256": "68879cb67882cdedb01c24fa00634c8704ef2bffd1c1937a8735c08ed3bfbd1e",
+      "bytes": 615,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/flatbuffers/include/flatbuffers/stl_emulation.h"
+      },
+      "source_sha256": "76ae0038c623ed9940d01aa1b227562dfe0d810a6858f6b93002e58c94893331",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "licenses/half-MIT.txt",
+      "sha256": "1269110471a5506d5cc9c115c57b855206f69a90cc57bbbf27860907067ed946",
+      "bytes": 1100,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/half/LICENSE.txt"
+      },
+      "source_sha256": "1269110471a5506d5cc9c115c57b855206f69a90cc57bbbf27860907067ed946",
+      "extraction": "complete file"
+    },
+    {
+      "path": "licenses/RapidJSON-MIT.txt",
+      "sha256": "6969309414f1e930f3480febbb1e4dfb9bdcc9e7ad14daafa39d294c7705cab4",
+      "bytes": 1119,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/rapidjson/license.txt"
+      },
+      "source_sha256": "a140e5d46fe734a1c78f1a3c3ef207871dd75648be71fdda8e309b23ab8b1f32",
+      "extraction": "lines 50-57, inclusive; bytes retained"
+    },
+    {
+      "path": "attributions/RapidJSON-copyright.txt",
+      "sha256": "8be37c1fb61cef16550eb8730f92363ceccf30c79588649dd829aa5c13d25756",
+      "bytes": 181,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/rapidjson/license.txt"
+      },
+      "source_sha256": "a140e5d46fe734a1c78f1a3c3ef207871dd75648be71fdda8e309b23ab8b1f32",
+      "extraction": "lines 1-3, inclusive; bytes retained"
+    },
+    {
+      "path": "licenses/Skia-BSD.txt",
+      "sha256": "d27678cba0d529e77201e2d2a053628143e986aad8f1e77f7039ad4366c8f978",
+      "bytes": 1635,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/lic/skia_license"
+      },
+      "source_sha256": "d27678cba0d529e77201e2d2a053628143e986aad8f1e77f7039ad4366c8f978",
+      "extraction": "complete file"
+    },
+    {
+      "path": "attributions/Skia-SkNx.h.txt",
+      "sha256": "c83b9a30f9590cf6fcf3eb8e000ce41e8ca88af38cb80a3ab4687f43e73a6604",
+      "bytes": 143,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "source/cv/SkNx.h"
+      },
+      "source_sha256": "0cbec4435f3209694e4397e7abcb15da92467702dcebeed4fb4eab05a018476d",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "attributions/Skia-SkNx_neon.h.txt",
+      "sha256": "c83b9a30f9590cf6fcf3eb8e000ce41e8ca88af38cb80a3ab4687f43e73a6604",
+      "bytes": 143,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "source/cv/SkNx_neon.h"
+      },
+      "source_sha256": "83d6993a8dfa90931d70102672be3b00da4d5d9d95352edc88fd7e7d0fdbfea8",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "attributions/Skia-Matrix.h.txt",
+      "sha256": "911730c97ba9a277ee95f846e76c19f4573085213d78bd0f45be8e0a13db8c24",
+      "bytes": 163,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "include/MNN/Matrix.h"
+      },
+      "source_sha256": "4becb851c912f987b895b08c0b10743f107430c8552a34da9bac3c447c692d1e",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "attributions/Skia-Rect.h.txt",
+      "sha256": "810b2fe653499634525db7604915d110d454b3ca2ed862538f4b07d798a21025",
+      "bytes": 815,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "include/MNN/Rect.h"
+      },
+      "source_sha256": "cec3ec954565d2e03bb749ac9513b53dae8b2389208b490d9cfa588b2eca1ea4",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "attributions/Skia-Matrix_CV.cpp.txt",
+      "sha256": "911730c97ba9a277ee95f846e76c19f4573085213d78bd0f45be8e0a13db8c24",
+      "bytes": 163,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "source/cv/Matrix_CV.cpp"
+      },
+      "source_sha256": "4977e9d2ac03e6eb464b35f7c1d9008d7da99f713b0e1ce1f85394c608028651",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "licenses/TensorFlow-Apache-2.0.txt",
+      "sha256": "9dc6ae3884ee868d517aa040c43b68cf08a9481cb8540a672b4703dccd592747",
+      "bytes": 11416,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "3rd_party/lic/tensorflow_license"
+      },
+      "source_sha256": "9dc6ae3884ee868d517aa040c43b68cf08a9481cb8540a672b4703dccd592747",
+      "extraction": "complete file"
+    },
+    {
+      "path": "attributions/TensorFlow-CPUNonMaxSuppressionV2.cpp.txt",
+      "sha256": "cdb9e4e95f321fb16c1306267aa215ad94aa45e3928342118af6420436dd6a8a",
+      "bytes": 671,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "source/backend/cpu/CPUNonMaxSuppressionV2.cpp"
+      },
+      "source_sha256": "d75465c66b35a4c1ced5ec89dfe205c38fac5a6250b832a5bdf34569afeb3709",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "attributions/TensorFlow-OptimizedComputer.cpp.txt",
+      "sha256": "91b017f2dac5deedf72c7e86674c614806399ee9726ba20834fe7037805d4e61",
+      "bytes": 668,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "source/backend/cpu/compute/OptimizedComputer.cpp"
+      },
+      "source_sha256": "c67482de43974d3f84efa36c9abaf14f1852393ec1a494393334638548078ff8",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "attributions/Jinja-header.txt",
+      "sha256": "3076d2afec35797cb8f1b368399e17b32548938700acf746a840cf9ba2da7cf9",
+      "bytes": 676,
+      "source": {
+        "repository": "https://github.com/alibaba/MNN",
+        "commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "path": "transformers/llm/engine/src/tokenizer/jinja.hpp"
+      },
+      "source_sha256": "be10c04845800f8f4a0ee2af56de0cec085122f585141dc2f728d02b2ec3eedb",
+      "extraction": "leading attribution/comment bytes through closing comment or first include"
+    },
+    {
+      "path": "licenses/llvm-compiler-rt.txt",
+      "sha256": "b606c871f483c0023ee92cb62e271fce42467407da220b7bc9e22208eada9d25",
+      "bytes": 16709,
+      "source": {
+        "distribution": "Android NDK r30",
+        "revision": "30.0.16248370",
+        "path": "NOTICE.toolchain",
+        "llvm_android_commit": "9f872551d3c681d06fd303b36f16ed5c274735eb"
+      },
+      "source_sha256": "6b8633011d874b75629180e60de13ebfd546a10e56dc7d0380a35f6609f30617",
+      "extraction": "lines 2113-2424, inclusive; complete component license block including legacy text"
+    },
+    {
+      "path": "licenses/llvm-libcxx.txt",
+      "sha256": "3f3d1da78246d5c2ffc879f8239d6e856b19ba813b8349cbe48f85bd018ee3af",
+      "bytes": 16704,
+      "source": {
+        "distribution": "Android NDK r30",
+        "revision": "30.0.16248370",
+        "path": "NOTICE.toolchain",
+        "llvm_android_commit": "9f872551d3c681d06fd303b36f16ed5c274735eb"
+      },
+      "source_sha256": "6b8633011d874b75629180e60de13ebfd546a10e56dc7d0380a35f6609f30617",
+      "extraction": "lines 2425-2736, inclusive; complete component license block including legacy text"
+    },
+    {
+      "path": "licenses/llvm-libcxxabi.txt",
+      "sha256": "b043b7c5fdaf8df24b2c3b50f7651e6acfc8bdd73cc152ec5d090b8a7e0ede33",
+      "bytes": 16707,
+      "source": {
+        "distribution": "Android NDK r30",
+        "revision": "30.0.16248370",
+        "path": "NOTICE.toolchain",
+        "llvm_android_commit": "9f872551d3c681d06fd303b36f16ed5c274735eb"
+      },
+      "source_sha256": "6b8633011d874b75629180e60de13ebfd546a10e56dc7d0380a35f6609f30617",
+      "extraction": "lines 2737-3048, inclusive; complete component license block including legacy text"
+    },
+    {
+      "path": "licenses/llvm-libunwind.txt",
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+      "bytes": 16706,
+      "source": {
+        "url": "https://android.googlesource.com/toolchain/llvm-project/+/9f872551d3c681d06fd303b36f16ed5c274735eb/libunwind/LICENSE.TXT?format=TEXT",
+        "commit": "9f872551d3c681d06fd303b36f16ed5c274735eb",
+        "path": "libunwind/LICENSE.TXT"
+      },
+      "source_sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+      "extraction": "base64 decoded complete official Gitiles response"
+    },
+    {
+      "path": "licenses/Unicode-License-v3.txt",
+      "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+      "bytes": 1995,
+      "source": {
+        "url": "https://www.unicode.org/license.txt",
+        "retrieved_utc": "2026-10-02"
+      },
+      "source_sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+      "extraction": "complete file"
+    },
+    {
+      "path": "attributions/Unicode-15.0.0-ReadMe.txt",
+      "sha256": "53672c0d0b5185e3cf04c8e970d544c3af81ae7c8eeba0b9cf6d355aa954ae1f",
+      "bytes": 635,
+      "source": {
+        "url": "https://www.unicode.org/Public/15.0.0/ucd/ReadMe.txt"
+      },
+      "source_sha256": "53672c0d0b5185e3cf04c8e970d544c3af81ae7c8eeba0b9cf6d355aa954ae1f",
+      "extraction": "complete file"
+    },
+    {
+      "path": "attributions/Unicode-SpecialCasing-header.txt",
+      "sha256": "51d9c979675bae43e6cc6c371837669d0c8d8482e6e53bee5ea69fe5fd35fa79",
+      "bytes": 261,
+      "source": {
+        "url": "https://www.unicode.org/Public/15.0.0/ucd/SpecialCasing.txt"
+      },
+      "source_sha256": "78b29c64b5840d25c11a9f31b665ee551b8a499eca6c70d770fcad7dd710f494",
+      "extraction": "lines 1-6 inclusive"
+    },
+    {
+      "path": "evidence/unicode-equivalence.json",
+      "sha256": "45c83a4de85ed6fce7de2e97cae74b7b5425f2e46883e65761653528548b3345",
+      "bytes": 1269,
+      "source": {
+        "kind": "controlled audit 2026-10-02",
+        "generator_repository": "https://github.com/alibaba/MNN",
+        "generator_commit": "d407447ed56c4121a11ccbd266dc184ca1ead0c2",
+        "generator_path": "tools/script/gen_unicode_data.py"
+      },
+      "source_sha256": "45c83a4de85ed6fce7de2e97cae74b7b5425f2e46883e65761653528548b3345",
+      "extraction": "audit result; original historical environment remains unknown"
+    },
+    {
+      "path": "evidence/Unicode-current-terms.html",
+      "sha256": "9f83fb0a046180c87d22c2678e79300475125611ac8dfc2da303db6c6b347251",
+      "bytes": 17115,
+      "source": {
+        "url": "https://www.unicode.org/terms_of_use.html",
+        "retrieved_utc": "2026-10-02"
+      },
+      "source_sha256": "9f83fb0a046180c87d22c2678e79300475125611ac8dfc2da303db6c6b347251",
+      "extraction": "complete file"
+    }
+  ],
+  "excluded_inventory": [
+    "protobuf",
+    "nlohmann/json",
+    "Python Jinja2",
+    "RapidJSON JSON_checker",
+    "RapidJSON msinttypes",
+    "OpenMP",
+    "sherpa",
+    "disabled GPU backends"
+  ],
+  "shared_licenses": [
+    {
+      "file": "licenses/MNN-Apache-2.0.txt",
+      "components": [
+        "mnn",
+        "jinja"
+      ]
+    },
+    {
+      "file": "licenses/FlatBuffers-Apache-2.0.txt",
+      "identical_upstream_copy": "3rd_party/lic/flatbuffer_license"
+    }
+  ],
+  "pending": [
+    "Prominent notices on modified Apache-licensed source files require later patch and identity re-lock; not changed here.",
+    "APK must include notices assets and accessible license UI; verify final link map and packaged libraries.",
+    "Future Rust/Flutter/application dependencies require their own inventory."
+  ],
+  "libatomic": {
+    "classification": "150-byte comment-only NDK linker placeholder; no GROUP/INPUT or archive members",
+    "sha256": "64247f041b2bab4fc609e5189e9e19f67810a20f2ebec7c86654160ab22e8de1",
+    "included_component": false,
+    "reason": "Not in Rust artifact manifest or build output; APIs are in compiler-rt builtins. Artifact directory residue is not distribution evidence."
+  }
+}

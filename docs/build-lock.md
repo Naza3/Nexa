@@ -144,3 +144,11 @@ Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package 
 本地已验证Debian GCC14.2.0；Ubuntu24.04 GCC13.3.0为新CI候选，远端门禁通过前不声明已验证。Rust1.98.1、CMake4.4.3、Ninja发行包1.13.2、Android NDKr30/Clang21/API28/arm64-v8a保持固定。Android完整链接同时设置max-page-size与common-page-size为16384并检查LOAD/RELRO，不只检查静态库或cargo check。详见[原生验证](../native/mnn-shim/VERIFICATION.md)、[Rust验证](../mobile/runtime/VERIFICATION.md)与[CI说明](../scripts/android_mnn/B1_CI.md)。
 
 当前仅研究CPU文本profile，未授予模型生产准入或Android运行结论。APK的Flutter/JDK/SDK/Gradle组合尚待安装许可与实际构建验证；不得把原生工具链通过写成APK已完成。原生二进制分发仍需补齐第三方notice/许可闭包。
+
+### APK工具链候选（安装与独立模板构建已核验）
+
+2026-10-02云端实际安装并核对Flutter3.47.6（revision `5fc346839b5d0eef006ed8404392afb4dfae428d`）/Dart3.13.5、Temurin17.0.20.1+1、Gradle9.3.1、Android command-line22.0、platform36 revision2、Build-Tools36.0.0；复用NDK30.0.16248370。独立官方模板的AGP9.1.0/Kotlin2.4.0已核实；minSdk28、compile/target36、arm64单ABI及固定NDK为本项目候选配置，尚无Nexa APK产物。
+
+Flutter/Dart首次执行前设置 `FLUTTER_SUPPRESS_ANALYTICS=true`、`DASH__SUPPRESS_ANALYTICS=true`、`CI=true`，仅CI变量不足。SDK官方ZIP下载核对尺寸及官方SHA1，另记录本次SHA256：platform36r2 `37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e`；build-tools36 `5d9ac77fb6ff43d9da518a337b4fcf8f9097113df531d99ccefe80ef7ce8250b`。后两项SHA256是本次观测，不冒称Google公开校验值。Gradle分发SHA256 `b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06`写入wrapper约束。
+
+独立Flutter模板生成、Pub获取与最终Gradle debug构建已通过。早期Java联网/证书信任失败保留：在本次授权下仅构建进程使用系统现成truststore并保持TLS；JAVA_TOOL_OPTIONS与GRADLE_OPTS需同用当次环境代理，旧后者可覆盖前者。Flutter须通过SDK目录视图发现现有NDKr30，仅app.ndkPath不足；没有补装额外NDK。独立模板APK81,664,735bytes，SHA256 `79dbb1c9037154817100c9de3e8b5c0abf1de3ee49a6333a29bca3cc3300f0b8`，ZIP CRC/debug v2签名/16KiB ZIP对齐、min28/target36/compile36、仅arm64和两个ELF64库LOAD65536已核验。它未包含FRB/Rust/MNN，不替代Nexa集成/真机验收，也不作为产品交付。模板旧wrapper bootstrap jar未单靠其校验配置保证Gradle摘要，本次分发ZIP另独立核hash；正式工程需生成现代wrapper。

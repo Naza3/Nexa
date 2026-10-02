@@ -38,11 +38,11 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 
 新增独立 `native/mnn-shim/`、精确可重放 `native/mnn-patches/` 与 `mobile/runtime/`，不改变根Cargo锁、Windows公共DTO或worker依赖图。已实现ABI1每请求采样、精确模板预算、单owner生命周期、独立atomic取消、UTF-8/stop与按调用借用的回调；Rust安全适配已完成真实CPU推理、取消/恢复、seed隔离与回调失败验证。
 
-2026-10-02本地复验：59项CI helper测试（含实际actionlint，无skip）、native CTest3/3、Rust6单测/4编译失败文档测试、clippy与显式真实模型集成均通过。原生9组日志canary及未补丁上游对照通过；Android最终三个Rust→shim→MNN ELF完成链接，LOAD与RELRO均16KiB对齐。详见[原生记录](native/mnn-shim/VERIFICATION.md)、[Rust记录](mobile/runtime/VERIFICATION.md)、[CI门禁](scripts/android_mnn/B1_CI.md)与[契约](docs/t07b-mnn-contract.md)。新B1 GitHub工作流尚待执行，不以本地结果代替Ubuntu配置验收。
+2026-10-02本地复验：59项CI helper测试（含实际actionlint，无skip）、native CTest3/3、Rust6单测/4编译失败文档测试、clippy与显式真实模型集成均通过。原生9组日志canary及未补丁上游对照通过；Android最终三个Rust→shim→MNN ELF完成链接，LOAD与RELRO均16KiB对齐。详见[原生记录](native/mnn-shim/VERIFICATION.md)、[Rust记录](mobile/runtime/VERIFICATION.md)、[CI门禁](scripts/android_mnn/B1_CI.md)与[契约](docs/t07b-mnn-contract.md)。B1源码`c651c433e5a3c6cca856bb87cbb2d1bcb3f4fcca`已推送开发分支，[B1 CI36966789118](https://github.com/Naza3/Nexa/actions/runs/36966789118)的Linux七阶段已通过，但Android依赖导出因libunwind路径错误失败，修正中；[原型回归36966789033](https://github.com/Naza3/Nexa/actions/runs/36966789033)成功且证据独立复核，[Windows36966789047](https://github.com/Naza3/Nexa/actions/runs/36966789047)已成功且50项库存报告hash独立核验。详见[T07-B记录](docs/verification/2026-10-02-t07b-mnn-runtime.md)。
 
-同轮修复旧llama流缓冲遇到stop前残缺UTF-8时静默丢字节的问题；纯stream回归与ASan/UBSan已通过，新的Windows CI尚待验证。此前c1114ee的Windows成功不覆盖此修改。Windows工作流仅对明确Android/文档路径免触发；本轮包含llama改动，仍需完整Windows回归。
+同轮修复旧llama流缓冲遇到stop前残缺UTF-8时静默丢字节的问题；纯stream回归与ASan/UBSan已通过，同提交c651的Windows CI36966789047已验证该修改。此前c1114ee的Windows成功不覆盖此修改。Windows工作流仅对明确Android/文档路径免触发；本轮包含llama改动，仍需完整Windows回归。
 
-B2生产模型store、MnnExecutor/core联动、APK、Android真机与GPU/NPU尚未完成。原生kernel不可抢占，检查点取消样本不是任意时刻停机保证。JDK/Flutter/Android SDK APK工具链安装与相应许可待确认；该等待不阻止B1或独立B2开发。
+B2固定候选受控store与MnnExecutor/core已实现，经过独立审查及本地真实链，远端CI待验；APK、Android真机与GPU/NPU尚未完成。原生kernel不可抢占，检查点取消样本不是任意时刻停机保证。JDK/Flutter/Android SDK APK工具链安装与已披露SDK条款已获确认，固定组合已完成云端安装/版本与摘要校验，独立Flutter模板与Pub成功，独立模板APK烟测已在获批的构建进程信任库/环境代理修正后通过；尚不包含FRB/Rust/MNN，不是Nexa产品；不包含手机安装或应用权限操作。B2受控store/Executor本地测试已完成，root独立复验24单测/4文档编译失败测试、clippy及四项真实门禁均通过（executor210.07秒/store39.04秒）。
 
 ## 任务状态
 
