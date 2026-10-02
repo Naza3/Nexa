@@ -16,14 +16,16 @@
 | [代理工作流](docs/agent-workflow.md) | 角色、派发和交接格式 |
 | [ADR 0001](docs/decisions/0001-nexa-scope-and-layers.md) | 项目命名、优先目标、runtime 与摘要的边界 |
 | [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md) | Windows llama保持、Android MNN主引擎、多文件包与分后端验收 |
-| [Android MNN计划](docs/t07-android-mnn-plan.md) | T07-A～F版本/CPU、契约、APK、OpenCL、QNN与直接Hexagon；均未实现 |
+| [Android MNN计划](docs/t07-android-mnn-plan.md) | T07-A～F版本/CPU、契约、APK、OpenCL、QNN与直接Hexagon；实际状态见验证报告 |
+| [ADR0009](docs/decisions/0009-android-mnn-chat-product.md) / [Android 产品计划](docs/android-app-parity.md) | MNN Chat 对标、App/runtime边界、首个可用APK与后续能力 |
+| [T07-A验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md) / [CPU探针](native/mnn-probe/README.md) | Linux真实模型、Android原生交叉构建及未验范围 |
 | [文档基线验证](docs/verification/2026-09-30-document-baseline.md) | 本轮文档检查及未验证范围 |
 
 `.codex/config.toml` 和 `.codex/agents/*.toml` 是现有开发代理配置，不属于 Nexa 产品运行时，也不是产品依赖锁。
 
 ## 当前工程入口
 
-已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/runtime-api/`、`crates/runtime-cli/`、`crates/desktop-bridge/`、`apps/desktop/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`xtask/`、`tests/fixtures/`。
+已创建且可审查：`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`crates/runtime-types/`、`crates/runtime-core/`、`crates/model-store/`、`crates/engine-host/`、`crates/runtime-ipc/`、`crates/process-host/`、`crates/runtime-worker/`、`crates/runtime-api/`、`crates/runtime-cli/`、`crates/desktop-bridge/`、`apps/desktop/`、`crates/llama-adapter/`、`native/llama-shim/`、`vendor/llama.cpp/`、`native/mnn-probe/`、`scripts/android_mnn/`、`xtask/`、`tests/fixtures/`。
 
 - [构建锁](docs/build-lock.md)：固定上游/工具链、实际编译参数与限制
 - [模型矩阵](docs/model-matrix.md)：真实模型与模板 hash
@@ -77,7 +79,7 @@
 | `crates/runtime-worker/` | PC IPC、控制线程、原生线程 | T03；第 6.4 节 |
 | `crates/runtime-api/`、`crates/runtime-cli/` | 本机 HTTP/SSE、鉴权和 CLI | T04；第 7–8 节 |
 | `crates/runtime-mobile/` | Dart/Rust 桥与生命周期入口 | T07；第 8.3 节 |
-| `apps/desktop/`、`apps/mobile/` | 最小模型管理及推理验证 UI | T06/T08；第 8 节 |
+| `apps/desktop/`、`apps/mobile/` | 桌面验证客户端；移动MNN Chat能力对标应用（移动未创建） | T06/T08；第 8 节 |
 | `xtask/`、`tests/contract/`、`tests/fixtures/` | 自动构建、协议与真实推理验证入口 | T00–T09 |
 | `docs/build-lock.md`、`docs/model-matrix.md` | 实测后的工具链与模型支持矩阵 | T00，之后增量维护 |
 | `artifacts/verification/` | 本机详细报告，不提交私有数据 | 按相关任务生成 |
@@ -104,9 +106,9 @@
 | 调度 / 存储 / IPC | 执行规格第 5–6 节、架构资源归属 |
 | API / SDK | 执行规格第 7–8 节、架构接入契约及未冻结扩展 |
 | Windows UI | T06契约、ADR0007、T06验证、apps/desktop与desktop-bridge |
-| Android | ADR0008、Android MNN计划、架构移动生命周期、执行规格第4.5/8.3/9.2/12.3节 |
+| Android | ADR0008/0009、Android产品计划、MNN计划、架构移动生命周期、执行规格第4.5/8.3/9.2/12.3节 |
 | 摘要 | 摘要方案、路线 S00–S04；无需全文读原生实现 |
-| 依赖 / 后端扩展 | build-lock、model-matrix、相关验证与决策；MNN待锁项不等于已构建 |
+| 依赖 / 后端扩展 | build-lock、model-matrix、相关验证与决策；MNN探针构建不等于生产适配或真机通过 |
 | 文档 / 交接 | AGENTS、本文、状态；按改动同步具体规范 |
 
 ## 验证入口的真实性

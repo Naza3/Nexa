@@ -1,22 +1,22 @@
 # T07–T08 Android MNN 执行计划
 
-日期：2026-10-02。本文为下一阶段设计与验收计划；Android/MNN 代码、模型包、APK、CPU/GPU/NPU 和真机结果均**未实现、未验证**。本轮完成方向文档迁移，不修改源码，不改变 Windows 已有实现或将上游示例记为 Nexa 成果。
+日期：2026-10-02。本文区分工程与产品阶段：T07-A独立CPU探针已实现，Linux真实模型与Android原生交叉构建通过；生产适配/模型包schema/APK/GPU/NPU/真机仍未通过。实际证据见[T07-A报告](verification/2026-10-02-t07a-mnn-cpu-probe.md)。Android最终能力对标MNN Chat，见[ADR0009](decisions/0009-android-mnn-chat-product.md)及[产品计划](android-app-parity.md)；不改变Windows已有实现。
 
 阅读入口：[架构](architecture.md)、[执行规格](../ai-runtime-v0.1-execution-spec.md)、[开发路线](roadmap.md)、[构建锁](build-lock.md)、[模型矩阵](model-matrix.md)。动态任务状态仍由[当前状态](../PROJECT_STATE.md)维护。
 
 ## 1. 已确认方向与实施边界
 
 1. Android 主推理引擎采用 MNN，保留 Rust 通用类型、模型管理、调度和生命周期控制层。Windows 继续使用现有 llama.cpp/worker 链路；不先实现 Android llama.cpp，再迁移 MNN。
-2. CPU、GPU、NPU 全部进入计划。工程顺序为 CPU 基线与安全契约 → 最小前台 APK → OpenCL → QNN v79/v81 → 直接 Hexagon 实验。纳入计划不等于所有后端同时发布，后端失败也不取消已通过的 CPU 基础路径。
+2. CPU、GPU、NPU 全部进入计划。工程顺序为 CPU 基线与安全契约 → 首个可用文本 APK → OpenCL → QNN v79/v81 → 直接 Hexagon 实验。纳入计划不等于所有后端同时发布，后端失败也不取消已通过的 CPU 基础路径。
 3. 目标覆盖 Snapdragon 8 Elite 及后续代际，按实际 SoC/驱动/模型组合逐项准入；后续芯片不会仅因名称更新就自动标为支持。
-4. 最小 APK 仅承载本地模型包导入、前台文本生成、流式显示、停止、状态和诊断。UI 沿用 Flutter + flutter_rust_bridge 的方向，精确版本在构建成功后锁定。不增加聊天业务、云账号、Telegram 接入、后台常驻服务或 NPU 性能承诺。
+4. Android目标为MNN Chat级应用，首个可用APK包含目录/单公开源下载续传、URI包导入、存储、多会话持久化、前台流式/停止、设置和诊断；多模态与加速后续分档。Flutter + flutter_rust_bridge精确版本仍待构建锁定。内部最小验证包不是产品交付；不自动增加云账号、Telegram接入、后台常驻、网络API、遥测上传或NPU性能承诺。
 5. 本计划不授权下载 SDK、接受新许可、注册账号、安装驱动或改变系统设置。Android SDK/NDK、QAIRT/QNN、Hexagon SDK/Tools 等新增依赖先列出版本、来源、协议、用途和再分发范围，在需要接受新协议或获得新权限时另行取得批准。
 
 ### 1.1 与旧规范的迁移关系
 
 [ADR0008](decisions/0008-android-mnn-engine-and-package.md)替代旧规范中“第一版只接 llama.cpp”“单文件 GGUF”“不接 MNN/QNN”及 Android 复用同一 adapter 的方向。架构、执行规格和路线已同步；通用调度、预算、取消、唯一终态、前后台及隐私要求继续保留。
 
-本轮仅同步方向与验收边界：Windows `llama/GGUF` 与 Android `MNN/package` 分开，尚未实现源码迁移。T07-B实施前再冻结具体模型包schema、C ABI和公共DTO的兼容设计；本文中的候选字段不是已发布协议。旧Windows验收不能追溯为新公共类型或Android通过。
+Windows `llama/GGUF` 与 Android `MNN/package` 分开；独立MNN探针已有源码，生产公共类型/包schema迁移仍未实现。T07-B实施前再冻结具体模型包schema、C ABI和公共DTO的兼容设计；本文中的候选字段不是已发布协议。旧Windows验收不能追溯为新公共类型或Android通过。
 
 ## 2. 当前源码与必须解除的耦合
 
@@ -38,7 +38,7 @@
 
 ### 3.1 版本状态
 
-[MNN 3.6.1 发布页](https://github.com/alibaba/MNN/releases/tag/3.6.1)提供直接 Hexagon 后端和 CPU/OpenCL 等路线的研究依据。发布页对应[候选 commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`](https://github.com/alibaba/MNN/commit/d407447ed56c4121a11ccbd266dc184ca1ead0c2)。这是本轮查到的上游身份，**尚未成为 Nexa 构建锁**；不得用“3.6.1”标签或文档网站的版本页眉代替精确依赖身份。
+[MNN 3.6.1 发布页](https://github.com/alibaba/MNN/releases/tag/3.6.1)提供直接 Hexagon 后端和 CPU/OpenCL 等路线的研究依据。发布页对应[候选 commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`](https://github.com/alibaba/MNN/commit/d407447ed56c4121a11ccbd266dc184ca1ead0c2)。这是已用于T07-A独立探针的精确构建身份（外部洁净checkout、无补丁），生产适配仍待验；不得用“3.6.1”标签或文档网站的版本页眉代替精确依赖身份。
 
 T07-A 必须复核 tag→完整 commit、子模块/第三方依赖、许可证、导出器和运行时是否同源，选定可构建组合后记录：MNN commit、Nexa shim ABI、补丁集及 hash、编译选项、NDK/Clang/CMake/Ninja、Android API 级别、Rust target、JDK/Gradle/AGP、Flutter/bridge 版本。更换 commit 或模型导出器须重新验证，不自动跟随 master。GPU/NPU 可因必要修复选择后续精确版本，但作为独立升级记录，不能污染已固定的 CPU 对照。
 
@@ -126,7 +126,7 @@ Windows GGUF schema 1、其单文件 hash 和原证据保持原含义；不能�
 
 ## 6. 按最小可验收切片推进
 
-全部切片当前为**未开始**。先完成 T07-A～C 的 CPU 纵向链，再将已稳定的同一契约推广到后端。表中“实现命令/报告”是后续交付要求，不代表今天已有 Android xtask。
+T07-A为**进行中**：独立探针/Linux真实功能/Android原生交叉构建已有证据，导出器与真机门槛未闭合；B～F及App仍未开始。先完成 T07-A～C 的 CPU 纵向链，再将已稳定的同一契约推广到后端。表中“实现命令/报告”是后续交付要求，不代表今天已有 Android xtask。
 
 ### T07-A：锁定版本并运行 MNN CPU 原型
 
@@ -154,11 +154,11 @@ Windows GGUF schema 1、其单文件 hash 和原证据保持原含义；不能�
 - 取消前后新请求、单活动槽+一个移动等待槽、慢消费者、加载失败、卸载竞争、重复创建释放分别留证；CPU 小模型的 prefill/decode 取消不是只在生成前预置标志
 - Android link graph 无 llama/PC 宿主依赖；共用类型变更后运行既有 Rust 聚合和 Windows 真实回归，保留旧 GGUF/桌面 external 行为
 
-### T07-C / T08：最小 APK 与前台生命周期
+### T07-C / T08：安全移动宿主与首个可用 APK
 
 **前置：** B 的核心/安全门槛通过；Flutter/bridge/Android 包版本锁定。
 
-**最小交付：** 一个最小 APK 和独立嵌入接入示例，只有模型包导入、加载、前台生成、停止、状态/错误和脱敏诊断；由既有 core 统一排队，不在 Dart 再维护调度器。
+**最小交付：** 安全移动宿主、独立嵌入接入示例及[产品计划P1](android-app-parity.md)定义的首个可用文本APK，含目录/下载续传/导入/存储、持久化多会话、设置与诊断；由既有 core 统一排队，不在 Dart 再维护调度器。
 
 **通过门槛：**
 
@@ -240,9 +240,9 @@ Windows GGUF schema 1、其单文件 hash 和原证据保持原含义；不能�
 
 ## 9. 下一条可执行动作与本轮检查
 
-下一条源码任务只启动 **T07-A 的精确版本/依赖清单与 CPU 原型**：方向ADR/规范已同步；接下来核验现有工具链及未获批准的SDK/协议，锁定公开小模型来源并实现可重复native探针。没有真机时可继续依赖审计、构建和独立解析/契约设计，真机门槛保持未完成；不为等待设备而先做聊天业务或另一套 Android llama 引擎。
+下一步闭合T07-A候选模型导出器/原始revision与真实Android运行证据，并推进T07-B安全契约；无设备时可进行不依赖设备的设计/实现，但不将A整体标完成。App按产品计划推进，不另建Android llama引擎；新增移动工具链/许可另行核验，不能把已验证NDK构建视为整个APK工具链就绪。
 
-本轮实施范围为本计划、ADR0008及相关规范/入口文档。检查相对链接、围栏、空白、源码入口与官方引用；未运行Android/MNN构建、模型转换、APK、性能或真机测试，未下载SDK或接受协议。Windows目录版源码及CI由独立任务跟踪，本迁移不更改其实现或验证结论。
+历史说明：初始方向文档阶段仅修改本计划、ADR0008及相关规范/入口，检查链接、围栏、空白和引用；该阶段没有运行Android/MNN构建、模型转换、APK、性能或真机测试，也没有获取SDK。后续T07-A已使用NDK r30完成原生交叉构建与Linux真实模型探针，当前事实以[T07-A报告](verification/2026-10-02-t07a-mnn-cpu-probe.md)和[构建锁](build-lock.md)为准，不能沿用初始阶段的“未构建”描述。Windows目录版源码及CI独立跟踪，本迁移不改变其结论。
 
 ## 10. 官方资料及引用范围
 

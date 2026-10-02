@@ -11,10 +11,13 @@
 | 共享推理核心 | Rust 类型、调度、模型管理；Windows llama / Android MNN 独立适配 | PC 与移动端复用控制层和事件语义 |
 | Windows runtime | 本机 HTTP 服务、CLI、独立推理 worker | 自有应用通过本机 API 调用 |
 | Android 嵌入库 | MNN 原生库、受控 Rust 桥、Flutter 接入示例（未实现） | 每个 App 内独立实例，前台运行 |
-| 验证 UI | Tauri 桌面 / Flutter 移动最小界面 | 导入模型、生成、取消和检查状态 |
+| Windows 验证 UI | Tauri 桌面界面 | 管理模型、生成、取消和检查状态 |
+| Android App | Flutter 应用，能力对标 MNN Chat（尚无 APK） | 模型目录/下载/导入、多会话；多模态分阶段交付 |
 | 摘要参考接入 | 来源标准化、分块、证据引用与任务编排 | 调用 Nexa；不侵入推理核心 |
 
-Windows 保留固定 commit 的 llama.cpp/GGUF；Android 主引擎采用 MNN/多文件模型包，先完成 CPU，再验证 OpenCL、QNN v79/v81 与直接 Hexagon。见[方向决策](docs/decisions/0008-android-mnn-engine-and-package.md)和[执行计划](docs/t07-android-mnn-plan.md)。支持范围按模型、量化、模板、后端和设备实测组合认定；Android 尚未实现或实测。固定 Windows CI 和短验结果不覆盖无开发工具、实际离线或长期稳定性条件。
+Windows 保留固定 commit 的 llama.cpp/GGUF；Android 主引擎采用 MNN/多文件模型包，先完成 CPU，再验证 OpenCL、QNN v79/v81 与直接 Hexagon。见[方向决策](docs/decisions/0008-android-mnn-engine-and-package.md)和[执行计划](docs/t07-android-mnn-plan.md)。支持范围按模型、量化、模板、后端和设备实测组合认定；Android 已有独立 CPU 开发探针：Linux 真实模型与 arm64 原生交叉构建通过，尚无 APK、生产适配或真机证据。固定 Windows CI 和短验结果不覆盖无开发工具、实际离线或长期稳定性条件。
+
+Android 最终目标见[产品能力矩阵与阶段](docs/android-app-parity.md)；内部原生探针不等于首个日常可用 APK。[T07-A 验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md)记录实际通过与未通过门槛。
 
 ## 阅读入口
 

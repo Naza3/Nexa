@@ -4,7 +4,7 @@
 
 ## 当前目标与授权
 
-用户已明确要求按照文档规划实施，并允许本地检查通过后推送新的开发分支、增加和运行 Windows GitHub Actions。未授权合并或部署。首个业务仍是 Telegram 群摘要；来源、触发、样本与保留策略保持待决，不自行登录账号或向群发送摘要。
+用户已明确要求按照文档规划实施，并允许本地检查通过后推送新的开发分支、增加和运行 Windows GitHub Actions。未授权合并或部署。Android 应用能力目标更新为对标 MNN Chat，见[ADR0009](docs/decisions/0009-android-mnn-chat-product.md)；不自动纳入账号、遥测上传、网络服务或后台常驻。首个业务仍是 Telegram 群摘要；来源、触发、样本与保留策略保持待决，不自行登录账号或向群发送摘要。
 
 Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GGUF。Android已确定采用MNN，CPU、OpenCL、QNN v79/v81与直接Hexagon均纳入计划，不先做Android llama。面向Snapdragon 8 Elite及后续，公开首测参考OnePlus 15 / SM8850 / v81，SM8750 / v79为兼容档；实际系统、驱动、ABI/页大小、内存和持续性能待诊断。方向与门槛见[ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)及[执行计划](docs/t07-android-mnn-plan.md)，不从型号推导支持或性能保证。
 
@@ -30,6 +30,10 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 
 - T04实现提交`ccb2053fe514f582f6161f9fc87ee25346aa55e4`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36816604494)于2026-10-01 05:00:03 UTC全部通过；212项Rust测试（平台差异已核对）、5项独立真实模型、DACL/Job实际边界及HTTP 50次断连恢复均通过。ZIP摘要已核对，完整证据见[T04记录](docs/verification/2026-10-01-t04-http-cli.md)
 
+## T07-A 本轮事实
+
+新增独立 `native/mnn-probe/` 与 `scripts/android_mnn/` 包含6个探针本体文件（CI辅助另计），未修改Windows链路/公共Rust契约。MNN 3.6.1精确源码与公开预转换Qwen3-0.6B五文件/hash已锁；仅load-time greedy、同步CPU原型。缺生产C ABI/MnnExecutor、每请求采样、线程安全取消、生产包schema、APK与Android运行证据；候选模型不可标为准入产品资产。详见[T07-A报告](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md)。
+
 ## 任务状态
 
 | 任务 | 状态 | 当前边界 |
@@ -42,7 +46,8 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；独立Windows 10短验已通过；按当前阶段范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
 | T06 Windows UI | 待验证 | 新目录/诊断源码75e458f的CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包及解压bridge验收通过；产物独立复核通过并已交付；新目录原生UI仍未测 |
-| T07–T08 Android核心与UI | 未开始 | MNN方向/六切片文档已就绪，尚无MNN适配、工具链锁、模型包、APK或真机证据；既有llama build.rs仍拒绝Android |
+| T07 Android核心 | 进行中 | T07-A独立CPU探针已实现：Linux真实4类输入/重复/预算边界通过，Python19/CTest2通过；NDK r30/API28/arm64原生交叉构建与16KiB LOAD对齐通过。导出器身份、生产适配和真机门槛未完成，见[T07-A验证](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md) |
+| T08 Android App | 未开始 | MNN Chat能力对标目标已确定；首个可用APK需目录/下载/导入/存储、多会话、设置与诊断，依赖T07-B/C安全门槛；无APK或真机证据 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | Android后端纳入T07-D～F单列验收；其余扩展未开始，Linux仍仅开发探针 |
 | S00–S04 摘要 | 未开始 | 来源/触发/样本/质量目标及接口契约仍待冻结 |
@@ -62,7 +67,7 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 2. T05源码6a7e9d0的Windows CI36829233039已通过，产品/工具ZIP已独立复核；另有Windows 10独立手工短验通过，不能替代尚未完成的A20条件
 3. 新源码75e458f的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功；下载产物已独立核验并交付，证据见[T06最终目录版记录](docs/verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。新目录原生UI仍未测，剪贴板等原生分支继续待验
 4. 无开发工具、实际离线和长期稳定性列为后期验证；Windows11/Android另行实测，不泛化当前支持证据
-5. Android从T07-A精确MNN/工具链与CPU原型开始；新增SDK/许可和实际设备条件分别核验，未获批准不下载SDK或接受协议。T07-B再冻结具体C ABI/schema/公共类型迁移
+5. Android继续闭合T07-A导出器/原始模型身份与真机门槛；可并行推进T07-B契约设计和受控实现，但不能以Linux结果宣称Android通过。NDK r30原生构建已验证；JDK/Gradle/Flutter等仍待锁。首个可用APK依[产品计划](docs/android-app-parity.md)，新依赖/许可仍分别核验
 6. 摘要来源/触发/评估基线保持独立待决；基础runtime推进不自行选择Telegram产品方案
 
 ## T05 收口与后期验证

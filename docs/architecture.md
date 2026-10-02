@@ -1,6 +1,6 @@
 # Nexa 总体方案与架构
 
-日期：2026-10-02。本文描述设计与模块边界；各项是否已经实现和验证见 [当前状态](../PROJECT_STATE.md)。runtime 的具体协议、默认值和验收以 [执行规格](../ai-runtime-v0.1-execution-spec.md) 为准；范围依据见 [ADR 0001](decisions/0001-nexa-scope-and-layers.md)，Android MNN 方向变更见 [ADR0008](decisions/0008-android-mnn-engine-and-package.md)。
+日期：2026-10-02。本文描述设计与模块边界；各项是否已经实现和验证见 [当前状态](../PROJECT_STATE.md)。runtime 的具体协议、默认值和验收以 [执行规格](../ai-runtime-v0.1-execution-spec.md) 为准；范围依据见 [ADR 0001](decisions/0001-nexa-scope-and-layers.md)，Android MNN方向与App产品目标分别见[ADR0008](decisions/0008-android-mnn-engine-and-package.md)、[ADR0009](decisions/0009-android-mnn-chat-product.md)。
 
 ## 1. 目标与设计取舍
 
@@ -10,7 +10,7 @@ Nexa 让用户自己的 PC / Android 应用复用一套本地推理能力。第�
 
 首版选择单模型、单运行槽、有限队列；明确不支持的能力返回错误。两端共享 Rust 类型、调度和事件语义，原生适配与模型资产格式分开，独立构建、独立运行、独立验收。Android 每个 App 有自己的实例和模型占用。
 
-保留 Windows HTTP 服务和 Android 嵌入库两种宿主。桌面/移动 UI 是验证客户端，核心不依赖 UI；接入方不需要采用相同前端技术。
+保留 Windows HTTP 服务和 Android 嵌入库两种宿主。桌面维持验证客户端；Android 为 MNN Chat 能力对标应用，见[产品计划](android-app-parity.md)。核心不依赖 UI；接入方不需要采用相同前端技术。
 
 ## 2. 总体分层
 
@@ -57,6 +57,7 @@ flowchart TB
 | runtime-worker | IPC、独立控制路径、原生线程与错误隔离 | 无公开 HTTP 端口 |
 | runtime-api / runtime-cli | HTTP/SSE、鉴权、错误映射与管理命令 | 不直接操作模型指针 |
 | runtime-mobile | 初始化、生成、取消、状态及生命周期桥 | 不复制调度算法 |
+| Android App（待实现） | 模型目录/下载、会话/附件持久化、交互与权限 | 只调用受控桥/资产导入，不拥有原生指针或第二套推理队列 |
 | summary-types / summary-core | 来源快照、摘要任务、阶段结果和证据映射 | 独立调用层，不是 runtime 必需依赖 |
 | 来源适配与宿主 UI | 获取消息、业务持久化、展示和用户操作 | 不拼接模型专用聊天模板 |
 
@@ -82,7 +83,7 @@ T05 将管理 CLI/API 与匹配 CPU worker 放在同一产品目录，worker 路
 
 ### 4.2 Android
 
-App 初始化一个 runtime 实例，经 MnnExecutor 使用 MNN。原生模型由专用线程独占，桥只传公共 DTO 和受控句柄；推理不阻塞 UI 线程。不先实现 Android llama.cpp；精确版本/CPU 原型、包与安全契约、APK、OpenCL、QNN、直接 Hexagon 依次推进，见[计划](t07-android-mnn-plan.md)。这些 Android 模块均未实现。
+App 初始化一个 runtime 实例，经 MnnExecutor 使用 MNN。原生模型由专用线程独占，桥只传公共 DTO 和受控句柄；推理不阻塞 UI 线程。不先实现 Android llama.cpp；精确版本/CPU 原型、包与安全契约、APK、OpenCL、QNN、直接 Hexagon 依次推进，见[计划](t07-android-mnn-plan.md)。独立 CPU 探针已完成 Linux 功能验证与 Android 原生交叉构建；上述生产模块和真机门槛仍未完成，见[T07-A报告](verification/2026-10-02-t07a-mnn-cpu-probe.md)。
 
 进入后台先停止接收本轮业务的新阶段，再取消当前推理，等待安全结束并卸载。原生调用尚未返回时继续显示正在停止，不释放使用中的资源。UI 重建不得继续使用已销毁句柄。
 
@@ -181,3 +182,9 @@ Windows 10 CPU 为首要交付范围，Windows 11后续。Android 面向 Snapdra
 原生链路 → 调度 → Windows 与 Android 宿主 → 独立应用接入 → 发行验收，详见 [路线](roadmap.md)。摘要路线以可替换的推理客户端和来源适配器独立推进。
 
 公共接口、状态机、数据目录、持久化版本或平台范围改变时，先记录决策并同步对应规范及验收。内部可逆实现细节由当前任务自行解决，不反复要求用户批准普通工程选择。
+
+## Android 产品层边界
+
+模型目录/下载任务、会话与附件数据库、消息呈现、系统权限、ASR/TTS交互和用户设置由App管理。下载器只把完整且校验通过的资产提交model-store，不能绕过包准入。runtime继续处理有界单次任务，不访问市场、不存聊天历史、不引入账号或遥测。多会话共享单运行槽；重新打开历史只恢复App数据，不恢复原生句柄或自动重放任务。
+
+图片/音频/生图需要后续版本化能力、输入输出与资源预算，不将二进制内容硬塞文本messages。首个可用APK和后续多模态/加速独立验收；不自动开启后台推理、Android网络API或云同步。

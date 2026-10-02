@@ -1,6 +1,6 @@
 # 开发与平台构建锁
 
-日期：2026-10-02。已锁定部分为Linux开发与固定Windows CI组合；Android/MNN只列待锁项，不宣称可构建。精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，T05另有独立Windows 10手工短验通过；T06新目录版CI及产物独立复核通过并交付；新目录及剩余原生UI分支、无开发工具/离线/长期稳定性及Android真机仍待验。
+日期：2026-10-02。已锁定部分为Linux开发与固定Windows CI组合；Android/MNN独立CPU探针已有Linux/arm64原生构建锁，生产移动栈与真机仍待验。精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，T05另有独立Windows 10手工短验通过；T06新目录版CI及产物独立复核通过并交付；新目录及剩余原生UI分支、无开发工具/离线/长期稳定性及Android真机仍待验。
 
 ## 固定输入
 
@@ -15,23 +15,27 @@
 | CPU 选项 | Release、静态库、`GGML_NATIVE=OFF`、OpenMP/CUDA/Vulkan/Metal 关闭 |
 | x64 指令集 | 上游固定配置实际启用 SSE4.2、AVX、AVX2、F16C、FMA、BMI2；不宣称兼容所有 x64 CPU |
 | Windows 编译器/SDK | MSVC 19.44.35229.0 / SDK 10.0.26100.0；Windows Server 2022 10.0.20348；原生Release、CTest与Rust静态链接已在d3d7cf2的CI通过 |
-| Android NDK/Flutter | unavailable；尚未加入工程依赖 |
+| Android NDK/Flutter | NDK r30已用于独立原生CLI构建；Flutter及APK工具链待锁 |
 
-## Android MNN 待锁清单（全部未构建/未验证）
+## Android MNN 探针构建锁与生产待锁清单
 
 按[ADR0008](decisions/0008-android-mnn-engine-and-package.md)和[执行计划](t07-android-mnn-plan.md)从T07-A开始，不修改上述Windows llama锁：
 
 | 项目 | 当前状态与锁定条件 |
 | --- | --- |
-| MNN | 已查到3.6.1候选commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`；未纳入vendor/构建锁，须实际构建后确认 |
+| MNN | 3.6.1 commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`；外部洁净checkout、无补丁，Linux/Android独立CPU探针已构建，不自动跟随master |
 | 原生适配 | MnnExecutor/C ABI未实现；ABI版本、补丁集/hash与线程/取消契约在T07-B冻结 |
-| 模型导出 | 导出器/转换器完整commit、参数、原模型revision、量化/校准、全文件/包hash均待锁；不沿用GGUF文件身份 |
-| Android构建 | arm64-v8a；NDK/Clang/CMake/Ninja、API级别、页对齐、Rust target、JDK/Gradle/AGP、Flutter/bridge待可重复构建确认 |
+| 模型导出 | 公开预转换候选revision/五文件hash/模板已锁；精确导出器commit、原模型revision与可重复导出仍待闭合；不沿用GGUF身份 |
+| Android构建 | 原生CLI已构建：NDK r30/30.0.16248370、Clang21.0.0、CMake4.4.3/Ninja1.13.2、arm64-v8a/API28、LOAD对齐16KiB；Rust移动target/JDK/Gradle/AGP/Flutter/bridge与APK待锁 |
 | OpenCL | 后端构建、驱动探测、profile、缓存身份与真实fallback未验证 |
 | QNN | QAIRT/QNN精确版本、Host/HTP依赖、SM8750/v79与SM8850/v81目标图分别锁定；尚无SDK/产物验证 |
 | 直接Hexagon | 独立SDK/Tools、Host/DSP库、量化/C4产物及v79/v81实测；不能继承QNN结果 |
 
-新增SDK下载/安装、新协议接受及再分发条件须另行核验并获相应批准；本轮未执行这些步骤。候选版本的官方来源及源码审查见[计划](t07-android-mnn-plan.md)，不使用动态latest代替锁定身份。
+新增SDK下载/安装、新协议接受及再分发条件须另行核验并获相应批准；NDK r30已取得并校验用于本轮原生构建；这不授予其他SDK或最终再分发结论。候选版本的官方来源及源码审查见[计划](t07-android-mnn-plan.md)，不使用动态latest代替锁定身份。
+
+NDK官方Linux ZIP共738633529字节，SHA256 `753611f410d002cfcd3f3dc2ef49aad532089d3180b436c060a90bf0fcb64df2`；source.properties复核30.0.16248370。来源[Google NDK r30](https://dl.google.com/android/repository/android-ndk-r30-linux.zip)。不提交工具链或模型大文件。构建开关、二进制身份和实际结果见[T07-A报告](verification/2026-10-02-t07a-mnn-cpu-probe.md)。
+
+许可边界：关闭`MNN_BUILD_OPENCV`仅关闭相关API构建选项，不证明MNN的`source/cv`源实现从最终静态链接中移除。Unicode衍生表等内嵌数据的来源、适用许可及再分发清单尚未闭合；不得仅凭顶层许可证或CPU/text-only选项宣布发行许可齐备。本轮未发布原生二进制/模型/SDK，后续二进制交付前须完成实际链接内容和第三方许可审计。
 
 没有升级跟随 master 的构建脚本。CMake 检查 submodule HEAD，不匹配直接失败。原生模型默认日志被抑制，以避免上游输出完整用户路径；开发基线用合成输入，原始上游日志只留在忽略目录。
 

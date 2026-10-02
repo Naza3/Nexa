@@ -23,15 +23,28 @@
 
 文件和模板 hash 已对实际下载文件计算；详细本轮 Linux 开发结果见对应验证记录。模型文件不提交源码仓库，不自动下载到最终产品。
 
-## Android MNN 候选矩阵（全部未实现/未验证）
+## Android MNN 候选矩阵（Linux探针已验证，Android运行未验证）
 
-采用[ADR0008](decisions/0008-android-mnn-engine-and-package.md)方向，先研究公开Qwen3-0.6B文本小模型；尚未选择/导出/校验具体MNN包，不把同名GGUF、上游发布样例或候选名称视为支持。
+采用[ADR0008](decisions/0008-android-mnn-engine-and-package.md)；当前是研究输入锁，不是生产schema或支持承诺。
 
-| 路径 | 资产与验收待办 | 当前状态 |
+| 字段 | 固定值/边界 |
+| --- | --- |
+| 来源 | [taobao-mnn/Qwen3-0.6B-MNN](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/tree/34dfccda1187ded6e07ea06426da576b0b793c6b) |
+| revision | `34dfccda1187ded6e07ea06426da576b0b793c6b` |
+| 文件 | config.json、llm_config.json、llm.mnn、llm.mnn.weight、tokenizer.txt |
+| 大小与SHA256 | [候选输入锁](../scripts/android_mnn/candidate-model.json)，逐文件对实际字节核对 |
+| 模板SHA256 | `87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5` |
+| MNN | `d407447ed56c4121a11ccbd266dc184ca1ead0c2`，无补丁 |
+| 配置 | CPU / precision high / 2线程 / load-time greedy / enable_thinking=false；功能输出预算16，边界预算8 |
+| 身份缺口 | 精确exporter commit、原始Qwen模型revision及可重复转换尚未闭合；模型许可/发行闭包须在生产准入复核 |
+| Linux x86_64 | 4类真实合成输入、重复一致、36/35预算边界通过；详见[T07-A](verification/2026-10-02-t07a-mnn-cpu-probe.md) |
+| Android arm64 CPU | 原生CLI交叉构建/16KiB LOAD对齐通过；模型加载/生成/真机性能与生命周期未验 |
+
+| 后端 | 资产与验收待办 | 当前状态 |
 | --- | --- | --- |
-| CPU | 原模型revision/许可、MNN导出器commit/参数、graph/weights/tokenizer/config/template闭包、整体hash与真实CPU基线 | 未锁定、未构建、未测 |
-| OpenCL | 明确兼容变体与CPU对照、驱动/profile/真实fallback、生命周期 | 未开始 |
-| QNN v79/v81 | 各SoC目标图、量化/激活/校准、SDK/runtime/图hash与兼容CPU资产分别记录 | 未开始 |
-| 直接Hexagon | 独立W4对称/C4候选变体、Host/DSP库与v79/v81目标分别验收，不能复用QNN支持结论 | 未开始 |
+| CPU生产资产 | 导出身份、包schema/引用闭包、生产Executor与设备准入 | 未完成；研究候选不能称正式支持 |
+| OpenCL | 兼容变体、CPU对照、驱动/profile/fallback、生命周期 | 未开始 |
+| QNN v79/v81 | 各SoC图、量化/校准、SDK/runtime/图hash及兼容CPU资产 | 未开始 |
+| 直接Hexagon | 独立W4对称/C4候选、Host/DSP库、v79/v81分别验收 | 未开始；不能继承QNN结果 |
 
-公开首测参考OnePlus 15 / SM8850 / v81；SM8750 / v79为兼容档，官方来源见[计划第3节](t07-android-mnn-plan.md#3-版本研究基线与设备矩阵)。Android版本、ABI/页大小、内存、驱动由实际诊断确定。详细准入须绑定包/模板/配置身份、实际后端和设备报告；新包schema在T07-B冻结前不发布虚构的manifest示例。
+公开参考设备档和官方来源见[计划第3节](t07-android-mnn-plan.md#3-版本研究基线与设备矩阵)。ABI/页大小/内存/驱动与支持范围必须由实际诊断确认；文档中的型号或上游模型条目不构成设备通过证据。

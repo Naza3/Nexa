@@ -15,14 +15,14 @@
 
 ## 2. 产品边界
 
-Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。首个业务场景为 Telegram 群消息摘要；两端最小 UI 用来管理模型和验证接入。
+Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。首个业务场景为 Telegram 群消息摘要；Windows 保持现有验证客户端范围；Android 应用能力对标 MNN Chat，按[ADR0009](docs/decisions/0009-android-mnn-chat-product.md)与[产品计划](docs/android-app-parity.md)分阶段交付。
 
 - Rust 管理协议、模型、调度和生命周期；Windows 使用 llama.cpp，Android 主引擎采用 MNN，各自以 C++ shim 封装原生边界。Android 不先实现 llama 路线，见 [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)。
 - Windows 使用 API 管理进程和独立 worker；Android 在每个 App 内嵌入核心并使用专用推理线程。统一源码与语义，不承诺跨平台二进制或 Android 多 App 共享模型实例。
 - Telegram 登录、消息获取、群记录、分块、摘要任务和产物属于调用层；runtime 不引入 Telegram SDK，不保存聊天历史。
 - 默认技术栈沿用执行规格：Axum/Tokio；桌面 Tauri 2 + React/TypeScript/Vite；移动 Flutter + flutter_rust_bridge 2。具体版本必须经构建验证后锁定。
 - 基础验收为 Windows x64 CPU 和 Android arm64 MNN CPU；Android OpenCL、QNN v79/v81 与直接 Hexagon 全部纳入分阶段计划，按模型/设备独立验证后列为可选支持。目标与门槛见 [Android计划](docs/t07-android-mnn-plan.md)，不从内存容量或芯片宣传推导速度保证。
-- 首版保持单模型、单运行任务、有限 FIFO；不自行扩展多模型并行、RAG、工具调用、模型市场、公网服务或移动后台常驻。
+- 首版保持单模型、单运行任务、有限 FIFO；不自行扩展多模型并行、RAG、工具调用、公网服务或移动后台常驻。Android 模型目录/下载、会话历史与多模态交互属于 App 层；共享 runtime 不承担市场网络、聊天数据库或业务编排。
 
 项目名为 Nexa；当前命令 `ai-runtime`、worker 名 `ai-runtime-worker`、`air_*` ABI 和 crate 名沿用原技术约定。统一更名须单独记录迁移，不在实现中混用。
 
