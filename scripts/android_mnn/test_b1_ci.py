@@ -133,6 +133,48 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ci.parse_elf(bad)
 
+    def test_android_dependency_allowlist_optional_unused_libraries(self):
+        for removed in ((), ('libm.so',), ('libdl.so',), ('libdl.so', 'libm.so')):
+            lines = [line for line in ELF.splitlines() if not any('[' + name + ']' in line for name in removed)]
+            result = ci.parse_elf('\n'.join(lines))
+            self.assertTrue(ci.valid_android_dependencies(result['needed']))
+            value = checks('elf')
+            for target in value.values():
+                target['needed'] = result['needed']
+            ci.validate_checks('elf', value)
+        for bad in (ELF.replace('[libc.so]', '[libm.so]'),
+                    ELF + '(NEEDED) Shared library: [libc.so]\n',
+                    ELF.replace('[libm.so]', '[libMNN.so]'),
+                    ELF.replace('[libm.so]', '[libc++_shared.so]'),
+                    ELF.replace('[libm.so]', '[unknown.so]')):
+            with self.assertRaises(ci.ElfAuditError) as error:
+                ci.parse_elf(bad)
+            self.assertEqual(error.exception.failure_case, 'elf_dependencies')
+        self.assertFalse(ci.valid_android_dependencies(['libdl.so', 'libm.so']))
+        self.assertFalse(ci.valid_android_dependencies(['libc.so', 'libdl.so', 'libdl.so']))
+
+    def test_elf_failures_have_fixed_safe_categories(self):
+        cases = [(ELF.replace('Machine: AArch64', 'Machine: x86-64'), 'elf_identity'),
+                 (ELF.replace('/system/bin/linker64', '/PRIVATE/linker'), 'elf_interpreter'),
+                 (ELF.replace('0x4000', '0x1000'), 'elf_load_alignment'),
+                 (ELF.replace('R E 0x4000', 'RWE 0x4000'), 'elf_writable_executable'),
+                 (ELF.replace('GNU_RELRO', 'NO_RELRO'), 'elf_relro'),
+                 (ELF.replace('RW 0x10', 'RWE 0x10'), 'elf_stack'),
+                 (ELF.replace('LOAD 0x000000', 'LOAD PRIVATE'), 'elf_malformed_headers')]
+        for content, expected in cases:
+            with self.assertRaises(ci.ElfAuditError) as error:
+                ci.parse_elf(content)
+            self.assertEqual(error.exception.failure_case, expected)
+            self.assertNotIn('PRIVATE', str(error.exception))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = ci.Runner(root / 'work', root / 'evidence', 'elf')
+            with patch.object(runner, 'elf', side_effect=ci.ElfAuditError('elf_dependencies')), self.assertRaises(ci.ElfAuditError):
+                runner.execute()
+            value = ci.read(runner.evidence / 'elf.json')
+            self.assertEqual(value['failure_case'], 'elf_dependencies')
+            ci.sanitize_report('elf', value)
+
     def prepare(self, directory):
         evidence = Path(directory) / 'evidence'
         evidence.mkdir()

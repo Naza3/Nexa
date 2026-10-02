@@ -61,3 +61,13 @@ Ubuntu24.04，实际编译器 `g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0`�
 ## c651 Windows回归已通过
 
 [Windows CI36966789047](https://github.com/Naza3/Nexa/actions/runs/36966789047)、job110712168155全部必需阶段success，包含本轮llama UTF-8/stop修正后的原生、runtime、HTTP/CLI及桌面解压bridge验证。证据artifact11211356112：ZIP77,279bytes，SHA256 `4b2d7a3da2b196abb804f7200542daf1ec6ae63e331d98c4fb68f599b402d4ff`。独立复核50个indexed文件的严格库存/size/hash、源码c651及pass状态；桌面acceptance=result pass、package_unchanged=true、native_window_tested=false。未重新下载或交付桌面产品包，不能扩大原生UI/Windows11/无开发工具/离线或长稳验收范围。B2仅改移动/native notice/Android CI与文档，根Windows代码/锁不变，依据精确paths-ignore不重复触发整套Windows构建。
+
+## B2首轮远端CI：最后ELF规则误判
+
+源码`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`、tree`0d1def2e0e1e4f70206946d49840dae6350b0ac2`的[CI36970559016](https://github.com/Naza3/Nexa/actions/runs/36970559016)整体failure，前九阶段全部success：Linux真实B1与四项B2矩阵、Android原生导出及完整五个Rust ELF链接均已通过；仅最终ELF检查失败。
+
+证据artifact11211457947，ZIP7,115bytes，SHA256 `0ae3c19329696af1e44a5fac74b3ed03908d862c2e6434708ef872537b673813`。root按精确fc8脚本/schema/lock/header独立复验九个成功报告及保留的失败报告；source/tree/clean正确，无缺失或invalid report。Ubuntu Linux完整manifest再次为`88c287f25394d6b4565d108592947c1973e7739187ff93e22a45391941450adc`，四个B2真实case均pass，证明本次重建与受审静态测试身份一致。Android完整manifest为`64ad7828607821fa6fca4ca104e786cf1feb4e892e6b00bd04db1b8322dbcb22`，不是本地构建指纹。
+
+根因由root在已存在五个Android ELF独立复现：store与build_identity仅需要libc/libdl，linker合法移除未使用libm；旧helper要求所有文件恰好包含三库而误拒。修正为必须libc、可选libdl/libm、不得重复或包含未知依赖；仍拒绝动态MNN/C++运行库，保留全部ABI、PIE、解释器、LOAD、RELRO、WX及stack门禁。不为满足脚本强行链接无用库。新固定失败类别只披露问题类型，不上传私有路径。
+
+修正后同五个真实ELF parse/schema全部通过，helper73项（root设置实际actionlint，无skip）通过；新的远端结果仍待记录。此次仅提交CI规则与对应说明，不混入正在本地开发的设备验证App或新原生修改标记。

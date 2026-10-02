@@ -135,28 +135,59 @@ def digest(path):
         return hashlib.file_digest(file, 'sha256').hexdigest()
 
 
+ELF_FAILURE_CASES = {'elf_identity', 'elf_interpreter', 'elf_dependencies', 'elf_load_alignment',
+                     'elf_writable_executable', 'elf_relro', 'elf_stack', 'elf_malformed_headers'}
+
+
+class ElfAuditError(ValueError):
+    def __init__(self, failure_case):
+        self.failure_case = failure_case
+        super().__init__(failure_case)
+
+
+def elf_require(condition, failure_case):
+    if not condition:
+        raise ElfAuditError(failure_case)
+
+
+def valid_android_dependencies(needed):
+    # Unused optional libraries may be removed by the real linker's --as-needed.
+    return (isinstance(needed, list) and all(isinstance(name, str) for name in needed)
+            and 'libc.so' in needed and needed == sorted(set(needed))
+            and set(needed) <= {'libc.so', 'libdl.so', 'libm.so'})
+
+
 def parse_elf(text):
-    require(re.search(r'Class:\s+ELF64', text) and re.search(r'Machine:\s+AArch64', text)
-            and re.search(r'Type:\s+DYN', text))
-    require('[Requesting program interpreter: /system/bin/linker64]' in text)
+    try:
+        return parse_elf_headers(text)
+    except ElfAuditError:
+        raise
+    except (ValueError, IndexError):
+        raise ElfAuditError('elf_malformed_headers') from None
+
+
+def parse_elf_headers(text):
+    elf_require(re.search(r'Class:\s+ELF64', text) and re.search(r'Machine:\s+AArch64', text)
+                and re.search(r'Type:\s+DYN', text), 'elf_identity')
+    elf_require('[Requesting program interpreter: /system/bin/linker64]' in text, 'elf_interpreter')
     needed = sorted(re.findall(r'\(NEEDED\).*?\[([^]]+)\]', text))
-    require(needed == ['libc.so', 'libdl.so', 'libm.so'])
+    elf_require(valid_android_dependencies(needed), 'elf_dependencies')
     loads = []
     for line in text.splitlines():
         fields = line.split()
         if fields and fields[0] == 'LOAD':
             offset, address, alignment = (int(fields[i], 16) for i in (1, 2, -1))
-            require(alignment >= 16384 and not alignment & (alignment - 1)
-                    and offset % 16384 == address % 16384)
+            elf_require(alignment >= 16384 and not alignment & (alignment - 1)
+                        and offset % 16384 == address % 16384, 'elf_load_alignment')
             flags = ''.join(fields[6:-1])
-            require(not ('W' in flags and 'E' in flags))
+            elf_require(not ('W' in flags and 'E' in flags), 'elf_writable_executable')
             loads.append({'offset': offset, 'virtual_address': address, 'alignment': alignment})
     relro = [line.split() for line in text.splitlines() if line.lstrip().startswith('GNU_RELRO ')]
-    require(loads and len(relro) == 1)
+    elf_require(loads and len(relro) == 1, 'elf_relro')
     start, size = int(relro[0][2], 16), int(relro[0][5], 16)
-    require(size > 0 and (start + size) % 16384 == 0)
+    elf_require(size > 0 and (start + size) % 16384 == 0, 'elf_relro')
     stack = [line.split() for line in text.splitlines() if line.lstrip().startswith('GNU_STACK ')]
-    require(len(stack) == 1 and 'E' not in ''.join(stack[0][6:-1]))
+    elf_require(len(stack) == 1 and 'E' not in ''.join(stack[0][6:-1]), 'elf_stack')
     return {'needed': needed, 'load_segments': loads, 'relro_start': start,
             'relro_size': size, 'relro_end': start + size, 'android_run': False}
 
@@ -188,7 +219,7 @@ FIXED_ERRORS = {
 FAILURE_CASES |= {'export_archive_architecture', 'export_archive_path_mismatch', 'export_resource_dir_mismatch'}
 FAILURE_CASES |= {value for mapping in FIXED_ERRORS.values() for value in mapping.values()}
 FAILURE_CASES |= {case_id for _, case_id in B2_REAL_CASES.values()}
-STAGE_FAILURE_CASES = FAILURE_CASES | {'stage_validation_failed', 'previous_cleanup_unconfirmed', 'b2_test_inventory_mismatch'}
+STAGE_FAILURE_CASES = FAILURE_CASES | ELF_FAILURE_CASES | {'stage_validation_failed', 'previous_cleanup_unconfirmed', 'b2_test_inventory_mismatch'}
 
 
 def command_category(command):
@@ -593,6 +624,9 @@ class Runner:
                 getattr(self, self.stage)()
             self.result['status'] = 'ok'
             self.result['failure_case'] = 'none'
+        except ElfAuditError as error:
+            self.result['failure_case'] = error.failure_case
+            raise
         except ArchiveInputError as error:
             self.result['failure_case'] = error.failure_case
             if error.failure_case == 'export_archive_missing':
@@ -741,7 +775,7 @@ def validate_checks(stage, checks):
                 require(value <= 12)
         elif stage == 'elf':
             require(set(value) == {'needed', 'load_segments', 'relro_start', 'relro_size', 'relro_end', 'android_run', 'sha256', 'size'})
-            require(value['needed'] == ['libc.so', 'libdl.so', 'libm.so'] and value['android_run'] is False)
+            require(valid_android_dependencies(value['needed']) and value['android_run'] is False)
             require(isinstance(value['sha256'], str) and SHA.fullmatch(value['sha256']))
             require(all(type(value[k]) is int and value[k] >= 0 for k in ('size', 'relro_start', 'relro_size', 'relro_end')))
             require(value['size'] > 0 and value['relro_size'] > 0 and value['relro_end'] == value['relro_start'] + value['relro_size'] and value['relro_end'] % 16384 == 0)

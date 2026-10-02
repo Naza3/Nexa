@@ -44,6 +44,8 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 
 B2固定候选受控store与MnnExecutor/core已实现，经过独立审查及本地真实链，远端CI待验；APK、Android真机与GPU/NPU尚未完成。原生kernel不可抢占，检查点取消样本不是任意时刻停机保证。JDK/Flutter/Android SDK APK工具链安装与已披露SDK条款已获确认，固定组合已完成云端安装/版本与摘要校验，独立Flutter模板与Pub成功，独立模板APK烟测已在获批的构建进程信任库/环境代理修正后通过；尚不包含FRB/Rust/MNN，不是Nexa产品；不包含手机安装或应用权限操作。B2受控store/Executor本地测试已完成，root独立复验24单测/4文档编译失败测试、clippy及四项真实门禁均通过（executor210.07秒/store39.04秒）。
 
+B2实现已推送`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`；[CI36970559016](https://github.com/Naza3/Nexa/actions/runs/36970559016)前九阶段（含四项真实B2、Android完整链接）成功，最终ELF检查错误要求未使用的libm导致整体失败。已实际复现并修正系统依赖白名单规则，保留全部页/架构/动态库安全门槛；73项helper及五个实际ELF本地检查通过，修正远端重跑待验。此CI修复不改变native/Rust/Windows代码。
+
 ## 任务状态
 
 | 任务 | 状态 | 当前边界 |

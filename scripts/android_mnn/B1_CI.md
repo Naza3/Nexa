@@ -28,7 +28,7 @@
 8. Android native 交叉构建、日志审计、真实 shim/MNN 与固定
    libc++/c++abi/unwind/Clang builtins 静态闭包导出
 9. Android clippy、Rust 最终测试 ELF 完整链接、artifact 负例、C 头布局交叉编译
-10. Cargo 实际报告的五个固定最终ELF（adapter/模型store/executor三个lib-test、real_model及build_identity示例）：AArch64 PIE/linker64、依赖仅 libc/libdl/libm、
+10. Cargo 实际报告的五个固定最终ELF（adapter/模型store/executor三个lib-test、real_model及build_identity示例）：AArch64 PIE/linker64、libc必需、libdl/libm可选且不得重复或出现其他依赖、
     全部 LOAD≥16KiB 且地址/偏移同余、无 WX 段/可执行栈、非空 GNU_RELRO
     结束地址按 16KiB 对齐
 
@@ -111,7 +111,7 @@ python -m unittest discover -s scripts/android_mnn -p 'test_*.py'
 actionlint .github/workflows/android-mnn-native.yml .github/workflows/native-windows.yml
 ```
 
-Python 共 71 项（1 项已有环境条件 skip）；包括缺失/失败/非法报告、嵌套原文泄露、
+Python 共 73 项（1 项已有环境条件 skip）；包括缺失/失败/非法报告、嵌套原文泄露、
 重复 outcomes、dirty source、遗漏取消阶段、非有限时间、错误 ELF 架构/依赖、
 不足 LOAD/RELRO 对齐及可执行栈，另覆盖快速日志超限、读取上限、超时回收、kill/退出竞态、
 无法确认回收后的阻断，以及编译错误脱敏/真实模型输出禁止进入诊断。另断言 Windows 精确排除列表、全部已知 Windows
@@ -140,3 +140,25 @@ unwind=9、builtins=287；实际manifest SHA保持
 `be2c62705f861ef6115d8a035fd1482662ccda0d11e8fbd642b4ca5b81676a72`。
 此摘要仅记录本地实际产物，不硬编码为CI应得摘要。未重新编译、未声称Android设备运行。
 缺库、错误架构、错误resource版本、musl/symlink错路径和缺库名安全输出均有回归测试。
+
+## fc8最终ELF依赖误判修复
+
+CI `36970559016` 的前九阶段均通过，包括四项B2真实测试与Android完整链接；
+最后ELF门禁错误地要求每个目标都同时需要libc/libdl/libm。实际链接器会移除未使用
+的libm，不能为迎合脚本而人为增加无用链接依赖。
+
+依赖规则现为：`libc.so`必须存在，`libdl.so`/`libm.so`可选，任何重复或其他依赖
+均拒绝，明确不允许`libMNN.so`、`libc++_shared.so`。原有ELF64/AArch64/PIE、
+解释器、LOAD16KiB同余、非WX、GNU_RELRO尾端16KiB及非可执行栈门禁保持不变。
+失败时仅报告固定类别：identity/interpreter/dependencies/load_alignment/
+writable_executable/relro/stack/malformed_headers，不上传原始readelf路径或内容。
+
+2026-10-02使用现有`android-final.jsonl`的五个实际目标和锁定NDK r30 readelf
+重新运行完整parser及证据schema检查，全部通过：
+
+- `build_identity`、`mnn_model_store`：libc/libdl
+- `mnn_adapter`、`mnn_executor`、`real_model`：libc/libdl/libm
+
+同时验证两库/三库（及仅libc）合法，缺libc、重复依赖、unknown/libMNN/
+libc++_shared拒绝，并验证固定失败类别。此次独立修复不修改native、mobile、
+App、receipt方案或Windows workflow；未重编译/执行Android ELF。
