@@ -57,7 +57,18 @@ export interface Snapshot {
   settings: Settings;
   model_directory: ModelDirectory;
 }
+export type ModelCompatibility =
+  | "admitted"
+  | "architecture_unsupported"
+  | "quantization_unvalidated"
+  | "template_unvalidated"
+  | "context_unvalidated"
+  | "artifact_unvalidated"
+  | "unvalidated"
+  | "unknown";
 export interface ModelSummary {
+  /** Absent on older services; never infer detailed support from the filename. */
+  compatibility?: ModelCompatibility;
   id: string;
   display_name: string;
   size_bytes: number;

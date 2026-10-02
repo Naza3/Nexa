@@ -2,6 +2,8 @@
 
 日期：2026-10-02。路线描述目标和依赖，不代表已经实现或获得所有分支的执行授权。唯一动态进度入口是 [PROJECT_STATE.md](../PROJECT_STATE.md)。Android MNN 方向以 [ADR0008](decisions/0008-android-mnn-engine-and-package.md) 为准。
 
+当前排期以[ADR0013](decisions/0013-windows-focus-and-android-mnn-chat.md)为准：回到Windows，Nexa独立Android App自研暂停；用户计划安卓修改MNN Chat。下列Android任务保留为历史计划，不要求当前继续或先完成Android才能推进Windows。
+
 ## 1. 两条路线与完成边界
 
 - runtime 路线沿用执行规格 T00–T10，完成安全的真实推理、两种宿主与发行验收。

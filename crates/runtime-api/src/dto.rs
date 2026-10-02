@@ -386,6 +386,7 @@ impl LoadRequest {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelSummary {
+    pub compatibility: runtime_types::ModelCompatibility,
     pub storage: model_store::ModelStorage,
     pub availability_error: Option<String>,
     pub id: ModelId,
@@ -401,8 +402,10 @@ pub struct ModelSummary {
 impl From<ModelManifest> for ModelSummary {
     fn from(model: ModelManifest) -> Self {
         Self {
+            compatibility: model.compatibility(),
             storage: model.storage,
-            availability_error: None,
+            availability_error: (!(model.validated && model.capabilities.chat))
+                .then(|| runtime_types::ErrorCode::UnsupportedModel.as_str().into()),
             id: model.id,
             display_name: model.display_name,
             size_bytes: model.size_bytes,

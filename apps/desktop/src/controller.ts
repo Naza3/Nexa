@@ -471,7 +471,7 @@ export class DesktopController {
           this.update({
             models: { data: [], next_after: null, generation: null },
             page_after: null,
-            notice: `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个可用。请启动运行服务读取实际模型列表。`,
+            notice: `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个符合本版本精确矩阵准入。请启动运行服务读取实际可用性。`,
           });
         } else if (progress.status === "cancelled")
           this.update({ notice: "模型库操作已取消，原目录与索引保持不变。" });

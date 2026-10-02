@@ -93,10 +93,28 @@ Windows工作流仅新增精确`apps/android-verifier/**`路径排除，与独�
 - background：8 passed、15 not_run，总体cancelled、原因backgrounded、cleanup=confirmed；已不再误记native_failure。此样本在adapter阶段前停止，不能声称精确中断某个原生kernel。摘要 `8d5a166be3ed0d02c43d0a08bcd88797a5e968103d42780c4a46c505c416e234`
 - recovery：13 passed、1 inconclusive、9 not_run，总体cancelled/backgrounded、cleanup=confirmed。重新加载、中英文生成、活动取消恢复等已成功，足以确认本次恢复能力；后续adapter_cancel_template受后台动作打断，不能将整套结果改为passed，也无需为此要求用户重复整套验证。摘要 `1d75a3586831685e4a001765905958d8c66e852b307ae666bad59415a4b1d68a`
 
-回前台没有自动重跑、由手动点击启动新operation的事实确认仍待用户回复。B3b仅完成只读设计，未构建私有准入fixture、未实现或运行core设备套件；生产resolver继续拒绝候选。4KiB单设备CPU证据不扩展为16KiB设备、全部芯片、GPU/NPU或完整安全矩阵。
+2026-10-02 11:36 UTC用户明确确认回前台没有自动重跑，只有手动点击才启动recovery；此为本次人工观察，不扩展到全部重建/进程死亡路径。B3b私有研究域二次审核结论见下节；生产resolver继续拒绝候选。4KiB单设备CPU证据不扩展为16KiB设备、全部芯片、GPU/NPU或完整安全矩阵。
 
 ## 07a14d2 Windows 回归闭环
 
 [Windows CI36993778258](https://github.com/Naza3/Nexa/actions/runs/36993778258)于2026-10-02 10:44:40 UTC成功，attempt1/job110795722582。源码精确绑定上述07a提交；Artifact11222576521下载ZIP为77,358 bytes，SHA256 `f3e165170ebe115df46dcd2fde8959191fa2e50e9fdf56ffbe331ae9c28d0f53`。
 
 下载后独立核对50个indexed文件的大小/hash、封闭库存、source与全部ci_step_outcomes；原生/真实模型、Release产品、解压包及desktop bridge验收成功。desktop acceptance=result pass、package_unchanged=true、native_window_tested=false。两项旧可选/失败路径报告缺失与c0一致，不影响此次通过；未重新交付Windows产品，也不扩大Windows11、无开发工具、离线或长期稳定性结论。
+
+
+## B3b 私有研究域二次审核
+
+2026-10-02 11:39 UTC完成独立审核，review_id `android-b3b-cpu-07a14d2-20261002`。上述最终APK、38项源码输入、三份报告与suite身份逐项匹配，11:36用户确认补齐无自动重放观察。按照ADR0011，允许实现验证器内部的受控core研究fixture/resolver；这是B3b运行资格，不是B3b测试通过或生产准入。
+
+fixture固定上节07a提交/tree、APK/桥接及三报告摘要和b3a_smoke_v1摘要作为历史证据关联。新B3b包必须另留新构建绑定，不能要求其APK/桥接hash与旧证据包相等。当前native六字段、完整模型五文件/模板/来源/策略逐字取自受审focus报告并与原锁复核；运行时任何身份不匹配都拒绝，不接受导入报告或Dart白名单自授。
+
+允许设备档仅为实际自报manufacturer=OnePlus、model=PLK110、soc_manufacturer=QTI、soc_model=SM8850、android_release=16、sdk_int=36、security_patch=2026-01-01、supported_abis=[arm64-v8a]、page_size=4096。固定模型qwen3-0.6b-mnn，artifact_digest `1ec59d439451738b4992f2ea5b06438788d752da81d55f11e1e8866d03fa7a57`；CPU/context2048/threads2/batch32/temperature0/top_p1/seed0/nonthinking，输入与max_tokens由版本化suite固定。
+
+实现范围限定独立验证器crate：同snapshot私有resolver与原MnnExecutor接入原Runtime，生产resolver仍须拒绝。原EventLease必须一直保留至有效ack或明确丢弃，不复制信用账本；JNI/UI仅置停止并唤醒，同步core控制及shutdown留在工作线程。未捕获的真实队列窗口记inconclusive，断流后不伪造本就不再发送的终态。原生清理不确认永久fail-closed。
+
+B3b现进入实现阶段，尚无B3b设备结果。完整后台各phase、Dart停止后的独立原生路径、SAF故障全集、重建/进程死亡、logcat、长期稳定性/温度/内存与16KiB设备仍未验证，保持对应后续门槛。
+
+
+## 12:23 UTC方向调整后的暂停边界
+
+用户要求回到Windows，安卓计划修改MNN Chat。独立验证器B3b源码WIP已停止，未提交、未发布，也没有新APK或B3b手机结果。作者已安全结束全部模型/测试/构建进程；32项Rust控制测试、clippy、Dart analyze与7项测试通过，B3a真实host55.22秒回归发生在最后ack小修正之前。最后ack原子退休补丁尚未独立复核，不把暂停源码标记可交付。见[ADR0013](../decisions/0013-windows-focus-and-android-mnn-chat.md)；既有0.1.1报告和限定研究审核作为历史事实保留。

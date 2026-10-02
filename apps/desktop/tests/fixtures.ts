@@ -17,6 +17,7 @@ export const model: ModelSummary = {
   quantization: "Q8_0",
   available: true,
   validated: true,
+  compatibility: "admitted",
   context_size: 2048,
   storage: "managed",
   availability_error: null,

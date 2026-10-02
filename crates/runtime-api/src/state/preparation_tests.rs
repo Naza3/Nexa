@@ -138,3 +138,76 @@ fn failed_preparation_changes_availability_and_page_generation() {
         Some("model_file_changed")
     );
 }
+
+#[test]
+fn compatibility_survives_source_failures_cancellation_and_prepare_retries() {
+    let summary = ModelSummary::from(super::import_outcome_tests::model());
+    assert_eq!(
+        summary.compatibility,
+        runtime_types::ModelCompatibility::TemplateUnvalidated
+    );
+    assert_eq!(
+        summary.availability_error.as_deref(),
+        Some("unsupported_model")
+    );
+    let id = summary.id.clone();
+    let registry = RwLock::new(RegistrySnapshot {
+        models: vec![summary],
+        generation: uuid::Uuid::new_v4(),
+    });
+    for source_code in [
+        ErrorCode::ModelFileChanged,
+        ErrorCode::ModelFileUnavailable,
+        ErrorCode::ModelFileInUse,
+    ] {
+        publish_preparation_result(
+            &registry,
+            &id,
+            &Err(RuntimeError::new(source_code, "private path")),
+        )
+        .unwrap();
+        let generation = registry.read().unwrap().generation;
+        for cancelled in [ErrorCode::ModelScanCancelled, ErrorCode::ModelScanTimeout] {
+            publish_preparation_result(
+                &registry,
+                &id,
+                &Err(RuntimeError::new(cancelled, "cancel")),
+            )
+            .unwrap();
+            let observed = registry.read().unwrap();
+            assert_eq!(observed.generation, generation);
+            assert_eq!(
+                observed.models[0].compatibility,
+                runtime_types::ModelCompatibility::TemplateUnvalidated
+            );
+            assert_eq!(
+                observed.models[0].availability_error.as_deref(),
+                Some(source_code.as_str())
+            );
+            assert!(!observed.models[0].available);
+        }
+    }
+    publish_preparation_result(
+        &registry,
+        &id,
+        &Err(RuntimeError::new(
+            ErrorCode::UnsupportedModel,
+            "not admitted",
+        )),
+    )
+    .unwrap();
+    assert_eq!(
+        registry.read().unwrap().models[0]
+            .availability_error
+            .as_deref(),
+        Some("unsupported_model")
+    );
+    // Even a successful source-only check cannot admit this model.
+    publish_preparation_result(&registry, &id, &Ok(())).unwrap();
+    let observed = registry.read().unwrap();
+    assert!(!observed.models[0].available);
+    assert_eq!(
+        observed.models[0].availability_error.as_deref(),
+        Some("unsupported_model")
+    );
+}

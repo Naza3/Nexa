@@ -128,6 +128,8 @@ pub struct MemoryStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelSummary {
     #[serde(default)]
+    pub compatibility: runtime_types::ModelCompatibility,
+    #[serde(default)]
     pub storage: model_store::ModelStorage,
     #[serde(default)]
     pub availability_error: Option<String>,
@@ -280,4 +282,45 @@ pub struct LibraryStopping {
 pub struct ModelLibraryObservation {
     pub supported: bool,
     pub directory: Option<ModelDirectoryInfo>,
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use runtime_types::ModelCompatibility;
+    use serde_json::json;
+
+    #[test]
+    fn api_compatibility_details_roundtrip_without_reinterpreting_source_failures() {
+        for compatibility in [
+            "admitted",
+            "architecture_unsupported",
+            "quantization_unvalidated",
+            "template_unvalidated",
+            "context_unvalidated",
+            "artifact_unvalidated",
+            "unvalidated",
+        ] {
+            let value = json!({
+                "id":"fixture", "display_name":"中文 模型", "size_bytes":64,
+                "sha256":"0".repeat(64), "architecture":"qwen3", "quantization":"Q8_0",
+                "validated":false, "available":false, "context_size":null,
+                "storage":"external", "availability_error":"model_file_changed",
+                "compatibility":compatibility
+            });
+            let summary: ModelSummary = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(summary).unwrap(), value);
+            let mut legacy = value;
+            legacy.as_object_mut().unwrap().remove("compatibility");
+            let summary: ModelSummary = serde_json::from_value(legacy.clone()).unwrap();
+            assert_eq!(summary.compatibility, ModelCompatibility::Unknown);
+            legacy["compatibility"] = json!("future_status");
+            let summary: ModelSummary = serde_json::from_value(legacy).unwrap();
+            assert_eq!(summary.compatibility, ModelCompatibility::Unknown);
+            assert_eq!(
+                summary.availability_error.as_deref(),
+                Some("model_file_changed")
+            );
+        }
+    }
 }

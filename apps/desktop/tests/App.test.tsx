@@ -29,6 +29,37 @@ const terminal: ChatBatch = {
 };
 
 describe("desktop React interaction", () => {
+  it("shows registered metadata, exact admission and source failures separately without enabling a candidate", async () => {
+    const candidate = {
+      ...model,
+      id: "candidate",
+      architecture: "qwen35",
+      validated: false,
+      available: false,
+      compatibility: "architecture_unsupported" as const,
+      availability_error: "model_file_changed",
+    };
+    const { api, user } = await mount({
+      modelsPage: vi.fn(async () => ({
+        data: [candidate],
+        next_after: null,
+        generation: "generation-1",
+      })),
+    });
+    expect(screen.getByText("登记时已识别 GGUF")).toBeInTheDocument();
+    expect(screen.getByText("本版本精确矩阵未准入")).toBeInTheDocument();
+    expect(screen.getByText("引擎架构范围：不支持此架构")).toBeInTheDocument();
+    expect(screen.getByText(/源文件已变动/)).toBeInTheDocument();
+    expect(screen.queryByText("尚未校验")).not.toBeInTheDocument();
+    const load = screen.getByRole("button", { name: "当前不可用" });
+    expect(load).toBeDisabled();
+    await user.click(load);
+    expect(api.loadModel).not.toHaveBeenCalled();
+    await user.click(screen.getByText("模型信息"));
+    expect(screen.getByText(/不代表当前文件完整性/)).toBeVisible();
+    expect(screen.getByText(`登记时 SHA-256：${model.sha256}`)).toBeVisible();
+  });
+
   it("shows three pages and unknown backend honestly, including keyboard navigation", async () => {
     const { user } = await mount();
     expect(screen.getByText(/原生后端观测：unavailable/)).toBeInTheDocument();

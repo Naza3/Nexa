@@ -346,3 +346,50 @@ fn windows_preexisting_writer_prevents_registration_guard() {
     drop(writer);
     assert!(scan_directory(data.path(), source.path(), None, &ScanControl::default()).is_ok());
 }
+
+#[test]
+fn unadmitted_external_source_failure_precedes_compatibility_without_rehashing() {
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("候选 模型.gguf");
+    fs::write(&path, gguf()).unwrap();
+    let library = scan(data.path(), source.path(), None);
+    let manifest = library.models[0].manifest.clone();
+    let encoded = library.encode().unwrap();
+    fs::write(data.path().join(LIBRARY_FILE), &encoded).unwrap();
+    let store = ModelStore::open(data.path()).unwrap();
+    assert_eq!(
+        manifest.compatibility(),
+        runtime_types::ModelCompatibility::TemplateUnvalidated
+    );
+    assert_eq!(
+        store
+            .prepare_external(&manifest.id, &ScanControl::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::UnsupportedModel
+    );
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(1)
+        .unwrap();
+    assert_eq!(
+        store
+            .prepare_external(&manifest.id, &ScanControl::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::ModelFileChanged
+    );
+    fs::remove_file(&path).unwrap();
+    assert_eq!(
+        store
+            .prepare_external(&manifest.id, &ScanControl::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::ModelFileUnavailable
+    );
+    assert_eq!(store.get(&manifest.id).unwrap(), manifest);
+    assert_eq!(fs::read(data.path().join(LIBRARY_FILE)).unwrap(), encoded);
+}

@@ -378,10 +378,14 @@ fn publish_preparation_result(
             "model registration unavailable",
         ));
     };
+    // Compatibility remains a separate registered-metadata observation. A
+    // source failure takes precedence; successful preparation must not clear a
+    // model's admission failure (including in synthetic/test observations).
     let code = result
         .as_ref()
         .err()
-        .map(|error| error.code.as_str().to_owned());
+        .map(|error| error.code.as_str().to_owned())
+        .or_else(|| (!model.validated).then(|| ErrorCode::UnsupportedModel.as_str().into()));
     let available = result.is_ok() && model.validated;
     if model.available != available || model.availability_error != code {
         model.available = available;

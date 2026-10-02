@@ -150,11 +150,26 @@ async fn safe_model_summaries_paginate_without_exposing_manifest_or_sources() {
         assert_eq!(status, StatusCode::OK, "{result}");
         assert_eq!(result["id"], id);
         assert_eq!(result["model"]["validated"], false);
+        assert_eq!(result["model"]["compatibility"], "template_unvalidated");
+        assert_eq!(result["model"]["availability_error"], "unsupported_model");
     }
     let (status, page) = harness.call("GET", "/runtime/models?limit=2", "").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(page["data"].as_array().unwrap().len(), 2);
     assert_eq!(page["next_after"], "b");
+    assert_eq!(page["data"][0]["compatibility"], "template_unvalidated");
+    assert_eq!(page["data"][0]["availability_error"], "unsupported_model");
+    // Registration does not permit load or the existing direct-chat auto-load.
+    for (path, request) in [
+        ("/runtime/load", json!({"model":"a","context_size":2048})),
+        (
+            "/v1/chat/completions",
+            json!({"model":"a","messages":[{"role":"user","content":"test"}]}),
+        ),
+    ] {
+        let (_, error) = harness.call("POST", path, &request.to_string()).await;
+        assert_eq!(error["error"]["code"], "unsupported_model");
+    }
     let encoded = page.to_string();
     for forbidden in [
         "source",

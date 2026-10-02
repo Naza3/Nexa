@@ -15,6 +15,8 @@
 
 ## 2. 产品边界
 
+当前排期按[ADR0013](docs/decisions/0013-windows-focus-and-android-mnn-chat.md)：优先Windows；Nexa独立Android App自研暂停，用户计划通过修改MNN Chat实现安卓模型API服务。以下Android架构保留为历史研究边界，不自行恢复该开发线。
+
 Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。首个业务场景为 Telegram 群消息摘要；Windows 保持现有验证客户端范围；Android 应用能力对标 MNN Chat，按[ADR0009](docs/decisions/0009-android-mnn-chat-product.md)与[产品计划](docs/android-app-parity.md)分阶段交付。
 
 - Rust 管理协议、模型、调度和生命周期；Windows 使用 llama.cpp，Android 主引擎采用 MNN，各自以 C++ shim 封装原生边界。Android 不先实现 llama 路线，见 [ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)。

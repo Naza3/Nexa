@@ -135,3 +135,7 @@
 - [c0c0927最终研究APK与Android CI交付记录](docs/verification/2026-10-02-android-device-verifier-delivery.md)
 
 - [共享core取消与真实故障修正](docs/verification/2026-10-02-core-cancellation-faults.md)：普通取消不掩盖真实错误、shutdown当次故障保留及226项控制回归
+
+- [当前Windows重点与Android路线调整](docs/decisions/0013-windows-focus-and-android-mnn-chat.md)：独立Android App暂停，保留研究结果
+
+- [Windows模型兼容性与API示例验证](docs/verification/2026-10-02-windows-model-compatibility.md)：准入原因、旧客户端兼容、144项Rust与74项前端回归

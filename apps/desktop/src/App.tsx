@@ -9,6 +9,7 @@ import {
 } from "./controller";
 import type { ViewState } from "./controller";
 import type { Preferences, RuntimeStatus, Settings } from "./types";
+import { modelCompatibility } from "./modelCompatibility";
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -280,17 +281,6 @@ function RuntimeBanner({
       </div>
     );
   return null;
-}
-function availabilityMessage(code: string) {
-  const labels: Record<string, string> = {
-    model_file_changed: "源文件已变动，请停止服务后重新扫描",
-    model_file_unavailable: "源文件已失踪或无法读取",
-    model_file_in_use: "源文件被写入程序占用，请释放后重试",
-    unsupported_model: "模型不在当前支持范围",
-    model_directory_unavailable: "源目录无法读取",
-    model_library_unsupported: "请停止服务后启动匹配版本",
-  };
-  return labels[code] ?? "模型当前不可用，请检查源文件后重试";
 }
 function DirectoryStateNotice({ state }: { state: ViewState }) {
   const directory = state.snapshot?.model_directory;
@@ -687,6 +677,7 @@ function ModelsPage({
             {state.models.data.map((model) => {
               const current = model.id === runtime?.selected_model && loaded;
               const mustUnload = loaded && !current;
+              const compatibility = modelCompatibility(model);
               return (
                 <article
                   key={model.id}
@@ -709,18 +700,24 @@ function ModelsPage({
                       <span>{model.quantization || "量化未知"}</span>
                       <span>{model.architecture || "架构未知"}</span>
                       <span>{formatSize(model.size_bytes)}</span>
-                      <span>{model.validated ? "已校验" : "尚未校验"}</span>
+                      <span>登记时已识别 GGUF</span>
+                      <span>{compatibility.admission}</span>
                     </div>
+                    <p className="small-note">{compatibility.architecture}</p>
                     <details>
                       <summary>模型信息</summary>
                       <p className="hash">API ID：{model.id}</p>
-                      <p className="hash">SHA-256：{model.sha256}</p>
-                      <p>模型上下文：{model.context_size ?? "未知"}</p>
+                      <p className="hash">登记时 SHA-256：{model.sha256}</p>
+                      <p>已验证运行上下文：{model.context_size ?? "未准入"}</p>
+                      <p>
+                        兼容性依据登记元数据，不代表当前文件完整性；加载时仍须核验源文件。
+                      </p>
                     </details>
-                    {model.availability_error && (
+                    {compatibility.reason && (
                       <p className="warning-text small-note">
-                        {availabilityMessage(model.availability_error)}（
-                        {model.availability_error}）
+                        {compatibility.reason}
+                        {model.availability_error &&
+                          `（${model.availability_error}）`}
                       </p>
                     )}
                     {state.models.data.filter(
@@ -750,7 +747,7 @@ function ModelsPage({
                     {current
                       ? "已加载"
                       : !model.available
-                        ? "当前不可用"
+                        ? compatibility.unavailableLabel
                         : runtime?.state === "faulted" &&
                             model.id === runtime.selected_model
                           ? "重新加载"

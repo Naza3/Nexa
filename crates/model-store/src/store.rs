@@ -383,6 +383,12 @@ impl ModelStore {
         };
         control.check()?;
         if !entry.manifest.validated {
+            // A stale/missing source is actionable even when its registered
+            // metadata was never admitted. This bounded identity observation
+            // performs no hash and must not be mistaken for load verification.
+            if let Some(code) = library.availability(entry) {
+                return Err(library_error(code));
+            }
             return Err(library_error(ErrorCode::UnsupportedModel));
         }
         let _gate = self

@@ -714,14 +714,15 @@ $aiExe = Join-Path $PWD 'dist/windows-x64-cpu/ai-runtime.exe'
 $aiData = Join-Path $env:TEMP ('Nexa manual test ' + [Guid]::NewGuid().ToString('N'))
 & $aiExe --data-dir $aiData init
 & $aiExe --data-dir $aiData models import --id qa-small --file 'C:\models\qa-small.gguf'
+Write-Host ('本次 data-dir：' + $aiData)
 & $aiExe --data-dir $aiData serve
 ```
 
-终端 B，同样在项目根目录运行：
+终端 B，同样在项目根目录运行。复制终端 A 显示的数据目录路径，两个终端必须指向同一实例；只传递目录路径，不打印或分享令牌：
 
 ```powershell
 $aiExe = Join-Path $PWD 'dist/windows-x64-cpu/ai-runtime.exe'
-$aiData = Join-Path $env:TEMP ('Nexa manual test ' + [Guid]::NewGuid().ToString('N'))
+$aiData = Read-Host '粘贴终端 A 显示的完整 data-dir 路径（不要重新生成目录）'
 $apiToken = (Get-Content -Raw (Join-Path $aiData 'secrets/api-token')).Trim()
 & $aiExe --data-dir $aiData load qa-small --backend cpu --context 2048 --threads 2 --batch 128
 & $aiExe --data-dir $aiData status

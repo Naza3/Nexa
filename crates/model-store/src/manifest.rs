@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use runtime_types::{ErrorCode, ModelId, RuntimeError};
+use runtime_types::{ErrorCode, ModelCompatibility, ModelId, RuntimeError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -293,6 +293,27 @@ impl ModelManifest {
         }
     }
 
+    /// Explains registered metadata without touching model bytes or changing the
+    /// execution gate. Callers must still validate the manifest and verify the
+    /// actual source through the existing store/load path.
+    pub fn compatibility(&self) -> ModelCompatibility {
+        if self.architecture != "qwen3" {
+            ModelCompatibility::ArchitectureUnsupported
+        } else if self.gguf_file_type != 7 || self.quantization != "Q8_0" {
+            ModelCompatibility::QuantizationUnvalidated
+        } else if self.template_sha256 != TEMPLATE_SHA256 {
+            ModelCompatibility::TemplateUnvalidated
+        } else if self.context_limit != 40_960 || self.default_context != VALIDATED_CONTEXT {
+            ModelCompatibility::ContextUnvalidated
+        } else if self.sha256 != MODEL_SHA256 || self.size_bytes != MODEL_SIZE {
+            ModelCompatibility::ArtifactUnvalidated
+        } else if self.validated && self.capabilities.chat {
+            ModelCompatibility::Admitted
+        } else {
+            ModelCompatibility::Unvalidated
+        }
+    }
+
     fn matches_matrix(&self) -> bool {
         self.sha256 == MODEL_SHA256
             && self.size_bytes == MODEL_SIZE
@@ -435,6 +456,40 @@ mod tests {
             assert!(mutated.validate().is_err());
         }
     }
+    #[test]
+    fn compatibility_explains_exact_matrix_in_stable_priority_without_admitting_candidates() {
+        use ModelCompatibility::*;
+        let admitted = known();
+        assert_eq!(admitted.compatibility(), Admitted);
+        let mut candidate = admitted;
+        candidate.validated = false;
+        candidate.validated_llama_commit = None;
+        candidate.validation = None;
+        candidate.capabilities = Capabilities::default();
+        assert_eq!(candidate.compatibility(), Unvalidated);
+        candidate.sha256 = "0".repeat(64);
+        assert_eq!(candidate.compatibility(), ArtifactUnvalidated);
+        candidate.default_context = 4096;
+        assert_eq!(candidate.compatibility(), ContextUnvalidated);
+        candidate.template_sha256 = "1".repeat(64);
+        assert_eq!(candidate.compatibility(), TemplateUnvalidated);
+        candidate.gguf_file_type = 2;
+        candidate.quantization = "Q4_0".into();
+        assert_eq!(candidate.compatibility(), QuantizationUnvalidated);
+        for architecture in ["llama", "qwen35", "qwen3moe"] {
+            candidate.architecture = architecture.into();
+            assert_eq!(candidate.compatibility(), ArchitectureUnsupported);
+            assert!(candidate.validate().is_ok());
+            assert!(!candidate.validated);
+            assert!(!candidate.capabilities.chat);
+        }
+        let mut different_length = known();
+        different_length.size_bytes -= 1;
+        assert_eq!(different_length.compatibility(), ArtifactUnvalidated);
+        // Labeling never repairs an inconsistent admission claim.
+        assert!(different_length.validate().is_err());
+    }
+
     #[test]
     fn missing_verification_fields_cannot_retain_validated_claim() {
         let mut json = serde_json::to_value(known()).unwrap();

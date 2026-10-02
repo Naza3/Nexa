@@ -4,6 +4,9 @@
 
 ## 当前目标与授权
 
+**2026-10-02 12:23 UTC最新方向：当前开发回到Windows。用户计划安卓通过修改MNN Chat实现，Nexa独立Android App自研暂停；下文Android路线与B3b为历史/保留研究，不作为当前待继续的产品排期。已完成的共享core修复继续Windows回归，App未提交WIP保留且不构建新APK。后续修改MNN Chat需独立确定仓库与任务，不自动开展。**
+
+
 用户已明确要求按照文档规划实施，并允许本地检查通过后推送新的开发分支、增加和运行 Windows GitHub Actions。未授权合并或部署。Android 应用能力目标更新为对标 MNN Chat，见[ADR0009](docs/decisions/0009-android-mnn-chat-product.md)；不自动纳入账号、遥测上传、网络服务或后台常驻。首个业务仍是 Telegram 群摘要；来源、触发、样本与保留策略保持待决，不自行登录账号或向群发送摘要。
 
 Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GGUF。Android已确定采用MNN，CPU、OpenCL、QNN v79/v81与直接Hexagon均纳入计划，不先做Android llama。面向Snapdragon 8 Elite及后续，公开首测参考OnePlus 15 / SM8850 / v81，SM8750 / v79为兼容档；实际系统、驱动、ABI/页大小、内存和持续性能待诊断。方向与门槛见[ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)及[执行计划](docs/t07-android-mnn-plan.md)，不从型号推导支持或性能保证。
@@ -58,7 +61,7 @@ B2实现已推送`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`；[CI36970559016](ht
 | T04 HTTP/CLI | 已完成 | ccb2053在Windows CI36816604494通过：212项Rust、37项API分层测试、真实DACL/Job、5项旧真实回归、无native CLI及真实HTTP50（89pass/9skip）；Linux214项回归通过；范围见T04记录 |
 | T05 Windows发行 | 已完成 | 6a7e9d0的CI36829233039已通过真实Release便携包/独立工具、PE与许可/hash、中文空格路径和HTTP50；独立Windows 10短验已通过；按当前阶段范围收口；A20无开发工具/离线及长期稳定性移至后期验证 |
 | T06 Windows UI | 待验证 | 新目录/诊断源码75e458f的CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包及解压bridge验收通过；产物独立复核通过并已交付；新目录原生UI仍未测 |
-| T07 Android核心 | 进行中 | c0c0927的T07-A/B完整CI和独立证据核验通过；固定MNN CPU模型store/Executor真实链及Android链接完成。B3a修复APK07a14d2已交付，固定设备失焦/后台取消/恢复报告已核验，等待无自动重放事实确认；同提交Windows回归成功；生产准入、B3b/core设备门槛及GPU/NPU未通过 |
+| T07 Android核心 | 进行中 | c0c0927的T07-A/B完整CI和独立证据核验通过；固定MNN CPU模型store/Executor真实链及Android链接完成。B3a修复APK07a14d2已交付，固定设备失焦/后台取消/恢复报告已核验，无自动重放已获用户明确确认；同提交Windows回归成功；生产准入、B3b/core设备门槛及GPU/NPU未通过 |
 | T08 Android App | 未开始 | MNN Chat能力对标目标已确定；首个可用APK需目录/下载/导入/存储、多会话、设置与诊断，依赖T07-B/C安全门槛；无完整产品APK或真机证据，独立B3a研究验证APK另行交付 |
 | T09 发布验收 | 未开始 | A01–A26完整矩阵未执行 |
 | T10 平台/后端扩展 | 未开始 | Android后端纳入T07-D～F单列验收；其余扩展未开始，Linux仍仅开发探针 |
@@ -137,3 +140,22 @@ c0c0927（tree c12fc577）的两套Android CI已成功，12阶段native与13份p
 App内已修复仅失焦inactive被误当后台、未请求原生取消的错误分类、并发停止掩盖真实故障及报告原因覆盖。优先级为清理不确认 > 真实故障 > 有证据的取消 > 正常完成；内部取消用例须有实际发起/检查点证据。Kotlin原生onStop边界保持，Dart只在hidden/paused/detached冗余取消。
 
 18项Rust控制测试、7项Dart/实际生命周期observer测试、clippy/analyze、完整真实host56.38秒通过；预提交0.1.1/code2 APK已检查同证书、三库与16KiB/许可闭包。报告版本单源读取pubspec，默认导出TXT但仍为原始JSON字节。最终安装包须绑定正式提交后重新构建；还需新包smoke、仅失焦不中断、后台取消/卸载及回前台不重放的最短手机补验，旧c0证据不自动迁移。B3b仍未启用。
+
+
+## 最新：B3b 私有研究接入（11:39 UTC）
+
+07a14d2最终修复包已完成上述最短设备补验，用户11:36明确确认回前台不自动重跑、手动启动后恢复；Windows36993778258成功且50份库存文件独立核验。ADR0011二次审核通过，review_id android-b3b-cpu-07a14d2-20261002，限定原OnePlus/PLK110/SM8850/Android16/4KiB与固定CPU模型参数，见[审核记录](docs/verification/2026-10-02-android-device-verifier-delivery.md#b3b-私有研究域二次审核)。
+
+B3b此前开始实现验证器内部共享Runtime接入、原EventLease贯穿ack、队列/取消/断流/安全shutdown套件。尚未构建交付或通过B3b设备验收；生产resolver与支持矩阵保持拒绝，不把研究资格写成产品支持。
+
+
+## 当前切换：Windows继续，Android WIP暂停
+
+共享core99aeba44af146a3e8f805d58abbfb0709ddd37ff已完成226项本地控制回归与clippy；Windows37004301787已成功，50项库存与源码身份独立核验通过。Android helper路径期望漏项已由a67c109修正，仅收尾已启动的两套CI，不作为继续Android产品开发的授权。
+
+独立B3b App源码未提交、未发布、无新APK和手机结果；保留既有0.1.1设备证据与本次私有研究设计。最后ack原子退休小补丁待独立复核，不宣称整个WIP可交付。当前Windows下一片须从T06模型管理/API runtime实际缺口选取，不为安卓继续增加FGS、网络或聊天功能。
+
+
+## Windows 当前实施片：模型兼容性可见性
+
+不重造已有模型列表/聊天补全API。补充API→desktop bridge→模型页一致的兼容性原因，区分登记元数据、当前架构范围与精确矩阵准入，保留所有现有load与external文件完整性门槛。修正手工HTTP示例让两个终端使用同一data-dir；此前各自新GUID会误读不存在令牌。实现与自动回归进行中，新Windows安装包和原生UI仍待后续验收。

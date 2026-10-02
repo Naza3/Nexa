@@ -596,7 +596,9 @@ h3 {
 .model-meta {
   display: flex;
   align-items: center;
-  gap: 0;
+  flex-wrap: wrap;
+  column-gap: 0;
+  row-gap: 6px;
   margin-top: 8px;
   font-size: 11px;
   color: #6b7586;

@@ -6,6 +6,9 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+mod model_compatibility;
+pub use model_compatibility::ModelCompatibility;
+
 mod scheduler;
 pub use scheduler::*;
 

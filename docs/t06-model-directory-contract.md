@@ -89,6 +89,14 @@ snapshot新增：
 
 新服务从启动时实际读取的catalog保存effective身份；其他客户端改配置或另一实例启动导致library_generation不同，bridge清空已选模型/分页缓存并显示stale，不偷换模型继续生成。模型加载/聊天仍按现有ID及已证明实例操作，不按前端展示文字选模型。
 
+### 模型兼容性说明（Windows）
+
+ModelSummary新增向后兼容字符串字段`compatibility`，由注册manifest元数据与本版本固定矩阵纯计算，不额外在列表请求整文件hash。值为`admitted`、`architecture_unsupported`、`quantization_unvalidated`、`template_unvalidated`、`context_unvalidated`、`artifact_unvalidated`、`unvalidated`；旧服务缺字段或未来未知值在桌面端显示`unknown`，文案为“未提供兼容性详情”，不能据此授予运行支持。
+
+`validated`与实际load/chat准入规则不变。未准入时`availability_error`使用既有`unsupported_model`，细原因由compatibility承载；文件/目录失效等实际错误优先显示。例：同qwen3/Q8_0但非精确受审资产为validated=false、available=false、compatibility=artifact_unvalidated、availability_error=unsupported_model。
+
+UI区分登记时识别的GGUF/架构信息、当前引擎范围与精确运行矩阵；不把未准入叫“尚待校验”，也不把历史导入/扫描结果冒充当前完整性保证。外部文件仍在实际prepare/load时完整校验，源变更不得通过兼容性提示绕过。当前仅固定Qwen3-0.6B Q8_0组合准入，Qwen3.5和其他GGUF须另行验证引擎、模板、资产及真实运行。
+
 ## 8. 受控错误与验收
 
 复用 runtime_running、desktop_busy、request_not_owned 等既有错误；新边界需要明确安全code：model_library_unsupported、model_directory_required、model_directory_unavailable、model_directory_unsupported、model_library_limit、model_library_changed、model_list_changed、model_scan_timeout、model_scan_cancelled、model_file_changed、model_file_unavailable、model_file_in_use、model_library_write_failed。错误正文不包含token、完整源路径或任意底层异常。
