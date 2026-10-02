@@ -1,0 +1,11 @@
+.dart_tool/
+.flutter-plugins-dependencies
+.idea/
+*.iml
+*.log
+*.pyc
+/build/
+/build-input/
+/coverage/
+/rust/target/
+/rust/frb_generated.h

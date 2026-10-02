@@ -1,3 +1,4 @@
+mod research_receipt;
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 #[test]
@@ -26,17 +27,36 @@ const MODEL_DIGEST: &str = "1ec59d439451738b4992f2ea5b06438788d752da81d55f11e1e8
 pub(super) struct ResearchCpuEvidence;
 impl ResearchCpuEvidence {
     fn verify(build: &mnn_adapter::BuildIdentity) -> Result<Self, RuntimeError> {
-        // Ubuntu record: independently inspected B1 Linux native + adapter
-        // reports, https://github.com/Naza3/Nexa/actions/runs/36966789118.
-        // That full job failed later in Android export; it grants no Android admission.
-        let (compiler, artifact) = match build.compiler.as_str() {
-            "c++ (Debian 14.2.0-19) 14.2.0" => (
+        // CI must consume same-run B1 proof; a missing/bad receipt never falls
+        // back to any static record. These environment reads compile only here.
+        if std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+            || std::env::var_os("NEXA_MNN_B2_RESEARCH_RECEIPT").is_some()
+        {
+            research_receipt::verify(build)
+                .map_err(|_| error(ErrorCode::UnsupportedModel, "research receipt rejected"))?;
+            return Ok(Self);
+        }
+        // Explicit local Debian evidence independently exercised by native owner
+        // and root adapter checks. No current-build self-admission is performed.
+        let (compiler, artifact, patch) = match (
+            build.compiler.as_str(),
+            build.artifact_manifest_sha256.as_str(),
+        ) {
+            (
                 "c++ (Debian 14.2.0-19) 14.2.0",
                 "53eab05ec35465082f784af6e305635376e9e12f8284cc4d208d1f5f40448450",
+            ) => (
+                "c++ (Debian 14.2.0-19) 14.2.0",
+                "53eab05ec35465082f784af6e305635376e9e12f8284cc4d208d1f5f40448450",
+                "43cc33146e2036ff452bd02d5ec352bb099d143ed4a4cdeb6ff55335987f9ce0",
             ),
-            "g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0" => (
-                "g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
-                "88c287f25394d6b4565d108592947c1973e7739187ff93e22a45391941450adc",
+            (
+                "c++ (Debian 14.2.0-19) 14.2.0",
+                "b8b4d8efb06388f49c6457d177997f2bf630c5dceeb9ec190d3cc245a313372d",
+            ) => (
+                "c++ (Debian 14.2.0-19) 14.2.0",
+                "b8b4d8efb06388f49c6457d177997f2bf630c5dceeb9ec190d3cc245a313372d",
+                "dfe571d08b1583e39d7ce271eb289ebc91c06b88261a3c83fdef1e53dc062b80",
             ),
             _ => {
                 return Err(error(
@@ -47,7 +67,7 @@ impl ResearchCpuEvidence {
         };
         let expected = mnn_adapter::BuildIdentity {
             upstream_commit: "d407447ed56c4121a11ccbd266dc184ca1ead0c2".into(),
-            patch_sha256: "43cc33146e2036ff452bd02d5ec352bb099d143ed4a4cdeb6ff55335987f9ce0".into(),
+            patch_sha256: patch.into(),
             policy_sha256: "ea06621b78e67e58f97f98951b26db0a8a893ded4112da3e5a762b98566fa328"
                 .into(),
             artifact_manifest_sha256: artifact.into(),
@@ -581,4 +601,28 @@ fn real_owner_fault_reload_load_timeout_and_idle() {
     released.store(true, Ordering::Release);
     owner.join().unwrap();
     store.remove_generation(&model_id()).unwrap();
+}
+
+#[test]
+fn ci_receipt_missing_or_invalid_never_uses_static_evidence() {
+    if std::env::var_os("NEXA_RECEIPT_NEGATIVE_CHILD").is_some() {
+        assert!(ResearchCpuEvidence::verify(&mnn_adapter::build_identity().unwrap()).is_err());
+        return;
+    }
+    for ci in ["true", "false"] {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "tests::ci_receipt_missing_or_invalid_never_uses_static_evidence",
+            ])
+            .env("NEXA_RECEIPT_NEGATIVE_CHILD", "1")
+            .env("GITHUB_ACTIONS", ci)
+            .env_remove("NEXA_MNN_B2_CONTEXT")
+            .env_remove("NEXA_MNN_B2_RESEARCH_RECEIPT");
+        if ci == "false" {
+            child.env("NEXA_MNN_B2_RESEARCH_RECEIPT", "/nonexistent/receipt.json");
+        }
+        assert!(child.output().unwrap().status.success());
+    }
 }

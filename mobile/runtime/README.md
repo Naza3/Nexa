@@ -102,6 +102,12 @@ cargo test --manifest-path mobile/runtime/Cargo.toml --locked --offline \
   -p mnn-model-store -p mnn-executor -- --ignored --test-threads=1
 ```
 
-四项默认 ignored 门禁及精确名称在两个 crate 的源码中；没显式运行不算真实验证。研究工厂接受的 native fingerprint 只在测试源维护，不接受任意当次 build_info 自动自授。CPU/多轮/等预算与超 1/stop/取消恢复/断流/故障 reload/慢消费/close/Drop 是不同断言。背压测试在**真实 native 首个 text callback**内注入明确合成数据占满 core 原账本，不声称自然生成了 256KiB；默认 10 秒真实等待与取消唤醒分报。load-timeout 用真实 native checkpoint 的测试屏障证实 deadline 不提前确认清理；并非测得 30 秒 native 内核耗时。
+四项默认 ignored 门禁及精确名称在两个 crate 的源码中；没显式运行不算真实验证。本地无凭据时只接受测试源维护的明确受审 Debian 完整 native fingerprint。CI 改为消费同次七个真实 B1 前置生成的45分钟内只读研究凭据；缺失/损坏不得静态回退，不接受单独 build_info 自授。凭据与环境变量只编译于 executor 的私有 cfg(test) 模块，生产 resolver 无入口；详见 [CI门禁](../../scripts/android_mnn/B1_CI.md)和 [ADR0012](../../docs/decisions/0012-ci-research-evidence-receipts.md)。CPU/多轮/等预算与超 1/stop/取消恢复/断流/故障 reload/慢消费/close/Drop 是不同断言。背压测试在**真实 native 首个 text callback**内注入明确合成数据占满 core 原账本，不声称自然生成了 256KiB；默认 10 秒真实等待与取消唤醒分报。load-timeout 用真实 native checkpoint 的测试屏障证实 deadline 不提前确认清理；并非测得 30 秒 native 内核耗时。
 
 Android 新增两个 lib-test ELF 需完整交叉链接和 16KiB LOAD/RELRO 检查；交叉链接、Linux 实测、目标设备运行分开记录。独立依赖与符号检查要求 root workspace 无 MNN、所有共享依赖版本与根 lock 精确相同，生产 rlib 无 ResearchCpuEvidence 或测试压力入口。
+
+
+同次研究凭据已在2026-10-02的本地完整12阶段中实际完成B1→receipt→四项B2，并重链/检查五个Android ELF；
+最终proof/receipt上传原字节摘要复现。该证据明确为local dirty工作区，clean CI总门禁按预期拒绝，
+不能当作新提交GitHub成功或Android运行。独立只读审查及receipt 11项Python测试通过；
+范围与本地限制见[验证记录](VERIFICATION.md)和[CI记录](../../scripts/android_mnn/B1_CI.md)。

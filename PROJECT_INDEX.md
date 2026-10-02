@@ -117,9 +117,18 @@
 
 ## 验证入口的真实性
 
-当前已有Cargo、原生、React前端和独立Tauri工程，尚无Flutter工程。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及独立Windows 10手工短验已通过，T05按当前阶段范围完成，A20无开发工具/离线与长期稳定性延后验证。T06已通过bc43e0f3的Windows CI36864041027与完整Release bridge/独立桌面包核验，另有独立手工验收确认旧包启动/导入/聊天/停止与两种关闭；最新外部目录源码75e458f的Windows CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包和解压bridge验收通过；下载产物独立复核通过并已交付，新目录原生UI仍未测，详见[T06最终目录版记录](docs/verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
+当前已有Cargo、原生、React前端和独立Tauri工程，已有独立Flutter设备研究验证工程apps/android-verifier，尚未完成目标手机验收。T04已新增产品CLI和xtask api-smoke；T05已有Windows专用build/独立验收器，6a7e9d0的固定Server2022 Release CI及独立Windows 10手工短验已通过，T05按当前阶段范围完成，A20无开发工具/离线与长期稳定性延后验证。T06已通过bc43e0f3的Windows CI36864041027与完整Release bridge/独立桌面包核验，另有独立手工验收确认旧包启动/导入/聊天/停止与两种关闭；最新外部目录源码75e458f的Windows CI36948947690已成功，native job110657335010含真实模型/runtime/HTTP/CLI、桌面包和解压bridge验收通过；下载产物独立复核通过并已交付，新目录原生UI仍未测，详见[T06最终目录版记录](docs/verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。执行规格第12节的通用check、contract套件与adb install仍按阶段推进，当前可运行范围见xtask/README.md、API/CLI README和状态文件。
 
 - 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
 - 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。
 - 真实推理：必须记录模型 hash、模板、后端、设备和输入版本；未测不填零或通过。
 - 摘要：必须核对覆盖、引用、事实归因和整份任务耗时，文本非空不等于质量合格。
+
+
+## Android 设备研究验证新增入口
+
+- [B3a 验证域与 JNI/FD 边界](docs/decisions/0011-android-device-verifier-domain.md)
+- [设备验证器计划](docs/t07c-android-verifier-plan.md)
+- [CI 研究证据收据决策](docs/decisions/0012-ci-research-evidence-receipts.md)
+- [设备研究 App](apps/android-verifier/README.md)：固定 CPU 验证、导入与报告；不是完整聊天产品
+- [一加15首轮安装与模型/报告验收](docs/android-device-verifier-acceptance.md)

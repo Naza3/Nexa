@@ -221,7 +221,19 @@ fn finish(state: &State, events: &ExecutionEvents, event: ExecutorEvent) {
     state.busy.store(false, Ordering::Release);
     events.emit(event);
 }
+fn pin_unconfirmed<T>(resource: &mut Option<T>, state: &State) {
+    // A later successful close cannot disprove an earlier ownership failure.
+    std::mem::forget(resource.take());
+    state.failed.store(true, Ordering::Release);
+}
 fn cleanup(model: &mut Option<(Model, LoadLease)>, state: &State) -> Result<(), RuntimeError> {
+    if state.failed.load(Ordering::Acquire) {
+        pin_unconfirmed(model, state);
+        return Err(error(
+            ErrorCode::ExecutorCleanupUnconfirmed,
+            "MNN cleanup remains unconfirmed",
+        ));
+    }
     if let Some((mut native, lease)) = model.take() {
         if native.close().is_err() {
             // Native ownership is unconfirmed: pin both handle and its files permanently.
@@ -313,7 +325,10 @@ fn owner(receiver: Receiver<Job>, snapshot: Arc<MnnRegistrySnapshot>, state: Arc
                     Some((native, _)) => {
                         let (event, fault) =
                             generate(native, request, &job.cancel, &job.events, &state);
-                        if fault {
+                        if matches!(event, ExecutorEvent::CleanupUnconfirmed(_)) {
+                            pin_unconfirmed(&mut model, &state);
+                            event
+                        } else if fault {
                             if let Err(e) = cleanup(&mut model, &state) {
                                 ExecutorEvent::CleanupUnconfirmed(e)
                             } else {
@@ -469,27 +484,82 @@ fn generate(
                 ),
             }
         }
-        Err(f) => {
-            let fault = f.cleanup_error.is_some()
-                || !matches!(
-                    f.error.kind,
-                    ErrorKind::Cancelled
-                        | ErrorKind::Budget
-                        | ErrorKind::Invalid
-                        | ErrorKind::Callback
-                );
-            (
-                ExecutorEvent::GenerationFailed {
-                    error: map_error(f.error),
-                    usage: Usage {
-                        prompt_tokens: f.usage.prompt_tokens as u32,
-                        completion_tokens: f.usage.completion_tokens as u32,
-                    },
-                },
-                fault,
-            )
-        }
+        Err(f) => generation_failure(f),
     }
 }
 #[cfg(test)]
 mod tests;
+
+fn generation_failure(f: mnn_adapter::GenerationFailure) -> (ExecutorEvent, bool) {
+    if f.cleanup_error.is_some() {
+        return (
+            ExecutorEvent::CleanupUnconfirmed(error(
+                ErrorCode::ExecutorCleanupUnconfirmed,
+                "MNN prepared cleanup was not confirmed",
+            )),
+            true,
+        );
+    }
+    let fault = !matches!(
+        f.error.kind,
+        ErrorKind::Cancelled | ErrorKind::Budget | ErrorKind::Invalid | ErrorKind::Callback
+    );
+    (
+        ExecutorEvent::GenerationFailed {
+            error: map_error(f.error),
+            usage: Usage {
+                prompt_tokens: f.usage.prompt_tokens as u32,
+                completion_tokens: f.usage.completion_tokens as u32,
+            },
+        },
+        fault,
+    )
+}
+#[cfg(test)]
+mod cleanup_regression {
+    use super::*;
+    fn failure(cleanup: bool) -> mnn_adapter::GenerationFailure {
+        mnn_adapter::GenerationFailure {
+            error: mnn_adapter::Error {
+                kind: ErrorKind::Cancelled,
+            },
+            cleanup_error: cleanup.then_some(mnn_adapter::Error {
+                kind: ErrorKind::Native,
+            }),
+            usage: mnn_adapter::Generation {
+                prompt_tokens: 2,
+                completion_tokens: 1,
+                resolved_seed: 0,
+                finish_reason: mnn_adapter::FinishReason::Cancelled,
+            },
+        }
+    }
+    #[test]
+    fn prepared_cleanup_failure_cannot_become_recoverable_cancellation() {
+        let (event, fault) = generation_failure(failure(true));
+        assert!(fault);
+        assert!(matches!(event, ExecutorEvent::CleanupUnconfirmed(_)));
+        let (event, fault) = generation_failure(failure(false));
+        assert!(!fault);
+        assert!(matches!(event, ExecutorEvent::GenerationFailed { .. }));
+    }
+    #[test]
+    fn unconfirmed_resources_are_pinned_and_cleanup_never_clears_failure() {
+        struct Resource(Arc<AtomicBool>);
+        impl Drop for Resource {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let state = State::default();
+        state.loaded.store(true, Ordering::Release);
+        let mut resource = Some(Resource(dropped.clone()));
+        pin_unconfirmed(&mut resource, &state);
+        assert!(resource.is_none());
+        assert!(!dropped.load(Ordering::Acquire));
+        assert!(state.failed.load(Ordering::Acquire));
+        assert!(cleanup(&mut None, &state).is_err());
+        assert!(state.loaded.load(Ordering::Acquire));
+    }
+}

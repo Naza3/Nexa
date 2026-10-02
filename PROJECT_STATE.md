@@ -13,7 +13,7 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 ## 已有工程事实
 
 - 原始远程提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168` 已通过 GitHub 原始对象精确重建本地 Git；初始 tree/commit SHA 一致，未创建替代历史
-- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建/桌面诊断/完整Release bridge已通过，旧包原生启动/导入/聊天/停止生成及两种关闭已有独立手工验收确认，剪贴板等其余分支待验证；已有独立mobile/runtime原生适配workspace，尚无移动App工程
+- Rust workspace 已有runtime-types、model-store、runtime-core、engine-host、llama-adapter、xtask；T03已有runtime-ipc、process-host、runtime-worker，Linux聚合及固定Windows进程隔离/真实模型已通过；T04新增HTTP/CLI并已完成固定Windows CI阶段验收；T06现已有desktop-bridge和React/Tauri桌面工程，Windows原生构建/桌面诊断/完整Release bridge已通过，旧包原生启动/导入/聊天/停止生成及两种关闭已有独立手工验收确认，剪贴板等其余分支待验证；已有独立mobile/runtime原生适配workspace与进行中的设备研究验证App（尚非MNN Chat对标产品）
 - llama.cpp submodule 锁定 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；Rust 1.98.1 与 Cargo.lock 已锁定
 - 自有 C ABI 实现模板、分词、精确逻辑预算、prefill/decode、采样、跨 token UTF-8/stop、取消和资源释放；Rust 使用借用/线程约束及 panic 隔离
 - Qwen3-0.6B Q8_0 实际文件和模板 hash 已核对；来源、许可与固定参数见 [模型矩阵](docs/model-matrix.md)
@@ -42,9 +42,9 @@ Windows 10为首要交付目标，Windows 11后续增加；Windows保留llama/GG
 
 同轮修复旧llama流缓冲遇到stop前残缺UTF-8时静默丢字节的问题；纯stream回归与ASan/UBSan已通过，同提交c651的Windows CI36966789047已验证该修改。此前c1114ee的Windows成功不覆盖此修改。Windows工作流仅对明确Android/文档路径免触发；本轮包含llama改动，仍需完整Windows回归。
 
-B2固定候选受控store与MnnExecutor/core已实现，经过独立审查及本地真实链，远端CI待验；APK、Android真机与GPU/NPU尚未完成。原生kernel不可抢占，检查点取消样本不是任意时刻停机保证。JDK/Flutter/Android SDK APK工具链安装与已披露SDK条款已获确认，固定组合已完成云端安装/版本与摘要校验，独立Flutter模板与Pub成功，独立模板APK烟测已在获批的构建进程信任库/环境代理修正后通过；尚不包含FRB/Rust/MNN，不是Nexa产品；不包含手机安装或应用权限操作。B2受控store/Executor本地测试已完成，root独立复验24单测/4文档编译失败测试、clippy及四项真实门禁均通过（executor210.07秒/store39.04秒）。
+B2固定候选受控store与MnnExecutor/core已实现，经过独立审查、本地真实链与f4fa90完整远端CI；APK、Android真机与GPU/NPU尚未完成。原生kernel不可抢占，检查点取消样本不是任意时刻停机保证。JDK/Flutter/Android SDK APK工具链安装与已披露SDK条款已获确认，固定组合已完成云端安装/版本与摘要校验，独立Flutter模板与Pub成功，独立模板APK烟测已在获批的构建进程信任库/环境代理修正后通过；尚不包含FRB/Rust/MNN，不是Nexa产品；不包含手机安装或应用权限操作。B2受控store/Executor本地测试已完成，root独立复验24单测/4文档编译失败测试、clippy及四项真实门禁均通过（executor210.07秒/store39.04秒）。
 
-B2实现已推送`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`；[CI36970559016](https://github.com/Naza3/Nexa/actions/runs/36970559016)前九阶段（含四项真实B2、Android完整链接）成功，最终ELF检查错误要求未使用的libm导致整体失败。已实际复现并修正系统依赖白名单规则，保留全部页/架构/动态库安全门槛；73项helper及五个实际ELF本地检查通过，修正远端重跑待验。此CI修复不改变native/Rust/Windows代码。
+B2实现已推送`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`；[CI36970559016](https://github.com/Naza3/Nexa/actions/runs/36970559016)前九阶段（含四项真实B2、Android完整链接）成功，最终ELF检查错误要求未使用的libm导致整体失败。已实际复现并修正系统依赖白名单规则，保留全部页/架构/动态库安全门槛；73项helper及五个实际ELF本地检查通过，修正提交f4fa90的CI36973082808全部通过且十阶段报告独立核验；四项真实B2及五ELF检查均通过。此CI修复不改变native/Rust/Windows代码。后续新原生修改标记、研究收据与App独立重验中，不能借用f4fa90的通过结论。
 
 ## 任务状态
 
@@ -109,6 +109,17 @@ B2实现已推送`fc8d87291404ea9b97cb5c5d18b35c0596ab8bc9`；[CI36970559016](ht
 
 ## Android MNN 文档迁移
 
-[ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)已记录方向并同步架构/规格/路线；[计划](docs/t07-android-mnn-plan.md)拆为CPU原型、MnnExecutor/包/安全契约、前台APK、OpenCL、QNN v79/v81、直接Hexagon六切片。当前只是文档完成；MNN3.6.1完整commit为研究候选，未进入实际构建锁，所有Android实现和设备门槛均未开始。新schema/ABI/profile字段未冻结，不新增外部协议承诺。Windows源码与当前CI状态独立，不因本迁移改变。
+[ADR0008](docs/decisions/0008-android-mnn-engine-and-package.md)已记录方向并同步架构/规格/路线；[计划](docs/t07-android-mnn-plan.md)拆为CPU原型、MnnExecutor/包/安全契约、前台APK、OpenCL、QNN v79/v81、直接Hexagon六切片。本段为方向迁移的历史说明；当前MNN3.6.1已精确锁定并完成T07-A/B云端实现与真实CPU门禁，设备门槛仍未通过。新schema/ABI/profile字段未冻结，不新增外部协议承诺。Windows源码与当前CI状态独立，不因本迁移改变。
 
 T07-A首批源码`e1ecc6e`及工作流语义修复`c1114ee`已推送。后者[Android CI36960074245](https://github.com/Naza3/Nexa/actions/runs/36960074245)成功；13份脱敏报告独立下载/hash/source/完整性复核通过，证明Linux真实六场景及Android arm64/API28构建与16KiB ELF检查。`android_run=false`，无APK或设备支持结论；同源码[Windows回归36960074287](https://github.com/Naza3/Nexa/actions/runs/36960074287)也已通过，详见[T07-A记录](docs/verification/2026-10-02-t07a-mnn-cpu-probe.md)。
+
+
+## T07-C 当前开发窗口
+
+[ADR0011](docs/decisions/0011-android-device-verifier-domain.md) 与 [设备验证计划](docs/t07c-android-verifier-plan.md) 定义独立 B3a 研究 APK；工程位于 apps/android-verifier。先验证固定 MNN CPU 模型的导入、运行、取消和报告，尚非 T08 多会话聊天产品。未 root 手机不能读取另一 App 的私有 /data 模型目录；此验证器通过 SAF 选择固定五文件并复制到自己的受控存储，不承诺读取 MNN Chat 私有缓存或跨 App 零复制。
+
+原开发环境丢失后，已恢复远端 f4fa90 精确源码与固定工具链/输入；旧未交付 APK 失效，App 已重建源码：12项Rust单测、4项Dart测试及真实host整链通过；约28MB预提交研究APK已通过独立签名/依赖/对齐/许可与生命周期源码审查，尚待提交后重建和手机验收。native 修改标记已重建复验；[ADR0012](docs/decisions/0012-ci-research-evidence-receipts.md) 的同次运行研究证据收据正在实现与真实链复验。此窗口所有后续修改尚不属于已验收的 f4fa90。
+
+当前设备验证源码与预提交构建记录见[App验证](apps/android-verifier/VERIFICATION.md)，手机验收步骤见[首轮指引](docs/android-device-verifier-acceptance.md)。研究验证器不计为T08完整聊天产品完成。
+
+同轮新原生修改标记、收据与cleanup修复已完成12阶段完整本地链及root归档复核；本地dirty不冒充clean CI通过。App预提交静态审查已完成。下一步为批量中文提交、精确新提交GitHub门禁、clean源码APK重建与一加15手工验收。

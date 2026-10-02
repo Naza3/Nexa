@@ -1,8 +1,13 @@
 diff --git a/include/MNN/MNNDefine.h b/include/MNN/MNNDefine.h
-index 29d6b14..0b1d6ca 100644
+index 29d6b14..11cf27a 100644
 --- a/include/MNN/MNNDefine.h
 +++ b/include/MNN/MNNDefine.h
-@@ -19,7 +19,13 @@
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Add compile-time silent logging for the private Nexa CPU build.
+ //
+ //  MNNDefine.h
+ //  MNN
+@@ -19,7 +20,13 @@
  #endif
  #endif
  
@@ -18,10 +23,15 @@ index 29d6b14..0b1d6ca 100644
  #include <hilog/log.h>
  #define MNN_ERROR(format, ...) {char logtmp[4096]; snprintf(logtmp, 4096, format, ##__VA_ARGS__); OH_LOG_Print(LOG_APP, LOG_ERROR, LOG_DOMAIN, "MNNJNI", (const char*)logtmp);}
 diff --git a/transformers/llm/engine/src/llmconfig.hpp b/transformers/llm/engine/src/llmconfig.hpp
-index e95c672..de1cccc 100644
+index e95c672..a5b39f3 100644
 --- a/transformers/llm/engine/src/llmconfig.hpp
 +++ b/transformers/llm/engine/src/llmconfig.hpp
-@@ -64,8 +64,8 @@ public:
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Replace direct configuration diagnostics with private-build-safe logging.
+ //
+ //  llmconfig.hpp
+ //
+@@ -64,8 +65,8 @@ public:
                  ostr << config_file.rdbuf();
                  config_ = ujson::json::parse(ostr.str());
              } else {
@@ -32,7 +42,7 @@ index e95c672..de1cccc 100644
              }
              base_dir_ = base_dir(path);
          } else {
-@@ -93,7 +93,7 @@ public:
+@@ -93,7 +94,7 @@ public:
              auto llm_config_ = ujson::json::parse(ostr.str());
              config_.merge(llm_config_);
          } else {
@@ -42,10 +52,15 @@ index e95c672..de1cccc 100644
          mllm_config_ = config_.contains("mllm") ? config_["mllm"] : ujson::json();
      }
 diff --git a/transformers/llm/engine/src/tokenizer/tokenizer.cpp b/transformers/llm/engine/src/tokenizer/tokenizer.cpp
-index 4ae4719..72a19fd 100644
+index 4ae4719..a182d96 100644
 --- a/transformers/llm/engine/src/tokenizer/tokenizer.cpp
 +++ b/transformers/llm/engine/src/tokenizer/tokenizer.cpp
-@@ -78,7 +78,7 @@ Tokenizer* Tokenizer::createTokenizer(const std::string& filename) {
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Route tokenizer failure diagnostics through private-build-safe logging.
+ //
+ //  tokenizer.cpp
+ //
+@@ -78,7 +79,7 @@ Tokenizer* Tokenizer::createTokenizer(const std::string& filename) {
      // check file
      std::ifstream tok_file(filename);
      if (!tok_file.good()) {
@@ -54,7 +69,7 @@ index 4ae4719..72a19fd 100644
          return tokenizer;
      }
      // check tokenizer info
-@@ -88,7 +88,7 @@ Tokenizer* Tokenizer::createTokenizer(const std::string& filename) {
+@@ -88,7 +89,7 @@ Tokenizer* Tokenizer::createTokenizer(const std::string& filename) {
      int magic_number, tokenizer_type;
      line_str >> magic_number;
      if (magic_number != MAGIC_NUMBER) {
@@ -63,7 +78,7 @@ index 4ae4719..72a19fd 100644
          return tokenizer;
      }
      line_str >> tokenizer_type;
-@@ -952,7 +952,7 @@ void HuggingfaceTokenizer::encode(const std::string& str, std::vector<int>& ids)
+@@ -952,7 +953,7 @@ void HuggingfaceTokenizer::encode(const std::string& str, std::vector<int>& ids)
  }
  
  std::string HuggingfaceTokenizer::decode(int id) {
@@ -73,15 +88,16 @@ index 4ae4719..72a19fd 100644
          return "";
      }
 diff --git a/transformers/llm/engine/src/tokenizer/unicode.cpp b/transformers/llm/engine/src/tokenizer/unicode.cpp
-index aab63d1..901f9d5 100644
+index aab63d1..4f6e0b3 100644
 --- a/transformers/llm/engine/src/tokenizer/unicode.cpp
 +++ b/transformers/llm/engine/src/tokenizer/unicode.cpp
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++// Nexa modifications (2026-10-02): Route Unicode warnings through private-build-safe logging.
 +#include <MNN/MNNDefine.h>
  //
  //  unicode.cpp
  //
-@@ -484,7 +485,7 @@ public:
+@@ -484,7 +486,7 @@ public:
              alts.push_back(std::move(branch));
          } else {
              // Extract the branch text for warning (approximate: from start to current '|' or end)
@@ -90,7 +106,7 @@ index aab63d1..901f9d5 100644
          }
          // Parse remaining branches
          while (peek() == '|') {
-@@ -494,7 +495,7 @@ public:
+@@ -494,7 +496,7 @@ public:
              if (supported_) {
                  alts.push_back(std::move(branch));
              } else {
@@ -99,7 +115,7 @@ index aab63d1..901f9d5 100644
              }
          }
          return alts;
-@@ -600,7 +601,7 @@ static const CompiledPattern& get_compiled(const std::string& pattern) {
+@@ -600,7 +602,7 @@ static const CompiledPattern& get_compiled(const std::string& pattern) {
          CompiledPattern cp;
          cp.branches = parser.parse();
          if (cp.branches.empty()) {

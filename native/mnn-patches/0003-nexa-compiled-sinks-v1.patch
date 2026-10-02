@@ -1,8 +1,13 @@
 diff --git a/source/core/ConvolutionCommon.cpp b/source/core/ConvolutionCommon.cpp
-index 85b395f..d5181a3 100644
+index 85b395f..19d5b53 100644
 --- a/source/core/ConvolutionCommon.cpp
 +++ b/source/core/ConvolutionCommon.cpp
-@@ -26,7 +26,7 @@ static int ReadBlobDim(BaseLoader* myfile, unsigned int* shape, int shapeBufCnt,
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Route the shape diagnostic through the private-build logging macro.
+ //
+ //  ConvolutionCommon.cpp
+ //  MNN
+@@ -26,7 +27,7 @@ static int ReadBlobDim(BaseLoader* myfile, unsigned int* shape, int shapeBufCnt,
      uint8_t uSize = 0;
      myfile->read((char*)&uSize, 1);
      if (uSize > 4) {
@@ -12,10 +17,15 @@ index 85b395f..d5181a3 100644
      }
      int copyLength = uSize;
 diff --git a/transformers/llm/engine/src/embedding.cpp b/transformers/llm/engine/src/embedding.cpp
-index e3a1725..447331a 100644
+index e3a1725..a27edc6 100644
 --- a/transformers/llm/engine/src/embedding.cpp
 +++ b/transformers/llm/engine/src/embedding.cpp
-@@ -53,11 +53,13 @@ bool Embedding::load() {
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Suppress direct embedding diagnostics in the private Nexa build.
+ //
+ //  embedding.cpp
+ //
+@@ -53,11 +54,13 @@ bool Embedding::load() {
      }
  
      initRuntime();
@@ -32,10 +42,15 @@ index e3a1725..447331a 100644
      setChatTemplate();
      // 2. load model
 diff --git a/transformers/llm/engine/src/omni.cpp b/transformers/llm/engine/src/omni.cpp
-index beac99b..80636ca 100644
+index beac99b..59b3ea8 100644
 --- a/transformers/llm/engine/src/omni.cpp
 +++ b/transformers/llm/engine/src/omni.cpp
-@@ -966,8 +966,12 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Suppress direct multimodal diagnostics in the private Nexa build.
+ //
+ //  omni.cpp
+ //
+@@ -966,8 +967,12 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
          if (currentPosition < info.length()) {
              file_info.append(info.substr(currentPosition));
          }
@@ -48,7 +63,7 @@ index beac99b..80636ca 100644
      }
  #ifdef LLM_SUPPORT_HTTP_RESOURCE
      if (file_info.substr(0, 4) == "http") {
-@@ -978,7 +982,9 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
+@@ -978,7 +983,9 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
              host = url_match_result[1].str();
              path = url_match_result[2].str();
          }
@@ -58,7 +73,7 @@ index beac99b..80636ca 100644
          httplib::Client cli(host);
          auto res  = cli.Get(path);
          file_info = "downloaded_file";
-@@ -986,13 +992,19 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
+@@ -986,13 +993,19 @@ std::vector<int> Omni::multimodeProcess(const std::string& mode, std::string inf
              std::ofstream file(file_info, std::ios::binary);
              if (file.is_open()) {
                  file.write(res->body.c_str(), res->body.size());
@@ -78,7 +93,7 @@ index beac99b..80636ca 100644
          }
      }
  #endif
-@@ -1258,11 +1270,11 @@ VARP Omni::gen_position_ids(int seq_len) {
+@@ -1258,11 +1271,11 @@ VARP Omni::gen_position_ids(int seq_len) {
          }
      }
      // // dump position ids
@@ -93,7 +108,7 @@ index beac99b..80636ca 100644
      return positionIds;
  }
  
-@@ -1442,18 +1454,18 @@ void Omni::responseInterleaved(const std::vector<int>& input_ids, std::ostream*
+@@ -1442,18 +1455,18 @@ void Omni::responseInterleaved(const std::vector<int>& input_ids, std::ostream*
          float talker_decode_s = ctx->decode_us / 1e6;
          float token2wav_s = ctx->audio_us / 1e6;
          float audio_duration = ctx->gen_seq_len / 50.0;
@@ -124,7 +139,7 @@ index beac99b..80636ca 100644
      }
  #endif
  }
-@@ -1497,20 +1509,20 @@ void Omni::generateWavform() {
+@@ -1497,20 +1510,20 @@ void Omni::generateWavform() {
                  tts_s += decode_s;
              }
              float audio_duration = context->gen_seq_len / 50.0;
@@ -160,10 +175,15 @@ index beac99b..80636ca 100644
          }
      }
 diff --git a/transformers/llm/engine/src/speculative_decoding/dflash.cpp b/transformers/llm/engine/src/speculative_decoding/dflash.cpp
-index 3825298..19bb0df 100644
+index 3825298..46cf077 100644
 --- a/transformers/llm/engine/src/speculative_decoding/dflash.cpp
 +++ b/transformers/llm/engine/src/speculative_decoding/dflash.cpp
-@@ -101,16 +101,16 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Route speculative diagnostics through the private-build logging macro.
+ //
+ //  dflash.cpp
+ //
+@@ -101,16 +102,16 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
                  if (hsPtr[i] == 0.0f) zeroCount++;
              }
          }
@@ -186,7 +206,7 @@ index 3825298..19bb0df 100644
      }
  #endif
      std::vector<VARP> inputs = {hidden_states};
-@@ -132,15 +132,15 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
+@@ -132,15 +133,15 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
                  if (rPtr[i] == 0.0f) zeroCount++;
              }
          }
@@ -208,7 +228,7 @@ index 3825298..19bb0df 100644
      }
  #endif
      // Sanitize: replace NaN values with 0 to prevent propagation
-@@ -157,7 +157,7 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
+@@ -157,7 +158,7 @@ VARP DFlashGeneration::fcForward(VARP hidden_states) {
  #if DFLASH_DEBUG
              int pos = i / hiddenDim;
              int dim = i % hiddenDim;
@@ -217,7 +237,7 @@ index 3825298..19bb0df 100644
  #endif
          }
      }
-@@ -224,9 +224,9 @@ VARP DFlashGeneration::dflashForward(const std::vector<int>& block_ids, VARP con
+@@ -224,9 +225,9 @@ VARP DFlashGeneration::dflashForward(const std::vector<int>& block_ids, VARP con
                  if (std::isnan(hsPtr[i]) || std::isinf(hsPtr[i])) nanCount++;
                  else { if (hsPtr[i] < minV) minV = hsPtr[i]; if (hsPtr[i] > maxV) maxV = hsPtr[i]; }
              }
@@ -230,7 +250,7 @@ index 3825298..19bb0df 100644
          }
  #endif
          auto lm_outputs = mLmHeadModule->onForward({hidden_states_out});
-@@ -239,14 +239,14 @@ VARP DFlashGeneration::dflashForward(const std::vector<int>& block_ids, VARP con
+@@ -239,14 +240,14 @@ VARP DFlashGeneration::dflashForward(const std::vector<int>& block_ids, VARP con
              for (auto d : lInfo->dim) total *= d;
              int vocab = lInfo->dim[lInfo->dim.size()-1];
              // Check argmax for first few positions
@@ -249,7 +269,7 @@ index 3825298..19bb0df 100644
              }
          }
  #endif
-@@ -297,7 +297,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
+@@ -297,7 +298,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
                  if (std::isnan(hsPtr[i]) || std::isinf(hsPtr[i])) hsNanCount++;
                  else { if (hsPtr[i] < hsMin) hsMin = hsPtr[i]; if (hsPtr[i] > hsMax) hsMax = hsPtr[i]; }
              }
@@ -258,7 +278,7 @@ index 3825298..19bb0df 100644
                     seq_len, hiddenDim, hsMin, hsMax, hsNanCount, hsTotal);
  #endif
          }
-@@ -315,11 +315,11 @@ void DFlashGeneration::generate(GenerationParams& param) {
+@@ -315,11 +316,11 @@ void DFlashGeneration::generate(GenerationParams& param) {
                  if (ctxPtr[i] < minV) minV = ctxPtr[i];
                  if (ctxPtr[i] > maxV) maxV = ctxPtr[i];
              }
@@ -273,7 +293,7 @@ index 3825298..19bb0df 100644
          }
  #endif
          mInitialized = true;
-@@ -354,21 +354,21 @@ void DFlashGeneration::generate(GenerationParams& param) {
+@@ -354,21 +355,21 @@ void DFlashGeneration::generate(GenerationParams& param) {
          // Phase 2: DFlash forward - get draft logits
  #if DFLASH_DEBUG
          if (len < 30) {
@@ -306,7 +326,7 @@ index 3825298..19bb0df 100644
          }
  #endif
  #ifdef DUMP_PROFILE_INFO
-@@ -408,7 +408,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
+@@ -408,7 +409,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
  
  #if DFLASH_DEBUG
              if (len < 30) {
@@ -315,7 +335,7 @@ index 3825298..19bb0df 100644
                  for (int pos = 1; pos < std::min(mBlockSize, 4); pos++) {
                      const float* row = logitsPtr + pos * vocab_size;
                      // Find top 5
-@@ -423,13 +423,13 @@ void DFlashGeneration::generate(GenerationParams& param) {
+@@ -423,13 +424,13 @@ void DFlashGeneration::generate(GenerationParams& param) {
                              }
                          }
                      }
@@ -333,7 +353,7 @@ index 3825298..19bb0df 100644
              }
  #endif
          }
-@@ -471,7 +471,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
+@@ -471,7 +472,7 @@ void DFlashGeneration::generate(GenerationParams& param) {
  
  #if DFLASH_DEBUG
                  if (len < 30 && i < 3) {
@@ -343,10 +363,15 @@ index 3825298..19bb0df 100644
                  }
  #endif
 diff --git a/transformers/llm/engine/src/speculative_decoding/eagle.cpp b/transformers/llm/engine/src/speculative_decoding/eagle.cpp
-index 805c25c..c47d225 100644
+index 805c25c..3904599 100644
 --- a/transformers/llm/engine/src/speculative_decoding/eagle.cpp
 +++ b/transformers/llm/engine/src/speculative_decoding/eagle.cpp
-@@ -82,7 +82,7 @@ std::vector<MNN::Express::VARP> EagleGeneration::eagleForwardRaw(const std::vect
+@@ -1,3 +1,4 @@
++// Nexa modifications (2026-10-02): Suppress direct speculative diagnostics in the private Nexa build.
+ //
+ //  mtp.cpp
+ //
+@@ -82,7 +83,7 @@ std::vector<MNN::Express::VARP> EagleGeneration::eagleForwardRaw(const std::vect
      int seq_len     = inputs[0]->getInfo()->dim[0];
      mEagleMeta->add = seq_len;
  #if EAGLE_DEBUG
@@ -355,7 +380,7 @@ index 805c25c..c47d225 100644
  #endif
      auto outputs    = mEagleModules[0]->onForward(inputs);
      mEagleMeta->sync();
-@@ -118,7 +118,7 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
+@@ -118,7 +119,7 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
  #if EAGLE_DEBUG
      for (int i = 0; i < inputIds.size(); i++) {
          auto token = inputIds[i];
@@ -364,7 +389,7 @@ index 805c25c..c47d225 100644
      }
  #endif
      int sampleToken = inputIds.back();
-@@ -146,7 +146,7 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
+@@ -146,7 +147,7 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
      for (int i = 0; i < topKV[0]->getInfo()->size; i++) {
          auto token = indices[i];
          token = token + d2tPtr[token];
@@ -373,7 +398,7 @@ index 805c25c..c47d225 100644
      }
  #endif
      tokenTree.init(indices, scores);
-@@ -172,38 +172,40 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
+@@ -172,38 +173,40 @@ EagleGeneration::DraftInfo EagleGeneration::topkGenerate(const std::vector<int>&
      auto output = tokenTree.finalize(sampleToken, mLlm->mDraftLength);
  #if EAGLE_DEBUG
      {
@@ -428,7 +453,7 @@ index 805c25c..c47d225 100644
          }
      }
  #endif
-@@ -271,16 +273,16 @@ EagleGeneration::AcceptInfo EagleGeneration::evaluatePosterior(const EagleGenera
+@@ -271,16 +274,16 @@ EagleGeneration::AcceptInfo EagleGeneration::evaluatePosterior(const EagleGenera
          acceptTokens[i] = samples[bestCandidate[i]];
      }
  #if EAGLE_DEBUG
@@ -451,7 +476,7 @@ index 805c25c..c47d225 100644
  #endif
      AcceptInfo acceptInfo;
      acceptInfo.sampleTokens  = std::move(samples);
-@@ -395,13 +397,13 @@ void EagleGeneration::generate(GenerationParams& param) {
+@@ -395,13 +398,13 @@ void EagleGeneration::generate(GenerationParams& param) {
          mContext->status = LlmStatus::MAX_TOKENS_FINISHED;
      }
  #if EAGLE_DEBUG

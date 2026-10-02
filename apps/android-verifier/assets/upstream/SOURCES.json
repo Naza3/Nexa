@@ -1,0 +1,15 @@
+{
+  "status": "Exact authoritative license originals restored and included; file hashes are recorded by notice inventory",
+  "sources": {
+    "dart-sys-LICENSE-MIT.txt": "https://raw.githubusercontent.com/dart-sys/dart-sys/c9329430a5a8e3828cf59600babe7896326c7c44/LICENSE-MIT.md",
+    "dart-sys-LICENSE-APACHE.txt": "https://raw.githubusercontent.com/dart-sys/dart-sys/c9329430a5a8e3828cf59600babe7896326c7c44/LICENSE-APACHE-2.0.md",
+    "kotlin-LICENSE.txt": "https://raw.githubusercontent.com/JetBrains/kotlin/v2.4.0/license/LICENSE.txt",
+    "kotlin-NOTICE.txt": "https://raw.githubusercontent.com/JetBrains/kotlin/v2.4.0/license/NOTICE.txt",
+    "Apache-2.0.txt": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+    "java-annotations-23.0.0-LICENSE.txt": "https://raw.githubusercontent.com/JetBrains/java-annotations/23.0.0/LICENSE.txt",
+    "kotlinx-coroutines-1.7.1-LICENSE.txt": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/1.7.1/LICENSE.txt",
+    "relinker-1.4.5-LICENSE.txt": "https://raw.githubusercontent.com/KeepSafe/ReLinker/1.4.5/LICENSE",
+    "jspecify-1.0.0-LICENSE.txt": "https://raw.githubusercontent.com/jspecify/jspecify/v1.0.0/LICENSE",
+    "flutter-engine-LICENSE.txt": "Flutter 3.47.6 official SDK engine/src/flutter/LICENSE; engine revision 692136cb6582dbfc5af3fb33c2515a069f2f66d0"
+  }
+}

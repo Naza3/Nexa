@@ -4,85 +4,85 @@
   "patches": [
     {
       "file": "0001-nexa-cpu-request-v1.patch",
-      "sha256": "a60bacb7804e89f6b35f15851275bf28b7acf76174e9b4718788614f2f90d9dd"
+      "sha256": "1710b0483a5e8a6ec9b0aa8fa0fecab28ddec68d3d0737f391f26b7ae93686d5"
     },
     {
       "file": "0002-nexa-private-logging-v1.patch",
-      "sha256": "21e89eecc0c14da2b952ce5f2c34f47a9da70005372b820323915ed355312a17"
+      "sha256": "90e19a7350abed88bf82482b83d52f570c582dd2b60c289dc170115f0639025d"
     },
     {
       "file": "0003-nexa-compiled-sinks-v1.patch",
-      "sha256": "5dcdd68f7d8da94157df302c05462ac4ac4b1ac199d15741f96916a4957fa8d0"
+      "sha256": "6216f089d7af26053a5c062243735625ca914dbbf0e256e864eb76db991816b6"
     }
   ],
-  "patch_set_sha256": "43cc33146e2036ff452bd02d5ec352bb099d143ed4a4cdeb6ff55335987f9ce0",
+  "patch_set_sha256": "dfe571d08b1583e39d7ce271eb289ebc91c06b88261a3c83fdef1e53dc062b80",
   "policy": "cpu-text-qwen3-v1;context<=2048;threads=1..2;chunk=1..128;precision=high;memory=low;sync;fresh-sampler;silent-logs-v1",
   "policy_sha256": "ea06621b78e67e58f97f98951b26db0a8a893ded4112da3e5a762b98566fa328",
   "files": [
     {
       "path": "include/MNN/MNNDefine.h",
       "before": "481f2ff7a4dd29ce779384b8f5169c8b1aee8ebd8f0a9ca4c2f8444de45f9b6f",
-      "after": "090bc59ae236d3d602a47ad8fac18fae3a19607ec0b9c4d21707c3c2dcb550bf"
+      "after": "2c0db276bb9c9f3bfa96daab49a00301438d99b5dc68a1c7afbecb17147b308f"
     },
     {
       "path": "source/core/ConvolutionCommon.cpp",
       "before": "f6ba572419842aa8a68a8c5f8f702c990abc9f01dfc5e640d156b53b7aba96ab",
-      "after": "c436e916a4b87d27a3975ef78f89a24583ca439484f5f5bdc9fe8f25a29366be"
+      "after": "3b53997c149ed93b9464c8d51777898f3f4154fc2e0483f27aae0164688b73c9"
     },
     {
       "path": "transformers/llm/engine/include/llm/llm.hpp",
       "before": "a9f1cccfe827a623f9051284c3f957d527100dad0d053174ef63fc88fbe69556",
-      "after": "d26c5524f99e0a8e39f5d6c4d5960d7dcc8e0e90a6f6de31d5a931184dd43d70"
+      "after": "b7c067dc294cb74e9555050bfe0f7ccb8f86773327185cc1b1d1decadebf148c"
     },
     {
       "path": "transformers/llm/engine/src/embedding.cpp",
       "before": "ae52ebfe92518ce57467fc4cb22105fbc17632c26695c03d40fc3f0e66133d0a",
-      "after": "4af903a35f59e5a2f91281ac79111ec19262a5164c694fb1e6e10dedd2d47906"
+      "after": "8d0c4aa0198edc571a22e354fb67935346473e50cf6aa42a91f458b306e5bb92"
     },
     {
       "path": "transformers/llm/engine/src/llm.cpp",
       "before": "3748a6e090b5c70532b782ceddcfb9d6032afe453316d158260021fdcf5d4088",
-      "after": "ff8ba8a9a96264d2ede7a68983aa18364865684c514723525143800e0bbfd3e3"
+      "after": "cd7dd5395a8ec8e82a018d432f92f2342f4fd3b8ca86300731d67cb33db0d3aa"
     },
     {
       "path": "transformers/llm/engine/src/llmconfig.hpp",
       "before": "62b7d670d01bb358db5f8b01d996c9babaa926bd563e8b8c749dd64494ea62ef",
-      "after": "f873a457d9483bed99da4ab864062bc43f18bdee45d1284f4237eaf1ad4c516b"
+      "after": "7be29f77a97f8318f9ff4f2c93f9dc09b4a33c2b30747401736b6dc2aa9ac560"
     },
     {
       "path": "transformers/llm/engine/src/omni.cpp",
       "before": "f49d2b83149b2e5dea23b0c9f35b1e9e15c7b01028ca67388ad0ea6136aad81f",
-      "after": "804d8904462028fd45d857ed319e3f2476bffaffb8408931ed1cc614da4e6fd9"
+      "after": "a50707babf2903ff3922188b63398ad55b945eeb68387cbf19bf735a9c7a71c5"
     },
     {
       "path": "transformers/llm/engine/src/sampler.hpp",
       "before": "9593aa91da1263413509adec9615834355868b01c4b6540c04076957d47c0a5e",
-      "after": "2222cbb52d41a943c6308d92d0ab4257262a033d82e8ffd2414c105ddeb458bf"
+      "after": "6c1eea73fa4fee72b3d90a2fc22888f9a2d3353419c49fcf44f01d7997409aca"
     },
     {
       "path": "transformers/llm/engine/src/speculative_decoding/dflash.cpp",
       "before": "07b826e7ed4a9ceb3a7b8b1c55385e0e5dd318b130a814aa499996117142d99a",
-      "after": "9e99ef5eb770de72c0e348aa438f406f0934273ad47700baefae220dfcf0ab13"
+      "after": "9602c393e6530c141f2107da529267102475a8f92f5639383b3e6d447c318794"
     },
     {
       "path": "transformers/llm/engine/src/speculative_decoding/eagle.cpp",
       "before": "2da14c1ff1166a917f84e0fff207456dde48ea283d081b422c68cef0af419d8d",
-      "after": "c864dbbf2213e6c899f99c3892ed5f5bc866750782258c2c2c8b2babd2ca30c3"
+      "after": "4a16fae206a182baa61d384218e921b096aa062bfb769f0cf9b8dd8cd3173d7b"
     },
     {
       "path": "transformers/llm/engine/src/speculative_decoding/generate.cpp",
       "before": "78a1d9ba485c20e9af3766a680050032cd334405f7be10cb56873393711d89de",
-      "after": "2500bf9054e141f1709c7c4be6cb53dbde1d5b768fc09b497bf77ee4018f9b4f"
+      "after": "e835608cbf3c7b688163e28db444e53a8bbafafdf1821a3eae78929b2b5540b7"
     },
     {
       "path": "transformers/llm/engine/src/tokenizer/tokenizer.cpp",
       "before": "f929572b26a41b72fdd8849793220191adde0e366c976c3a896006c3e0b74ee3",
-      "after": "ca4639aa63722500b4a33c3f7ad77e860d6db8b2c80d9b4532afe89958e55d2e"
+      "after": "e06ebc8b241a39ffaffe9597c3b473f5d795578c0b6f5891e05749f6ac83560b"
     },
     {
       "path": "transformers/llm/engine/src/tokenizer/unicode.cpp",
       "before": "7119a5f0d167bf8c840586af25f52d92d4ed0eba9c328ddad5c5c20a9d6ca6d0",
-      "after": "481ceeadb2114e397e488c2619e667f714e9291a34328299e716c96bec6e712f"
+      "after": "517ef360c57f05c8bd12b6dac24121f14666e32dfa3681b971bcc171541c60ec"
     }
   ]
 }

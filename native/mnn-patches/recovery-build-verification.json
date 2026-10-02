@@ -1,0 +1,172 @@
+{
+  "record_kind": "fresh_post_loss_rebuild_evidence",
+  "environment_loss_time": "2026-10-02 06:34 UTC",
+  "source_restoration_base": "f4fa90abad4e1e58ea785508251026083ae62177",
+  "patch_set_sha256": "dfe571d08b1583e39d7ce271eb289ebc91c06b88261a3c83fdef1e53dc062b80",
+  "old_b2_preserved_copies_restored": false,
+  "android": {
+    "status": "cross_build_audit_export_elf_passed",
+    "manifest_sha256": "6ff7a9625cd8bf1135e3f82fa36095da4f4f27ebc0ac808c474020e62e1cb750",
+    "static_libraries": [
+      {
+        "name": "nexa-mnn-shim",
+        "path": "lib/libnexa-mnn-shim.a",
+        "sha256": "44b21c0f83e69562fe10588519eb8697e215102eb204e2b770ebec110aaa5d3c"
+      },
+      {
+        "name": "MNN",
+        "path": "lib/libMNN.a",
+        "sha256": "22a11893a1b64ca125dacaa388f2c774b947e810d23573c4639d135669df9f2e"
+      },
+      {
+        "name": "c++_static",
+        "path": "lib/libc++_static.a",
+        "sha256": "71fa8618e087652c7798bd33439cee372c697a049b48c5dfede1378af28cb9ce"
+      },
+      {
+        "name": "c++abi",
+        "path": "lib/libc++abi.a",
+        "sha256": "6d5ae293f3b3952b75a88e478cd2056ceb8f7ca9ea2acb94685119e09cf7038a"
+      },
+      {
+        "name": "unwind",
+        "path": "lib/libunwind.a",
+        "sha256": "bfbe474acf75b59fd2f19f0b7210588aa662410d5d8d0996812fe50e9e0143ab"
+      },
+      {
+        "name": "clang_rt_builtins",
+        "path": "lib/libclang_rt_builtins.a",
+        "sha256": "7e900bcdd0bb6f05824fd7e96c9309ee9c47c22751a1b3c98242d1f4902e4632"
+      }
+    ],
+    "elf_load_alignment": 16384,
+    "historical_manifest_bytes_reproduced": true,
+    "compiled_sources": 445,
+    "dependency_headers": 220,
+    "device_execution": false
+  },
+  "linux": {
+    "status": "build_ctest_real_privacy_sanitizer_audit_export_passed",
+    "manifest_sha256": "b8b4d8efb06388f49c6457d177997f2bf630c5dceeb9ec190d3cc245a313372d",
+    "static_libraries": [
+      {
+        "name": "nexa-mnn-shim",
+        "path": "lib/libnexa-mnn-shim.a",
+        "sha256": "43261b20f10692789196ed5024fb287d7a0ff7f8e05832289fa88bcebeb0c081"
+      },
+      {
+        "name": "MNN",
+        "path": "lib/libMNN.a",
+        "sha256": "75e6328cbfa5ebaa9f83224d6b030b19247e7e8cfce86e78dd56d4eb2ad801cd"
+      }
+    ],
+    "historical_manifest_bytes_reproduced": true,
+    "ctest_passed": 3,
+    "privacy_cases_passed": 9,
+    "compiled_sources": 314,
+    "dependency_headers": 242,
+    "stream_sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "leak_sanitizer_enabled": false
+  },
+  "independent_unpatched_baseline": {
+    "status": "fresh_clean_upstream_build_and_real_comparison_passed",
+    "prompt_tokens": 21,
+    "completion_tokens": 12,
+    "checks": [
+      "rendered_prompt",
+      "prompt_token_ids",
+      "accepted_output_token_ids",
+      "streamed_bytes",
+      "usage"
+    ]
+  },
+  "new_rust_validation": false,
+  "new_production_admission": false,
+  "checks": {
+    "android-configure.log": {
+      "exit_code": 0,
+      "evidence_sha256": "511634f89ed45fedd5b21d877f2b95c877af008ec8de0024df8a7dcb0780adab"
+    },
+    "android-build.log": {
+      "exit_code": 0,
+      "evidence_sha256": "5ad783a5bbabf5eefdd30f8e03a5177393e84e634f9c025f9b3afd6fbac16485"
+    },
+    "android-audit.json": {
+      "exit_code": 0,
+      "evidence_sha256": "ea4226534999ca3f5d6cacfbd5014563fe822fc258e979928ac90e399fd7ba2e"
+    },
+    "android-elf.txt": {
+      "exit_code": 0,
+      "evidence_sha256": "2ce8ecfafba8be9d00906812778a275ee4d080028159c74257a764fe27f257b0"
+    },
+    "android-export.log": {
+      "exit_code": 0,
+      "evidence_sha256": "9c6d49d9608b07e26018c21f57ac71e717ebd6540881a4fd2b1ca6b66b8b963f"
+    },
+    "notice-replay.json": {
+      "exit_code": 0,
+      "evidence_sha256": "28e8a528c3f2c0a697fad2c9f530497422ad09023caa99d464e4fdf9bf2d6fd3"
+    },
+    "notice-inventory.log": {
+      "exit_code": 0,
+      "evidence_sha256": "15e5cc36015d4feaab53598f4777195895693a24c8131d56823524ccfa6fd1e9"
+    },
+    "candidate.json": {
+      "exit_code": 0,
+      "evidence_sha256": "877c0fbff737837fa13fcb1fb51549649f0ba5b7402f3d1d2889d147910210cb"
+    },
+    "linux-configure.log": {
+      "exit_code": 0,
+      "evidence_sha256": "54a26e4a132a6862b8ee787e39c13ee2e1fe9d351c9b4297ea4ebe747078a508"
+    },
+    "linux-build.log": {
+      "exit_code": 0,
+      "evidence_sha256": "f980f1b734a7b18a0f965069e0b03e2074503afbb0106ebd0d4950743a7b70ac"
+    },
+    "ctest.log": {
+      "exit_code": 0,
+      "evidence_sha256": "d6c8666cbb60e36ef1c788df1fe6ac9956f19872f447caf8da2cad19daa5c954"
+    },
+    "real.log": {
+      "exit_code": 0,
+      "evidence_sha256": "9e9a6ff5efff658caf79ece8564bc213a7039014334af86c96909ca9b303c6e0"
+    },
+    "privacy.json": {
+      "exit_code": 0,
+      "evidence_sha256": "e21ed170278f735a5aeaabf9a291e6ef40fc5281df5569437883c4bd85181c35"
+    },
+    "stream-asan.log": {
+      "exit_code": 0,
+      "evidence_sha256": "d4af3dfc45bc180d13fd758e4c4ee3580486f525e404e6810db81db40f9dbd7e"
+    },
+    "linux-audit.json": {
+      "exit_code": 0,
+      "evidence_sha256": "1338ca4a8846359966d4549e7777aa875555e30f47c9b6c0a5ff17f4f4b3e3c4"
+    },
+    "linux-export.log": {
+      "exit_code": 0,
+      "evidence_sha256": "2c680224f4338ff5e54a38743e1308845b69cc121ff313537ea84329416366b0"
+    },
+    "upstream-configure.log": {
+      "exit_code": 0,
+      "evidence_sha256": "b129ed26b35ffaf76cbec6ed57c5efa3ef9316ea4178bd15d1c68c41f381dd8c"
+    },
+    "upstream-build.log": {
+      "exit_code": 0,
+      "evidence_sha256": "a3ab0cf8af29e4613fe15e2a28339982622b514db5614aed9d490e0f8dfef2a7"
+    },
+    "upstream.log": {
+      "exit_code": 0,
+      "evidence_sha256": "0340f984d4495f5c501ffcecaa8384d1ca7b5ed3e581de942ae8cc52be34fc71"
+    },
+    "upstream-comparison.json": {
+      "exit_code": 0,
+      "evidence_sha256": "0c1d453c30d0820e2ac5611ebaceff6d41dfe2ff1c10540eead53fea17ba03d9"
+    }
+  },
+  "status": "all_requested_native_recovery_gates_passed",
+  "completed_at_utc": "2026-10-02 07:20 UTC"
+}

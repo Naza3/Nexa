@@ -71,3 +71,37 @@ Ubuntu24.04，实际编译器 `g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0`�
 根因由root在已存在五个Android ELF独立复现：store与build_identity仅需要libc/libdl，linker合法移除未使用libm；旧helper要求所有文件恰好包含三库而误拒。修正为必须libc、可选libdl/libm、不得重复或包含未知依赖；仍拒绝动态MNN/C++运行库，保留全部ABI、PIE、解释器、LOAD、RELRO、WX及stack门禁。不为满足脚本强行链接无用库。新固定失败类别只披露问题类型，不上传私有路径。
 
 修正后同五个真实ELF parse/schema全部通过，helper73项（root设置实际actionlint，无skip）通过；新的远端结果仍待记录。此次仅提交CI规则与对应说明，不混入正在本地开发的设备验证App或新原生修改标记。
+
+
+## f4fa90 完整远端门禁与独立验收
+
+源码 `f4fa90abad4e1e58ea785508251026083ae62177`、tree `6866cff3cc9cdc30a392676b07ee0f239c4ac77a` 的 [CI36973082808](https://github.com/Naza3/Nexa/actions/runs/36973082808) 于 2026-10-02 06:48:15 UTC 全部成功，job110731006525。证据 artifact11213655630，ZIP7,784bytes，SHA256 `45200e071f6a137824f280811e82f0f70d5435ef00e87ba7d073901476cd124c`。root 下载后以该提交原版 verifier/schema/lock/header 独立检查全部十阶段报告、source/tree/clean 与四个真实 B2 case；无缺失或 invalid report，all_required_steps_succeeded/evidence_verified=true，android_run=false。
+
+五个实际 Android ELF 全部通过：build_identity/mnn_model_store 依赖 libc/libdl；mnn_adapter/mnn_executor/real_model 依赖 libc/libdl/libm。Android manifest 仍为 `64ad7828607821fa6fca4ca104e786cf1feb4e892e6b00bd04db1b8322dbcb22`。[原型回归36973082807](https://github.com/Naza3/Nexa/actions/runs/36973082807) 同样 success；其产物元数据已读，本节不冒称重新下载复验原型 ZIP。
+
+此结果仅覆盖 f4fa90。随后原生修改标记、新研究证据收据及设备验证 App 是独立修改，必须重新构建验证；不由此取得 Android 真机、GPU/NPU 或生产准入结论。
+
+## 开发环境恢复与当前产物边界
+
+2026-10-02 06:34–06:36 UTC 原执行目录与临时产物不可用；原因未确定。已从远端精确恢复 f4fa90 的 323 blobs/426 tree entries，逐项检查 Git blob SHA 与大小并复原同一 tree/commit，没有创建替代历史。固定工具链、原版 MNN 与五文件模型重新下载并核验；原先未交付的研究 APK 不再存在，不能沿用旧路径或旧构建结论交付。
+
+native 修改标记 patch-set `dfe571d08b1583e39d7ce271eb289ebc91c06b88261a3c83fdef1e53dc062b80` 已在恢复环境重新构建、源审计、原版真实对照和 Android 16KiB 检查，具体证据见 `native/mnn-patches/recovery-build-verification.json`（仓库根相对路径）。App 与收据变更仍在验证；最终 APK、许可证闭包、独立审查和手机安装/生命周期尚未收口。
+
+### 设备验证审查发现的 Executor 清理错误降级
+
+独立审查发现：Prepared::generate 已返回 cleanup_error 时，Executor 原先只设置一般 fault，随后 model.close 成功可把事件降为 Faulted 并释放文件 lease。后续成功不能否定此前未确认的所有权状态。修复为直接 CleanupUnconfirmed，owner 先永久 pin 整组 model/lease 并置 failed；所有后续 cleanup/start/close 保持拒绝，退出尾部不会清除 loaded 或释放已 pin 资源。
+
+root 新增两项定向回归均通过：取消同时携带 cleanup_error 不降级；资源 Drop 不执行且后续 cleanup 不清失败。独立审查复核 owner、退出尾部与 Executor Drop 路径通过。此为生产 Executor 行为修复，不能与同轮仅 cfg(test) 的研究收据隔离说明混淆；完整新真实链与最终 APK 必须重新覆盖。
+
+
+## 新修改的完整本地收口（GitHub 新提交待验）
+
+原生修改标记、研究收据与 Executor 清理修复的同次本地12阶段全部通过：tools/inputs/patch/baseline/linux_native/native_real/rust_linux/research_receipt/b2_linux/android_native/rust_android/elf。四项B2必须显式运行，Android五ELF实际链接和校验通过。Python86项检查中1项因本地actionlint工具缺失跳过；Rust34单测/4编译失败文档测试与clippy通过。独立收据审查无P0/P1阻塞，并另跑11项收据测试通过。
+
+运行时源码快照SHA256 `8f618bd1c220095e62182a3ee29f1303fb0eeb8f470fc3f914e630b679049c6a`，收据SHA256 `eff52f1647843347110100c704812b900e39406ce2d22c26b2b7da3f262a6e6b`。Linux完整manifest为 `b8b4d8efb06388f49c6457d177997f2bf630c5dceeb9ec190d3cc245a313372d`，Android为 `6ff7a9625cd8bf1135e3f82fa36095da4f4f27ebc0ac808c474020e62e1cb750`。
+
+实际stage_reports得到evidence_verified=true、missing/invalid均空；由于本地有未提交修改，clean CI总门禁按预期拒绝，all_required_steps_succeeded=false。root独立从运行时暂存Git原始字节重算上述源码快照，并按归档模式复核12份报告、七个上传proof原文hash、receipt与B2绑定。随后补写文档使live source context拒绝属于正确行为，不为了更新文档而篡改旧收据或伪造新执行。
+
+本地明确复用已恢复并复验的MNN构建缓存（Linux Makefiles、Android Ninja）；仍重新configure/build/audit/export并运行全部真实门禁。NDK ZIP hash引用同一环境恢复时实际校验，当前重新核查properties/clang/静态成员和模型五文件；不声称再次hash已删除ZIP。ASan/UBSan实际执行，本地LSan因ptrace限制关闭。GitHub仍使用独立新目录、Ninja与实际下载hash，不沿用本地旁路。
+
+设备研究App有独立12单测、4Dart测试、真实host完整链及预提交APK签名/库/对齐/许可审查，见[App记录](../../apps/android-verifier/VERIFICATION.md)。source commit正式绑定须提交后重建，尚无手机执行或GPU/NPU支持结论。

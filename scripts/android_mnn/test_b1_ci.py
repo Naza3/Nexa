@@ -26,6 +26,10 @@ GNU_STACK 0x000000 0x000000 0x000000 0x000000 0x000000 RW 0x10
 (NEEDED) Shared library: [libm.so]
 '''
 IDENTITY = {'source_commit': '1' * 40, 'source_tree': '2' * 40, 'source_clean': True}
+CONTEXT = dict(IDENTITY, mode='github-ci', source_snapshot_sha256='3' * 64,
+               run_id='1', run_attempt='1', job='native-adapter', context_id='4' * 64)
+RECEIPT_RESULT = dict(receipt_sha256=ci.receipt.sha(b'{}\n'), context_id=CONTEXT['context_id'], manifest_sha256='c' * 64,
+                      research_only=True, production_admitted=False, mode='github-ci')
 
 
 def checks(stage):
@@ -44,6 +48,10 @@ def checks(stage):
         result['logging_audit'] = dict(compiled_source_count=20, header_count=30)
     if stage == 'rust_linux':
         result['linked_manifest_sha256'] = 'c' * 64
+    if stage == 'research_receipt':
+        return RECEIPT_RESULT.copy()
+    if stage == 'b2_linux':
+        result['receipt'] = RECEIPT_RESULT.copy()
         result['b2_real_matrix'] = {'cases': {name: 'pass' for name in ci.B2_REAL_CASES}, 'research_only': True,
                                     'production_admitted': False, 'model_lock_sha256': ci.digest(ci.run_probe.LOCK)}
     if stage == 'native_real':
@@ -55,12 +63,18 @@ def checks(stage):
 
 
 def report(stage):
-    return dict(schema=1, stage=stage, status='ok', failure_case='none', missing_archive=None, android_run=False, exit_codes=[0], commands=[dict(
+    return dict(schema=2, context=copy.deepcopy(CONTEXT), stage=stage, status='ok', failure_case='none', missing_archive=None, android_run=False, exit_codes=[0], commands=[dict(
         index=0, category='verification', timeout_seconds=600, timed_out=False, log_limit_exceeded=False,
         cleanup_confirmed=True, failure_case='none', exit_code=0, log_bytes=0, output_truncated=False, diagnostics=[])], checks=checks(stage))
 
 
 class EvidenceTests(unittest.TestCase):
+    def setUp(self):
+        for name, value in [('check_current', None), ('verify_bundle', RECEIPT_RESULT)]:
+            mock = patch.object(ci.receipt, name, return_value=value)
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_all_stage_schemas(self):
         for stage in ci.STAGES:
             self.assertEqual(ci.sanitize_report(stage, report(stage)), report(stage))
@@ -169,7 +183,7 @@ class EvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner = ci.Runner(root / 'work', root / 'evidence', 'elf')
-            with patch.object(runner, 'elf', side_effect=ci.ElfAuditError('elf_dependencies')), self.assertRaises(ci.ElfAuditError):
+            with patch.object(runner, 'bind_context'), patch.object(runner, 'elf', side_effect=ci.ElfAuditError('elf_dependencies')), self.assertRaises(ci.ElfAuditError):
                 runner.execute()
             value = ci.read(runner.evidence / 'elf.json')
             self.assertEqual(value['failure_case'], 'elf_dependencies')
@@ -178,6 +192,10 @@ class EvidenceTests(unittest.TestCase):
     def prepare(self, directory):
         evidence = Path(directory) / 'evidence'
         evidence.mkdir()
+        (evidence / 'bundle').mkdir()
+        ci.ci_verify.write(evidence / 'bundle/receipt.json', {})
+        (evidence / 'bundle/receipt.json').chmod(0o444)
+        ci.ci_verify.write(evidence / 'context.private.json', CONTEXT)
         for stage in ci.STAGES:
             ci.ci_verify.write(evidence / (stage + '.json'), report(stage))
         return evidence, Path(directory) / 'upload', ','.join(stage + ':success' for stage in ci.STAGES)
@@ -185,9 +203,29 @@ class EvidenceTests(unittest.TestCase):
     def test_complete_gate(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(ci.ci_verify, 'source_identity', return_value=IDENTITY):
             evidence, destination, outcomes = self.prepare(directory)
-            ci.stage_reports(evidence, destination, outcomes)
+            ci.stage_reports(evidence, destination, outcomes, evidence / 'bundle')
             self.assertTrue(ci.read(destination / 'ci-status.json')['all_required_steps_succeeded'])
-            self.assertEqual(len(list(destination.iterdir())), len(ci.STAGES) + 1)
+            self.assertEqual(len(list(destination.iterdir())), len(ci.STAGES) + 2)
+
+    def test_bundle_failure_cannot_claim_evidence_verified(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(ci.ci_verify, 'source_identity', return_value=IDENTITY):
+            evidence, destination, outcomes = self.prepare(directory)
+            with patch.object(ci.receipt, 'verify_bundle', side_effect=ValueError('rejected')), self.assertRaises(ValueError):
+                ci.stage_reports(evidence, destination, outcomes, evidence / 'bundle')
+            status = ci.read(destination / 'ci-status.json')
+            self.assertFalse(status['evidence_verified'])
+            self.assertFalse(status['all_required_steps_succeeded'])
+            self.assertIn('research_bundle', status['invalid_reports'])
+            self.assertTrue((destination / 'tools.json').is_file())
+
+    def test_staged_success_preserves_exact_proof_and_receipt_bytes(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(ci.ci_verify, 'source_identity', return_value=IDENTITY):
+            evidence, destination, outcomes = self.prepare(directory)
+            raw = ci.receipt.encode(report('tools'))
+            (evidence / 'tools.json').write_bytes(raw)
+            ci.stage_reports(evidence, destination, outcomes, evidence / 'bundle')
+            self.assertEqual((destination / 'tools.json').read_bytes(), raw)
+            self.assertEqual(ci.digest(destination / 'research-receipt.json'), RECEIPT_RESULT['receipt_sha256'])
 
     def test_missing_or_failed_or_invalid_preserves_failure_evidence(self):
         for scenario in ('missing', 'failed', 'invalid', 'outcome', 'symlink'):
@@ -206,7 +244,7 @@ class EvidenceTests(unittest.TestCase):
                     value.update(status='failed' if scenario == 'failed' else 'ok', failure_case='stage_validation_failed' if scenario == 'failed' else 'none', checks={'raw': 'PRIVATE'})
                     ci.ci_verify.write(target, value)
                 with self.assertRaises(ValueError):
-                    ci.stage_reports(evidence, destination, outcomes)
+                    ci.stage_reports(evidence, destination, outcomes, evidence / 'bundle')
                 self.assertFalse(ci.read(destination / 'ci-status.json')['all_required_steps_succeeded'])
                 self.assertTrue((destination / 'tools.json').is_file())
                 self.assertNotIn('PRIVATE', ''.join(p.read_text(encoding='utf-8') for p in destination.iterdir()))
@@ -219,7 +257,7 @@ class EvidenceTests(unittest.TestCase):
                 if scenario == 'duplicate':
                     outcomes += ',tools:success'
                 with patch.object(ci.ci_verify, 'source_identity', return_value=identity), self.assertRaises(ValueError):
-                    ci.stage_reports(evidence, destination, outcomes)
+                    ci.stage_reports(evidence, destination, outcomes, evidence / 'bundle')
                 self.assertFalse(ci.read(destination / 'ci-status.json')['all_required_steps_succeeded'])
 
 
@@ -405,7 +443,7 @@ class AndroidArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner = ci.Runner(root / 'work', root / 'evidence', 'android_native')
-            with patch.object(runner, 'android_native', side_effect=ci.ArchiveInputError('export_archive_missing', 'unwind')), self.assertRaises(ci.ArchiveInputError):
+            with patch.object(runner, 'bind_context'), patch.object(runner, 'android_native', side_effect=ci.ArchiveInputError('export_archive_missing', 'unwind')), self.assertRaises(ci.ArchiveInputError):
                 runner.execute()
             value = ci.read(runner.evidence / 'android_native.json')
             self.assertEqual(value['missing_archive'], 'unwind')
@@ -443,8 +481,8 @@ class B2GateTests(unittest.TestCase):
                     ci.verify_b2_inventory(bad, package)
 
     def test_complete_b2_report_no_production_claim(self):
-        value = checks('rust_linux')
-        ci.validate_checks('rust_linux', value)
+        value = checks('b2_linux')
+        ci.validate_checks('b2_linux', value, CONTEXT)
         for mutate in (
             lambda v: v['b2_real_matrix']['cases'].pop(next(iter(ci.B2_REAL_CASES))),
             lambda v: v['b2_real_matrix'].update(production_admitted=True),
@@ -455,7 +493,7 @@ class B2GateTests(unittest.TestCase):
             bad = copy.deepcopy(value)
             mutate(bad)
             with self.assertRaises(ValueError):
-                ci.validate_checks('rust_linux', bad)
+                ci.validate_checks('b2_linux', bad, CONTEXT)
 
     def test_notice_inventory_does_not_claim_apk_verification(self):
         value = checks('tools')

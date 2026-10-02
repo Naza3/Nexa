@@ -1,5 +1,7 @@
 # T07-B1 原生 CPU 验证（2026-10-02）
 
+下文为原B1身份的历史验证。后续13文件修改注释使用新patch-set `dfe571d08b1583e39d7ce271eb289ebc91c06b88261a3c83fdef1e53dc062b80`，也曾通过独立原生复验。但2026-10-02 06:34 UTC环境整体丢失，旧产物、日志和B2保留副本不再存在。补丁源码已精确恢复，随后至07:20 UTC又完成全部原生重编/真实/独立baseline回归，当前dfe库与manifest实际重现历史字节身份；这是新执行，不是仅据源码恢复宣称通过。旧43cc B2 backup仍未恢复；新证据及边界见[修改标记记录](../mnn-patches/MODIFICATION_NOTICES.md)。
+
 状态：原生请求切片已实现并完成下列 Linux 开发验证、Android arm64 交叉构建；不等于完整 T07-B 或 Android 真机/产品准入。仅改 `native/mnn-shim/`、`native/mnn-patches/`；未修改 Windows 或共享原始 MNN checkout，未提交/推送。
 
 ## 固定身份

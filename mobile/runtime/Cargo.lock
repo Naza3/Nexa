@@ -177,11 +177,14 @@ dependencies = [
 name = "mnn-executor"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mnn-adapter",
  "mnn-model-store",
  "runtime-core",
  "runtime-types",
+ "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

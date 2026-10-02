@@ -70,9 +70,19 @@ jobs:
       - name: Verify real native requests independent upstream comparison privacy and cancellation
         id: native_real
         run: python scripts/android_mnn/b1_ci.py run native_real --work "$WORK" --evidence "$EVIDENCE"
-      - name: Verify Rust B1 gates and four explicit B2 store executor real tests
+      - name: Verify Rust B1 unit compile-fail artifact negatives and real model
         id: rust_linux
         run: python scripts/android_mnn/b1_ci.py run rust_linux --work "$WORK" --evidence "$EVIDENCE"
+      - name: Seal same-run B1 research evidence for test-only B2
+        id: research_receipt
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' && steps.inputs.outcome == 'success' && steps.patch.outcome == 'success' && steps.baseline.outcome == 'success' && steps.linux_native.outcome == 'success' && steps.native_real.outcome == 'success' && steps.rust_linux.outcome == 'success' }}
+        run: |
+          python scripts/android_mnn/b1_ci.py run research_receipt --work "$WORK" --evidence "$EVIDENCE" \
+            --prerequisite-outcomes 'tools:${{ steps.tools.outcome }},inputs:${{ steps.inputs.outcome }},patch:${{ steps.patch.outcome }},baseline:${{ steps.baseline.outcome }},linux_native:${{ steps.linux_native.outcome }},native_real:${{ steps.native_real.outcome }},rust_linux:${{ steps.rust_linux.outcome }}'
+      - name: Verify all four explicit B2 real store executor tests with same-run evidence
+        id: b2_linux
+        if: ${{ !cancelled() && steps.research_receipt.outcome == 'success' }}
+        run: python scripts/android_mnn/b1_ci.py run b2_linux --work "$WORK" --evidence "$EVIDENCE"
       - name: Cross-build Android C ABI and export pinned static link closure
         id: android_native
         if: ${{ !cancelled() && steps.tools.outcome == 'success' && steps.inputs.outcome == 'success' && steps.patch.outcome == 'success' }}
@@ -88,8 +98,8 @@ jobs:
       - name: Gate complete evidence and preserve sanitized failure reports
         if: ${{ always() }}
         run: |
-          python scripts/android_mnn/b1_ci.py stage --evidence "$EVIDENCE" --destination artifacts/t07b1-upload \
-            --outcomes 'tools:${{ steps.tools.outcome }},inputs:${{ steps.inputs.outcome }},patch:${{ steps.patch.outcome }},baseline:${{ steps.baseline.outcome }},linux_native:${{ steps.linux_native.outcome }},native_real:${{ steps.native_real.outcome }},rust_linux:${{ steps.rust_linux.outcome }},android_native:${{ steps.android_native.outcome }},rust_android:${{ steps.rust_android.outcome }},elf:${{ steps.elf.outcome }}'
+          python scripts/android_mnn/b1_ci.py stage --evidence "$EVIDENCE" --destination artifacts/t07b1-upload --receipt-bundle "$WORK/research-bundle" \
+            --outcomes 'tools:${{ steps.tools.outcome }},inputs:${{ steps.inputs.outcome }},patch:${{ steps.patch.outcome }},baseline:${{ steps.baseline.outcome }},linux_native:${{ steps.linux_native.outcome }},native_real:${{ steps.native_real.outcome }},rust_linux:${{ steps.rust_linux.outcome }},research_receipt:${{ steps.research_receipt.outcome }},b2_linux:${{ steps.b2_linux.outcome }},android_native:${{ steps.android_native.outcome }},rust_android:${{ steps.rust_android.outcome }},elf:${{ steps.elf.outcome }}'
       - name: Upload only sanitized JSON evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

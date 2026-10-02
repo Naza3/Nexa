@@ -9,3 +9,9 @@
 13个目标的before/after SHA256、补丁顺序/每文件SHA256和patch-set身份全部在`lock.json`。`identity.py`只接受精确干净原版、新建私有副本；应用后核对完整目标集合与postimage，目标文件不允许symlink。已有上游非修改symlink原样保留，不用解引用改变Git身份。
 
 MNN原版源代码/许可由调用者已锁checkout提供（Apache-2.0）；这些patch不打包上游完整代码或模型。构建/测试/限制见[shim README](../mnn-shim/README.md)与[验证记录](../mnn-shim/VERIFICATION.md)。
+
+## 显著修改标记与环境恢复
+
+全部13个目标在第一行带`Nexa modifications (2026-10-02)`及对应修改用途；其余上游版权和源码字节原样保留。`modification-notice-verification.json`记录旧/新postimage及剥离注释比对，`verify_modification_notices.py --source CLEAN_UPSTREAM`只复制13个目标到临时目录精确重放。2026-10-02 06:34 UTC环境整体丢失后，3patch/hash/lock已精确恢复；历史产物和旧B2保留副本已丢失，不能把源码恢复当作重建验证通过。当前状态见[记录](MODIFICATION_NOTICES.md)。
+
+本目录`.gitattributes`仅允许unified patch的空白上下文标记（空源码行以单个空格编码）；`git apply --whitespace=error`仍检查实际新增源代码。

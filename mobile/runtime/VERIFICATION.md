@@ -93,3 +93,18 @@
 正常成功/取消/可恢复失败的 usage 来自 adapter 已知计数。现有 `ExecutorEvent::Faulted` 不带 usage；不可恢复错误的最终 completion 计数无法交给共享 core，终态中的默认 0 不代表精确计数。按已审定边界仅发一次 Faulted，禁止先 GenerationFailed 再 Faulted，未改 Windows DTO。cleanup 无法确认时永久不可用并保守 pin lease，绝不假 Unloaded；Drop 不强杀线程/异线程释放 native。宿主 panic hook/abort 限制沿用 B1。
 
 本地原始证据目录：`/workspace/shared/nexa-mnn-b2-verification/`，含 unit.log、unit-final.log、clippy.log、real.log、fault-timeout-drop-final.log、mobile/root-metadata.json、isolation.json、production-build.log、production-symbols.txt、后续 android-final/ELF 报告。未 stage/commit/push，由主代理整合。本文 B1 历史段中的“只有 adapter/Executor 未完成”等仅描述 B1 当时范围，以本节为 B2 增量事实。
+
+
+## 同次研究凭据改造（2026-10-02，恢复后本地完整链通过）
+
+原有历史结果属于对应已冻结源码。凭据实现新增executor cfg(test)私有消费者及dev-only serde/sha2/libc，生产没有receipt入口；同批次另包含root审查并实现的cleanup-unconfirmed永久pin修复，不能泛称整个批次无生产变化。
+
+本次重新验证：34项Rust单元、4项compile-fail、fmt/clippy通过；包括7项receipt格式/文件/身份/命名空间测试、缺坏凭据不静态回退的子进程测试及2项生产cleanup回归。helper为85 pass/1 actionlint缺工具skip。独立只读审查无P0/P1阻塞，并单独重跑receipt Python 11/11。
+
+独立新work实际通过12阶段，包含七个真实B1前置→原子只读receipt→四项显式B2，以及Android native/Rust/五ELF门禁。`stage_reports`真实复验得到`evidence_verified=true`、missing/invalid为空，七份proof及receipt上传原始字节SHA完全一致。该上下文为`local-verification/source_clean=false`，故clean CI总门禁按预期非零且`all_required_steps_succeeded=false`；不是GitHub成功。
+
+Linux完整manifest为`b8b4d8efb06388f49c6457d177997f2bf630c5dceeb9ec190d3cc245a313372d`，Android为`6ff7a9625cd8bf1135e3f82fa36095da4f4f27ebc0ac808c474020e62e1cb750`；receipt为`eff52f1647843347110100c704812b900e39406ce2d22c26b2b7da3f262a6e6b`。执行时源码范围快照`8f618bd1c220095e62182a3ee29f1303fb0eeb8f470fc3f914e630b679049c6a`，之后仅补写本记录。本地证据`/workspace/shared/nexa-receipt-complete/complete-verification.json`及`verified-upload/`。
+
+本地复用Linux Makefiles/Android Ninja缓存但重跑全部build/audit/hash和真实门禁；NDK ZIP哈希引用本环境恢复时的校验，本轮重新验properties/clang/五模型文件。容器ptrace使LSan不可用，本地只禁leak扫描，ASan/UBSan仍实际运行。GitHub路径保持全新Ninja构建和ZIP实际下载/hash。生产rlib实际无receipt/test工厂符号或相关环境变量字符串，normal直接依赖不变、registry版本与checksum未升级。
+
+凭据不证明产品支持或防伪认证。最终仍需独立核验精确新GitHub commit/run/outcome/产物；Android仅完成链接/静态审计，未执行设备测试。完整边界见[CI记录](../../scripts/android_mnn/B1_CI.md)。

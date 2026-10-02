@@ -1,6 +1,6 @@
 # Android MNN 原生第三方 notice 源文件包
 
-本目录是 CPU 文本 profile 的可复核许可/归属库存，不是完整产品合规保证，也不代表最终 APK 或 `.so` 链接闭包已验证。此轮仅新增本目录，未改变 native 源码、patch、header、lock、构建脚本或 artifact 身份。
+本目录是 CPU 文本 profile 的可复核许可/归属库存，不是完整产品合规保证，也不代表最终 APK 或 `.so` 链接闭包已验证。初次整理仅新增本目录。后续修改标记及环境恢复状态见下方第1项；许可源文件和组件manifest未改动。
 
 ## 校验
 
@@ -41,7 +41,7 @@ python -B native/mnn-shim/notices/verify.py
 
 ## 尚待完成的发行门槛
 
-1. Apache许可修改文件的显著变更标记尚未补齐；须后续单独改patch并重锁身份，本轮不动
+1. **修改标记源码已补齐并精确恢复（2026-10-02）**：13个目标均有显著`Nexa modifications`用途注释，剥离后等于旧postimage，原版权保留；新patch-set为`dfe571d08b1583e39d7ce271eb289ebc91c06b88261a3c83fdef1e53dc062b80`。历史原生复验曾通过，但06:34 UTC整体环境丢失导致产物/日志/旧B2保留副本消失；至07:20 UTC，两平台原生重新构建、Linux真实/独立原版对照/privacy/sanitizer、日志审计及Android export/hash/16KiB ELF已重新通过；新dfe产物实际重现历史字节身份，但旧43cc B2 backup仍未恢复。见[修改标记记录](../../mnn-patches/MODIFICATION_NOTICES.md)，不据源码恢复授予Rust/产品/手机准入
 2. APK必须实际包含notice资产，并提供用户可访问的许可入口；打包完成后核对文件、hash和入口
 3. 对最终 `.so`/APK保存链接map并检查实际静态库成员、DT_NEEDED和打包文件，不将当前测试ELF或artifact目录库存当作最终闭包
 4. Rust、Flutter、Android应用壳及以后启用的后端/功能依赖需另行审计；模型许可也不由此包覆盖

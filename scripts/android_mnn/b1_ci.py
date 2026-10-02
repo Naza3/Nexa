@@ -18,10 +18,11 @@ import time
 
 import ci_verify
 import run_probe
+import research_receipt as receipt
 
 ROOT = Path(__file__).resolve().parents[2]
 STAGES = ('tools', 'inputs', 'patch', 'baseline', 'linux_native', 'native_real',
-          'rust_linux', 'android_native', 'rust_android', 'elf')
+          'rust_linux', 'research_receipt', 'b2_linux', 'android_native', 'rust_android', 'elf')
 TARGET = 'aarch64-linux-android'
 SHA = re.compile(r'[0-9a-f]{64}')
 
@@ -219,7 +220,7 @@ FIXED_ERRORS = {
 FAILURE_CASES |= {'export_archive_architecture', 'export_archive_path_mismatch', 'export_resource_dir_mismatch'}
 FAILURE_CASES |= {value for mapping in FIXED_ERRORS.values() for value in mapping.values()}
 FAILURE_CASES |= {case_id for _, case_id in B2_REAL_CASES.values()}
-STAGE_FAILURE_CASES = FAILURE_CASES | ELF_FAILURE_CASES | {'stage_validation_failed', 'previous_cleanup_unconfirmed', 'b2_test_inventory_mismatch'}
+STAGE_FAILURE_CASES = FAILURE_CASES | ELF_FAILURE_CASES | {'stage_validation_failed', 'previous_cleanup_unconfirmed', 'b2_test_inventory_mismatch', 'research_receipt_rejected', 'source_context_mismatch'}
 
 
 def command_category(command):
@@ -372,7 +373,10 @@ class Runner:
         self.work, self.evidence, self.stage = work.resolve(), evidence.resolve(), stage
         self.work.mkdir(parents=True, exist_ok=True)
         self.evidence.mkdir(parents=True, exist_ok=True)
-        self.result = {'schema': 1, 'stage': stage, 'status': 'failed', 'android_run': False,
+        self.context_mode = 'github-ci'
+        self.prerequisite_outcomes = None
+        self.context = None
+        self.result = {'schema': 2, 'context': None, 'stage': stage, 'status': 'failed', 'android_run': False,
                        'exit_codes': [], 'commands': [], 'failure_case': 'stage_validation_failed', 'missing_archive': None, 'checks': {}}
         self.env = dict(os.environ, RUSTUP_TOOLCHAIN='1.98.1', CARGO_BUILD_JOBS='2',
                         CARGO_INCREMENTAL='0', CMAKE_BUILD_PARALLEL_LEVEL='2')
@@ -383,6 +387,16 @@ class Runner:
         self.ndk = self.inputs / 'android-ndk-r30'
         self.toolchain = self.ndk / 'toolchains/llvm/prebuilt/linux-x86_64'
         self.config = self.work / 'runtime.json'
+
+    def bind_context(self):
+        if self.stage == 'tools':
+            self.context = receipt.initialize(self.evidence, self.context_mode)
+        else:
+            self.context = receipt.load_context(self.evidence)
+        self.result['context'] = self.context
+
+    def linux_compilers(self):
+        return ('cc', 'c++') if self.context and self.context['mode'] == 'local-verification' else ('/usr/bin/gcc-13', '/usr/bin/g++-13')
 
     def run(self, command, timeout=600, env=None):
         index = len(self.result['exit_codes'])
@@ -412,12 +426,13 @@ class Runner:
             args += [f'-DCMAKE_TOOLCHAIN_FILE={self.ndk}/build/cmake/android.toolchain.cmake',
                      '-DANDROID_ABI=arm64-v8a', '-DANDROID_PLATFORM=android-28']
         else:
-            args += ['-DCMAKE_C_COMPILER=/usr/bin/gcc-13', '-DCMAKE_CXX_COMPILER=/usr/bin/g++-13']
+            cc, cxx = self.linux_compilers()
+            args += ['-DCMAKE_C_COMPILER=' + cc, '-DCMAKE_CXX_COMPILER=' + cxx]
         self.run(args)
         self.run(['cmake', '--build', directory, '-j2'], timeout=900)
 
     def export(self, directory, android=False):
-        compiler = self.toolchain / 'bin/clang++' if android else Path('/usr/bin/g++-13')
+        compiler = self.toolchain / 'bin/clang++' if android else self.linux_compilers()[1]
         identity = self.run([compiler, '--version']).splitlines()[0]
         args = [directory, '--target', TARGET if android else 'x86_64-unknown-linux-gnu', '--compiler', identity]
         native_archives = {'nexa-mnn-shim': directory / 'libnexa-mnn-shim.a', 'MNN': directory / 'mnn/libMNN.a'}
@@ -467,18 +482,20 @@ class Runner:
 
     def tools(self):
         self.python('scripts/android_mnn/ci_verify.py', 'tools', '--report', self.work / 'tools-input.json')
-        require(self.run(['/usr/bin/g++-13', '-dumpfullversion']).strip() == '13.3.0')
-        require(self.run(['/usr/bin/gcc-13', '-dumpfullversion']).strip() == '13.3.0')
+        cc, cxx = self.linux_compilers()
+        gcc = '14.2.0' if self.context['mode'] == 'local-verification' else '13.3.0'
+        require(self.run([cxx, '-dumpfullversion']).strip() == gcc)
+        require(self.run([cc, '-dumpfullversion']).strip() == gcc)
         require(self.run(['rustc', '--version']).startswith('rustc 1.98.1 '))
         require(self.run(['cargo', '--version']).startswith('cargo 1.98.1 '))
         require(TARGET in self.run(['rustup', 'target', 'list', '--installed']).splitlines())
         identity = ci_verify.source_identity()
-        require(identity['source_clean'])
+        require(identity['source_clean'] or self.context['mode'] == 'local-verification')
         require(self.run(['git', '-C', self.source, 'rev-parse', 'HEAD']).strip() == run_probe.MNN_COMMIT)
         require(not self.run(['git', '-C', self.source, 'status', '--porcelain', '--untracked-files=all']).strip())
         self.python('-m', 'unittest', 'discover', '-s', 'scripts/android_mnn', '-p', 'test_*.py')
         self.python('native/mnn-shim/notices/verify.py')
-        self.result['checks'] = {'source': identity, 'gcc': '13.3.0', 'rust': '1.98.1', 'cmake': '4.4.3', 'ninja': '1.13.2',
+        self.result['checks'] = {'source': identity, 'gcc': gcc, 'rust': '1.98.1', 'cmake': '4.4.3', 'ninja': '1.13.2',
                                  'notice_inventory': notice_identity()}
 
     def inputs_stage(self):
@@ -511,7 +528,7 @@ class Runner:
         self.run(['ctest', '--test-dir', directory, '--output-on-failure'])
         self.export(directory)
         sanitizer = self.work / 'stream-asan'
-        self.run(['/usr/bin/g++-13', '-std=c++17', '-UNDEBUG', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+        self.run([self.linux_compilers()[1], '-std=c++17', '-UNDEBUG', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                   '-I', 'native/mnn-shim/src', 'native/mnn-shim/tests/stream_buffer_test.cpp', '-o', sanitizer])
         self.run([sanitizer])
         self.result['checks']['ctest_and_stream_sanitizers'] = True
@@ -551,7 +568,7 @@ class Runner:
             binaries = parse_android_artifacts(output, self.work / 'rust-android')
             ci_verify.write(self.work / 'android-binaries.private.json', binaries)
         self.python('mobile/runtime/scripts/test_artifact_gate.py', env=env)
-        compiler = self.toolchain / 'bin/aarch64-linux-android28-clang' if android else Path('/usr/bin/gcc-13')
+        compiler = self.toolchain / 'bin/aarch64-linux-android28-clang' if android else self.linux_compilers()[0]
         abi = self.work / ('abi-android.o' if android else 'abi-linux')
         self.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-I', 'native/mnn-shim/include',
                   *(['-c'] if android else []), 'mobile/runtime/crates/mnn-adapter/tests/abi_layout.c', '-o', abi])
@@ -567,7 +584,25 @@ class Runner:
             manifest_path = self.work / 'linux/artifact/artifact.json'
             verify_rust_identity(output, read(manifest_path), digest(manifest_path))
             self.result['checks']['linked_manifest_sha256'] = digest(manifest_path)
-            self.b2_real_tests()
+
+    def research_receipt(self):
+        # A real linked identity check also gives this pure validation stage a
+        # bounded command outcome; no synthetic success command is invented.
+        env, command = self.cargo('run', '--quiet', '--example', 'build_identity')
+        output = self.run(command, env=env)
+        artifact = self.work / 'linux/artifact'
+        verify_rust_identity(output, read(artifact / 'artifact.json'), digest(artifact / 'artifact.json'))
+        self.python('native/mnn-shim/prepare_research_config.py', '--model-root', self.model,
+                    '--output', self.work / 'receipt-verified-runtime.json')
+        result = receipt.mint(self.evidence, self.work / 'research-bundle', artifact,
+                              self.prerequisite_outcomes, sanitize_report, work=self.work)
+        self.result['checks'] = result
+
+    def b2_linux(self):
+        result = receipt.verify_bundle(self.work / 'research-bundle/receipt.json', self.context, self.evidence, sanitize_report, artifact=self.work / 'linux/artifact')
+        self.b2_real_tests()
+        self.result['checks']['receipt'] = result
+        receipt.verify_bundle(self.work / 'research-bundle/receipt.json', self.context, self.evidence, sanitize_report, artifact=self.work / 'linux/artifact')
 
     def b2_real_tests(self):
         # This only supplies the already hash-locked fixed candidate. Research
@@ -584,6 +619,8 @@ class Runner:
             env, command = self.cargo('test', '-p', package, '--lib', name,
                                       '--', '--ignored', '--exact', '--test-threads=1')
             env['NEXA_MNN_TEST_MODEL'] = str(self.model)
+            env['NEXA_MNN_B2_RESEARCH_RECEIPT'] = str(self.work / 'research-bundle/receipt.json')
+            env['NEXA_MNN_B2_CONTEXT'] = json.dumps(self.context, sort_keys=True, separators=(',', ':'))
             self.result['failure_case'] = case_id
             output = self.run(command, env=env, timeout=900)
             verify_b2_execution(output, name)
@@ -616,14 +653,19 @@ class Runner:
             if (self.work / 'cleanup-unconfirmed').exists():
                 self.result['failure_case'] = 'previous_cleanup_unconfirmed'
                 raise ValueError('previous_cleanup_unconfirmed')
+            self.bind_context()
             if self.stage == 'inputs':
                 self.inputs_stage()
             elif self.stage in ('rust_linux', 'rust_android'):
                 self.rust_stage(self.stage == 'rust_android')
             else:
                 getattr(self, self.stage)()
+            receipt.check_current(self.context)
             self.result['status'] = 'ok'
             self.result['failure_case'] = 'none'
+        except receipt.ReceiptError:
+            self.result['failure_case'] = 'research_receipt_rejected'
+            raise
         except ElfAuditError as error:
             self.result['failure_case'] = error.failure_case
             raise
@@ -719,7 +761,9 @@ CHECK_KEYS = {
     'patch': {'pristine_source_unchanged'}, 'baseline': {'unpatched_probe_ctest'},
     'linux_native': {'artifact', 'logging_audit', 'ctest_and_stream_sanitizers'},
     'native_real': {'upstream_exact', 'privacy_canaries', 'prompt_tokens', 'completion_tokens', 'cancel_safe_return_ms'},
-    'rust_linux': {'clippy', 'abi_layout', 'artifact_negative', 'unit_compile_fail_and_real_model', 'linked_manifest_sha256', 'b2_real_matrix'},
+    'rust_linux': {'clippy', 'abi_layout', 'artifact_negative', 'unit_compile_fail_and_real_model', 'linked_manifest_sha256'},
+    'research_receipt': {'receipt_sha256', 'context_id', 'manifest_sha256', 'research_only', 'production_admitted', 'mode'},
+    'b2_linux': {'b2_real_matrix', 'receipt'},
     'android_native': {'artifact', 'logging_audit'},
     'rust_android': {'clippy', 'abi_layout', 'artifact_negative', 'final_elf_link'},
     'elf': set(ANDROID_TARGETS),
@@ -732,19 +776,24 @@ def validate_identity(value):
     require(type(value['source_clean']) is bool)
 
 
-def validate_checks(stage, checks):
+def validate_checks(stage, checks, context=None):
     require(set(checks) == CHECK_KEYS[stage])
     lock = read(ROOT / 'native/mnn-patches/lock.json')
+    if stage == 'research_receipt':
+        validate_receipt_result(checks, context)
+        return
     for key, value in checks.items():
         if key == 'source':
             validate_identity(value)
-            require(value['source_clean'])
+            require(value['source_clean'] or (context and context['mode'] == 'local-verification'))
         elif key in ('gcc', 'rust', 'cmake', 'ninja', 'ndk_revision', 'ndk_sha256', 'model_lock_sha256'):
-            require(value == {'gcc': '13.3.0', 'rust': '1.98.1', 'cmake': '4.4.3', 'ninja': '1.13.2',
+            require(value == {'gcc': '14.2.0' if context and context['mode'] == 'local-verification' else '13.3.0', 'rust': '1.98.1', 'cmake': '4.4.3', 'ninja': '1.13.2',
                 'ndk_revision': ci_verify.NDK['revision'], 'ndk_sha256': ci_verify.NDK['sha256'],
                 'model_lock_sha256': digest(run_probe.LOCK)}[key])
         elif key == 'notice_inventory':
             require(value == notice_identity() and value['components'] == 12 and value['final_apk_verified'] is False)
+        elif key == 'receipt':
+            validate_receipt_result(value, context)
         elif key == 'b2_real_matrix':
             require(value == {'cases': {name: 'pass' for name in B2_REAL_CASES}, 'research_only': True,
                               'production_admitted': False, 'model_lock_sha256': digest(run_probe.LOCK)})
@@ -789,6 +838,13 @@ def validate_checks(stage, checks):
             require(value is True)
 
 
+def validate_receipt_result(value, context):
+    require(isinstance(value, dict) and set(value) == CHECK_KEYS['research_receipt'])
+    require(all(isinstance(value[k], str) and SHA.fullmatch(value[k]) for k in ('receipt_sha256', 'context_id', 'manifest_sha256')))
+    require(value['research_only'] is True and value['production_admitted'] is False)
+    require(context and value['context_id'] == context['context_id'] and value['mode'] == context['mode'])
+
+
 def validate_commands(commands, exit_codes):
     require(isinstance(commands, list) and len(commands) == len(exit_codes))
     for index, command in enumerate(commands):
@@ -817,30 +873,33 @@ def validate_commands(commands, exit_codes):
 
 
 def sanitize_report(stage, report):
-    require(set(report) == {'schema', 'stage', 'status', 'android_run', 'exit_codes', 'commands', 'failure_case', 'missing_archive', 'checks'})
-    require(report['schema'] == 1 and report['stage'] == stage and report['status'] in ('ok', 'failed') and report['android_run'] is False)
+    require(set(report) == {'schema', 'context', 'stage', 'status', 'android_run', 'exit_codes', 'commands', 'failure_case', 'missing_archive', 'checks'})
+    require(type(report['schema']) is int and report['schema'] == 2 and report['stage'] == stage and report['status'] in ('ok', 'failed') and report['android_run'] is False)
+    if report['context'] is not None:
+        receipt.validate_context(report['context'])
     require(isinstance(report['exit_codes'], list) and len(report['exit_codes']) <= 32)
     require(all(type(code) is int and -128 <= code <= 255 for code in report['exit_codes']))
     require(report['failure_case'] in STAGE_FAILURE_CASES)
     require(report['missing_archive'] is None or report['missing_archive'] in ARCHIVE_NAMES)
     require(report['missing_archive'] is None or report['failure_case'] == 'export_archive_missing')
     validate_commands(report['commands'], report['exit_codes'])
-    if stage not in ('baseline', 'linux_native', 'rust_linux', 'android_native', 'rust_android'):
+    if stage not in ('baseline', 'linux_native', 'rust_linux', 'research_receipt', 'b2_linux', 'android_native', 'rust_android'):
         require(all(not command['diagnostics'] for command in report['commands']))
     if report['status'] == 'ok':
         require(report['failure_case'] == 'none')
         require(all(command['failure_case'] == 'none' for command in report['commands']))
         require(report['exit_codes'] and all(code == 0 for code in report['exit_codes']))
-        validate_checks(stage, report['checks'])
+        require(report['context'] is not None)
+        validate_checks(stage, report['checks'], report['context'])
     else:
         require(report['failure_case'] != 'none')
     # Failure reports retain exit codes but never partial/unvalidated nested content.
     return dict(report, checks=report['checks'] if report['status'] == 'ok' else {})
 
 
-def stage_reports(evidence, destination, outcomes):
+def stage_reports(evidence, destination, outcomes, receipt_bundle):
     destination.mkdir(parents=True, exist_ok=False)
-    status = {'schema': 1, 'android_run': False, 'all_required_steps_succeeded': False,
+    status = {'schema': 2, 'android_run': False, 'all_required_steps_succeeded': False,
               'evidence_verified': False, 'invalid_reports': [], 'missing_reports': []}
     try:
         pairs = [item.split(':', 1) for item in outcomes.split(',')]
@@ -849,6 +908,12 @@ def stage_reports(evidence, destination, outcomes):
         require(set(states) == set(STAGES) and all(v in ('success', 'failure', 'cancelled', 'skipped') for v in states.values()))
         status['steps'] = states
         status.update(ci_verify.source_identity())
+        context = None
+        try:
+            context = receipt.load_context(evidence)
+        except (ValueError, KeyError, TypeError, OSError):
+            status['invalid_reports'].append('context')
+        status['context'] = context
         reports = {}
         for name in STAGES:
             path = evidence / (name + '.json')
@@ -856,15 +921,32 @@ def stage_reports(evidence, destination, outcomes):
                 status['missing_reports'].append(name)
                 continue
             try:
-                reports[name] = sanitize_report(name, read(path))
-                ci_verify.write(destination / path.name, reports[name])
-            except (ValueError, KeyError, TypeError):
+                raw = receipt.file_bytes(path.absolute())
+                reports[name] = sanitize_report(name, receipt.parse_bytes(raw))
+                if reports[name]['status'] == 'ok':
+                    # Preserve exact verified bytes so uploaded proof hashes remain reproducible.
+                    (destination / path.name).write_bytes(raw)
+                else:
+                    ci_verify.write(destination / path.name, reports[name])
+                require(context is not None and reports[name]['context'] == context)
+            except (ValueError, KeyError, TypeError, OSError):
                 status['invalid_reports'].append(name)
-        status['evidence_verified'] = (not status['missing_reports'] and not status['invalid_reports']
+        reports_valid = (not status['missing_reports'] and not status['invalid_reports']
             and all(r['status'] == 'ok' for r in reports.values()))
-        if status['evidence_verified']:
-            require(reports['rust_linux']['checks']['linked_manifest_sha256'] == reports['linux_native']['checks']['artifact']['manifest_sha256'])
-            require(reports['tools']['checks']['source'] == {key: status[key] for key in ('source_commit', 'source_tree', 'source_clean')})
+        if reports_valid:
+            try:
+                bundle_path = receipt_bundle / 'receipt.json'
+                bundle_result = receipt.verify_bundle(bundle_path, context, evidence, sanitize_report, artifact=receipt_bundle.parent / 'linux/artifact')
+                require(reports['research_receipt']['checks'] == bundle_result and reports['b2_linux']['checks']['receipt'] == bundle_result)
+                receipt_bytes = receipt.file_bytes(bundle_path, readonly=True)
+                require(receipt.sha(receipt_bytes) == bundle_result['receipt_sha256'])
+                require(reports['rust_linux']['checks']['linked_manifest_sha256'] == reports['linux_native']['checks']['artifact']['manifest_sha256'])
+                require(reports['tools']['checks']['source'] == {key: status[key] for key in ('source_commit', 'source_tree', 'source_clean')})
+                (destination / 'research-receipt.json').write_bytes(receipt_bytes)
+                status['evidence_verified'] = True
+            except (ValueError, KeyError, TypeError, OSError):
+                status['invalid_reports'].append('research_bundle')
+                raise
         status['all_required_steps_succeeded'] = (status['evidence_verified'] and status['source_clean']
                                                  and all(value == 'success' for value in states.values()))
     finally:
@@ -879,16 +961,23 @@ def main():
     run.add_argument('stage', choices=STAGES)
     run.add_argument('--work', type=Path, required=True)
     run.add_argument('--evidence', type=Path, required=True)
+    run.add_argument('--context-mode', choices=('github-ci', 'local-verification'), default='github-ci')
+    run.add_argument('--prerequisite-outcomes')
     stage = sub.add_parser('stage')
     stage.add_argument('--evidence', type=Path, required=True)
     stage.add_argument('--destination', type=Path, required=True)
     stage.add_argument('--outcomes', required=True)
+    stage.add_argument('--receipt-bundle', type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == 'run':
-            Runner(args.work, args.evidence, args.stage).execute()
+            runner = Runner(args.work, args.evidence, args.stage)
+            runner.context_mode = args.context_mode
+            runner.prerequisite_outcomes = args.prerequisite_outcomes
+            require(args.stage == 'research_receipt' or args.prerequisite_outcomes is None)
+            runner.execute()
         else:
-            stage_reports(args.evidence, args.destination, args.outcomes)
+            stage_reports(args.evidence, args.destination, args.outcomes, args.receipt_bundle)
     except Exception:
         # Deliberately fixed failure marker: paths, prompts, compiler logs and canaries remain private.
         print('T07-B1 required stage failed; inspect sanitized stage outcomes', file=sys.stderr)
