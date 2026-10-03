@@ -140,6 +140,32 @@ fn gguf_header(reader: &mut impl Read) -> bool {
     reader.read_exact(&mut magic).is_ok() && magic == *b"GGUF"
 }
 
+fn owned_download_partial(root: &Path, relative: &str) -> Result<bool, &'static str> {
+    let parts: Vec<_> = relative.split('/').collect();
+    let allowed = parts.len() == 1
+        || (parts.len() == 2
+            && (parts[0].eq_ignore_ascii_case("model") || parts[0].eq_ignore_ascii_case("models")));
+    if !allowed {
+        return Ok(false);
+    }
+    let name = parts.last().unwrap();
+    let Some(id) = name
+        .strip_prefix(".nexa-download-")
+        .and_then(|s| s.strip_suffix(".part"))
+    else {
+        return Ok(false);
+    };
+    if !uuid::Uuid::parse_str(id).is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == id) {
+        return Ok(false);
+    }
+    // Inert leftovers are tolerated, never opened as models, executed or deleted.
+    let file = regular_file(&root.join(relative))?;
+    Ok(fs::metadata(file)
+        .map_err(|_| "package_file_unavailable")?
+        .len()
+        <= 16 * 1024 * 1024 * 1024)
+}
+
 fn external_root_model(root: &Path, relative: &str) -> Result<bool, &'static str> {
     // Only undeclared direct children of root, model/ or models/ are candidates.
     // This is not model validation or import, and never hashes the model body.
@@ -220,7 +246,15 @@ fn verify(
     inventory(root, root, &mut actual, &mut directories)?;
     actual.remove("SHA256SUMS");
     let declared_names = declared.keys().cloned().collect::<BTreeSet<_>>();
+    let mut partial_count = 0;
     for name in actual.difference(&declared_names) {
+        if allow_external_root_models && owned_download_partial(root, name)? {
+            partial_count += 1;
+            if partial_count > 64 {
+                return Err("package_unlisted_file");
+            }
+            continue;
+        }
         if !allow_external_root_models || !external_root_model(root, name)? {
             return Err("package_unlisted_file");
         }
@@ -446,6 +480,46 @@ pub(crate) mod tests {
                 Err("package_unlisted_file")
             ));
             fs::remove_dir(directory.join("nested")).unwrap();
+        }
+    }
+
+    #[test]
+    fn owned_partial_leftovers_do_not_block_restart_or_weaken_package_integrity() {
+        for folder in ["", "model", "models"] {
+            let temp = tempfile::tempdir().unwrap();
+            complete_fixture(temp.path());
+            let target = temp.path().join(folder);
+            if !folder.is_empty() {
+                fs::create_dir(&target).unwrap();
+            }
+            let manifest = fs::read(temp.path().join("manifest.json")).unwrap();
+            let sums = fs::read(temp.path().join("SHA256SUMS")).unwrap();
+            let name = format!(".nexa-download-{}.part", uuid::Uuid::new_v4());
+            fs::write(target.join(&name), b"incomplete inert bytes").unwrap();
+            assert!(
+                validate(&temp.path().join("nexa-desktop.exe")).is_ok(),
+                "{folder}"
+            );
+            assert_eq!(
+                fs::read(temp.path().join("manifest.json")).unwrap(),
+                manifest
+            );
+            assert_eq!(fs::read(temp.path().join("SHA256SUMS")).unwrap(), sums);
+            for bad in [
+                "arbitrary.part",
+                ".nexa-download-not-a-uuid.part",
+                ".nexa-download-00000000-0000-0000-0000-000000000000.part",
+                "extra.dll",
+            ] {
+                fs::write(target.join(bad), b"inert").unwrap();
+                assert!(validate(&temp.path().join("nexa-desktop.exe")).is_err());
+                fs::remove_file(target.join(bad)).unwrap();
+            }
+            fs::write(temp.path().join("runtime/ai-runtime.exe"), b"tampered").unwrap();
+            assert!(matches!(
+                validate(&temp.path().join("nexa-desktop.exe")),
+                Err("package_file_hash_mismatch")
+            ));
         }
     }
 

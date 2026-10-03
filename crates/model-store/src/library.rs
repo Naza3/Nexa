@@ -1,5 +1,8 @@
 //! Read-only external GGUF catalog. Only its private metadata is persisted by
 //! the owning application; this module never writes into a selected directory.
+#[path = "library_download.rs"]
+pub mod download;
+
 use crate::{ImportRequest, ModelManifest, ModelSource, ModelStorage, Result, gguf};
 use runtime_types::{ErrorCode, ModelId, ResolvedModel, RuntimeError};
 use serde::{Deserialize, Serialize};

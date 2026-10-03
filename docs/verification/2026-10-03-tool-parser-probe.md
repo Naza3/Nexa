@@ -1,6 +1,6 @@
 # W04 / T0 无模型工具parser探针
 
-日期：2026-10-03。状态：13条行为观察、隔离Release CTest4/4、主代理复验及独立审查通过；发现具体接受判定缺口。本片是证据实验，生产tools/API/协议未实现或变更，没有真实模型、工具执行或DSH结果。Windows本切片执行待精确提交CI，不能继承43ad5c2的既有结果。
+日期：2026-10-03。状态：13条行为观察、隔离Release CTest4/4、主代理复验及独立审查通过；发现具体接受判定缺口。本片是证据实验，生产tools/API/协议未实现或变更，没有真实模型、工具执行或DSH结果。后续精确提交4d30bfa的WindowsCI已通过，新增平台证据见末节；它不覆盖后来目录发现/下载工作区。
 
 ## 1. 基线、输入与改动范围
 
@@ -67,4 +67,16 @@
 
 T0已取得可复现证据：final LENIENT映射会容忍本次不完整工具结构；严格PEG全匹配可阻止部分截断，但不能验证JSON重复key/schema/调用数，且当前普通文本分支与generation prefix仍有缺口。因此尚无完整的工具与普通文本接受算法，未证明该模板家族整体工具能力。
 
-本片停在上述具体缺口，生产工具路径保持未开放。下一步只能先明确原始边界/JSON/schema/调用数与普通文本的双分支处理及反例，再单独评估生产纵向实现；不因本测试通过自动升级协议或发送工具事件。真实GGUF、原生token预算、采样停止、Windows本轮执行、官方pi-ai工具wire、DSH、无害工具闭环及用户Win10/i5-8400/16GB均未在本实验验证，既有文本/模型/交付结果保持原范围。
+本片停在上述具体缺口，生产工具路径保持未开放。下一步只能先明确原始边界/JSON/schema/调用数与普通文本的双分支处理及反例，再单独评估生产纵向实现；不因本测试通过自动升级协议或发送工具事件。本无模型实验没有验证真实工具GGUF、工具token预算/采样停止、官方pi-ai工具wire、DSH或无害工具闭环；后续Windows执行与原固定模型文本回归见末节，用户Win10/i5-8400/16GB仍待验。既有文本/模型/交付结果保持原范围。
+
+
+## 6. 精确4d30bfa WindowsCI收口
+
+[WindowsCI37115797798](https://github.com/Naza3/Nexa/actions/runs/37115797798)、job`111182258689`最终success，精确源码`4d30bfae815dbdce888f58ec6bf911834dc8dca9`、tree`ba0a30d4f56dfcb86d8fc85cf1cb86ccab2cf1c5`。主代理已下载50份封闭报告并核source/大小/hash，文档写入者再次逐文件复算全部50份一致。
+
+- Windows CTest4/4通过，0.19秒，包含新增air-tool-parser-test及stream/template/template-privacy。该结果证明固定行为观察断言在Windows成立，仍不建立工具接受算法
+- 常规Rust48组344 pass/0 fail/7 ignored。既有固定GGUF、HTTP/CLI、包及解压bridge步骤通过；它们是原文本/存储产品回归，不是工具生成或DSH闭环
+- 桌面报告`package_unchanged=true`、`native_window_tested=false`，没有用户原生窗口/目标机证据
+- 本次没有另行发送T0新二进制，最新用户已发送包仍43ad5c2。随后自动models发现、HF/MS目录下载是未包含于4d30bfa的独立工作区增量，不能继承本CI通过结论
+
+此处只关闭T0精确提交的Windows证据环节，13case暴露的LENIENT/严格完整性/schema/普通文本缺口保持原结论，生产工具路径继续未开放。

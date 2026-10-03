@@ -1,5 +1,7 @@
 import { DesktopError, safeError } from "./adapter";
 import type {
+  CatalogEntry,
+  DownloadOperation,
   ChatBatch,
   ChatRequest,
   DesktopApi,
@@ -23,6 +25,7 @@ export const LIMITS = {
   batch: 16 * 1024,
 } as const;
 export const DEFAULT_SETTINGS: Settings = {
+  download_source: "modelscope",
   context_size: 2048,
   threads: 2,
   batch_size: 128,
@@ -67,6 +70,21 @@ function validLibraryOperation(value: LibraryOperation): boolean {
     (value.status !== "failed" || value.verified_files !== 0 || failures.length === 0 || failures.length !== value.candidate_files)) return false;
   return true;
 }
+function validDownloadOperation(value: DownloadOperation): boolean {
+  const text = (value: unknown, max: number, nonempty = true) => typeof value === "string" && (!nonempty || value.length > 0) && byteLength(value) <= max && !value.includes("\0");
+  const bytes = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 16 * 1024 ** 3;
+  if (!value || typeof value !== "object" || byteLength(JSON.stringify(value)) > 64 * 1024 ||
+      !text(value.operation_id, 128) || !text(value.catalog_id, 256) || !text(value.directory_id, 128) ||
+      !text(value.file_name, 1024) || /[/\\]/.test(value.file_name) || !text(value.target_display_path, 32768) ||
+      !bytes(value.downloaded_bytes) || (value.total_bytes !== null && (!bytes(value.total_bytes) || value.total_bytes === 0)) ||
+      typeof value.terminal !== "boolean" ||
+      (value.error !== null && (!value.error || typeof value.error !== "object" ||
+        !text(value.error.code, 80) || !/^[a-z0-9_]+$/.test(value.error.code) || !text(value.error.message, 500))) ||
+      (value.result !== null && (!value.result || typeof value.result !== "object" ||
+        value.result.saved !== true || value.result.registered !== false || !text(value.result.file_name, 1024) ||
+        (value.result.cleanup_warning !== null && !text(value.result.cleanup_warning, 500, false))))) return false;
+  return true;
+}
 export type MessageState = "complete" | "streaming" | "incomplete";
 export interface SessionMessage extends WireMessage {
   id: number;
@@ -82,6 +100,12 @@ export type ChatPhase =
   | "stopping"
   | "recovery";
 export interface ViewState {
+  catalog: CatalogEntry[];
+  catalog_loading: boolean;
+  catalog_loaded: boolean;
+  download: DownloadOperation | null;
+  download_phase: "idle" | "starting" | "running" | "stopping" | "recovery";
+  discovery: "unchecked" | "checking" | "none" | "configured" | "failed";
   snapshot: Snapshot | null;
   booting: boolean;
   error: SafeError | null;
@@ -100,6 +124,7 @@ export interface ViewState {
 export const wait = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 export function validatePreferences(settings: Preferences): string | null {
+  if (!["modelscope", "huggingface"].includes(settings.download_source)) return "请选择有效的默认下载源。";
   const {
     context_size: context,
     threads,
@@ -156,6 +181,8 @@ export function checkSubmission(
 /** Owns exactly one stream across page changes. No transcript is persisted. */
 export class DesktopController {
   private state: ViewState = {
+    catalog: [], catalog_loading: false, catalog_loaded: false,
+    download: null, download_phase: "idle", discovery: "unchecked",
     snapshot: null,
     booting: true,
     error: null,
@@ -193,6 +220,7 @@ export class DesktopController {
     reading: boolean;
     lastPull: number;
   } | null = null;
+  private downloadTask: { id: string | null; catalog_id: string; source: Settings["download_source"]; directory_id: string; cancel: boolean; cancelSent: boolean; reading: boolean; lastPull: number } | null = null;
   private modelsEpoch = 0;
   private nextMessage = 0;
   private modelsLoaded = false;
@@ -218,6 +246,10 @@ export class DesktopController {
     const tick = async () => {
       if (!this.mounted || epoch !== this.pollEpoch) return;
       await this.refresh();
+      if (this.mounted && epoch === this.pollEpoch && this.state.discovery === "unchecked" && this.state.snapshot) {
+        if (this.state.snapshot.model_directory.configured) this.update({ discovery: "configured" });
+        else if (this.state.snapshot.connection === "stopped") await this.discoverDirectory();
+      }
       if (this.mounted && epoch === this.pollEpoch)
         this.poll = setTimeout(tick, 1000);
     };
@@ -228,6 +260,7 @@ export class DesktopController {
       clearTimeout(this.poll);
       void this.cancel();
       void this.cancelLibrary();
+      void this.cancelDownload();
     };
   };
   refresh = (): Promise<void> => {
@@ -285,7 +318,7 @@ export class DesktopController {
     if (
       this.state.operation ||
       (!allowChat && this.stream) ||
-      (!allowLibrary && this.libraryTask)
+      (!allowLibrary && (this.libraryTask || this.downloadTask))
     )
       return;
     ++this.snapshotEpoch;
@@ -368,10 +401,19 @@ export class DesktopController {
     if (!this.state.operation && !this.libraryTask)
       this.update({ directory_selection: null });
   };
+  discoverDirectory = async () => {
+    if (this.state.snapshot?.model_directory.configured) {
+      this.update({ discovery: "configured" });
+      return;
+    }
+    if (this.state.snapshot?.connection !== "stopped" || this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
+    this.update({ discovery: "checking" });
+    await this.beginLibrary("discover");
+  };
   applyDirectory = () => this.beginLibrary("apply");
   scanModels = () => this.beginLibrary("scan");
-  private async beginLibrary(kind: "apply" | "scan") {
-    if (this.libraryTask || this.state.operation || this.stream) return;
+  private async beginLibrary(kind: "apply" | "scan" | "discover") {
+    if (this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
     if (this.state.snapshot?.connection !== "stopped") {
       this.report(
         new DesktopError(
@@ -410,10 +452,18 @@ export class DesktopController {
     });
     try {
       const handle =
-        kind === "apply"
+        kind === "discover"
+          ? await this.api.discoverDirectory()
+          : kind === "apply"
           ? await this.api.applyDirectory(selection!.selection_id)
           : await this.api.scanModels();
-      if (!handle.operation_id)
+      if (kind === "discover" && !handle) {
+        this.libraryTask = null;
+        ++this.snapshotEpoch;
+        this.update({ library_phase: "idle", discovery: "none" });
+        return;
+      }
+      if (!handle?.operation_id)
         throw new DesktopError(
           "invalid_library_operation",
           "模型库操作未返回有效标识。",
@@ -426,7 +476,7 @@ export class DesktopController {
     } catch (error) {
       this.libraryTask = null;
       ++this.snapshotEpoch;
-      this.update({ library_phase: "idle" });
+      this.update({ library_phase: "idle", ...(kind === "discover" ? { discovery: "failed" as const } : {}) });
       this.report(error);
     }
   }
@@ -487,6 +537,7 @@ export class DesktopController {
         this.update({ library: progress });
         if (!terminal) continue;
         this.libraryTask = null;
+        if (this.state.discovery === "checking") this.update({ discovery: progress.status === "completed" || progress.status === "partial" ? "configured" : "failed" });
         ++this.snapshotEpoch;
         const durabilityUnconfirmed =
           progress.status === "failed" &&
@@ -501,6 +552,10 @@ export class DesktopController {
           });
         }
         if (progress.status === "completed" || progress.status === "partial") {
+          // Scan diagnostics now supersede the historical saved-but-unregistered download notice.
+          // A partial scan does not prove this particular file was accepted.
+          if (this.state.download?.status === "completed" && progress.result?.directory_id === this.state.download.directory_id)
+            this.update({ download: null });
           ++this.modelsEpoch;
           this.modelsLoaded = false;
           this.update({
@@ -537,6 +592,130 @@ export class DesktopController {
     } finally {
       task.reading = false;
     }
+  }
+  loadCatalog = async () => {
+    if (this.state.catalog_loading) return;
+    this.update({ catalog_loading: true });
+    try {
+      const result = await this.api.catalog();
+      const bounded = (value: unknown) => typeof value === "string" && byteLength(value) <= 8192;
+      if (!Array.isArray(result.entries) || result.entries.length > 128 || byteLength(JSON.stringify(result)) > 1024 * 1024 ||
+          result.entries.some((entry) => !entry || !entry.catalog_id || !entry.file_name ||
+            ![entry.catalog_id, entry.file_name, entry.display_name, entry.architecture, entry.quantization, entry.sha256, entry.license, entry.recommendation].every(bounded) ||
+            !Number.isSafeInteger(entry.context_hint) || entry.context_hint < 0 ||
+            !Number.isSafeInteger(entry.size_bytes) || entry.size_bytes < 0 ||
+            !Array.isArray(entry.sources) || entry.sources.some((source) =>
+              !source || !["modelscope", "huggingface"].includes(source.source) ||
+              ![source.repository, source.revision, source.url].every(bounded))) ||
+          new Set(result.entries.map((entry) => entry.catalog_id)).size !== result.entries.length)
+        throw new DesktopError("invalid_model_catalog", "下载目录数据无效，请重试读取。");
+      this.update({ catalog: result.entries, catalog_loaded: true });
+    } catch (error) { this.report(error); }
+    finally { this.update({ catalog_loading: false }); }
+  };
+  startDownload = async (catalog_id: string) => {
+    if (this.downloadTask || this.libraryTask || this.stream || this.state.operation) return;
+    const snapshot = this.state.snapshot;
+    const entry = this.state.catalog.find((entry) => entry.catalog_id === catalog_id);
+    if (!snapshot || snapshot.connection !== "stopped" || !snapshot.model_directory.configured) {
+      this.report(new DesktopError("model_directory_required", "请先停止服务并选择、应用模型目录，再下载。"));
+      return;
+    }
+    if (!entry?.sources.some((source) => source.source === snapshot.settings.download_source)) {
+      this.report(new DesktopError("download_source_unavailable", "此模型在已保存的下载源不可用，请在设置中选择其他来源并保存。"));
+      return;
+    }
+    const task = { id: null as string | null, catalog_id, source: snapshot.settings.download_source, directory_id: snapshot.model_directory.configured.directory_id, cancel: false, cancelSent: false, reading: false, lastPull: -Infinity };
+    this.downloadTask = task;
+    this.update({ download: null, download_phase: "starting", error: null, notice: null });
+    try {
+      const handle = await this.api.downloadStart(catalog_id);
+      if (!handle.operation_id) throw new DesktopError("invalid_download_operation", "下载未返回有效标识，未自动重试。");
+      task.id = handle.operation_id;
+      this.update({ download_phase: task.cancel ? "stopping" : "running" });
+      if (task.cancel) void this.sendDownloadCancel();
+      void this.consumeDownload();
+    } catch (error) {
+      this.downloadTask = null;
+      this.update({ download_phase: "idle" });
+      this.report(error);
+    }
+  };
+  cancelDownload = async () => {
+    if (!this.downloadTask) return;
+    this.downloadTask.cancel = true;
+    if (this.state.download_phase !== "recovery") this.update({ download_phase: "stopping" });
+    await this.sendDownloadCancel();
+  };
+  private async sendDownloadCancel() {
+    const task = this.downloadTask;
+    if (!task?.id || task.cancelSent) return;
+    task.cancelSent = true;
+    try { await this.api.downloadCancel(task.id); }
+    catch (error) {
+      if (this.downloadTask === task) { task.cancelSent = false; this.report(error); }
+    }
+  }
+  recoverDownload = async () => {
+    if (!this.downloadTask?.id || this.downloadTask.reading) return;
+    this.update({ download_phase: "stopping", error: null });
+    this.downloadTask.cancel = true;
+    await this.sendDownloadCancel();
+    void this.consumeDownload();
+  };
+  private async consumeDownload() {
+    const task = this.downloadTask;
+    if (!task?.id || task.reading) return;
+    task.reading = true;
+    try {
+      while (this.downloadTask === task) {
+        await wait(Math.max(0, Math.ceil(1000 - (performance.now() - task.lastPull))));
+        if (this.downloadTask !== task) return;
+        if (performance.now() - task.lastPull < 1000) continue;
+        task.lastPull = performance.now();
+        const value = await this.api.downloadNext(task.id);
+        if (this.downloadTask !== task) return;
+        if (!validDownloadOperation(value))
+          throw new DesktopError("invalid_download_operation", "下载状态字段无效，尚未确认操作结束。");
+        const terminal = value.status !== "running";
+        if (value.operation_id !== task.id || value.catalog_id !== task.catalog_id || value.source !== task.source || value.directory_id !== task.directory_id ||
+            !["running", "completed", "cancelled", "failed"].includes(value.status) ||
+            !["connecting", "downloading", "verifying", "committing", "finished"].includes(value.phase) ||
+            !["modelscope", "huggingface"].includes(value.source) ||
+            !Number.isSafeInteger(value.downloaded_bytes) || value.downloaded_bytes < 0 ||
+            (value.total_bytes !== null && (!Number.isSafeInteger(value.total_bytes) || value.total_bytes < value.downloaded_bytes)) ||
+            value.terminal !== terminal || (terminal && value.phase !== "finished") ||
+            (!terminal && (value.result !== null || value.error !== null)) ||
+            (value.status === "completed" && (!value.result?.saved || value.result.registered !== false || value.result.file_name !== value.file_name || value.error !== null ||
+              (value.total_bytes !== null && value.downloaded_bytes !== value.total_bytes))) ||
+            (value.status !== "completed" && value.result !== null) ||
+            (value.status === "failed" && !value.error))
+          throw new DesktopError("invalid_download_operation", "下载状态数据无效，尚未确认下载结束。请重新确认，勿重复下载。");
+        const previous = this.state.download;
+        if (previous && (previous.source !== value.source || previous.directory_id !== value.directory_id ||
+            previous.file_name !== value.file_name || previous.target_display_path !== value.target_display_path ||
+            (previous.total_bytes !== null && previous.total_bytes !== value.total_bytes) ||
+            value.downloaded_bytes < previous.downloaded_bytes))
+          throw new DesktopError("invalid_download_operation", "下载身份或进度发生异常，尚未确认下载结束。");
+        this.update({ download: value });
+        if (!terminal) continue;
+        this.downloadTask = null;
+        this.update({ download_phase: "idle" });
+        if (value.status === "completed") this.update({ notice: value.result?.cleanup_warning
+          ? "模型文件已保存，但部分下载文件清理未确认；请勿重复下载。文件尚未登记。"
+          : "模型文件已保存，尚未登记。请重新扫描目录；不会自动加载模型。" });
+        else if (value.status === "cancelled") this.update({ notice: "下载已取消。" });
+        else this.report(value.error);
+        return;
+      }
+    } catch (error) {
+      if (this.downloadTask === task) {
+        this.update({ download_phase: "recovery" });
+        this.report(error);
+        task.cancel = true;
+        void this.sendDownloadCancel();
+      }
+    } finally { task.reading = false; }
   }
   private setRuntime(runtime: RuntimeStatus) {
     if (this.state.snapshot)
@@ -627,7 +806,7 @@ export class DesktopController {
       true,
     );
   send = async (text: string): Promise<boolean> => {
-    if (this.stream || this.libraryTask || this.state.operation || !text.trim())
+    if (this.stream || this.libraryTask || this.downloadTask || this.state.operation || !text.trim())
       return false;
     const snapshot = this.state.snapshot;
     if (

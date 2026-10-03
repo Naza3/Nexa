@@ -119,6 +119,28 @@ fn file_errors(progress: &model_store::library::ScanProgress) -> Vec<LibraryFile
         .collect()
 }
 impl DesktopBridge {
+    pub fn with_default_model_directory(mut self, path: PathBuf) -> Self {
+        self.default_model_directory = Some(path);
+        self
+    }
+    /// Startup admission uses the same guarded transaction as an explicit pick.
+    /// A configured missing/stale directory never falls back to another location.
+    pub fn directory_discover(self: &Arc<Self>) -> Result<Option<LibraryOperationHandle>> {
+        self.open()?;
+        if ModelLibrary::read(&self.root).map_err(error)?.is_some() {
+            return Ok(None);
+        }
+        let Some(path) = &self.default_model_directory else {
+            return Ok(None);
+        };
+        match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(BridgeError::new("model_directory_unavailable")),
+            Ok(_) => (),
+        }
+        self.begin_library(Some(path.clone()), true).map(Some)
+    }
+
     pub fn with_directory_validator(
         mut self,
         validator: impl Fn(&Path) -> Result<()> + Send + Sync + 'static,
@@ -138,14 +160,15 @@ impl DesktopBridge {
             })
     }
     pub fn directory_apply(self: &Arc<Self>, path: PathBuf) -> Result<LibraryOperationHandle> {
-        self.begin_library(Some(path))
+        self.begin_library(Some(path), false)
     }
     pub fn models_scan(self: &Arc<Self>) -> Result<LibraryOperationHandle> {
-        self.begin_library(None)
+        self.begin_library(None, false)
     }
     fn begin_library(
         self: &Arc<Self>,
         candidate: Option<PathBuf>,
+        discovery: bool,
     ) -> Result<LibraryOperationHandle> {
         self.open()?;
         let ownership = self
@@ -184,7 +207,9 @@ impl DesktopBridge {
         slot.current = Some(task.clone());
         let bridge = self.clone();
         tokio::spawn(async move {
-            let result = bridge.run_library(candidate, task.clone(), ownership).await;
+            let result = bridge
+                .run_library(candidate, discovery, task.clone(), ownership)
+                .await;
             task.finish(result);
         });
         Ok(LibraryOperationHandle { operation_id: id })
@@ -192,6 +217,7 @@ impl DesktopBridge {
     async fn run_library(
         &self,
         candidate: Option<PathBuf>,
+        discovery: bool,
         task: Arc<LibraryTask>,
         _ownership: tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<LibraryOperationResult> {
@@ -216,6 +242,9 @@ impl DesktopBridge {
             task.owns_instance.store(true, Ordering::Release);
             let _owner = OwnsInstance(task.clone());
             let previous = ModelLibrary::read(&root).map_err(error)?;
+            if discovery && previous.is_some() {
+                return Err(BridgeError::new("model_directory_already_configured"));
+            }
             let rescan = candidate.is_none();
             let directory = candidate
                 .or_else(|| previous.as_ref().map(|old| old.directory.clone()))

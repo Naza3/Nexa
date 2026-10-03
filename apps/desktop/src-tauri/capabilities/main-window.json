@@ -1,12 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "Only the bundled main UI may invoke these twenty fixed desktop operations",
+  "description": "Only the bundled main UI may invoke these fixed desktop operations",
   "local": true,
   "windows": ["main"],
   "webviews": ["main"],
   "permissions": [
     "allow-desktop-snapshot", "allow-runtime-start", "allow-model-pick", "allow-model-import",
+    "allow-model-directory-discover", "allow-model-catalog", "allow-model-download-start",
+    "allow-model-download-next", "allow-model-download-cancel",
     "allow-model-directory-pick", "allow-model-directory-apply", "allow-models-scan",
     "allow-model-library-next", "allow-model-library-cancel",
     "allow-models-page", "allow-model-load", "allow-model-unload", "allow-chat-start",

@@ -1,14 +1,14 @@
 # T06 外部模型目录与自动名称契约
 
-2026-10-03更新。ADR0015开放模型基线50c9d41已过WindowsCI并发送，用户目标机仍待验；本轮按[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)实施混合目录partial/有界诊断和短context扫描默认值，源码已冻结、本机合成回归及独立审查通过，精确提交WindowsCI/包/目标机待验。下述增量是本轮实施契约，不追溯授予50c9d41新行为。runtime-lifetime lease及轻量启动/首次加载核验保持；实际结果见[本轮验证记录](verification/2026-10-03-mixed-model-directory.md)。
+2026-10-03更新。ADR0015开放模型基线50c9d41已过WindowsCI并发送，用户目标机仍待验；本轮按[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)实施混合目录partial/有界诊断和短context扫描默认值，已在43ad5c2通过WindowsCI/包复核并发送，用户目标机待验。下述增量是本轮实施契约，不追溯授予50c9d41新行为。runtime-lifetime lease及轻量启动/首次加载核验保持；实际结果见[本轮验证记录](verification/2026-10-03-mixed-model-directory.md)。
 
 ## 1. 现状与最小范围
 
 - 当前真实名称为 `%LOCALAPPDATA%/Nexa/models`（复数），managed 布局为 `models/<id>/{model.gguf,manifest.json}`，另有 `imports/` 与 `runtime/model-store.lock`。CLI serve 以及离线 import/list 都传入同一个 data root；现有配置没有独立模型目录字段。
 - 单纯修改 data root 会同时移动 token/config，仍会复制模型，不满足本次需求。
 - 保留现有 managed 模型、原始 ID、manifest 与复制导入 API。新增一个外部目录并与旧 managed 列表合并展示，不自动迁移、删除或重命名任何原文件。
-- 外部目录只读；不在其中写锁、manifest、缓存或临时导入文件。程序旁 `model/` 或 `models/` 只是用户可选择的位置，不是强制默认，也不以启动 CWD 推导目录。
-- 目录须为支持的本地普通目录，非递归读取直接子级 GGUF。目录本身无需可写；配置与元数据写权限仍要求 AppData 可写。拒绝 UNC/网络/设备路径、路径穿越、任意祖先及最终文件的 symlink/reparse 间接路径。拒绝非普通文件；不扫描子目录、不跟随链接。
+- 普通扫描/加载只读，不在外部目录写锁、manifest或缓存。本轮[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)进行中：仅无已配置目录且服务停止时，自动检查真实桌面EXE旁已存在的`models/`并复用扫描；不存在不创建，已配置路径即使missing/stale仍优先，不用CWD、`model/`或其他目录回退。显式选定后方可由独立下载任务创建其自有UUID.part并no-clobber发布新GGUF，原文件不改。
+- 目录须为支持的本地普通目录，非递归读取直接子级 GGUF。普通扫描目录本身无需可写，显式下载另需目标可写；配置与元数据写权限仍要求AppData可写。拒绝 UNC/网络/设备路径、路径穿越、任意祖先及最终文件的 symlink/reparse 间接路径。拒绝非普通文件；不扫描子目录、不跟随链接。
 - ModelId、精确历史验证证据、模板后推理预算与实例proof/锁/停止约束保持；ADR0015将loadable与validated分离，不以验证矩阵作为型号/hash许可名单。
 
 ## 2. 单文件持久化与事务
@@ -113,9 +113,19 @@ context_limit按模型metadata和131072既有硬限约束；历史验证context2
 
 已交付50c9d41仍可能因单个坏GGUF整批失败。本轮ADR0016在完整安全扫描后，将明确内容拒绝与硬失败分开；合法集合一次原子替换并标partial，全坏保旧index/generation，空目录可空提交。被拒文件仅列本轮诊断，不持久注册为不可用模型。成功partial不混入旧坏条目，未扫描部分不冒充完整。
 
-仅自动扫描的登记默认context改取min(2048, metadata.context_length)；显式import/load和UI参数不夹紧。扫描登记成功不保证当前加载参数适合该模型。该增量已冻结并通过本机合成回归/独立审查，尚未新提交WindowsCI或新版本交付，不追溯修改50c9d41事实。
+仅自动扫描的登记默认context改取min(2048, metadata.context_length)；显式import/load和UI参数不夹紧。扫描登记成功不保证当前加载参数适合该模型。该增量已有43ad5c2 WindowsCI及包发送证据，目标机待验，不追溯修改50c9d41事实；新增自动发现/下载另按ADR0017验证。
 
-## 8. 受控错误与验收
+## 8. 默认发现与目录内下载增量（ADR0017，进行中）
+
+`model_directory_discover()`返回null或既有LibraryOperationHandle；只接收原生壳绑定的EXE/models，不接收前端自由路径。已有配置绝不回退；未配置、停止且目录存在时复用完整有界扫描，随后状态/partial/失败与generation仍按本契约。
+
+固定8条catalog只提供下载建议，不构成模型许可名单；启动/展示不联网。显式`model_download_start({catalog_id})`在接纳时冻结已保存download_source与目录身份，必须服务停止；不自动stop、切源、重试或登记。下载进度与取消使用独立operation，不复用scan结果伪造状态。
+
+仅写自有`.nexa-download-<UUID>.part`，全量实际size/SHA256匹配后原子no-clobber发布；已有同名文件或竞争新目标不覆盖。成功saved=true/registered=false，用户须再扫描；失败/取消清理只针对本任务实际持有对象。发布后清理未确认仍承认saved并警告，不谎称回滚。普通扫描忽略非GGUF.part但计目录条目，源保护和模型结构检查不变。
+
+包内仅root/model/models直接子级的严格UUID.part普通文件≤16GiB、至多64项获惰性残留例外，不执行或自动删除，不放宽未知EXE/DLL/reparse与manifest/hash。完整网络/设置回退/任务上限见[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)，结果见[本轮记录](verification/2026-10-03-model-catalog-download.md)。
+
+## 9. 受控错误与验收
 
 复用 runtime_running、desktop_busy、request_not_owned 等既有错误；新边界需要明确安全code：model_library_unsupported、model_directory_required、model_directory_unavailable、model_directory_unsupported、model_library_limit、model_library_changed、model_list_changed、model_scan_timeout、model_scan_cancelled、model_scan_no_usable_files、model_file_changed、model_file_unavailable、model_file_in_use、model_library_write_failed。错误正文不包含token、完整源路径或任意底层异常。
 
@@ -123,7 +133,7 @@ context_limit按模型metadata和131072既有硬限约束；历史验证context2
 
 壳包校验只给指定数据类别建立准确边界。不能整棵`model/`或`models/`无条件跳过；所选目录在产品外无需改产品清单；产品内部的源GGUF目录只允许受控目录/普通GGUF与必要的精确规则，产品EXE、runtime、DLL、manifest及SHA清单仍原样严格验证。新目录注册元数据不在产品里，因此无须为model-library.json/imports/model-store.lock放开发行包。
 
-## 9. 分工
+## 10. 分工
 
 - 父级：确认限额/lease与最终契约、整合审阅提交；既有14文件修复保留各自写入者，可与本功能一起完成验证后统一提交
 - bridge工位：model-store外部catalog及共享元数据验证、必要runtime-types/API/CLI/bridge修改与对应harness；独占根Cargo/锁；尽量不动native/worker IPC

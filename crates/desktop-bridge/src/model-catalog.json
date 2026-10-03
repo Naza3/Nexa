@@ -1,0 +1,212 @@
+{
+  "entries": [
+    {
+      "catalog_id": "qwen3-0.6b-q8-0",
+      "display_name": "Qwen3-0.6B Q8_0",
+      "file_name": "Qwen3-0.6B-Q8_0.gguf",
+      "architecture": "qwen3",
+      "quantization": "Q8_0",
+      "size_bytes": 639446688,
+      "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "已有固定文件的 Windows CI 回归；i5-8400/16GB 目标机仍待验证。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "Qwen/Qwen3-0.6B-GGUF",
+          "revision": "6abe20cd0aed577f4d0b267935868ecae190aee9",
+          "url": "https://modelscope.cn/api/v1/models/Qwen/Qwen3-0.6B-GGUF/repo?Revision=6abe20cd0aed577f4d0b267935868ecae190aee9&FilePath=Qwen3-0.6B-Q8_0.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "Qwen/Qwen3-0.6B-GGUF",
+          "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+          "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "catalog_id": "qwen3-1.7b-q8-0",
+      "display_name": "Qwen3-1.7B Q8_0",
+      "file_name": "Qwen3-1.7B-Q8_0.gguf",
+      "architecture": "qwen3",
+      "quantization": "Q8_0",
+      "size_bytes": 1834426016,
+      "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "未实测候选；文件大小不等于运行内存。请从 context 2048 开始按可用内存尝试。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "Qwen/Qwen3-1.7B-GGUF",
+          "revision": "dc80e1956e7551cd4aa5309c914e767b69188639",
+          "url": "https://modelscope.cn/api/v1/models/Qwen/Qwen3-1.7B-GGUF/repo?Revision=dc80e1956e7551cd4aa5309c914e767b69188639&FilePath=Qwen3-1.7B-Q8_0.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "Qwen/Qwen3-1.7B-GGUF",
+          "revision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
+          "url": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "catalog_id": "qwen3-4b-q4-k-m",
+      "display_name": "Qwen3-4B Q4_K_M",
+      "file_name": "Qwen3-4B-Q4_K_M.gguf",
+      "architecture": "qwen3",
+      "quantization": "Q4_K_M",
+      "size_bytes": 2497280256,
+      "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "未实测候选；文件大小不等于运行内存。请从 context 2048 开始按可用内存尝试。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "Qwen/Qwen3-4B-GGUF",
+          "revision": "8cca206c792af04f8d452368bd30b43ec18007f1",
+          "url": "https://modelscope.cn/api/v1/models/Qwen/Qwen3-4B-GGUF/repo?Revision=8cca206c792af04f8d452368bd30b43ec18007f1&FilePath=Qwen3-4B-Q4_K_M.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "Qwen/Qwen3-4B-GGUF",
+          "revision": "bc640142c66e1fdd12af0bd68f40445458f3869b",
+          "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf"
+        }
+      ]
+    },
+    {
+      "catalog_id": "qwen3-4b-q8-0",
+      "display_name": "Qwen3-4B Q8_0",
+      "file_name": "Qwen3-4B-Q8_0.gguf",
+      "architecture": "qwen3",
+      "quantization": "Q8_0",
+      "size_bytes": 4280404704,
+      "sha256": "8c2f07f26af9747e41988551106f149b03eb9b5cb6df636027b6bf6278473300",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "未实测候选；文件大小不等于运行内存。请从 context 2048 开始按可用内存尝试。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "Qwen/Qwen3-4B-GGUF",
+          "revision": "8cca206c792af04f8d452368bd30b43ec18007f1",
+          "url": "https://modelscope.cn/api/v1/models/Qwen/Qwen3-4B-GGUF/repo?Revision=8cca206c792af04f8d452368bd30b43ec18007f1&FilePath=Qwen3-4B-Q8_0.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "Qwen/Qwen3-4B-GGUF",
+          "revision": "bc640142c66e1fdd12af0bd68f40445458f3869b",
+          "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "catalog_id": "qwen3-8b-q4-k-m",
+      "display_name": "Qwen3-8B Q4_K_M",
+      "file_name": "Qwen3-8B-Q4_K_M.gguf",
+      "architecture": "qwen3",
+      "quantization": "Q4_K_M",
+      "size_bytes": 5027783488,
+      "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "未实测候选；文件大小不等于运行内存。请从 context 2048 开始按可用内存尝试。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "Qwen/Qwen3-8B-GGUF",
+          "revision": "c38f9307f3d23c914614557de83d66c0104f942c",
+          "url": "https://modelscope.cn/api/v1/models/Qwen/Qwen3-8B-GGUF/repo?Revision=c38f9307f3d23c914614557de83d66c0104f942c&FilePath=Qwen3-8B-Q4_K_M.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "Qwen/Qwen3-8B-GGUF",
+          "revision": "7c41481f57cb95916b40956ab2f0b139b296d974",
+          "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q4_K_M.gguf"
+        }
+      ]
+    },
+    {
+      "catalog_id": "qwen3-8b-q8-0",
+      "display_name": "Qwen3-8B Q8_0",
+      "file_name": "Qwen3-8B-Q8_0.gguf",
+      "architecture": "qwen3",
+      "quantization": "Q8_0",
+      "size_bytes": 8709518112,
+      "sha256": "408b955510e196121c1c375201744783b5c9a43c7956d73fc78df54c66e883d6",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "高内存候选，文件约 8.71GB；16GB 总内存需给系统、KV cache 和运行缓冲留空间，CPU 延迟未测。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "Qwen/Qwen3-8B-GGUF",
+          "revision": "c38f9307f3d23c914614557de83d66c0104f942c",
+          "url": "https://modelscope.cn/api/v1/models/Qwen/Qwen3-8B-GGUF/repo?Revision=c38f9307f3d23c914614557de83d66c0104f942c&FilePath=Qwen3-8B-Q8_0.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "Qwen/Qwen3-8B-GGUF",
+          "revision": "7c41481f57cb95916b40956ab2f0b139b296d974",
+          "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/7c41481f57cb95916b40956ab2f0b139b296d974/Qwen3-8B-Q8_0.gguf"
+        }
+      ]
+    },
+    {
+      "catalog_id": "qwen3.5-4b-q4-k-m",
+      "display_name": "Qwen3.5-4B Q4_K_M",
+      "file_name": "Qwen3.5-4B-Q4_K_M.gguf",
+      "architecture": "qwen35",
+      "quantization": "Q4_K_M",
+      "size_bytes": 2740937888,
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "Unsloth 常规量化；锁定引擎含 qwen35 架构，但 Nexa 未实测。仅文本候选，不能宣称视觉/工具支持。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "unsloth/Qwen3.5-4B-GGUF",
+          "revision": "167b4afc359863325cb4164418c715421b4e9118",
+          "url": "https://modelscope.cn/api/v1/models/unsloth/Qwen3.5-4B-GGUF/repo?Revision=167b4afc359863325cb4164418c715421b4e9118&FilePath=Qwen3.5-4B-Q4_K_M.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "unsloth/Qwen3.5-4B-GGUF",
+          "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+          "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf"
+        }
+      ]
+    },
+    {
+      "catalog_id": "qwen3.5-4b-q8-0",
+      "display_name": "Qwen3.5-4B Q8_0",
+      "file_name": "Qwen3.5-4B-Q8_0.gguf",
+      "architecture": "qwen35",
+      "quantization": "Q8_0",
+      "size_bytes": 4482403488,
+      "sha256": "10cc391b403021dd11c614679d2fd92f611c3681d29e29651b717316965d61e1",
+      "license": "apache-2.0",
+      "context_hint": 2048,
+      "recommendation": "Unsloth 常规量化；锁定引擎含 qwen35 架构，但 Nexa 未实测。仅文本候选，不能宣称视觉/工具支持。",
+      "sources": [
+        {
+          "source": "modelscope",
+          "repository": "unsloth/Qwen3.5-4B-GGUF",
+          "revision": "167b4afc359863325cb4164418c715421b4e9118",
+          "url": "https://modelscope.cn/api/v1/models/unsloth/Qwen3.5-4B-GGUF/repo?Revision=167b4afc359863325cb4164418c715421b4e9118&FilePath=Qwen3.5-4B-Q8_0.gguf"
+        },
+        {
+          "source": "huggingface",
+          "repository": "unsloth/Qwen3.5-4B-GGUF",
+          "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+          "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q8_0.gguf"
+        }
+      ]
+    }
+  ]
+}

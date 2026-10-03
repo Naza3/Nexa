@@ -42,6 +42,11 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
   }
 }
 export const nativeApi: DesktopApi = {
+  catalog: () => call("model_catalog"),
+  discoverDirectory: () => call("model_directory_discover"),
+  downloadStart: (catalog_id) => call("model_download_start", { catalog_id }),
+  downloadNext: (operation_id) => call("model_download_next", { operation_id }),
+  downloadCancel: (operation_id) => call("model_download_cancel", { operation_id }),
   snapshot: () => call("desktop_snapshot"),
   start: (initialize_if_missing) =>
     call("runtime_start", { initialize_if_missing }),

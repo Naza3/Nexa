@@ -196,13 +196,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Worker build failed' }
       - name: Download exact public test model and verify identity
         id: model_identity
+        timeout-minutes: 35
         run: |
           $ErrorActionPreference = 'Stop'
           $baseline = Get-Content -Raw tests/fixtures/baseline.json | ConvertFrom-Json
           New-Item -ItemType Directory -Force models | Out-Null
-          $uri = "$($baseline.model.source)/resolve/$($baseline.model.revision)/$($baseline.model.filename)"
-          curl.exe --fail --location --retry 3 $uri --output models/qa-small.gguf
-          if ($LASTEXITCODE -ne 0) { throw 'Model download failed' }
+          cargo build --locked -p desktop-bridge --bin nexa-catalog-download-verify
+          if ($LASTEXITCODE -ne 0) { throw 'Catalog download verifier build failed' }
+          # Exercise the same default ModelScope bridge path as the desktop.
+          # Download once, then retain the independent baseline hash checks.
+          & (Join-Path $PWD 'target/debug/nexa-catalog-download-verify.exe') --directory (Join-Path $PWD 'models') --output (Join-Path $PWD 'artifacts/verification/windows-catalog-download.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Real default-source catalog download failed' }
+          $downloaded = Join-Path $PWD 'models/Qwen3-0.6B-Q8_0.gguf'
+          if (Test-Path models/qa-small.gguf) { throw 'Baseline destination already exists' }
+          Move-Item -LiteralPath $downloaded -Destination models/qa-small.gguf
           $actual = (Get-FileHash models/qa-small.gguf -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $baseline.model.sha256) { throw 'Model SHA256 mismatch' }
           cargo run --locked -p xtask -- baseline-verify --model models/qa-small.gguf --device github-actions-windows-2022 --out artifacts/verification/windows-baseline.json

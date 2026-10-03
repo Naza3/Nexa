@@ -7,6 +7,27 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "model_download_active" => {
+                "A download is active. Cancel it or wait before changing models, directories or settings."
+            }
+            "model_download_cleanup_unconfirmed" => {
+                "Download cleanup has not completed. Keep the window open and retry closing."
+            }
+            "model_download_cancelled" => "The download was cancelled before publication.",
+            "model_download_timeout" => {
+                "The download deadline was reached. Retry explicitly when the source is available."
+            }
+            "model_download_identity_mismatch" | "model_download_size_mismatch" => {
+                "The downloaded bytes do not match the pinned size and SHA256. No model was published."
+            }
+            "model_download_network_failed"
+            | "model_download_http_failed"
+            | "model_download_redirect_rejected" => {
+                "The selected source could not be downloaded safely. No alternative source was used."
+            }
+            "already_exists" => {
+                "A file with this name already exists. It was not changed or overwritten."
+            }
             "desktop_busy" => "This window already has an operation in progress.",
             "desktop_closing" => "This window is closing.",
             "runtime_running" => "Stop the runtime before applying this runtime setting.",

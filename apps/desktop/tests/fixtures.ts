@@ -60,6 +60,11 @@ export function deferred<T>() {
 }
 export function makeApi(overrides: Partial<DesktopApi> = {}) {
   return {
+    catalog: vi.fn(async () => ({ entries: [] })),
+    discoverDirectory: vi.fn(async () => null),
+    downloadStart: vi.fn(async () => ({ operation_id: "download-1" })),
+    downloadNext: vi.fn(async () => ({ operation_id: "download-1", catalog_id: "test-model", source: "modelscope" as const, file_name: "test.gguf", directory_id: "directory-1", target_display_path: "D:\\models", downloaded_bytes: 0, total_bytes: 1024, phase: "finished" as const, status: "cancelled" as const, terminal: true, result: null, error: null })),
+    downloadCancel: vi.fn(async () => ({ stopping: true })),
     snapshot: vi.fn(async () => snapshot()),
     start: vi.fn(async () => snapshot()),
     pickDirectory: vi.fn(async () => null),

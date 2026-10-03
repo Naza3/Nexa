@@ -380,3 +380,108 @@ async fn replaced_saved_directory_requires_explicit_apply_and_bounds_still_roll_
     assert_eq!(bounded.error.unwrap().code, "model_library_limit");
     assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), replaced);
 }
+
+#[tokio::test]
+async fn startup_discovery_registers_existing_models_and_preserves_configured_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let models = temp.path().join("models");
+    fs::create_dir(&models).unwrap();
+    tiny_model(&models.join("local.gguf"));
+    let bridge = Arc::new(
+        DesktopBridge::new(
+            root.clone(),
+            temp.path().join(if cfg!(windows) {
+                "ai-runtime.exe"
+            } else {
+                "ai-runtime"
+            }),
+        )
+        .unwrap()
+        .with_default_model_directory(models.clone()),
+    );
+    let handle = bridge.directory_discover().unwrap().unwrap();
+    assert_eq!(
+        terminal(&bridge, handle.operation_id).await.status,
+        LibraryOperationStatus::Completed
+    );
+    let library = ModelLibrary::read(&root).unwrap().unwrap();
+    assert_eq!(library.models.len(), 1);
+    assert_eq!(library.directory, fs::canonicalize(&models).unwrap());
+    assert!(bridge.directory_discover().unwrap().is_none());
+    let saved = fs::read(root.join(LIBRARY_FILE)).unwrap();
+    fs::rename(&models, temp.path().join("missing-models")).unwrap();
+    assert!(bridge.directory_discover().unwrap().is_none());
+    assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), saved);
+}
+
+#[tokio::test]
+async fn startup_discovery_does_not_create_absent_folder_or_replace_running_instance() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let models = temp.path().join("models");
+    let bridge = Arc::new(
+        DesktopBridge::new(
+            root.clone(),
+            temp.path().join(if cfg!(windows) {
+                "ai-runtime.exe"
+            } else {
+                "ai-runtime"
+            }),
+        )
+        .unwrap()
+        .with_default_model_directory(models.clone()),
+    );
+    assert!(bridge.directory_discover().unwrap().is_none());
+    assert!(!models.exists());
+    fs::create_dir(&models).unwrap();
+    runtime_api::token::create_private_dir(&root).unwrap();
+    let _lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    let handle = bridge.directory_discover().unwrap().unwrap();
+    let result = terminal(&bridge, handle.operation_id).await;
+    assert_eq!(result.error.unwrap().code, "runtime_running");
+    assert!(!root.join(LIBRARY_FILE).exists());
+}
+
+#[tokio::test]
+async fn download_reads_and_validates_target_while_instance_is_exclusively_owned() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let models = temp.path().join("models");
+    fs::create_dir(&models).unwrap();
+    let initial = bridge(&root);
+    let handle = initial.directory_apply(models.clone()).unwrap();
+    assert_eq!(
+        terminal(&initial, handle.operation_id).await.status,
+        LibraryOperationStatus::Completed
+    );
+    let lock_root = root.clone();
+    let downloader = Arc::new(
+        DesktopBridge::new(
+            root.clone(),
+            temp.path().join(if cfg!(windows) {
+                "ai-runtime.exe"
+            } else {
+                "ai-runtime"
+            }),
+        )
+        .unwrap()
+        .with_directory_validator(move |_| {
+            assert!(InstanceLock::try_acquire(&lock_root).unwrap().is_none());
+            // Deliberately stop before any file creation or network request.
+            Err(desktop_bridge::BridgeError {
+                code: "fixture_admission_stop".into(),
+                message: "fixture".into(),
+            })
+        }),
+    );
+    assert_eq!(
+        downloader
+            .download_start("qwen3-0.6b-q8-0".into())
+            .unwrap_err()
+            .code,
+        "fixture_admission_stop"
+    );
+    assert!(InstanceLock::try_acquire(&root).unwrap().is_some());
+    assert_eq!(fs::read_dir(models).unwrap().count(), 0);
+}

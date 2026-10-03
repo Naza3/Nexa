@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from stage_ci_evidence import MAX_REPORT_BYTES, read_regular, stage
+from stage_ci_evidence import MAX_REPORT_BYTES, catalog_download_report, read_regular, stage
 from run_desktop_smoke import DIAGNOSTIC_REPORTS, EXTERNAL_LIBRARY_KEYS
 
 
@@ -209,6 +209,37 @@ class EvidenceStagingTests(unittest.TestCase):
         (self.out / "stale-secret").write_text("old", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "already exists"):
             self.run_stage()
+
+    def test_catalog_download_report_has_closed_non_sensitive_schema(self):
+        report = {"schema_version": 1, "success": True, "source": "modelscope",
+                  "catalog_id": "qwen3-0.6b-q8-0", "source_revision": "a" * 40,
+                  "size_bytes": 639446688, "sha256": "b" * 64,
+                  "downloaded_bytes": 639446688, "published": True,
+                  "registered": False, "elapsed_ms": 1234}
+        catalog_download_report(report)
+        self.put("windows-catalog-download.json", json.dumps(report))
+        result = self.run_stage()
+        self.assertEqual(result["result"], "pass")
+        self.assertEqual(json.loads((self.out / "windows-catalog-download.json").read_text(encoding="utf-8")), report)
+        for changes in ({"path": "private"}, {"url": "https://private.invalid"},
+                        {"source": "huggingface"}, {"catalog_id": "other"},
+                        {"schema_version": True}, {"size_bytes": True},
+                        {"downloaded_bytes": 1}, {"published": False},
+                        {"registered": True}, {"sha256": "invalid"},
+                        {"elapsed_ms": -1}, {"source_revision": {}}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                catalog_download_report(report | changes)
+
+    def test_catalog_failure_keeps_only_fixed_error(self):
+        report = {"schema_version": 1, "success": False, "source": "modelscope",
+                  "catalog_id": "qwen3-0.6b-q8-0", "error": "catalog_download_verification_failed"}
+        catalog_download_report(report)
+        catalog_download_report(report | {"stage": "download_poll", "code": "model_download_timeout"})
+        for changes in ({"error": "private exception body"}, {"url": "private"}, {"success": 0},
+                        {"stage": "download_poll"}, {"stage": "download_poll", "code": "https://private.invalid"},
+                        {"stage": {}, "code": "verification_failed"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                catalog_download_report(report | changes)
 
 
 if __name__ == "__main__":

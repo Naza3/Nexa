@@ -12,6 +12,16 @@ beforeEach(() => {
 });
 describe("native-only adapter", () => {
   it("uses frozen snake_case requests and fixed commands only", async () => {
+    await nativeApi.catalog();
+    expect(invoke).toHaveBeenLastCalledWith("model_catalog", undefined);
+    await nativeApi.discoverDirectory();
+    expect(invoke).toHaveBeenLastCalledWith("model_directory_discover", undefined);
+    await nativeApi.downloadStart("fixed-candidate");
+    expect(invoke).toHaveBeenLastCalledWith("model_download_start", { request: { catalog_id: "fixed-candidate" } });
+    await nativeApi.downloadNext("download-id");
+    expect(invoke).toHaveBeenLastCalledWith("model_download_next", { request: { operation_id: "download-id" } });
+    await nativeApi.downloadCancel("download-id");
+    expect(invoke).toHaveBeenLastCalledWith("model_download_cancel", { request: { operation_id: "download-id" } });
     await nativeApi.start(true);
     expect(invoke).toHaveBeenLastCalledWith("runtime_start", {
       request: { initialize_if_missing: true },

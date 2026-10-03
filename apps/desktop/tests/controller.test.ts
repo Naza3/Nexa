@@ -432,6 +432,7 @@ it("does not let a stale in-flight status overwrite explicitly saved preferences
     batch_size: saved.settings.batch_size,
     max_output_tokens: saved.settings.max_output_tokens,
     close_runtime_on_exit: saved.settings.close_runtime_on_exit,
+    download_source: saved.settings.download_source,
   };
   await controller.saveSettings(preferences);
   pending.resolve(snapshot());

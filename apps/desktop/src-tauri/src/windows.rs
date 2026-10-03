@@ -93,6 +93,11 @@ struct DirectoryRequest {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DownloadRequest {
+    catalog_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LibraryRequest {
     operation_id: Uuid,
 }
@@ -201,7 +206,7 @@ async fn model_directory_pick(
     let _picking = Picking(&state.picking);
     let picked = rfd::AsyncFileDialog::new()
         .set_parent(&window)
-        .set_title("选择现有 GGUF 模型目录（只读使用，不复制或移动）")
+        .set_title("选择现有 GGUF 目录（扫描不移动，下载会保存到此目录）")
         .pick_folder()
         .await;
     guard(&window, &state)?;
@@ -244,6 +249,49 @@ async fn model_directory_apply(
         AdmissionError::Selection(code) => error(code),
         AdmissionError::Rejected(error) => error,
     })
+}
+#[tauri::command]
+async fn model_directory_discover(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<Option<LibraryOperationHandle>> {
+    guard(&window, &state)?;
+    state.bridge.directory_discover()
+}
+#[tauri::command]
+async fn model_catalog(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<ModelCatalog> {
+    guard(&window, &state)?;
+    state.bridge.model_catalog()
+}
+#[tauri::command]
+async fn model_download_start(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: DownloadRequest,
+) -> Result<DownloadOperationHandle> {
+    guard(&window, &state)?;
+    state.bridge.download_start(request.catalog_id)
+}
+#[tauri::command]
+async fn model_download_next(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: LibraryRequest,
+) -> Result<DownloadOperationState> {
+    guard(&window, &state)?;
+    state.bridge.download_next(request.operation_id).await
+}
+#[tauri::command]
+async fn model_download_cancel(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: LibraryRequest,
+) -> Result<DownloadStopping> {
+    guard(&window, &state)?;
+    state.bridge.download_cancel(request.operation_id).await
 }
 #[tauri::command]
 async fn models_scan(
@@ -469,10 +517,15 @@ pub fn run() {
     };
     let validation_root = layout.package_root.clone();
     let bridge = match DesktopBridge::new(data_dir.clone(), layout.runtime_executable) {
-        Ok(bridge) => Arc::new(bridge.with_directory_validator(move |path| {
-            desktop_bridge::validate_model_directory_path(path)?;
-            crate::directory_selection::preflight_directory(path, &validation_root).map_err(error)
-        })),
+        Ok(bridge) => Arc::new(
+            bridge
+                .with_default_model_directory(layout.package_root.join("models"))
+                .with_directory_validator(move |path| {
+                    desktop_bridge::validate_model_directory_path(path)?;
+                    crate::directory_selection::preflight_directory(path, &validation_root)
+                        .map_err(error)
+                }),
+        ),
         Err(_) => {
             failure("本地配置或凭据未通过安全校验。未启动、覆盖或替换 runtime。");
             return;
@@ -497,6 +550,11 @@ pub fn run() {
             model_import,
             model_directory_pick,
             model_directory_apply,
+            model_directory_discover,
+            model_catalog,
+            model_download_start,
+            model_download_next,
+            model_download_cancel,
             models_scan,
             model_library_next,
             model_library_cancel,

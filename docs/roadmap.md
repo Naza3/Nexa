@@ -29,6 +29,8 @@ W04的官方dsh rc2/pi-ai协议研究已完成，可与W01并行建立客户端f
 | W04 API 与 deepseek harness | 严格文本 Chat Completions 子集、SSE、鉴权、模型列表/管理、取消已有 | 基于已确认dsh rc2/pi-ai契约冻结实际lockfile/出站fixture，补工具协议和可复现接入示例 | 精确客户端版本/配置连本机 Nexa；请求/流式/错误/取消与必要工具回合逐项通过；不支持项明确报错；无云 API 冒充本地通过 |
 | W05 后期发行验收 | 便携包/桌面包/独立工具、CI/包完整性证据已有 | 无开发工具、实际离线、长期稳定性、更新/回退与数据保留、Windows11支持矩阵；公开发行准备另行决策 | A19/A20 等实际环境门槛、W 阶段汇总、全新/升级/故障场景与依赖许可；每个声明支持的组合均有报告 |
 
+用户2026-10-03最新优先事项为完成模型目录发现和下载后加载。按[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)先收口EXE/models未配置发现、固定双源目录、默认MS设置、显式保存→扫描→加载；当前本机完整聚合及独立审查通过，Windows真实MS下载及产品包待验。W04新Harness实施暂缓；其旧文本/T0证据保留，不混入本轮交付。
+
 ## 3. W01 最小下一步
 
 1. 使用已交付 `Nexa-Windows-x64-43ad5c2.zip`，退出旧 UI 和服务后解压到新目录，记录 OS/CPU、包 hash 和模型 hash
@@ -52,6 +54,16 @@ W01 不重复造目录选择、自动命名、API、聊天、线程控件或两�
 本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)混合目录切片43ad5c2已通过本机回归/独立审查及[WindowsCI37108375458](https://github.com/Naza3/Nexa/actions/runs/37108375458)（344 pass/0 fail/7 ignored、external17、CTest3/3、固定GGUF/包/bridge）；下载原字节包独立复核通过，43ad5c2于08:45:45 UTC发送获接受，用户下载/运行、原生窗口/目标机仍待验：完整安全扫描后只把确定内容问题作为逐文件拒绝，合法集合一次partial原子发布并显示完整有限诊断；全坏保旧目录/index/generation，无候选可空提交。所有预算（含parser）、I/O、身份/路径/reparse、取消/timeout/save仍硬失败，坏文件计全部预算；诊断不持久化，公共协议/native/library schema不改。scan-only核旧目录身份，apply可显式换目录；旧50c9d41包仍整批失败，不追溯赋能；43ad5c2的partial已获合成事务/Windows guard证据，但未据此宣称多模型质量或目标机性能通过。
 
 managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。50c9d41默认2048扫描对短context的限制仍在；本轮仅自动扫描default_context改取min(2048,metadata)，显式import/load及UI设置保持。新结果见[验证记录](verification/2026-10-03-mixed-model-directory.md)，不能把候选登记当真实加载/性能已验。
+
+### W02 当前优先增量：发现与下载
+
+- 未配置且服务停止时只发现已有EXE/models；已保存missing/stale路径优先，不隐式回退或联网
+- 固定8条、每源独立revision/size/hash；本地列表无远程查询，MS默认/HF可选，明确点击才下载，不自动切源
+- 下载服务停止快拒、真实字节/校验、取消/有限关闭、自有.part和no-clobber；saved不等于registered，用户再扫描/加载
+- 原普通扫描/模型开放策略保持，其他本地GGUF可尝试；新设置回退旧版需备份或移除download_source，旧UI“默认值”不解决兼容
+- Windows验收拟用产品下载器经MS获取一次固定0.6B并复用到真实链，另核TLS依赖许可及包闭包；本地UI105与后端定向不是该真实结果
+
+本轮[验证记录](verification/2026-10-03-model-catalog-download.md)独立于43ad5c2混合目录和4d30bfa T0测试CI。没有新版本/新包证据前，W01仍使用既有43ad5c2且不声称它已有自动发现/下载。
 
 ## 5. W04 兼容门槛
 

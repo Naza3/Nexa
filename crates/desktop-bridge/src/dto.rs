@@ -12,6 +12,8 @@ pub struct DesktopSettings {
     pub max_output_tokens: u32,
     pub idle_unload_seconds: u64,
     pub close_runtime_on_exit: bool,
+    #[serde(default)]
+    pub download_source: DownloadSource,
 }
 impl Default for DesktopSettings {
     fn default() -> Self {
@@ -22,6 +24,7 @@ impl Default for DesktopSettings {
             max_output_tokens: 512,
             idle_unload_seconds: 300,
             close_runtime_on_exit: false,
+            download_source: DownloadSource::default(),
         }
     }
 }
@@ -33,6 +36,8 @@ pub struct DesktopPreferences {
     pub batch_size: u32,
     pub max_output_tokens: u32,
     pub close_runtime_on_exit: bool,
+    #[serde(default)]
+    pub download_source: DownloadSource,
 }
 impl Default for DesktopPreferences {
     fn default() -> Self {
@@ -47,6 +52,7 @@ impl From<DesktopSettings> for DesktopPreferences {
             batch_size: s.batch_size,
             max_output_tokens: s.max_output_tokens,
             close_runtime_on_exit: s.close_runtime_on_exit,
+            download_source: s.download_source,
         }
     }
 }
@@ -58,6 +64,7 @@ impl DesktopPreferences {
             batch_size: self.batch_size,
             max_output_tokens: self.max_output_tokens,
             close_runtime_on_exit: self.close_runtime_on_exit,
+            download_source: self.download_source,
             idle_unload_seconds,
         }
     }
@@ -388,4 +395,89 @@ mod library_protocol_tests {
         );
         assert!(serde_json::to_vec(&state).unwrap().len() < 1024 * 1024);
     }
+}
+
+/// Curated download suggestions never grant model loading permission or validation.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadSource {
+    #[default]
+    Modelscope,
+    Huggingface,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCatalog {
+    pub entries: Vec<CatalogEntry>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogEntry {
+    pub catalog_id: String,
+    pub display_name: String,
+    pub file_name: String,
+    pub architecture: String,
+    pub quantization: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub license: String,
+    pub context_hint: u32,
+    pub recommendation: String,
+    pub sources: Vec<CatalogSource>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogSource {
+    pub source: DownloadSource,
+    pub repository: String,
+    pub revision: String,
+    pub url: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DownloadOperationHandle {
+    pub operation_id: Uuid,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadPhase {
+    Connecting,
+    Downloading,
+    Verifying,
+    Committing,
+    Finished,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadStatus {
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DownloadResult {
+    pub saved: bool,
+    pub registered: bool,
+    pub file_name: String,
+    pub cleanup_warning: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DownloadOperationState {
+    pub operation_id: Uuid,
+    pub catalog_id: String,
+    pub source: DownloadSource,
+    pub file_name: String,
+    pub directory_id: Uuid,
+    pub target_display_path: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub phase: DownloadPhase,
+    pub status: DownloadStatus,
+    pub terminal: bool,
+    pub result: Option<DownloadResult>,
+    pub error: Option<crate::BridgeError>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DownloadStopping {
+    pub stopping: bool,
 }

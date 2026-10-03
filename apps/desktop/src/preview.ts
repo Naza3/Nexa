@@ -113,6 +113,11 @@ export function createPreviewApi(): DesktopApi {
     return { operation_id: `preview-library-${libraryId}` };
   }
   return {
+    catalog: async () => ({ entries: [] }),
+    discoverDirectory: async () => null,
+    downloadStart: async () => { throw new DesktopError("preview_only", "开发预览不下载真实模型。"); },
+    downloadNext: async () => { throw new DesktopError("preview_only", "开发预览没有真实下载进度。"); },
+    downloadCancel: async () => ({ stopping: true }),
     snapshot: async () => {
       await wait(60);
       return clone();

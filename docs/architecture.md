@@ -73,14 +73,22 @@ dsh接入复用既有HTTP路径，先准确配置pi-ai provider，再增加真�
 
 | 数据 | 所有者 |
 | --- | --- |
-| GGUF、manifest、目录索引、运行配置、API凭据 | model-store/runtime，原始external文件只读 |
+| GGUF、manifest、目录索引、运行配置、API凭据 | model-store/runtime，原始external文件只读；显式catalog下载另走新文件事务 |
 | tokenizer/context/KV/sampler | worker内原生推理线程 |
 | 请求队列、取消、事件缓冲 | runtime-core，进程内有界 |
 | 模型管理和显示偏好 | 桌面管理器，不假装当前服务已采用新配置 |
 | 会话、harness工具状态、Telegram等业务数据 | 调用应用 |
 | 性能/验证报告 | 验证体系，默认不记录私有正文、token或完整用户路径 |
 
-external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/hash/metadata与候选资格，不以精确验证表限制模型名。目录应用/重扫需先显式停止服务，不自动终止其他客户端。本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)源码/本机合成回归/独立审查已完成，Windows待验：明确内容拒绝可列逐文件诊断，完整合法集合一次原子替换并以partial区分；全坏保留旧目录/index/generation，无候选可空提交。所有预算（含parser）、I/O、身份/路径/reparse、取消/超时和保存问题仍硬失败，坏文件仍计预算。scan-only核旧目录身份，apply可显式更换；成功/软拒guard覆盖提交或放弃决定，确定不可发布的硬失败退出后可释放。诊断只在本App内存，≤512KiB/完整operation≤1MiB；不改HTTP、worker/native或library schema。详见 [目录契约](t06-model-directory-contract.md)。
+external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/hash/metadata与候选资格，不以精确验证表限制模型名。目录应用/重扫需先显式停止服务，不自动终止其他客户端。本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)已由43ad5c2 WindowsCI/包发送验证，目标机待验：明确内容拒绝可列逐文件诊断，完整合法集合一次原子替换并以partial区分；全坏保留旧目录/index/generation，无候选可空提交。所有预算（含parser）、I/O、身份/路径/reparse、取消/超时和保存问题仍硬失败，坏文件仍计预算。scan-only核旧目录身份，apply可显式更换；成功/软拒guard覆盖提交或放弃决定，确定不可发布的硬失败退出后可释放。诊断只在本App内存，≤512KiB/完整operation≤1MiB；不改HTTP、worker/native或library schema。详见 [目录契约](t06-model-directory-contract.md)。
+
+### 本地默认发现与显式下载（ADR0017，进行中）
+
+原生壳提供EXE/models的默认位置，UI仅在无配置/服务停止时尝试一次发现；已有配置失效也不转用其他目录，不用CWD，不创建不存在目录。扫描仍只读与单文件原子索引事务。默认位置只是本地发现入口，不触发网络或账户/凭据初始化。
+
+固定8条HF/MS候选元信息属于desktop-bridge，本地展示不联网，网络只由显式catalog_id下载触发。源偏好在desktop-settings内（默认MS），任务开始冻结源和目录；bridge负责有界HTTPS/精确redirect/传输/取消，model-store仅负责受保护UUID.part和no-clobber新文件发布。已有文件不改；保存完成registered=false，显式扫描/加载继续走原有结构、身份、模板和预算门槛。目录列表不构成运行名单。
+
+下载保持服务停止前置，不自动关停；后台持实例锁及目录/文件保护，快拒冲突写入而允许snapshot。发布后清理未确认如实警告，不能把saved文件说成回滚。下载源是严格设置新字段，旧版回退需旧备份或仅移除该key，重设默认无效。协议/worker/native不变；资源、源host与包内.part精确例外见[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)，实际证据见[新验证页](verification/2026-10-03-model-catalog-download.md)。
 
 ## 7. 桌面CPU与模型扩展
 
@@ -90,7 +98,7 @@ external目录保持非递归只读、零复制登记、稳定ID和有效目录�
 
 现有线程/context/batch/输出与空闲卸载设置继续复用；性能优化围绕正确参数、目标CPU实测、背压与UI刷新，禁止无基线重做调度。测量parent/worker/UI、冷加载、TTFT、prefill、decode、取消与空闲成本；配置值与未知实测值严格区分。
 
-当前切片只接单文件GGUF及已实现tensor结构；原始嵌入Jinja须符合文本continuation和vocab结束规则，禁止fallback与role/system改写。分片、encoder/diffusion/noncausal、未知结构或输出framing明确拒绝。context取metadata与131072硬限，16GB不等于可运行该窗口；Job没有RAM硬限制，进程隔离不构成完整OOM保障。50c9d41仍使用目录整批失败策略；本轮ADR0016混合目录/有界诊断增量已冻结并通过本机合成回归及独立审查，精确提交WindowsCI/包待验。仅扫描登记默认context取min(2048,metadata)，不夹紧显式import/load或UI设置。开放模型基线50c9d41已有固定GGUF的WindowsCI/包与发送证据，其他模型/用户目标机未因此通过；本轮目录增量不继承旧CI结论。
+当前切片只接单文件GGUF及已实现tensor结构；原始嵌入Jinja须符合文本continuation和vocab结束规则，禁止fallback与role/system改写。分片、encoder/diffusion/noncausal、未知结构或输出framing明确拒绝。context取metadata与131072硬限，16GB不等于可运行该窗口；Job没有RAM硬限制，进程隔离不构成完整OOM保障。50c9d41仍使用目录整批失败策略；本轮ADR0016混合目录/有界诊断增量已有43ad5c2 WindowsCI及包发送证据，目标机待验。仅扫描登记默认context取min(2048,metadata)，不夹紧显式import/load或UI设置。开放模型基线50c9d41已有固定GGUF的WindowsCI/包与发送证据，其他模型/用户目标机未因此通过；本轮目录增量不继承旧CI结论。
 
 原始模板、metadata key与tensor name含NUL时拒绝，避免Rust/native的C-string身份截断；普通tokenizer metadata values含NUL不一概禁止。Engine初始化强制关闭common/Jinja日志并使用受控静态模板错误，最终隐私canary只证明被覆盖的成功/异常路径，不作绝对无泄漏承诺。
 

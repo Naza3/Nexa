@@ -312,6 +312,12 @@ def license_files(package_dir, explicit=None):
     for path in sorted(package_dir.iterdir()):
         if path.name.lower().startswith(("license", "licence", "copying", "notice", "unlicense")):
             files.extend([path] if path.is_file() else [x for x in path.rglob("*") if x.is_file()])
+    # aws-lc-sys carries native code and nested third-party notices. Preserve
+    # those exact notice files as well as its aggregate crate-root LICENSE.
+    native = package_dir / "aws-lc"
+    if (native / "LICENSE").is_file():
+        files.extend(path for path in native.rglob("*") if path.is_file()
+                     and path.name.lower().startswith(("license", "licence", "copying", "notice", "unlicense")))
     return sorted(set(files))
 
 

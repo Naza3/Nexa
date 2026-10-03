@@ -41,6 +41,7 @@ async fn preference_and_idle_publications_are_separate_atomic_and_preserve_token
         batch_size: 256,
         max_output_tokens: 123,
         close_runtime_on_exit: true,
+        download_source: Default::default(),
     };
     bridge.settings_save(p.clone()).await.unwrap();
     assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), original);
@@ -183,4 +184,40 @@ async fn settings_symlink_is_not_followed_or_overwritten() {
             .file_type()
             .is_symlink()
     );
+}
+
+#[tokio::test]
+async fn source_preference_persists_before_runtime_initialization() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = DesktopBridge::new(
+        root.clone(),
+        temp.path().join(if cfg!(windows) {
+            "ai-runtime.exe"
+        } else {
+            "ai-runtime"
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        bridge.snapshot().await.unwrap().settings.download_source,
+        desktop_bridge::DownloadSource::Modelscope
+    );
+    let snapshot = bridge
+        .settings_save(DesktopPreferences {
+            download_source: desktop_bridge::DownloadSource::Huggingface,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(!snapshot.initialized);
+    assert_eq!(
+        snapshot.settings.download_source,
+        desktop_bridge::DownloadSource::Huggingface
+    );
+    assert_eq!(
+        bridge.snapshot().await.unwrap().settings.download_source,
+        desktop_bridge::DownloadSource::Huggingface
+    );
+    assert!(!root.join("secrets/api-token").exists());
 }

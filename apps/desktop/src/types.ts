@@ -4,7 +4,9 @@ export interface LoadOptions {
   threads: number;
   batch_size: number;
 }
+export type DownloadSource = "modelscope" | "huggingface";
 export interface Preferences extends LoadOptions {
+  download_source: DownloadSource;
   max_output_tokens: number;
   close_runtime_on_exit: boolean;
 }
@@ -159,7 +161,46 @@ export interface ChatRequest {
   messages: WireMessage[];
   max_output_tokens: number;
 }
+export interface CatalogSource {
+  source: DownloadSource;
+  repository: string;
+  revision: string;
+  url: string;
+}
+export interface CatalogEntry {
+  catalog_id: string;
+  display_name: string;
+  file_name: string;
+  architecture: string;
+  quantization: string;
+  size_bytes: number;
+  sha256: string;
+  license: string;
+  context_hint: number;
+  recommendation: string;
+  sources: CatalogSource[];
+}
+export interface DownloadOperation {
+  operation_id: string;
+  catalog_id: string;
+  source: DownloadSource;
+  file_name: string;
+  directory_id: string;
+  target_display_path: string;
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  phase: "connecting" | "downloading" | "verifying" | "committing" | "finished";
+  status: "running" | "completed" | "cancelled" | "failed";
+  terminal: boolean;
+  result: { saved: true; registered: false; file_name: string; cleanup_warning: string | null } | null;
+  error: SafeError | null;
+}
 export interface DesktopApi {
+  catalog(): Promise<{ entries: CatalogEntry[] }>;
+  discoverDirectory(): Promise<{ operation_id: string } | null>;
+  downloadStart(catalog_id: string): Promise<{ operation_id: string }>;
+  downloadNext(operation_id: string): Promise<DownloadOperation>;
+  downloadCancel(operation_id: string): Promise<{ stopping: boolean }>;
   snapshot(): Promise<Snapshot>;
   start(initialize_if_missing: boolean): Promise<Snapshot>;
   pickDirectory(): Promise<DirectorySelection | null>;

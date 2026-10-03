@@ -1,6 +1,7 @@
 //! Native-free desktop boundary. All requests use endpoint-bound proof and the
 //! very same TCP connection; no arbitrary request, process, or token command.
 mod chat;
+mod download;
 pub mod dto;
 mod error;
 mod library;
@@ -54,6 +55,9 @@ pub struct DesktopBridge {
     chat: Mutex<chat::ChatSlot>,
     library: Mutex<library::LibrarySlot>,
     library_poll: AsyncMutex<()>,
+    default_model_directory: Option<PathBuf>,
+    downloads: Mutex<download::DownloadSlot>,
+    download_poll: AsyncMutex<()>,
 }
 impl DesktopBridge {
     /// Paths come from the native shell's verified package layout, never invoke.
@@ -84,6 +88,9 @@ impl DesktopBridge {
             chat: Mutex::new(chat::ChatSlot::default()),
             library: Mutex::new(library::LibrarySlot::default()),
             library_poll: AsyncMutex::new(()),
+            default_model_directory: None,
+            downloads: Mutex::new(download::DownloadSlot::default()),
+            download_poll: AsyncMutex::new(()),
         })
     }
     pub fn startup_diagnostics(&self) -> StartupDiagnostics {
@@ -92,6 +99,8 @@ impl DesktopBridge {
     fn open(&self) -> Result<()> {
         if self.closing.load(Ordering::Acquire) {
             Err(BridgeError::new("desktop_closing"))
+        } else if self.download_active() {
+            Err(BridgeError::new("model_download_active"))
         } else {
             Ok(())
         }
@@ -128,7 +137,7 @@ impl DesktopBridge {
                 connection: ConnectionState::Stopped,
                 api_address: None,
                 runtime: None,
-                settings: DesktopSettings::default(),
+                settings: settings::preferences(&self.root)?.with_idle(300),
                 model_directory: library::directory_snapshot(&self.root, None)?,
             });
         }
@@ -142,7 +151,7 @@ impl DesktopBridge {
             settings: preferences.with_idle(config.runtime.idle_unload_seconds),
             model_directory: library::directory_snapshot(&self.root, None)?,
         };
-        if self.library.lock().unwrap().owns_instance() {
+        if self.library.lock().unwrap().owns_instance() || self.download_active() {
             return Ok(snapshot);
         }
         if let Some(lock) = InstanceLock::try_acquire(&self.root)
@@ -412,7 +421,6 @@ impl DesktopBridge {
             .try_lock()
             .map_err(|_| BridgeError::new("desktop_busy"))?;
         self.open()?;
-        settings::require_initialized(&self.root)?;
         settings::save_preferences(&self.root, &preferences)?;
         self.snapshot_inner().await
     }
@@ -507,6 +515,7 @@ impl DesktopBridge {
         self.closing.store(true, Ordering::Release);
         self.close_signal.notify_waiters();
         let result = async {
+            self.close_download().await?;
             self.close_chat().await?;
             self.close_library().await?;
             let _work = tokio::time::timeout(Duration::from_secs(10), self.work.lock())

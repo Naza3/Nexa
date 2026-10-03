@@ -86,6 +86,7 @@ class DesktopPackageTests(unittest.TestCase):
         self.assertTrue(capability["local"])
         self.assertNotIn("remote", capability)
         commands = {"desktop_snapshot", "runtime_start", "model_pick", "model_import", "model_directory_pick", "model_directory_apply", "models_scan", "model_library_next", "model_library_cancel", "models_page", "model_load", "model_unload", "chat_start", "chat_next", "chat_cancel", "settings_save", "runtime_idle_save", "token_copy", "runtime_stop", "desktop_close"}
+        commands.update({"model_directory_discover", "model_catalog", "model_download_start", "model_download_next", "model_download_cancel"})
         self.assertEqual(set(capability["permissions"]), {"allow-" + name.replace("_", "-") for name in commands})
         native = (pack.SHELL / "src/windows.rs").read_text(encoding="utf-8")
         import re
@@ -94,6 +95,8 @@ class DesktopPackageTests(unittest.TestCase):
         self.assertEqual(set(re.findall(r'"([a-z_]+)"', manifest_builder)) - {"windows"}, commands)
         directory_request = re.search(r"struct DirectoryRequest \{(.*?)\}", native, re.DOTALL)[1]
         self.assertEqual(re.findall(r"([a-z_]+):", directory_request), ["selection_id"])
+        download_request = re.search(r"struct DownloadRequest \{(.*?)\}", native, re.DOTALL)[1]
+        self.assertEqual(re.findall(r"([a-z_]+):", download_request), ["catalog_id"])
         self.assertEqual(config["app"]["security"]["capabilities"], ["main-window"])
         self.assertFalse(config["app"]["withGlobalTauri"])
         self.assertFalse(config["app"]["windows"][0]["devtools"])

@@ -1,6 +1,6 @@
 # model-store（T02）
 
-管理managed复制导入与external只读零复制GGUF目录，无llama链接、模型下载或网络访问。`Read + 精确字节数`保留通用有界输入能力，不把URI当本地文件路径。
+管理managed复制导入与external只读零复制GGUF目录，无llama链接或网络访问；本轮新增仅文件侧DownloadFile事务，由desktop-bridge显式下载器供字节，不承担网络请求。`Read + 精确字节数`保留通用有界输入能力，不把URI当本地文件路径。
 
 ## 公共入口
 
@@ -37,7 +37,7 @@ Unix 同步文件与可 fsync 的目录；Windows 文件在 rename 前同步，�
 - GGUF 结构通过仅表示可安全登记，不表示可推理。只有原矩阵的hash/大小/qwen3/Q8_0/模板hash、40960 metadata context和2048默认context匹配时记录既有精确llama/实测证据；这仅控制validated声明，不再限制其他合法候选尝试加载
 - 已验证记录明确只对应 Windows Server 2022 x64 CPU CI / 2 threads / context 2048；历史验证不限制候选请求窗口；`ResolvedModel.context_limit`取模型metadata与131072硬限较小者，实际模板/loader/资源仍须检查。大于2048、其他设备或线程数不因此成为已验收
 - 缺少关键字段或矛盾的validated/capabilities/commit声明拒绝；普通未实测导入validated=false，仍可有独立loadable候选资格，不能由用户字段伪造验证。summary.loadable不替代load前文件准备/hash/metadata与external lease
-- managed导入前、manifest/load与external统一单文件≤16GiB；是文件安全预算，不是16GB RAM保证。分片、未知tensor结构与缺模板仍拒绝；50c9d41仍保留默认2048扫描对短context的限制；本轮ADR0016仅将自动扫描default_context改取min(2048,metadata)，显式managed import/load参数语义不变，本机合成回归通过、Windows待验
+- managed导入前、manifest/load与external统一单文件≤16GiB；是文件安全预算，不是16GB RAM保证。分片、未知tensor结构与缺模板仍拒绝；50c9d41仍保留默认2048扫描对短context的限制；本轮ADR0016仅将自动扫描default_context改取min(2048,metadata)，显式managed import/load参数语义不变，43ad5c2 WindowsCI及包发送完成、用户目标机待验
 - schema/来源中的扩展 JSON 字段可保留，保留字段不能被扩展覆盖。调用层负责日志/导出时的来源隐私处理
 
 ## 验证入口
@@ -51,6 +51,8 @@ ModelStore保留现有managed布局，同时从data root的model-library.json读
 
 读取旧索引只校验结构及路径语法，拔掉外置盘不会阻止旧managed使用；访问外部源时再只读核查DriveType、祖先/文件reparse和OS身份。首次实际加载重hash并保留Windows source guard到已确认shutdown，actor resolve不hash。外部扫描/读取从不向所选目录写文件；持久化由可信应用在data root持实例锁原子完成。上限与取消/生命周期契约见 [目录契约](../../docs/t06-model-directory-contract.md)。
 
-本轮[ADR0016](../../docs/decisions/0016-mixed-model-directory-diagnostics.md)源码已冻结并通过本机合成回归/独立审查，Windows待验：对受保护读取后明确的内容拒绝形成有界诊断，合法集合仍一次原子发布；全坏不发布，空目录可空提交。坏文件计入全部预算；私有read_for_scan将parser预算typed映射既有ModelLibraryLimit，managed read/导入错误语义保持。I/O、路径/reparse、身份变化、取消/超时与全部限额为硬失败，不能跳过。扫描only在同一次DirectoryGuard核旧目录身份；显式apply可选新目录。成功/软拒source guard保持到提交或放弃决定；确定不可发布的硬失败退出后可释放，不等待UI轮询。诊断不进入schema1索引。实现与验证状态见[本轮记录](../../docs/verification/2026-10-03-mixed-model-directory.md)。
+本轮[ADR0016](../../docs/decisions/0016-mixed-model-directory-diagnostics.md)已由43ad5c2 WindowsCI及包发送验证、用户目标机待验：对受保护读取后明确的内容拒绝形成有界诊断，合法集合仍一次原子发布；全坏不发布，空目录可空提交。坏文件计入全部预算；私有read_for_scan将parser预算typed映射既有ModelLibraryLimit，managed read/导入错误语义保持。I/O、路径/reparse、身份变化、取消/超时与全部限额为硬失败，不能跳过。扫描only在同一次DirectoryGuard核旧目录身份；显式apply可选新目录。成功/软拒source guard保持到提交或放弃决定；确定不可发布的硬失败退出后可释放，不等待UI轮询。诊断不进入schema1索引。实现与验证状态见[本轮记录](../../docs/verification/2026-10-03-mixed-model-directory.md)。
+
+本轮[ADR0017](../../docs/decisions/0017-model-discovery-and-catalog-download.md)增加`library::download::DownloadFile`，仅显式下载可创建受保护UUID.part并在全量size/hash核验后原子hardlink no-clobber发布。模型目录与祖先身份须匹配，已有或竞争目标绝不覆盖；仅清理本任务实际持有的partial对象。生产文件保护仅Windows实现，Linux单元fixture只能验证字节事务；发布后临时项清理未确认须承认文件已保存并上报warning。普通scan/prepare仍只读，不调用该写路径。下载不登记模型、不迁移到managed，也不自动赋validated；使用者须另扫再load，详见[本轮记录](../../docs/verification/2026-10-03-model-catalog-download.md)。
 
 Windows合成共享访问与预存可写mapping测试仅证明各自观察，Linux不能冒称拥有Windows强制共享保证。未确认cleanup的prepared guard有界保留到进程退出，进程随后拒绝重新open catalog；正常调用者必须在worker确认停止后显式release_external_after_shutdown。

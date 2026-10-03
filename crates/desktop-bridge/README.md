@@ -14,21 +14,33 @@
 - `chat_next(Uuid)`、`chat_cancel(Uuid)` 为 async；批次 `terminal` 是 bool，终态来自 `events`；重复终态读取无重复文本
 - `stop()` 要求 HTTP shutdown 成功且 `wait_stopped` 确认实例释放；`close()` 读取关闭设置；`close_ui_only()` 明确只关 UI，失败不放行关闭
 
-壳只把原生选择器得到的路径传给 `import_model`，前端只持一次性选择 ID；路径、Token 不通过 bridge DTO 暴露。Windows 原始普通盘符路径在 canonicalize 后受控移除 `\\?\` 盘符前缀，再交现有 API，UNC/URL/最终 symlink 不支持。真实导入 API 返回包装对象，bridge 核对外层与 `model` 内层的 ID、大小和 SHA-256。
+壳只把原生选择器得到的路径传给 `import_model`，前端只持一次性选择 ID；自由路径输入与Token不通过bridge DTO暴露；已授权目录可有只读display_path/target_display_path展示，不赋予JS自由路径权限。Windows 原始普通盘符路径在 canonicalize 后受控移除 `\\?\` 盘符前缀，再交现有 API，UNC/URL/最终 symlink 不支持。真实导入 API 返回包装对象，bridge 核对外层与 `model` 内层的 ID、大小和 SHA-256。
 
 Token 复制属于原生壳按钮：调用现有私有 Token 读取校验，直接写系统剪贴板；本 crate 没有 Token getter。
 
-## 混合模型目录增量（本机回归通过，Windows待验）
+## 混合模型目录（43ad5c2已交付，目标机待验）
 
-按[ADR0016](../../docs/decisions/0016-mixed-model-directory-diagnostics.md)，本轮源码已冻结、本机合成回归及独立审查通过，WindowsCI/整包/窗口待验，已交付50c9d41不含此行为。directory_apply/models_scan仍先要求停止服务并持实例锁；scan-only核旧目录身份，显式apply可选新目录。合法集合完整核验后一次发布：全合法completed，好坏混合partial，全坏failed/model_scan_no_usable_files保旧index/generation；无候选可completed空提交。
+按[ADR0016](../../docs/decisions/0016-mixed-model-directory-diagnostics.md)，该行为已由43ad5c2 WindowsCI/包复核并发送，用户窗口待验，旧50c9d41不含此行为。directory_apply/models_scan仍先要求停止服务并持实例锁；scan-only核旧目录身份，显式apply可选新目录。合法集合完整核验后一次发布：全合法completed，好坏混合partial，全坏failed/model_scan_no_usable_files保旧index/generation；无候选可completed空提交。
 
 私有LibraryOperationState新增file_errors（默认[]）及partial终态，LibraryOperationResult新增rejected_files（默认0），兼容旧completed缺字段。诊断仅安全basename和三种静态内容code/message；完整序列化diagnostics≤512KiB、operation≤1MiB，包含JSON转义，不截断。completed/partial有result无error，全坏result=null。诊断仅当前App生命周期及一份有界旧终态，不持久化；terminal在工作/实例锁释放后发布，避免读取终态即重扫仍误报busy。
 
 所有资源/解析预算及I/O、身份、路径/reparse、取消/超时、保存失败仍硬失败；成功/软拒guard覆盖提交或放弃决定，硬失败确定不可发布退出后可释放。自动扫描context默认值min(2048,metadata)，显式load/import/UI参数保持。公共HTTP、worker/native/library schema和包内preflight不变，混合坏文件验收使用包外目录。详细DTO/事务见[目录契约](../../docs/t06-model-directory-contract.md)，实际结果见[验证记录](../../docs/verification/2026-10-03-mixed-model-directory.md)。
 
+## 默认发现与固定目录下载（进行中）
+
+按[ADR0017](../../docs/decisions/0017-model-discovery-and-catalog-download.md)，UI未配置模型目录且服务停止时调用directory_discover，只检查原生壳绑定的EXE/models；不存在不创建，已有目录失效也不回退。model_catalog只读内置8条固定双源数据，不联网、不限制其他本地GGUF加载。
+
+下载仅显式catalog_id，来源取已保存download_source（默认MS、HF可选），开始后绑定目标目录/source/revision/size/hash，无自动切源。model_download_*私有命令有独立task/next/cancel，后台持实例锁和目录/自有partial保护；其他写操作快拒model_download_active，snapshot可用。服务须显式停止，不在下载时自动关闭它。
+
+HTTPS精确允许MS modelscope.cn；HF huggingface.co/us.aws.cdn.hf.co/cas-bridge.xethub.hf.co，最多5跳，无代理/referer/自动重试/URL日志；15秒连接、30秒读、2小时总上限。64KiB写块/2块队列，精确实收字节与SHA256再发布，无预分配成功保证。下载文件事务由model-store提供，最终no-clobber，不覆盖同名源。
+
+completed仅saved=true/registered=false，下载后显式扫描。若发布后自有.part清理未确认，result带partial_cleanup_unconfirmed而保持saved真值；取消/关闭须等真实终态，关闭最多10秒未确认就保窗。详见[验证记录](../../docs/verification/2026-10-03-model-catalog-download.md)，本机检查点不是Windows/live下载或产品验收。
+
+下载源与原UI设置同文件严格原子保存。新版读旧文件缺字段默认MS；退回43ad5c2前停止应用，恢复旧备份或仅移除download_source，新版恢复默认仍写key。公共runtime HTTP、worker/native协议及凭据不用于远端下载。
+
 ## 安全与关闭边界
 
-所有请求通过 `runtime_cli::client::VerifiedConnection` 的同一 TCP endpoint-bound proof 后发送 Bearer。每项控制请求独立连接，不代理、重定向、自动重连、重放或用失败的 proof 接管既有实例。`start(false)` 永不隐式初始化。启动仅固定原生 Command/参数/路径，stdio 均为 null；Windows 显式 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，正常继承外部 Job，不请求 breakaway、不变更 Job 限制或提权，也无失败后换 flags 重试。Nexa 不新建随 UI 关闭而杀掉 runtime 的 Job；默认 UI 退出保留 runtime 的保证受外部宿主 Job 生命周期约束。启动错误仅暴露 OS 数字错误码用于定位。
+所有本机runtime请求通过 `runtime_cli::client::VerifiedConnection` 的同一 TCP endpoint-bound proof 后发送 Bearer。每项控制请求独立连接，不代理、重定向、自动重连、重放或用失败的 proof 接管既有实例。`start(false)` 永不隐式初始化。启动仅固定原生 Command/参数/路径，stdio 均为 null；Windows 显式 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，正常继承外部 Job，不请求 breakaway、不变更 Job 限制或提权，也无失败后换 flags 重试。Nexa 不新建随 UI 关闭而杀掉 runtime 的 Job；默认 UI 退出保留 runtime 的保证受外部宿主 Job 生命周期约束。启动错误仅暴露 OS 数字错误码用于定位。
 
 默认关闭停止接收操作、取消本 UI chat，关闭其 HTTP 流并有限等待终态。关闭与 Import 竞争时丢弃本次导入的连接，触发现有 API `ImportGuard`，随后有限观察 registry 空闲；不取消其他客户端的 registry 操作，也不假装知道其归属。Load/Unload 没有独立操作取消 ID，关闭最多等工作锁 10 秒；未完成返回错误、保留窗口，用户待操作结束后重试。此边界不能报告为所有原生窗口路径已经验收。
 
@@ -66,7 +78,7 @@ Harness 仅新建唯一临时目录、临时凭据与 listen=0 配置，使用�
 
 新桌面流程由原生目录选择产生一次性 selection_id，bridge 将目录扫描与单一 model-library.json 原子发布放在停止状态的实例锁内。库操作登记 operation_id 后通过有界 next/cancel 接口观察；只读源 GGUF，不复制、移动、改名或删除。旧 managed 模型仍在原位置，显示名与内部 ID 分离，外部文件默认按文件名去掉 .gguf 显示，ID 自动生成并按文件名/内容身份稳定复用。
 
-配置、token、索引继续在 AppData；选中目录只有读取要求。路径上限 32KiB UTF-8/64 components，扫描非递归、1024目录项/64 GGUF、单16GiB/总32GiB，300秒协作预算与64KiB取消检查。单次OS文件I/O不能被Rust强制抢断时，关闭继续报告清理未确认/保留窗口，不假装已取消；源文件始终不写。详细字段见 [冻结契约](../../docs/t06-model-directory-contract.md)。
+配置、token、索引继续在 AppData；普通扫描对选中目录只有读取要求，显式下载另需写入权限。路径上限 32KiB UTF-8/64 components，扫描非递归、1024目录项/64 GGUF、单16GiB/总32GiB，300秒协作预算与64KiB取消检查。单次OS文件I/O不能被Rust强制抢断时，关闭继续报告清理未确认/保留窗口，不假装已取消；既有源文件始终不写；本轮显式下载是独立新文件事务，不改扫描只读语义。详细字段见 [冻结契约](../../docs/t06-model-directory-contract.md)。
 
 Windows 首次load或直接chat自动加载前，在blocking准备任务取得只读共享文件/目录guard并完整核验SHA与身份。启动只读索引/元数据，不重hash整库。API断流与关停取消准备；registry lease保留到blocking任务实际结束。guard一直保留到runtime/worker确认停止，卸载不释放。未知cleanup会保留有界guard到进程退出并永久禁止本进程重建catalog；产品CLI每进程只serve一次。普通写入/替换保护与预存可写mapping观察分开验收，不能称任意写者下绝对不可修改。Linux外部推理明确unsupported，仅开发扫描/契约回归。
 

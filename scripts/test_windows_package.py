@@ -13,6 +13,17 @@ spec.loader.exec_module(pack)
 
 
 class PackageTests(unittest.TestCase):
+    def test_aws_lc_native_notices_are_retained_without_source_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            names = ("LICENSE", "aws-lc/LICENSE", "aws-lc/third_party/fiat/LICENSE",
+                     "aws-lc/third_party/NOTICE.txt", "aws-lc/crypto/source.c", "unrelated/src/LICENSE")
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture", encoding="utf-8")
+            self.assertEqual({path.relative_to(root).as_posix() for path in pack.license_files(root)}, set(names[:4]))
+
     def test_windows_environment_overrides_case_insensitively(self):
         base = {"PATH": "old path", "VCTOOLSREDISTDIR": "old redist", "ImageOS": "windows2022", "ImageVersion": "20260929", "SystemRoot": "C:/Windows"}
         output = "Path=new path\r\nVCToolsRedistDir=new redist\r\n= C:=ignored\r\nCOMPLEX=a=b=c\r\n"

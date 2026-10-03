@@ -9,6 +9,7 @@ import {
 } from "./controller";
 import type { ViewState } from "./controller";
 import type { Preferences, RuntimeStatus, Settings } from "./types";
+import { ModelDownloads, DownloadProgress } from "./ModelDownloads";
 import { modelCompatibility } from "./modelCompatibility";
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
@@ -102,6 +103,9 @@ const stateNames: Record<RuntimeStatus["state"], string> = {
 function statusLabel(state: ViewState) {
   if (state.booting) return "正在连接";
   if (state.operation) return state.operation;
+  if (state.download_phase === "recovery") return "下载状态待确认";
+  if (state.download_phase === "stopping") return "正在取消下载";
+  if (state.download_phase !== "idle") return "正在下载模型";
   if (state.library_phase === "starting") return "正在提交模型库操作";
   if (state.library_phase === "running") return "正在核验模型目录";
   if (state.library_phase === "stopping") return "正在取消模型库操作";
@@ -229,7 +233,7 @@ function RuntimeBanner({
         </div>
         <button
           className="primary"
-          disabled={!!state.operation || state.library_phase !== "idle"}
+          disabled={!!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle"}
           onClick={() => void controller.start(true)}
         >
           {state.operation ? <Spinner /> : <Icon name="power" size={16} />}
@@ -256,7 +260,7 @@ function RuntimeBanner({
         </div>
         <button
           className="primary"
-          disabled={!!state.operation || state.library_phase !== "idle"}
+          disabled={!!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle"}
           onClick={() =>
             void (snapshot.connection === "error"
               ? controller.refresh()
@@ -303,6 +307,10 @@ function DirectoryStateNotice({ state }: { state: ViewState }) {
       role="status"
     >
       <p>{explanations[directory.state]}</p>
+      {!directory.configured && state.discovery === "unchecked" && ["connected", "connecting"].includes(state.snapshot?.connection ?? "") && <p>服务仍在运行；显式停止后会自动发现程序旁的 models 目录。</p>}
+      {!directory.configured && state.discovery === "checking" && <p>正在自动发现并核验程序旁的 models 目录；完成前不会把它当作已登记目录。</p>}
+      {!directory.configured && state.discovery === "none" && <p>未发现程序旁的 models 目录，可在设置中选择已有模型目录。</p>}
+      {!directory.configured && state.discovery === "failed" && <p className="warning-text">自动发现或登记未完成，原模型库保留。请检查错误并重新发现，或显式选择目录。</p>}
       {directory.effective && (
         <p>
           当前服务使用：
@@ -410,6 +418,7 @@ function DirectorySettings({
   const busy =
     !!state.operation ||
     state.library_phase !== "idle" ||
+    state.download_phase !== "idle" ||
     state.chat_phase !== "idle";
   return (
     <section
@@ -438,6 +447,7 @@ function DirectorySettings({
       </div>
       <DirectoryStateNotice state={state} />
       <div className="directory-actions">
+        {!directory.configured && state.discovery !== "checking" && <button disabled={busy || !stopped} onClick={() => void controller.discoverDirectory()}>重新发现程序旁 models</button>}
         <button disabled={busy} onClick={() => void controller.pickDirectory()}>
           <Icon name="file" size={16} />
           选择模型目录
@@ -491,8 +501,7 @@ function DirectorySettings({
       )}
       <div className="directory-guidance">
         <p>
-          可选择程序旁的 model
-          目录，也可选择其他支持的本地目录；目录仅需可读。只扫描直接子级，不递归，也不移动、重命名或删除源文件。
+          未配置目录时会自动发现程序旁的 models 目录；已选目录始终优先。也可选择其他支持的本地目录；读取已有模型时目录仅需可读，下载目标须可写。只扫描直接子级，不递归，也不移动、重命名或删除源文件。
         </p>
         <p>
           单次最多 1024 个条目、64 个 GGUF；单文件 16 GiB、候选合计 32
@@ -559,12 +568,14 @@ function ModelsPage({
   goChat: () => void;
   goSettings: () => void;
 }) {
+  const [view, setView] = useState<"local" | "download">("local");
   const runtime = state.snapshot?.runtime;
   const settings = state.snapshot?.settings ?? DEFAULT_SETTINGS;
   const connected = state.snapshot?.connection === "connected";
   const busy =
     !!state.operation ||
     state.library_phase !== "idle" ||
+    state.download_phase !== "idle" ||
     ["stale", "unsupported"].includes(
       state.snapshot?.model_directory.state ?? "",
     ) ||
@@ -591,6 +602,8 @@ function ModelsPage({
           本地运行
         </span>
       </div>
+      <div className="model-view-switch" role="group" aria-label="模型视图"><button aria-pressed={view === "local"} onClick={() => setView("local")}>本地模型</button><button aria-pressed={view === "download"} onClick={() => setView("download")}>下载模型</button></div>
+      {view === "download" ? <ModelDownloads state={state} controller={controller} goSettings={goSettings} /> : <>
       <section className="runtime-card" aria-label="模型运行状态">
         <div className="model-emblem">
           <Icon name="models" size={26} />
@@ -687,7 +700,7 @@ function ModelsPage({
                 ? "启动运行服务后，读取当前模型列表。"
                 : "在设置中选择已有 GGUF 的目录，停止服务后应用。"}
             </p>
-            <span>仅支持单文件 GGUF，模型文件由你提供，不会自动下载</span>
+            <span>支持单文件 GGUF；可选择本地目录，或切换到“下载模型”选取文件</span>
           </div>
         ) : (
           <div className="model-list">
@@ -816,6 +829,7 @@ function ModelsPage({
           加载参数来自已保存的偏好，不代表硬件性能保证。
         </p>
       </div>
+      </>}
     </>
   );
 }
@@ -1109,6 +1123,7 @@ function SettingsPage({
     batch_size: settings.batch_size,
     max_output_tokens: settings.max_output_tokens,
     close_runtime_on_exit: settings.close_runtime_on_exit,
+    download_source: settings.download_source,
   }));
   const [idle, setIdle] = useState(settings.idle_unload_seconds);
   const [modal, setModal] = useState<"token" | "stop" | null>(null);
@@ -1170,6 +1185,13 @@ function SettingsPage({
           void controller.saveSettings(draft);
         }}
       >
+        <section className="settings-card">
+          <label className="setting-field" htmlFor="download-source"><span>默认下载源</span><small>默认 ModelScope，可改为 Hugging Face。点击下方“保存偏好”后生效；在途下载不会切换来源。</small>
+            <select id="download-source" value={draft.download_source} onChange={(event) => setDraft({ ...draft, download_source: event.target.value as Preferences["download_source"] })}>
+              <option value="modelscope">ModelScope</option><option value="huggingface">Hugging Face</option>
+            </select>
+          </label>
+        </section>
         <section className="settings-card">
           <div className="card-heading">
             <div>
@@ -1252,6 +1274,7 @@ function SettingsPage({
             disabled={
               !!state.operation ||
               state.library_phase !== "idle" ||
+              state.download_phase !== "idle" ||
               !!validation
             }
           >
@@ -1287,6 +1310,7 @@ function SettingsPage({
               !stopped ||
               !!state.operation ||
               state.library_phase !== "idle" ||
+              state.download_phase !== "idle" ||
               !Number.isSafeInteger(idle) ||
               idle < 1 ||
               idle > 86400
@@ -1343,6 +1367,7 @@ function SettingsPage({
             !running ||
             !!state.operation ||
             state.library_phase !== "idle" ||
+            state.download_phase !== "idle" ||
             state.chat_phase !== "idle"
           }
           onClick={() => setModal("stop")}
@@ -1557,6 +1582,7 @@ export default function App({
                 </button>
               </div>
             )}
+          <DownloadProgress state={state} controller={controller} />
           <LibraryProgress state={state} controller={controller} />
           <LibraryDiagnostics state={state} />
           {state.notice && (

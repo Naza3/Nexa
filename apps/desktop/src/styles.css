@@ -1426,3 +1426,18 @@ h3 {
   overflow-wrap: anywhere;
   margin-block: 0.5rem;
 }
+
+.model-view-switch { display: flex; gap: 8px; margin-bottom: 22px; }
+.model-view-switch button[aria-pressed="true"] { background: var(--accent, #4a6958); color: white; }
+.download-catalog { display: grid; gap: 18px; }
+.download-catalog .section-heading { align-items: flex-start; }
+.download-catalog .directory-summary { margin: 0; }
+.catalog-filter { display: grid; gap: 8px; font-weight: 600; }
+.catalog-filter input, #download-source { padding: 10px 12px; border: 1px solid #b8c0bc; border-radius: 8px; font: inherit; background: white; color: #202c26; }
+.catalog-row { align-items: flex-start; }
+.catalog-row p, .catalog-row details { overflow-wrap: anywhere; }
+.catalog-row details { font-size: 12px; margin-top: 9px; }
+.catalog-row summary { cursor: pointer; }
+.catalog-filename { font-size: 12px; }
+.download-progress progress { display: block; width: min(100%, 460px); margin: 8px 0; }
+.download-progress > div { min-width: 0; flex: 1; }

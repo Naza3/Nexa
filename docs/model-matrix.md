@@ -39,6 +39,27 @@ Qwen3.5-4B及其他模型未实测不等于被产品名称名单永久禁止；�
 文件和模板 hash 已对实际下载文件计算；详细本轮 Linux 开发结果见对应验证记录。模型文件不提交源码仓库，不自动下载到最终产品。
 
 
+## 内置可下载候选目录（ADR0017，实施中）
+
+[固定源码目录](../crates/desktop-bridge/src/model-catalog.json)含8个单文件GGUF，各源独立锁完整revision、URL、size及SHA256。来源和字节身份用于安全下载，不是允许加载的白名单；其他合法本地GGUF仍可尝试。启动和打开目录不联网，明确下载才访问已保存的MS/HF源。
+
+| 文件 | 精确bytes | 发布来源 | 当前能力证据 |
+| --- | --- | --- | --- |
+| Qwen3-0.6B-Q8_0.gguf | 639,446,688 | Qwen官方 | 原固定文件Windows CI真实回归；本下载器尚未实测 |
+| Qwen3-1.7B-Q8_0.gguf | 1,834,426,016 | Qwen官方 | 未实测候选；加载/文本/工具均需另验 |
+| Qwen3-4B-Q4_K_M.gguf | 2,497,280,256 | Qwen官方 | 未实测候选；加载/文本/工具均需另验 |
+| Qwen3-4B-Q8_0.gguf | 4,280,404,704 | Qwen官方 | 未实测候选；加载/文本/工具均需另验 |
+| Qwen3-8B-Q4_K_M.gguf | 5,027,783,488 | Qwen官方 | 未实测候选；加载/文本/工具均需另验 |
+| Qwen3-8B-Q8_0.gguf | 8,709,518,112 | Qwen官方 | 未实测候选；加载/文本/工具均需另验 |
+| Qwen3.5-4B-Q4_K_M.gguf | 2,740,937,888 | Unsloth社区量化 | 未实测候选；加载/文本/工具均需另验 |
+| Qwen3.5-4B-Q8_0.gguf | 4,482,403,488 | Unsloth社区量化 | 未实测候选；加载/文本/工具均需另验 |
+
+所有条目服务元信息标注Apache-2.0，各自固定来源/许可信息仍须保留。双服务声明size/hash相等、MS HEAD成功与HF重定向仅是研究元信息，不是本下载器全文件验证；HF仓库模板元信息也不是逐个量化文件完整解析。仅0.6B Q8_0有历史精确验证，下载完成不升级validated。
+
+Qwen3.5条目为文本候选，即使锁定llama源码含qwen35也不承诺实际loader/模板可用、视觉或工具支持。8B Q8_0约8.71GB权重，16GB总内存还须供系统/KV/缓冲，未测CPU延迟；其他量化也不能由文件名推断全部tensor布局。context_hint2048是保守试验提示，不是已经配置或可运行容量证明。
+
+本轮保存结果明确saved=true/registered=false，须另扫描。实际传输、Windows保护与产品验收见[新记录](verification/2026-10-03-model-catalog-download.md)；旧43ad5c2没有自动发现或下载功能。
+
 ## 开放候选与基准样本（固定旧模型已回归，其他模型/目标机待验）
 
 产品允许范围按实际结构/引擎/模板能力决定，不逐个批准模型名或hash。基准样本可以从0.6B、1.7B、4B等容量档选取，目的为测16GB桌面的内存、延迟和质量，不是把产品限定在这些档位/型号；更大或不同系列的合法候选不因未列入表而自动禁用。
@@ -58,8 +79,8 @@ Qwen3.5-4B及其他模型未实测不等于被产品名称名单永久禁止；�
 
 新模型可先作为“未实测，可尝试加载”候选；运行失败返回具体原因，不自动升级validated，也不通过换模板/换模型假装成功。需要新llama版本时另立升级验证，不自动跟随上游。
 
-managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。已发送50c9d41在metadata context小于默认2048时扫描登记仍失败；本轮ADR0016源码已冻结并过本机合成回归/独立审查，仅自动扫描default_context改取min(2048,metadata)，用户显式import/load/UI参数不静默夹紧，尚无本切片WindowsCI/新包/真实短context模型验证。
+managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。已发送50c9d41在metadata context小于默认2048时扫描登记仍失败；ADR0016已由43ad5c2 WindowsCI及包发送验证，仅自动扫描default_context改取min(2048,metadata)，用户显式import/load/UI参数不静默夹紧，真实短context模型仍未验。
 
-当前结构子集包括GGUF v2/v3及已实现常规/K tensor布局；未知layout、分片、无嵌入模板或非受支持执行方式明确拒绝。已发送50c9d41仍可能因单个不兼容文件整批登记失败；本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)在完整安全扫描后一次发布合法集合，partial带完整有界诊断、全坏保旧、空目录可空提交。所有预算/IO/身份/路径/reparse/取消/timeout/save仍硬失败；实现及本机合成回归/独立审查已完成，WindowsCI/整包待验，见[新记录](verification/2026-10-03-mixed-model-directory.md)。候选扫描改进不新增任何模型实测标签。[W02记录](verification/2026-10-03-windows-open-models.md)单列逻辑、模板fixture、真实模型和WindowsCI，不混用通过结论。
+当前结构子集包括GGUF v2/v3及已实现常规/K tensor布局；未知layout、分片、无嵌入模板或非受支持执行方式明确拒绝。已发送50c9d41仍可能因单个不兼容文件整批登记失败；本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)在完整安全扫描后一次发布合法集合，partial带完整有界诊断、全坏保旧、空目录可空提交。所有预算/IO/身份/路径/reparse/取消/timeout/save仍硬失败；实现及43ad5c2 WindowsCI/包发送已完成，用户目标机待验，见[新记录](verification/2026-10-03-mixed-model-directory.md)。候选扫描改进不新增任何模型实测标签。[W02记录](verification/2026-10-03-windows-open-models.md)单列逻辑、模板fixture、真实模型和WindowsCI，不混用通过结论。
 
 旧Android/MNN研究矩阵完整保留于[原矩阵快照](archive/windows-focus-2026-10-03/docs/model-matrix.md)，不构成当前Windows依赖。
