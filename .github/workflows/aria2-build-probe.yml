@@ -1,0 +1,57 @@
+name: Pinned Nexa aria2 Windows build and policy probe
+
+on:
+  push:
+    branches: ['codex/nexa-native-baseline', 'codex/nexa-aria2-build']
+    paths:
+      - 'third_party/aria2/**'
+      - 'scripts/build_aria2_windows.*'
+      - 'scripts/test_aria2_build*.py'
+      - '.github/workflows/aria2-build-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, matches main CI
+        with:
+          persist-credentials: false
+      - name: Offline build-contract tests
+        run: python3 -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_aria2_build*.py'
+      - name: Build pinned source as Windows AMD64 PE with Schannel
+        run: bash scripts/build_aria2_windows.sh "$RUNNER_TEMP/aria2-build"
+      - name: Retain build materials and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, matches main CI
+        with:
+          name: aria2-pinned-build-${{ github.sha }}
+          path: ${{ runner.temp }}/aria2-build/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+  windows-policy:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0, official release verified
+        with:
+          name: aria2-pinned-build-${{ github.sha }}
+          path: artifacts/aria2-build
+      - name: Real Windows native policy, private socket and Schannel tests
+        run: python third_party/aria2/tests/windows_probe.py --artifacts artifacts/aria2-build --output artifacts/aria2-windows-policy.json
+      - name: Retain Windows observations separately from untested build artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aria2-pinned-windows-policy-${{ github.sha }}
+          path: artifacts/aria2-windows-policy.json
+          if-no-files-found: error
+          retention-days: 14
