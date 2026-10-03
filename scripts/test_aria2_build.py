@@ -17,6 +17,28 @@ class BuildContractTests(unittest.TestCase):
         lock = json.loads(build.LOCK.read_text(encoding="utf-8"))
         build.verified(build.MATERIALS / "patches" / lock["patch"]["filename"], lock["patch"]["sha256"])
 
+    def test_additional_patch_identities(self):
+        lock = json.loads(build.LOCK.read_text(encoding="utf-8"))
+        self.assertEqual([p["filename"] for p in lock["additional_patches"]],
+                         ["nexa-payload-limit.patch", "nexa-iofile-nul.patch"])
+        for item in lock["additional_patches"]:
+            build.verified(build.MATERIALS / "patches" / item["filename"], item["sha256"])
+
+    def test_payload_environment_is_explicit(self):
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"NEXA_PAYLOAD_MAX_BYTES": "ambient"}):
+            self.assertNotIn("NEXA_PAYLOAD_MAX_BYTES", probe.clean_env())
+            self.assertEqual(probe.clean_env("64")["NEXA_PAYLOAD_MAX_BYTES"], "64")
+
+    def test_cap_precedes_every_mutating_disk_operation(self):
+        text = (build.MATERIALS / "patches/nexa-payload-limit.patch").read_text(encoding="utf-8")
+        self.assertIn("const uint64_t nexaPayloadMax_", text)
+        self.assertIn("length > limit - static_cast<uint64_t>(offset)", text)
+        self.assertIn("checkNexaPayloadRange(offset, static_cast<uint64_t>(len));", text)
+        self.assertIn("nexa::payloadMaxBytesFromEnvironment();", text)
+        self.assertNotIn("NEXA_TEST", text)
+
     def test_version_locked(self):
         lock = json.loads(build.LOCK.read_text(encoding="utf-8"))
         self.assertEqual(lock["aria2"]["version"], "1.37.0")

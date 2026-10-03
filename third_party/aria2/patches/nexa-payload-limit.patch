@@ -1,0 +1,170 @@
+--- a/src/AbstractDiskWriter.h
++++ b/src/AbstractDiskWriter.h
+@@ -43,6 +43,7 @@
+ class AbstractDiskWriter : public DiskWriter {
+ private:
+   std::string filename_;
++  const uint64_t nexaPayloadMax_;
+ 
+ #ifdef __MINGW32__
+   HANDLE fd_;
+@@ -67,6 +68,8 @@
+   void ensureMmapWrite(size_t len, int64_t offset);
+ 
+ protected:
++  void checkNexaPayloadRange(int64_t offset, uint64_t length) const;
++
+   void createFile(int addFlags = 0);
+ 
+ public:
+--- a/src/AbstractDiskWriter.cc
++++ b/src/AbstractDiskWriter.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "AbstractDiskWriter.h"
++#include "NexaPayloadLimit.h"
+ 
+ #include <unistd.h>
+ #ifdef HAVE_MMAP
+@@ -58,6 +59,7 @@
+ 
+ AbstractDiskWriter::AbstractDiskWriter(const std::string& filename)
+     : filename_(filename),
++      nexaPayloadMax_(nexa::payloadMaxBytesFromEnvironment()),
+       fd_(A2_BAD_FD),
+ #ifdef __MINGW32__
+       mapView_(0),
+@@ -106,8 +108,14 @@
+ }
+ } // namespace
+ 
++void AbstractDiskWriter::checkNexaPayloadRange(int64_t offset, uint64_t length) const
++{
++  nexa::enforcePayloadRange(nexaPayloadMax_, offset, length);
++}
++
+ void AbstractDiskWriter::openFile(int64_t totalLength)
+ {
++  checkNexaPayloadRange(0, static_cast<uint64_t>(totalLength));
+   try {
+     openExistingFile(totalLength);
+   }
+@@ -235,6 +243,7 @@
+ 
+ void AbstractDiskWriter::openExistingFile(int64_t totalLength)
+ {
++  checkNexaPayloadRange(0, static_cast<uint64_t>(totalLength));
+   int flags = O_BINARY;
+   if (readOnly_) {
+     flags |= O_RDONLY;
+@@ -243,10 +252,12 @@
+     flags |= O_RDWR;
+   }
+   fd_ = openFileWithFlags(filename_, flags, error_code::FILE_OPEN_ERROR);
++  checkNexaPayloadRange(0, static_cast<uint64_t>(size()));
+ }
+ 
+ void AbstractDiskWriter::createFile(int addFlags)
+ {
++  checkNexaPayloadRange(0, 0);
+   assert(!filename_.empty());
+   util::mkdirs(File(filename_).getDirname());
+   fd_ = openFileWithFlags(filename_,
+@@ -444,6 +455,7 @@
+ void AbstractDiskWriter::writeData(const unsigned char* data, size_t len,
+                                    int64_t offset)
+ {
++  checkNexaPayloadRange(offset, static_cast<uint64_t>(len));
+   ensureMmapWrite(len, offset);
+   if (writeDataInternal(data, len, offset) < 0) {
+     int errNum = fileError();
+@@ -480,6 +492,7 @@
+ 
+ void AbstractDiskWriter::truncate(int64_t length)
+ {
++  checkNexaPayloadRange(0, static_cast<uint64_t>(length));
+   if (fd_ == A2_BAD_FD) {
+     throw DL_ABORT_EX("File not yet opened.");
+   }
+@@ -501,6 +514,7 @@
+ 
+ void AbstractDiskWriter::allocate(int64_t offset, int64_t length, bool sparse)
+ {
++  checkNexaPayloadRange(offset, static_cast<uint64_t>(length));
+   if (fd_ == A2_BAD_FD) {
+     throw DL_ABORT_EX("File not yet opened.");
+   }
+--- a/src/DefaultDiskWriter.cc
++++ b/src/DefaultDiskWriter.cc
+@@ -43,6 +43,10 @@
+ 
+ DefaultDiskWriter::~DefaultDiskWriter() = default;
+ 
+-void DefaultDiskWriter::initAndOpenFile(int64_t totalLength) { createFile(); }
++void DefaultDiskWriter::initAndOpenFile(int64_t totalLength)
++{
++  checkNexaPayloadRange(0, static_cast<uint64_t>(totalLength));
++  createFile();
++}
+ 
+ } // namespace aria2
+--- a/src/MultiUrlRequestInfo.cc
++++ b/src/MultiUrlRequestInfo.cc
+@@ -34,6 +34,7 @@
+ /* copyright --> */
+ #include "MultiUrlRequestInfo.h"
+ #include "NexaNetworkPolicy.h"
++#include "NexaPayloadLimit.h"
+ 
+ #include <signal.h>
+ 
+@@ -179,6 +180,8 @@
+ {
+   global::globalHaltRequested = 0;
+   try {
++    // Mandatory before network tasks; --version never enters prepare().
++    nexa::payloadMaxBytesFromEnvironment();
+     if (option_->getAsBool(PREF_ENABLE_RPC) || !option_->getAsBool(PREF_NO_NETRC) ||
+         !option_->getAsBool(PREF_CHECK_CERTIFICATE) ||
+         !option_->blank(PREF_HTTP_USER) || !option_->blank(PREF_HTTP_PASSWD) ||
+--- /dev/null
++++ b/src/NexaPayloadLimit.h
+@@ -0,0 +1,37 @@
++// Nexa dedicated payload bound; GPL-2.0-or-later, upstream OpenSSL exception.
++#ifndef NEXA_PAYLOAD_LIMIT_H
++#define NEXA_PAYLOAD_LIMIT_H
++#include <cstdint>
++#include <cstdlib>
++#include "DownloadFailureException.h"
++#include "error_code.h"
++namespace aria2 { namespace nexa {
++constexpr uint64_t MAX_PAYLOAD_BYTES = UINT64_C(17179869184);
++inline uint64_t parsePayloadMaxBytes(const char* value)
++{
++  // Canonical decimal only. The parent supplies this in a fresh environment.
++  if (!value || *value < '1' || *value > '9')
++    throw DOWNLOAD_FAILURE_EXCEPTION2("Nexa policy: invalid payload byte limit", error_code::FILE_IO_ERROR);
++  uint64_t result = 0;
++  for (const char* p = value; *p; ++p) {
++    if (*p < '0' || *p > '9' || result > (MAX_PAYLOAD_BYTES - (*p - '0')) / 10)
++      throw DOWNLOAD_FAILURE_EXCEPTION2("Nexa policy: invalid payload byte limit", error_code::FILE_IO_ERROR);
++    result = result * 10 + (*p - '0');
++  }
++  if (result < 4)
++    throw DOWNLOAD_FAILURE_EXCEPTION2("Nexa policy: invalid payload byte limit", error_code::FILE_IO_ERROR);
++  return result;
++}
++inline uint64_t payloadMaxBytesFromEnvironment()
++{
++  return parsePayloadMaxBytes(std::getenv("NEXA_PAYLOAD_MAX_BYTES"));
++}
++inline void enforcePayloadRange(uint64_t limit, int64_t offset, uint64_t length)
++{
++  // Check by subtraction before addition, conversion to size_t or OS I/O.
++  if (offset < 0 || static_cast<uint64_t>(offset) > limit ||
++      length > limit - static_cast<uint64_t>(offset))
++    throw DOWNLOAD_FAILURE_EXCEPTION2("Nexa policy: payload byte limit exceeded", error_code::FILE_IO_ERROR);
++}
++}} // namespace aria2::nexa
++#endif

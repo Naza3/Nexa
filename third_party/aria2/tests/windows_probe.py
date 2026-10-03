@@ -25,9 +25,11 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def clean_env() -> dict:
+def clean_env(payload_limit: str | None = None) -> dict:
     env = {k: v for k, v in os.environ.items() if "proxy" not in k.lower() and k.upper() not in
-           {"LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "ARIA2_CONF_PATH"}}
+           {"LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "ARIA2_CONF_PATH", "NEXA_PAYLOAD_MAX_BYTES"}}
+    if payload_limit is not None:
+        env["NEXA_PAYLOAD_MAX_BYTES"] = payload_limit
     return env
 
 
@@ -54,9 +56,17 @@ def probe(artifacts: Path, output: Path) -> bool:
         report["source_commit"] = manifest["source_commit"]
         if os.environ.get("GITHUB_SHA") and manifest["source_commit"] != os.environ["GITHUB_SHA"]:
             raise RuntimeError("Build and test checkout commits differ")
-        for name in ("nexa-aria2.exe", "policy_unit.exe", "engine_unit.exe"):
+        for name in ("nexa-aria2.exe", "policy_unit.exe", "engine_unit.exe", "payload_unit.exe", "config.h", "pe.txt"):
             if sha(artifacts / name) != manifest["files"][name]["sha256"]:
                 raise RuntimeError("Executable hash mismatch: " + name)
+        config = (artifacts / "config.h").read_text(encoding="utf-8")
+        pe_text = (artifacts / "pe.txt").read_text(encoding="utf-8")
+        if (not re.search(r"^#define SECURITY_WIN32 1$", config, re.M) or
+                not re.search(r"^#define ENABLE_SSL 1$", config, re.M) or
+                "secur32.dll" not in {s.lower() for s in manifest["pe"]["imports"]} or
+                not re.search(r"Name:\s+secur32\.dll", pe_text, re.I)):
+            raise RuntimeError("Missing authenticated Schannel configuration/import evidence")
+        report["tls_backend_evidence"] = "hashed config SECURITY_WIN32+ENABLE_SSL, hashed PE secur32 import; real certificate cases below"
         binary = artifacts / "nexa-aria2.exe"
         report["binary_sha256"] = sha(binary)
         for name, expected in (("policy_unit.exe", "68 policy unit cases passed"),
@@ -72,7 +82,7 @@ def probe(artifacts: Path, output: Path) -> bool:
         r = subprocess.run([str(binary), "--version"], capture_output=True, timeout=15, env=clean_env())
         version = (r.stdout + r.stderr).decode("utf-8", "replace")
         report["version_output"] = version[:8192]
-        good = r.returncode == 0 and "aria2 version 1.37.0" in version and "WinTLS" in version
+        good = r.returncode == 0 and "aria2 version 1.37.0" in version and "HTTPS" in version
         good = good and not any(s in version for s in ("BitTorrent", "Metalink", "Async DNS", "SFTP", "OpenSSL", "GnuTLS"))
         cases.append({"name": "version_features", "passed": good, "exit": r.returncode})
         if not good:
@@ -80,7 +90,14 @@ def probe(artifacts: Path, output: Path) -> bool:
         report["windows_runtime_tested"] = True
         with tempfile.TemporaryDirectory(prefix="nexa-policy-") as tmp:
             tmp = Path(tmp)
-            def run(name: str, url: str, expectation: str, extra: tuple = ()) -> None:
+            r = subprocess.run([str(artifacts / "payload_unit.exe"), str(tmp / "unit-payload")],
+                               capture_output=True, timeout=30, env=clean_env())
+            text = (r.stdout + r.stderr).decode("utf-8", "replace")
+            good = r.returncode == 0 and "53 payload/IOFile cases passed" in text
+            cases.append({"name": "payload_unit.exe", "passed": good, "exit": r.returncode, "output": text[:2048]})
+            if not good:
+                raise RuntimeError("Native payload/IOFile test failed")
+            def run(name: str, url: str, expectation: str, extra: tuple = (), payload_limit: str | None = "1048576") -> None:
                 directory = tmp / name
                 directory.mkdir()
                 argv = [str(binary), "--no-conf", "--no-netrc=true", "--check-certificate=true",
@@ -89,7 +106,7 @@ def probe(artifacts: Path, output: Path) -> bool:
                         "--auto-file-renaming=false", "--allow-overwrite=false", "--summary-interval=0",
                         "--download-result=hide", "--console-log-level=warn", "--max-download-limit=1M",
                         "--dir=" + str(directory), "--out=payload", *extra, url]
-                r = subprocess.run(argv, capture_output=True, timeout=60, env=clean_env())
+                r = subprocess.run(argv, capture_output=True, timeout=60, env=clean_env(payload_limit))
                 text = (r.stdout + r.stderr).decode("utf-8", "replace")
                 payload = directory / "payload"
                 size = payload.stat().st_size if payload.exists() else 0
@@ -97,6 +114,8 @@ def probe(artifacts: Path, output: Path) -> bool:
                     good = r.returncode == 0 and 0 < size <= 1024 * 1024
                 elif expectation == "private_socket":
                     good = r.returncode != 0 and "Nexa policy: destination rejected" in text and size == 0
+                elif expectation == "invalid_limit":
+                    good = r.returncode != 0 and "Nexa policy: invalid payload byte limit" in text and size == 0
                 elif expectation == "unsupported_option":
                     good = r.returncode != 0 and "Nexa policy: unsupported" in text and size == 0
                 elif expectation == "invalid_uri":
@@ -124,6 +143,8 @@ def probe(artifacts: Path, output: Path) -> bool:
             thread = threading.Thread(target=listen)
             thread.start()
             try:
+                for i, limit in enumerate((None, "", "0", "3", "04", "+4", "4 ", "17179869185", "18446744073709551616")):
+                    run("invalid_limit_" + str(i), "https://127.0.0.1/", "invalid_limit", payload_limit=limit)
                 for name, url in (("private_literal", "https://127.0.0.1/"),
                                   ("private_integer", "https://2130706433/"),
                                   ("private_hex", "https://0x7f000001/"),

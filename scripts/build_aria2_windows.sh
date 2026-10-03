@@ -48,6 +48,10 @@ done
   "$repo/third_party/aria2/tests/engine_unit.cc" src/libaria2.la \
   -lws2_32 -lwsock32 -lgdi32 -lwinmm -liphlpapi -lpsapi -lcrypt32 -lsecur32 -ladvapi32 \
   -static -all-static -Wl,--no-insert-timestamp -o "$work/artifacts/engine_unit.exe"
+./libtool --mode=link x86_64-w64-mingw32-clang++ "${common[@]}" \
+  "$repo/third_party/aria2/tests/payload_unit.cc" src/libaria2.la \
+  -lws2_32 -lwsock32 -lgdi32 -lwinmm -liphlpapi -lpsapi -lcrypt32 -lsecur32 -ladvapi32 \
+  -static -all-static -Wl,--no-insert-timestamp -o "$work/artifacts/payload_unit.exe"
 cp src/aria2c.exe "$work/artifacts/nexa-aria2.exe"
 x86_64-w64-mingw32-strip "$work/artifacts/nexa-aria2.exe"
 llvm-readobj --file-headers --coff-imports "$work/artifacts/nexa-aria2.exe" > "$work/artifacts/pe.txt"

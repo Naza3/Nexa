@@ -25,6 +25,8 @@ jobs:
         run: python3 -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_aria2_build*.py'
       - name: Build pinned source as Windows AMD64 PE with Schannel
         run: bash scripts/build_aria2_windows.sh "$RUNNER_TEMP/aria2-build"
+      - name: Linux payload bounds and IOFile regression fixtures
+        run: bash third_party/aria2/tests/run_linux_payload.sh "$RUNNER_TEMP/aria2-build"
       - name: Retain build materials and diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, matches main CI

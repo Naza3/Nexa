@@ -42,5 +42,15 @@
       "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libunwind/LICENSE.TXT",
       "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d"
     }
+  ],
+  "additional_patches": [
+    {
+      "filename": "nexa-payload-limit.patch",
+      "sha256": "c027a39e84cf8e669c6256643e7498f3fe22aed083feebb36d40d73db9b95800"
+    },
+    {
+      "filename": "nexa-iofile-nul.patch",
+      "sha256": "c052132bc5e94cc2187544d89c954fd73a6ad94f19c6cf70684cc66f26f7fb86"
+    }
   ]
 }

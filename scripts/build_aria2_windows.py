@@ -56,18 +56,25 @@ def source_identity(source: Path) -> dict:
 
 def prepare(work: Path) -> None:
     lock = json.loads(LOCK.read_text(encoding="utf-8"))
-    patch = MATERIALS / "patches" / lock["patch"]["filename"]
-    verified(patch, lock["patch"]["sha256"])
+    patches = [lock["patch"], *lock.get("additional_patches", [])]
+    for item in patches:
+        verified(MATERIALS / "patches" / item["filename"], item["sha256"])
     archive = fetch(lock["aria2"], work)
     source = work / lock["aria2"]["root"]
     identity = work / "prepared-source.json"
+    applied = work / "prepared-patches.json"
     if source.exists():
-        if not identity.exists() or source_identity(source) != json.loads(identity.read_text(encoding="utf-8")):
+        if (not identity.exists() or not applied.exists() or
+                json.loads(applied.read_text(encoding="utf-8")) != patches or
+                source_identity(source) != json.loads(identity.read_text(encoding="utf-8"))):
             raise ValueError("Existing source differs or was not prepared here; use a fresh work directory")
     else:
         with tarfile.open(archive) as tar:
             tar.extractall(work, filter="data")
-        subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i", str(patch)], cwd=source, check=True)
+        for item in patches:
+            patch = MATERIALS / "patches" / item["filename"]
+            subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i", str(patch)], cwd=source, check=True)
+        applied.write_text(json.dumps(patches, indent=2) + "\n", encoding="utf-8")
         identity.write_text(json.dumps(source_identity(source), indent=2) + "\n", encoding="utf-8")
     archive = fetch(lock["toolchain"], work)
     toolchain = work / lock["toolchain"]["root"]
