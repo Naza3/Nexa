@@ -16,37 +16,39 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 
 当前W04/T0进行无模型工具parser证据实验：13条锁定上游模板/parser观察、Release CTest4/4、主代理复验与独立审查通过；发现final LENIENT可接受不完整调用、strict全匹配不验证schema/调用数且普通文本分支不成立的具体缺口。尚无完整工具/文本接受算法，生产API/tools/版本均未改，其精确4d30bfa WindowsCI37115797798现已success（CTest4/4、常规Rust344/0/7、50报告hash已核），无模型工具实验和真实DSH/工具能力结论仍分开；未另发T0二进制，也不覆盖新目录下载增量，见[T0记录](docs/verification/2026-10-03-tool-parser-probe.md)。
 
-当前优先事项按用户2026-10-03 10:47 UTC最新要求恢复模型加载流程：修复无配置时EXE/models自动发现，增加默认ModelScope/HF可选的固定8条目录下载，保存后显式扫描/加载。见[ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md)与[本轮记录](docs/verification/2026-10-03-model-catalog-download.md)。本机后端49组360/0/7、壳Linux24/UI105、完整Python86项（84通过/2平台skip）及严格静态检查/独立审查已通过。前两次WindowsCI分别因桌面构建预算和preview测试超时失败；21cfb40第三次37121623438已过前端105、Tauri Release及native构建/CTest4/4，随后目录集成测试11通过/1失败，断言把同一路径的短名与扩展路径显示字符串直接比较。修正仅规范化测试两侧路径，生产路径保护未改；本机bridge74项、clippy/格式及独立审查通过，修正后的Windows结果待验。真实MS下载、全workspace完成、native真实推理与完整包均未执行。本片未交付，已发送仍43ad5c2；其他Harness新实施暂缓。
+当前优先事项按用户2026-10-03 10:47 UTC最新要求恢复模型加载流程：修复无配置时EXE/models自动发现，增加默认ModelScope/HF可选的固定8条目录下载，保存后显式扫描/加载。见[ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md)与[本轮记录](docs/verification/2026-10-03-model-catalog-download.md)。本机完整聚合与独立源码审查通过；前三次WindowsCI的构建预算、preview超时、路径显示断言失败及修正均保留。最终33f0e17的WindowsCI37124146573成功，52项证据身份/大小/hash已核，常规Rust49组363/0/7、CTest4/4通过。产品下载器经默认MS实际下载固定0.6B Q8_0共639,446,688字节，完整hash符合基线，47,149ms后发布且registered=false；后续独立基线、真实推理/停止/core/worker/HTTP/CLI、Release包与解压bridge链路通过。原生窗口未执行，HF实际下载、其他7个模型和Win10/i5-8400/16GB仍待验。新包独立字节闭包审查通过，原字节33f0e17包于13:42:49 UTC发送获接受，用户下载/运行尚未确认；Harness新实施继续暂停。
 
 ## 已有工程与最新交付
 
 | 范围 | 状态与证据 |
 | --- | --- |
-| 检查基线 | `codex/nexa-native-baseline`；自动发现/下载实现817ad7d；第三次提交`21cfb408d7a3254f0afa91aeb7b874e38cb7bd78`、tree`8541a044d1aa7bbbe0281be47ee922e24c8832e9`的[WindowsCI37121623438](https://github.com/Naza3/Nexa/actions/runs/37121623438)在目录测试路径显示断言失败，真实下载/推理/包未执行；最新已发送Windows实现仍43ad5c2，用户下载/运行未确认 |
+| 检查基线 | `codex/nexa-native-baseline`；目录发现/下载最终源码`33f0e17a5bdaf5e5d234034af0c946d878e0e4ae`、tree`e2aa33f7852c09514361fe94178156bfaa95d481`的[WindowsCI37124146573](https://github.com/Naza3/Nexa/actions/runs/37124146573)成功，52项报告已核；独立新包复核通过，最新已发送实现33f0e17，用户下载/运行未确认 |
 | 推理核心 | llama.cpp固定`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；C++ shim、模板/token预算/采样、UTF-8/stop、取消/释放已有真实回归 |
 | T00–T04 | 固定 Windows CPU 的原生链、model-store、单actor/队列、独立worker/IPC/Job、HTTP/CLI阶段已完成；详情见[索引](PROJECT_INDEX.md) |
 | T05 | Release便携包/独立工具、PE/依赖/许可/hash及独立Windows10短验已按阶段范围收口；A19/A20后期条件未完成 |
 | T06 | 目录选择、零复制、自动名、兼容原因、参数设置、聊天/停止、服务启停/两种关闭已实现；新包原生UI剩余分支待验 |
 | 模型加载/证据 | 旧交付389eeef仅开放固定0.6B；50c9d41已实现独立loadable与历史validated，移除模型名/hash许可名单并保留安全/模板/预算门槛；此次CI真实模型仍仅固定Qwen3-0.6B Q8_0/context2048，其他候选未标已实测 |
-| 已交付版本CI | [Windows37108375458](https://github.com/Naza3/Nexa/actions/runs/37108375458)成功，job111161243743；48组344 pass/0 fail/7 ignored、CTest3/3、external17（含被拒文件guard）及固定真实模型/store/core/worker/HTTP/CLI/完整包/解压bridge通过；50项证据身份/hash已核；`native_window_tested=false` |
-| 最新交付 | `Nexa-Windows-x64-43ad5c2.zip`，9,432,048 bytes，SHA256`5dc8cffe0fd4113b715a989566d481f5ff482099327d036e4768c2af7d66f7b5`；原ZIP字节未改；750文件/runtime197、6个AMD64 PE的普通及delay imports、许可540+6+186项独立核验通过；3 CRT与CI微软签名记录一致，Linux未重新Authenticode验签；2026-10-03 08:45:45 UTC发送获接受 |
-| 上一交付 | `Nexa-Windows-x64-50c9d41.zip`，9,423,216 bytes，SHA256`713cd39d78adeb38e585529f3e188c9a3912090651172e3b268fb21bcab5c47f`；原ZIP内容未改；750文件/嵌套runtime197文件、6个AMD64 PE导入闭包及许可540+6+186项记录独立复核通过；3个CRT与CI微软签名记录一致，Linux未重新签名或验签；2026-10-03 07:03 UTC消息发送获接受 |
+| 最新交付版本CI | 33f0e17 / job111205956541；Windows常规Rust363 pass/0 fail/7 ignored、CTest4/4，默认MS固定0.6B真实下载及后续独立hash/真实推理/完整包/bridge通过；新桌面ZIP11,119,286 bytes、SHA256`b37d89cbd1baf1dfd07d7dbdeae794157504d4c5a4064e171e7c4851d1015c1b`；`native_window_tested=false`，独立下载包审查通过 |
+| 上一交付版本CI | [Windows37108375458](https://github.com/Naza3/Nexa/actions/runs/37108375458)成功，job111161243743；48组344 pass/0 fail/7 ignored、CTest3/3、external17（含被拒文件guard）及固定真实模型/store/core/worker/HTTP/CLI/完整包/解压bridge通过；50项证据身份/hash已核；`native_window_tested=false` |
+| 最新交付 | `Nexa-Windows-x64-33f0e17.zip`，11,119,286 bytes，SHA256`b37d89cbd1baf1dfd07d7dbdeae794157504d4c5a4064e171e7c4851d1015c1b`；原ZIP字节未改；817文件/runtime209、6个AMD64 PE导入闭包、许可595+6+198项及AWS-LC原文完整；3 CRT与CI签名记录一致，Linux未重新Authenticode验签；2026-10-03 13:42:49 UTC发送获接受 |
+| 上一交付 | `Nexa-Windows-x64-43ad5c2.zip`，9,432,048 bytes，SHA256`5dc8cffe0fd4113b715a989566d481f5ff482099327d036e4768c2af7d66f7b5`；原ZIP字节未改；750文件/runtime197、6个AMD64 PE的普通及delay imports、许可540+6+186项独立核验通过；3 CRT与CI微软签名记录一致，Linux未重新Authenticode验签；2026-10-03 08:45:45 UTC发送获接受 |
+| 较早交付 | `Nexa-Windows-x64-50c9d41.zip`，9,423,216 bytes，SHA256`713cd39d78adeb38e585529f3e188c9a3912090651172e3b268fb21bcab5c47f`；原ZIP内容未改；750文件/嵌套runtime197文件、6个AMD64 PE导入闭包及许可540+6+186项记录独立复核通过；3个CRT与CI微软签名记录一致，Linux未重新签名或验签；2026-10-03 07:03 UTC消息发送获接受 |
 | 历史交付 | `Nexa-Windows-x64-389eeef.zip`，9,789,508 bytes；SHA256 `45251f28c2eb61a1b6ee5119aab3b0923a8117c677fef4ec91ea680be1b209f0`；750文件、嵌套runtime、6个PE与许可hash已独立复核；2026-10-02 13:36 UTC附件发送被接受 |
 
-旧389eeef交付据[历史记录](docs/verification/2026-10-02-windows-model-compatibility.md#最终提交ci与交付)；50c9d41历史CI、包复核与交付范围见[开放模型记录](docs/verification/2026-10-03-windows-open-models.md#最终50c9d41-windows-ci与交付产物2026-10-03)。43ad5c2最新WindowsCI/包复核/交付见[混合目录记录](docs/verification/2026-10-03-mixed-model-directory.md#精确43ad5c2-windowsci与交付产物)。文档更新不表示用户已下载或运行。旧包 `bc43e0f3` 已有原生启动、导入、聊天、停止和两种关闭手验；不能追溯证明新目录版窗口操作通过。
+旧389eeef交付据[历史记录](docs/verification/2026-10-02-windows-model-compatibility.md#最终提交ci与交付)；50c9d41历史CI、包复核与交付范围见[开放模型记录](docs/verification/2026-10-03-windows-open-models.md#最终50c9d41-windows-ci与交付产物2026-10-03)。43ad5c2历史WindowsCI/包复核/交付见[混合目录记录](docs/verification/2026-10-03-mixed-model-directory.md#精确43ad5c2-windowsci与交付产物)。最新33f0e17的下载/CI/包复核/交付见[目录下载记录](docs/verification/2026-10-03-model-catalog-download.md#最终33f0e17-windows-ci与产物)。文档更新不表示用户已下载或运行。旧包 `bc43e0f3` 已有原生启动、导入、聊天、停止和两种关闭手验；不能追溯证明新目录版窗口操作通过。
 
 ## 当前路线状态
 
 | 阶段 | 状态 | 下一步/边界 |
 | --- | --- | --- |
 | W00 主线收敛 | 已完成 | `82c4db6`独立审查、文档/归档检查与远端身份核验通过；纯文档无源码改动、无CI运行，见[本轮记录](docs/verification/2026-10-03-windows-scope-and-harness.md) |
-| W01 当前版本短验 | 待验证 | 已发送43ad5c2新包，待验Windows10混合目录诊断/全坏保旧/空目录清空、零复制/自动名、开放候选提示、剪贴板及独立API；CI bridge不替代窗口手验，等待用户目标机窗口 |
-| W02 开放模型与CPU性能 | 进行中 | 用户要求16GB机器广泛模型支持；50c9d41完整WindowsCI及固定GGUF真实回归通过；独立包复核与发送完成；用户Win10/i5-8400/16GB验收与其他模型/性能仍待完成；本轮43ad5c2混合目录增量已过本机/独立审查及精确WindowsCI，独立产物复核及发送完成，用户目标机仍待验；本轮自动发现/双源下载进行中，Windows真实下载和新包未验；固定8条是建议目录非产品名单，见[开放模型记录](docs/verification/2026-10-03-windows-open-models.md) |
+| W01 当前版本短验 | 待验证 | 已发送33f0e17新包，待验Windows10自动发现/下载→显式扫描/加载、取消、混合目录诊断、零复制/自动名、剪贴板及独立API；CI bridge不替代窗口手验，等待用户目标机窗口 |
+| W02 开放模型与CPU性能 | 进行中 | 用户要求16GB机器广泛模型支持；50c9d41完整WindowsCI及固定GGUF真实回归通过；独立包复核与发送完成；用户Win10/i5-8400/16GB验收与其他模型/性能仍待完成；本轮43ad5c2混合目录增量已过本机/独立审查及精确WindowsCI，独立产物复核及发送完成，用户目标机仍待验；本轮33f0e17自动发现/双源下载已过WindowsCI、MS固定模型实际传输与完整包链路，新包独立复核及发送完成；HF/其他候选/目标机仍待验；固定8条是建议目录非产品名单，见[开放模型记录](docs/verification/2026-10-03-windows-open-models.md) |
 | W03 桌面管理器 | 未开始 | 托盘/窗口恢复与API诊断体验；当前已有服务启停和关窗保留服务 |
 | W04 API / deepseek harness | 进行中 | 窄文本协议切片完成：pi-ai7场景、真实HTTP+合成执行器1项、8个native-free包248回归及clippy/独立审查通过；早期本地全workspace因缺子模块失败；35bfd85 WindowsCI324/0/7及旧模型真实链已通过，DSH/Windows pi-ai/生产工具未跑；新T0为13条无模型parser观察/CTest4/4及独立审查，定位缺口但不证明工具接受，见[分层记录](docs/verification/2026-10-03-windows-scope-and-harness.md) |
 | W05 后期发行验收 | 未开始 | 无开发工具、实际离线、长期稳定性、升级/回退、Windows11及完整支持矩阵 |
 
-各阶段最小增量、依赖与验收见 [路线](docs/roadmap.md)。目标机验收暂不可执行时，可推进W04已授权的最小文本互通切片、W02验证准备，不降低验收门槛。
+各阶段最小增量、依赖与验收见 [路线](docs/roadmap.md)。目标机验收暂不可执行时，保留W02验证准备与未执行项；W04新实施按用户最新要求暂停，不降低验收门槛。
 
 ## 实现与验证限制
 
@@ -61,9 +63,9 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 ## 最小下一步
 
 1. W00已完成；W04窄文本切片已提交35bfd85，其[WindowsCI37087595998](https://github.com/Naza3/Nexa/actions/runs/37087595998)已于02:27 UTC成功，50项证据/身份/hash核验通过；只覆盖35bfd85，不覆盖本次开放模型工作区变更
-2. 43ad5c2桌面包独立字节闭包复核及发送完成；待用户下载/运行后做W01 Win10短验，消息发送获接受不等于已运行
-3. W02混合目录43ad5c2已通过WindowsCI、包内验收与独立下载包复核，原字节包已发送；等待用户目标机验收，按[本轮矩阵](docs/verification/2026-10-03-mixed-model-directory.md)逐层记录；旧50c9d41 CI不覆盖该增量。继续其他模型/目标16GB机实测，不扩大已验证矩阵。补W04完整DSH/真实模型文本与独立工具能力；pi-ai fixture仍非DSH本体捕获
-4. 优先收口ADR0017本机聚合/安全审查、Windows产品下载器真实MS下载→显式扫描/加载及新包；新下载依赖许可闭包另核。W04新实施暂缓，T0仅继续记录旧提交CI结果，生产工具仍未实现，不恢复Android或绑定Telegram业务
+2. 33f0e17桌面包独立字节闭包复核及发送完成；待用户下载/运行后做W01 Win10发现、下载→显式扫描/加载短验，消息发送获接受不等于已运行
+3. W02混合目录43ad5c2已通过WindowsCI、包内验收与独立下载包复核，原字节包已发送；等待用户目标机验收，按[本轮矩阵](docs/verification/2026-10-03-mixed-model-directory.md)逐层记录；旧50c9d41 CI不覆盖该增量。继续其他模型/目标16GB机实测，不扩大已验证矩阵。W04完整DSH/真实模型文本与工具能力缺口保留，按用户要求暂停新实施；pi-ai fixture仍非DSH本体捕获
+4. ADR0017的33f0e17已过精确WindowsCI、真实MS固定模型链和独立包/新依赖许可复核并发送；后续记录用户目标机发现、下载→显式扫描/加载与取消分支。HF实际下载与其他7个候选另验。W04新实施暂停，生产工具仍未实现，不恢复Android或绑定Telegram业务
 
 ## 历史与保留工作
 
