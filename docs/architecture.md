@@ -1,190 +1,97 @@
-# Nexa 总体方案与架构
+# Nexa Windows 总体方案与架构
 
-日期：2026-10-02。本文描述设计与模块边界；各项是否已经实现和验证见 [当前状态](../PROJECT_STATE.md)。runtime 的具体协议、默认值和验收以 [执行规格](../ai-runtime-v0.1-execution-spec.md) 为准；范围依据见 [ADR 0001](decisions/0001-nexa-scope-and-layers.md)，Android MNN方向与App产品目标分别见[ADR0008](decisions/0008-android-mnn-engine-and-package.md)、[ADR0009](decisions/0009-android-mnn-chat-product.md)。
+日期：2026-10-03。当前范围见 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，具体协议见 [执行规格](../ai-runtime-v0.1-execution-spec.md)，完成事实见 [当前状态](../PROJECT_STATE.md)。旧跨端方案保留于 [历史索引](archive/windows-focus-2026-10-03/INDEX.md)。
 
-## 1. 目标与设计取舍
+## 1. 产品目标与边界
 
-Nexa 让用户自己的 PC / Android 应用复用一套本地推理能力。第一个业务验证是 Telegram 群消息摘要，后续应用可提交其他文本生成任务。
+Nexa 是面向 Windows 桌面 CPU 的本地 LLM runtime。其他应用通过本机 API 调用；桌面 UI 管理模型与服务，聊天辅助验证。首要目标 Windows10 x64 / i5-8400，后续按实测覆盖更多 Intel/AMD 桌面 CPU 与 Windows11。
 
-核心价值是稳定接入、资源受控和跨端一致语义。Windows 继续使用 llama.cpp，Android 主引擎采用 MNN；Nexa 不自行训练模型，也不承诺仅通过 Rust 封装提升模型能力或降低权重占用。
+llama.cpp 是推理核心，Rust 负责稳定接入和资源/生命周期管理。封装不会凭空提升模型能力、减少模型权重或让未验证的模型成为支持项。当前单模型、单运行槽、有限队列，明确拒绝不支持能力。
 
-首版选择单模型、单运行槽、有限队列；明确不支持的能力返回错误。两端共享 Rust 类型、调度和事件语义，原生适配与模型资产格式分开，独立构建、独立运行、独立验收。Android 每个 App 有自己的实例和模型占用。
+API 兼容目标为官方 deepseek-ai/deepseek-harness（dsh）。优先通过其 `@deepseek-ai/dsh-llm-pi-ai` 自定义 `openai-completions` provider 对接；默认 `deepseek-official` Messages adapter 不在首期承诺中。实际协议与验收见 [harness契约](windows-harness-contract.md)。Telegram 等业务只作为可选调用方，不绑定发行。
 
-保留 Windows HTTP 服务和 Android 嵌入库两种宿主。桌面维持验证客户端；Android 为 MNN Chat 能力对标应用，见[产品计划](android-app-parity.md)。核心不依赖 UI；接入方不需要采用相同前端技术。
-
-## 2. 总体分层
+## 2. Windows 执行链
 
 ```mermaid
-flowchart TB
-  subgraph APP["调用方应用：拥有业务数据"]
-    S["Telegram 来源适配"]
-    H["消息快照与摘要任务"]
-    O["摘要编排 / 普通文本任务"]
-    S --> H --> O
-  end
-  subgraph PC["Windows 宿主"]
-    P["HTTP 客户端"]
-    A["API 进程：runtime-core + model-store"]
-    W["独立 worker：控制线程 + 推理线程"]
-    P --> A --> W
-  end
-  subgraph MOBILE["Android App 宿主"]
-    B["受控移动桥"]
-    C["App 内 runtime-core + model-store"]
-    I["专用原生推理线程"]
-    B --> C --> I
-  end
-  O --> P
-  O --> B
-  W --> L["llama-adapter / C++ shim / llama.cpp"]
-  I --> M["MnnExecutor / 自有 C ABI / MNN（待实现）"]
+flowchart LR
+  D["dsh / 其他本机应用"] --> A["HTTP/API 管理进程"]
+  U["Tauri 桌面管理界面"] --> B["desktop-bridge"] --> A
+  A --> C["runtime-core + model-store"]
+  C --> P["process-host / 私有 IPC"]
+  P --> W["独立 worker / 控制线程"]
+  W --> E["engine-host / 专用推理线程"]
+  E --> L["llama-adapter / C++ shim / llama.cpp"]
 ```
 
-底部节点按平台分开，不能把既有 EngineHost 直接当作 MNN 执行器；两端不共享内存。摘要层经推理客户端接口调用不同宿主，runtime 不反向依赖摘要层。
+API 进程是调度和模型注册状态的唯一所有者。worker 不创建第二个 Runtime；UI 与外部调用方共用同一服务，不各起一套模型。Windows 主线不再为移动宿主、其他引擎或跨端事件一致性新增架构约束。
 
-## 3. 模块与依赖方向
+## 3. 模块与职责
 
-| 模块 | 所有权与职责 | 边界 |
+| 模块 | 实际职责 | 边界 |
 | --- | --- | --- |
-| runtime-types | 请求、事件、错误、模型标识与配置 DTO | 无平台 UI、HTTP、原生指针 |
-| runtime-core | 调度 actor、状态、队列、取消、超时和卸载策略 | 只依赖公共类型及存储/执行器抽象 |
-| model-store | 管理目录、GGUF 导入；待增加 MNN 包 schema/引用闭包校验 | 不下载市场模型，不存聊天；旧 GGUF 行为保持 |
-| engine-host | 已有 llama 原生专用线程执行器，供 Windows worker 使用 | 不创建第二调度器，不自动承担 MNN |
-| MnnExecutor / mnn-adapter（待实现） | Android 专用原生线程、自有 C ABI 与 MNN 资源 | 实现既有 Executor 契约，不引入 llama/PC 宿主 |
-| process-host | PC 父进程执行器与子进程回收 | 只依赖纯 Rust core/types/IPC，不链接 llama |
-| runtime-ipc | 私有协议 DTO、严格有界 codec 与代际/信用校验 | 不含 native、HTTP 或第二套公共状态 |
-| llama-adapter + shim | 模板、tokenizer、采样、prefill/decode、原生资源 | 只在推理线程使用模型/context |
-| runtime-worker | IPC、独立控制路径、原生线程与错误隔离 | 无公开 HTTP 端口 |
-| runtime-api / runtime-cli | HTTP/SSE、鉴权、错误映射与管理命令 | 不直接操作模型指针 |
-| runtime-mobile | 初始化、生成、取消、状态及生命周期桥 | 不复制调度算法 |
-| Android App（待实现） | 模型目录/下载、会话/附件持久化、交互与权限 | 只调用受控桥/资产导入，不拥有原生指针或第二套推理队列 |
-| summary-types / summary-core | 来源快照、摘要任务、阶段结果和证据映射 | 独立调用层，不是 runtime 必需依赖 |
-| 来源适配与宿主 UI | 获取消息、业务持久化、展示和用户操作 | 不拼接模型专用聊天模板 |
+| runtime-types | 请求、事件、错误、模型/配置 DTO | 无原生指针、UI或HTTP类型 |
+| runtime-core | 单actor、状态、有限队列、取消、deadline、空闲卸载 | 不重写推理算法，不直接操作原生模型 |
+| model-store | managed导入与external只读目录、manifest/hash/准入 | 不下载模型市场、不存业务会话 |
+| process-host / runtime-ipc | worker进程、Job回收、握手、私有NDJSON及有界信用 | 父端不链接llama，不能另造公共状态机 |
+| runtime-worker | 控制读取、事件写入、原生执行组装 | 无公开监听端口，无第二调度器 |
+| engine-host | 专用原生线程、执行器与取消句柄 | 只有独立取消标志可跨线程 |
+| llama-adapter / C++ shim | 模板、tokenizer、采样、prefill/decode与资源 | 使用锁定llama.cpp，原生类型不向上泄漏 |
+| runtime-api / runtime-cli | HTTP/SSE/鉴权/管理命令、发现/启动/关停 | 不在父进程加载原生库 |
+| desktop-bridge / Tauri / React | 安全本机客户端、模型/服务管理与验证聊天 | token不交给前端脚本；桌面不复制推理队列 |
+| dsh或其他调用应用 | 会话、工具执行、业务数据、重试策略 | 不从模型输出自动获得额外权限 |
 
-依赖组织规则：
+Executor、ModelResolver、DTO/IPC边界已有Windows进程隔离、测试和解耦用途，保留这些合理角色；不为“桌面化”重写成上游server转发，不为可能的移动需求新建空trait/crate。依赖层级由实际功能决定。
 
-1. `runtime-types` 位于底层；原生类型不进入公共 DTO。
-2. core 所需 trait 由 core 的接口模块或公共抽象定义，engine-host/process-host/model-store 实现或被组装适配；避免 core 与 host 互相依赖。
-3. API、worker、CLI、mobile 为组装入口。PC 父进程的最终依赖图不得引入原生推理库。
-4. 摘要层只依赖自有类型和 `InferenceClient` 抽象；HTTP 与嵌入适配器在宿主侧组装。
-5. 不为预测将来需要的每种后端预建空插件或大量空 crate；按纵向功能增加实际代码。
+## 4. 生命周期与资源归属
 
-## 4. 推理执行与生命周期
-
-### 4.1 Windows
-
-管理进程持有数据目录实例锁、认证令牌、模型注册表和调度器。首次有效请求可选定模型并加载；请求不同模型时遵守原规格的 model_conflict，不自动挤掉当前模型。
-
-worker 与父进程使用私有 stdin/stdout NDJSON。stdout 仅传协议，stderr 传日志；启动握手验证协议、shim 和 llama commit。控制读取与生成独立，取消不等待生成返回。事件写入有界且可取消。父端是唯一 Runtime；worker 通过 ExecutionEvents sink 直接使用 EngineHost。每次子进程启动使用新 session UUID，每次操作另有单调 operation_id，wire seq 与公共请求 seq 分开。
-
-正常退出回收 worker；父进程异常退出由管道关闭和 Windows Job Object 等机制回收。worker 崩溃后当前及排队请求终结，进入 Faulted，显式 load 恢复。崩溃隔离不能替代 FFI 内存安全验证。
-
-T05 将管理 CLI/API 与匹配 CPU worker 放在同一产品目录，worker 路径以已验证的产品可执行文件目录为准，不从调用方 CWD 或 PATH 猜测。原生静态库仍只进入 worker；微软动态 CRT 按实际 PE 闭包 app-local 提供。验收器另包、另有自身依赖，不参与产品发现、不为产品补DLL。构建身份、文件/许可/hash与目标机器验收边界见[ADR0006](decisions/0006-t05-windows-portable-package.md)。
-
-### 4.2 Android
-
-App 初始化一个 runtime 实例，经 MnnExecutor 使用 MNN。原生模型由专用线程独占，桥只传公共 DTO 和受控句柄；推理不阻塞 UI 线程。不先实现 Android llama.cpp；精确版本/CPU 原型、包与安全契约、APK、OpenCL、QNN、直接 Hexagon 依次推进，见[计划](t07-android-mnn-plan.md)。独立 CPU 探针已完成 Linux 功能验证与 Android 原生交叉构建；上述生产模块和真机门槛仍未完成，见[T07-A报告](verification/2026-10-02-t07a-mnn-cpu-probe.md)。
-
-进入后台先停止接收本轮业务的新阶段，再取消当前推理，等待安全结束并卸载。原生调用尚未返回时继续显示正在停止，不释放使用中的资源。UI 重建不得继续使用已销毁句柄。
-
-摘要调用层可以保存已完成阶段，用户重新发起继续时创建新的推理请求；runtime 不恢复旧请求。自动后台日报或常驻任务需要另行改变生命周期方案，目前没有这项能力。
-
-### 4.3 单次请求
+1. `ai-runtime serve` 持有数据目录锁、令牌、注册表和单一调度器；启动不加载模型
+2. 首次有效load/请求按需启动唯一匹配worker。model冲突不自动挤出其他客户端正在使用的模型
+3. worker经控制线程及时处理取消，在专用推理线程创建/释放engine/model/context/sampler
+4. 正常退出或空闲卸载回收worker；worker崩溃时API保持可用，受影响运行/排队请求终结，显式load恢复
+5. 不能确认OS回收时fail-closed，保留Faulted与清理错误，不能创建第二个worker或冒充已停止
+6. 正常关闭UI默认只取消本窗口请求并保留runtime，显式同时退出影响全部客户端。托盘仅为计划中的管理入口，不改变安全关停所有权
 
 ```text
-结构校验 → 有界入队 → 获得槽位 → 必要时加载
-→ 应用聊天模板与分词 → 精确预算校验
-→ 清理请求间 KV / 初始化 sampler → prefill → decode
-→ UTF-8 与 stop 处理 → 唯一终态 / usage → 清理本次资源
+结构校验 → 有界排队 → 获得槽位 → 必要时加载
+→ 模板/tokenizer与精确预算 → 请求级KV/sampler清理
+→ prefill/decode → UTF-8/stop与唯一终态 → 清理
 ```
 
-queue、load、execution 分别计时。模板 token 计入输入；不得静默截断、跨请求复用 KV 或在输出后自动重放。
+加载、排队和执行分别计时；输入预算包括模板及特殊token。输出有界、取消优先，不静默截断历史、换模型或自动重放已输出请求。当前256KiB在途文本、4KiB分片、信用与EventLease语义保持；详见 [ADR0004](decisions/0004-t03-process-isolation-and-credit-ledger.md)。该账本不是整个进程或模型内存上限。
 
-每请求最多 256 KiB 待发送文本、delta 最多 4 KiB 等具体限制沿用执行规格。预算与慢消费者处理在原生回调、IPC、HTTP/桥接各层共同落实，不能只限制最后一层。PC 父端保守预留16 KiB暂存和两个120 KiB信用；每个信用只准一条≤4 KiB文本，实际消费或丢弃 EventLease 后才退账。详见 [T03决策](decisions/0004-t03-process-isolation-and-credit-ledger.md)。这个输出账本不等于模型、原生tokenizer、输入帧、分配器或整个进程内存上限。
+## 5. API 与 harness 接入
 
-### 4.4 业务任务与推理请求
+现有接口：`/v1/models`、`/v1/chat/completions`文本子集与`/runtime/*`管理。SSE在Started后开始；Accepted/Queued/Loading不是现有HTTP完整任务流。当前status仅给聚合状态/活动ID。
 
-`summary_job_id` 标识整份摘要；每个阶段有自己的 stage_id，每次实际推理有独立 UUID request_id。一次摘要可能产生多个请求，任务进度由调用层统计。
+dsh接入复用既有HTTP路径，先准确配置pi-ai provider，再增加真正需要的工具消息/工具输出流能力；不先增加另一套 `/v1/messages` 网关。协议兼容与模型具备可靠工具能力是两种验收，0.6B链路成功不能证明真实harness可用。
 
-默认按需要逐次提交，避免预先填满 runtime FIFO。整体取消先禁止提交后续阶段，再取消已提交请求并等待实际终态。取消接口返回 202 只代表接受取消意图。
+新增能力必须贯穿：HTTP DTO → core/IPC → shim模板/模型能力 → 输出事件 → HTTP/SSE → 实际客户端。tools JSON Schema不是已经实施strict约束解码的证明。工具执行仍由dsh负责，Nexa只生成可校验的请求，不在runtime执行shell或文件操作。
 
-任务总截止时间和总生成预算由摘要层维护；runtime 的单次 execution_timeout 不能替代整份摘要限制。某一阶段失败不能令调用层无限重试或静默报告完整成功。
+认证/Host/Origin、本机回环、实例发现与同TCP服务端proof保持既有边界。不能为通过harness接入而开放公网、任意CORS、泄露token或关闭错误校验。实际客户端的认证和出站字段通过契约测试与真实联调记录，见 [harness契约](windows-harness-contract.md)。
 
-## 5. SDK 与接口边界
+## 6. 模型与数据
 
-### 5.1 已有设计契约
-
-“已有”指执行规格已定义，不表示代码已实现：
-
-- Windows：本机 `/v1/models`、`/v1/chat/completions` 文本子集及 `/runtime/*` 管理接口。
-- 移动：受控初始化、导入、加载、生成、取消、状态和生命周期入口；独立 request_id。
-- 两端：错误码、usage、请求终态和模型状态语义一致；HTTP 使用其兼容映射，原生桥可订阅公共事件。
-- 接入产物：Windows runtime 包与最小 HTTP 示例；Android 原生库、Flutter 桥及独立接入示例。Rust crate 的版本与分发方式在工程阶段确定。
-
-T04 本机鉴权、原子注册预约、同连接服务端proof和96KiB非流式上限见[ADR0005](decisions/0005-t04-loopback-http-and-management.md)。HTTP/CLI管理进程仅依赖Store/core/ProcessHost，不链接native。
-
-HTTP 正常 SSE 在 Started 后才开始；Accepted/Queued/Loading 是内部/原生事件，不意味着当前 HTTP 已提供全量任务事件流。调用方先生成 request_id，以便响应头返回前取消；当前 runtime/status 仅提供聚合状态与活动 ID。
-
-### 5.2 摘要需要的契约扩展
-
-以下为 S01 的设计输入，不能作为已经发布的接口调用；实现前记录独立 ADR 并同步执行规格、types、HTTP、IPC 与移动桥：
-
-| 能力 | 必须明确的语义 |
+| 数据 | 所有者 |
 | --- | --- |
-| 模型能力查询 | 有效 context_size、默认/最大输出预算、模型 hash、模板与思考模式标识、配置代际 |
-| 精确 prompt 预算检查 | 使用与生成相同的模板/tokenizer，包含特殊 token；不执行 prefill/decode，不返回原生句柄 |
-| 计数期间的调度 | 在资源所有线程执行；明确 Ready/Busy/Unloaded 行为、超时与取消，不从另一个线程并发访问 tokenizer/model |
-| 代际一致性 | 预算结果绑定模型/模板/加载配置；实际生成再次校验，旧结果不构成预留或成功保证 |
-| 请求状态观察 | 明确 HTTP 等待期间可查询范围、终态保留时间、重启后失效及断连处理；不提前承诺可恢复 SSE |
-| 应用格式校验 | response_format 仍不受支持；固定文本/JSON 提示没有结构保证，解析和有限重试由应用处理 |
+| GGUF、manifest、目录索引、运行配置、API凭据 | model-store/runtime，原始external文件只读 |
+| tokenizer/context/KV/sampler | worker内原生推理线程 |
+| 请求队列、取消、事件缓冲 | runtime-core，进程内有界 |
+| 模型管理和显示偏好 | 桌面管理器，不假装当前服务已采用新配置 |
+| 会话、harness工具状态、Telegram等业务数据 | 调用应用 |
+| 性能/验证报告 | 验证体系，默认不记录私有正文、token或完整用户路径 |
 
-在这些接口完成前，可以用最小原生测试入口验证分词和摘要可行性，但不能为此让 HTTP 父进程链接 llama 或复制一套不一致的模板逻辑。
+external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/精确准入。目录应用/重扫需先显式停止服务，不自动终止其他客户端。详见 [目录契约](t06-model-directory-contract.md)。
 
-## 6. 数据与持久化归属
+## 7. 桌面CPU与模型扩展
 
-| 数据 | 所有者 | 原则 |
-| --- | --- | --- |
-| 模型文件、manifest、配置、API 令牌 | runtime/model-store | 目录锁、校验、临时复制及原子提交 |
-| tokenizer/context/KV/sampler | 原生执行器 | 单线程生命周期，不交给 UI |
-| request 状态、队列、事件缓冲 | runtime-core | 进程内有界；不在重启后恢复生成 |
-| Telegram 原消息、来源账号与获取权限 | 调用应用 | 不进入 runtime 持久化 |
-| 快照、分块、阶段结果、摘要产物 | 摘要调用层 | 版本化、记录覆盖；格式与保留策略在 S00/S03 冻结 |
-| 性能与验证报告 | 开发验证体系 | 保存参数与统计，避免提交私有正文和真实凭据 |
+当前只有固定Qwen3-0.6B Q8_0/context2048获得精确准入。后续W02不仅调线程：按目标CPU可用内存和实际质量挑选桌面实用模型候选（如4B档），先审查锁定llama版本的架构、模板、量化支持，再锁资产并验收。
 
-导入后的 manifest/index 必须能处理复制或提交中断。模型元信息解析不能破坏 PC 父进程不链接原生推理库的边界；需要原生验证时经隔离执行器完成。Android 文件选择 URI 将 MNN 包导入 App 私有持久目录，校验 graph/weights/tokenizer/config/template 与后端变体的完整引用闭包、路径、逐文件及整体 hash，原子发布；运行配置和后端缓存与不可变包隔离。现有单文件 ResolvedModel/manifest 需在 T07-B 迁移，具体协议尚未冻结。
+每个模型分别记录文本/工具/可选思考能力、上下文预算、内存和速度。不由GGUF扩展名或上游新版宣传授予本项目固定版本支持。新llama版本须单独升级决策与原有模型回归。
 
-原文保存和摘要缓存不是跨请求 KV 缓存，生命周期分别管理。不因摘要功能给 runtime 加入消息数据库、Telegram 客户端或账号系统。
+现有线程/context/batch/输出与空闲卸载设置继续复用；性能优化围绕正确参数、目标CPU实测、背压与UI刷新，禁止无基线重做调度。测量parent/worker/UI、冷加载、TTFT、prefill、decode、取消与空闲成本；配置值与未知实测值严格区分。
 
-## 7. 资源与安全边界
+## 8. 交付与演进
 
-Windows API 仅监听回环地址，管理和生成接口使用本地令牌；默认不开放任意 CORS。Tauri 通过 Rust 代理调用，令牌不进入前端脚本。现有令牌代表可信本机客户端，不宣称具备多租户隔离。
+保留runtime包、桌面包、独立验收器的分离与同source身份/PE依赖/许可/hash闭包。Windows10短验与Server2022 CI分别记录，Windows11和其他CPU不自动继承支持。
 
-群消息、模型输出和文件内容均为数据，不能改变系统权限或驱动外部操作。摘要层不执行消息里的命令，不自动发送群消息。来源引用由应用根据已知映射生成，不信任模型编造 URL。
-
-日志只记录 ID、状态、用时、token 数、后端及错误码。临时文件和业务缓存按归属处理；诊断正文须由用户主动开启。
-
-总内存评估包含模型、KV、计算缓冲、runtime、UI 和摘要业务数据。消息输入和中间结果必须有界；按页读取/分块处理，避免同时持有整群的重复大字符串。
-
-## 8. 性能与质量验证
-
-Windows 10 CPU 为首要交付范围，Windows 11后续。Android 面向 Snapdragon 8 Elite 及后续代际，公开首测参考 OnePlus 15 / SM8850 / v81，SM8750 / v79 为兼容档；公开来源见[计划](t07-android-mnn-plan.md)。实际 Android 版本、ABI/页大小、内存、驱动和持续性能待诊断，不由型号推定支持。
-
-- 先以小模型验证模板、中文流式、取消和重复释放，再比较 1.7B/4B 等业务候选。
-- 上游与封装使用相同模型、模板、采样、线程、上下文和设备条件；区分 prefill、decode 与端到端耗时。
-- 同时记录短输入、长输入和完整摘要任务；一份摘要的累计耗时可能包含多次推理。
-- Android 记录持续 15 分钟表现与后台取消；CPU 基线稳定后依次验证 OpenCL、QNN v79/v81 和直接 Hexagon，分别证明实际执行与 fallback。
-- 摘要单独验收覆盖、事实支持、发言归因和引用；runtime 通过 A01 不代表摘要业务达标。
-
-性能门槛和业务默认模型由 S00 样本与实测确定。Android GPU/NPU 已纳入分阶段计划，QNN 与直接 Hexagon 的量化/产物/依赖分别管理；失败可按已验证 profile 在生成前明确兜底 CPU，输出后不重放。扩大上下文、前缀缓存和结构化约束输出仍是独立研究，不预先承诺收益。
-
-## 9. 演进方式
-
-原生链路 → 调度 → Windows 与 Android 宿主 → 独立应用接入 → 发行验收，详见 [路线](roadmap.md)。摘要路线以可替换的推理客户端和来源适配器独立推进。
-
-公共接口、状态机、数据目录、持久化版本或平台范围改变时，先记录决策并同步对应规范及验收。内部可逆实现细节由当前任务自行解决，不反复要求用户批准普通工程选择。
-
-## Android 产品层边界
-
-模型目录/下载任务、会话与附件数据库、消息呈现、系统权限、ASR/TTS交互和用户设置由App管理。下载器只把完整且校验通过的资产提交model-store，不能绕过包准入。runtime继续处理有界单次任务，不访问市场、不存聊天历史、不引入账号或遥测。多会话共享单运行槽；重新打开历史只恢复App数据，不恢复原生句柄或自动重放任务。
-
-图片/音频/生图需要后续版本化能力、输入输出与资源预算，不将二进制内容硬塞文本messages。首个可用APK和后续多模态/加速独立验收；不自动开启后台推理、Android网络API或云同步。
+W00后，W01既有功能短验与W04最小harness文本互通并行；真实工具闭环依赖W02实用模型/工具能力准入。W04文本优先于非必要托盘美化，不被W03管理器阻塞；各阶段门槛通过后进入W05后期发行。无开发工具、离线和长期稳定性仍留后期；未验不等于通过。详见 [路线](roadmap.md)。Android历史不再是依赖，原研究源码/WIP不动。

@@ -1,6 +1,8 @@
+> 历史快照：2026-10-03 Windows 范围收敛前的文档，仅供追溯，不是当前要求或待执行任务。原文事实未重新验收；只增加本说明并修正相对链接。当前入口见 [PROJECT_STATE.md](../../../../PROJECT_STATE.md)。
+
 # 开发与平台构建锁
 
-日期：2026-10-03。本文保留Windows/开发Linux的实际构建锁与历史证据；Linux是开发/验证环境，不是当前发布平台。最新Windows交付为389eeef，真实CI与包复核已过，新包原生UI及后期条件待验；详见当前状态。Android构建锁已归历史快照，不驱动本轮开发。
+日期：2026-10-02。已锁定部分为Linux开发与固定Windows CI组合；Android/MNN独立CPU探针已有Linux/arm64原生构建锁，生产移动栈与真机仍待验。精确支持范围见模型矩阵和验证报告。T00/T01固定Windows 2线程组合已通过，T05另有独立Windows 10手工短验通过；T06新目录版CI及产物独立复核通过并交付；新目录及剩余原生UI分支、无开发工具/离线/长期稳定性及Android真机仍待验。
 
 ## 固定输入
 
@@ -15,6 +17,27 @@
 | CPU 选项 | Release、静态库、`GGML_NATIVE=OFF`、OpenMP/CUDA/Vulkan/Metal 关闭 |
 | x64 指令集 | 上游固定配置实际启用 SSE4.2、AVX、AVX2、F16C、FMA、BMI2；不宣称兼容所有 x64 CPU |
 | Windows 编译器/SDK | MSVC 19.44.35229.0 / SDK 10.0.26100.0；Windows Server 2022 10.0.20348；原生Release、CTest与Rust静态链接已在d3d7cf2的CI通过 |
+| Android NDK/Flutter | NDK r30已用于独立原生CLI构建；Flutter及APK工具链待锁 |
+
+## Android MNN 探针构建锁与生产待锁清单
+
+按[ADR0008](../../../decisions/0008-android-mnn-engine-and-package.md)和[执行计划](../../../t07-android-mnn-plan.md)从T07-A开始，不修改上述Windows llama锁：
+
+| 项目 | 当前状态与锁定条件 |
+| --- | --- |
+| MNN | 3.6.1 commit `d407447ed56c4121a11ccbd266dc184ca1ead0c2`；外部洁净checkout、无补丁，Linux/Android独立CPU探针已构建，不自动跟随master |
+| 原生适配 | MnnExecutor/C ABI未实现；ABI版本、补丁集/hash与线程/取消契约在T07-B冻结 |
+| 模型运行输入/转换 | 按[ADR0010](../../../decisions/0010-model-artifact-and-conversion-provenance.md)分开：公开预转换候选revision/五文件hash/模板已锁，exporter/原始Qwen revision未知且不宣称可重复转换；自行导出路径才强制闭合转换身份。许可/生产准入仍待验，不沿用GGUF身份 |
+| Android构建 | 原生CLI已构建：NDK r30/30.0.16248370、Clang21.0.0、CMake4.4.3/Ninja1.13.2、arm64-v8a/API28、LOAD对齐16KiB；Rust移动target/JDK/Gradle/AGP/Flutter/bridge与APK待锁 |
+| OpenCL | 后端构建、驱动探测、profile、缓存身份与真实fallback未验证 |
+| QNN | QAIRT/QNN精确版本、Host/HTP依赖、SM8750/v79与SM8850/v81目标图分别锁定；尚无SDK/产物验证 |
+| 直接Hexagon | 独立SDK/Tools、Host/DSP库、量化/C4产物及v79/v81实测；不能继承QNN结果 |
+
+新增SDK下载/安装、新协议接受及再分发条件须另行核验并获相应批准；NDK r30已取得并校验用于本轮原生构建；这不授予其他SDK或最终再分发结论。候选版本的官方来源及源码审查见[计划](../../../t07-android-mnn-plan.md)，不使用动态latest代替锁定身份。
+
+NDK官方Linux ZIP共738633529字节，SHA256 `753611f410d002cfcd3f3dc2ef49aad532089d3180b436c060a90bf0fcb64df2`；source.properties复核30.0.16248370。来源[Google NDK r30](https://dl.google.com/android/repository/android-ndk-r30-linux.zip)。不提交工具链或模型大文件。构建开关、二进制身份和实际结果见[T07-A报告](../../../verification/2026-10-02-t07a-mnn-cpu-probe.md)。
+
+许可边界：关闭`MNN_BUILD_OPENCV`仅关闭相关API构建选项，不证明MNN的`source/cv`源实现从最终静态链接中移除。Unicode衍生表等内嵌数据的来源、适用许可及再分发清单尚未闭合；不得仅凭顶层许可证或CPU/text-only选项宣布发行许可齐备。本轮未发布原生二进制/模型/SDK，后续二进制交付前须完成实际链接内容和第三方许可审计。
 
 没有升级跟随 master 的构建脚本。CMake 检查 submodule HEAD，不匹配直接失败。原生模型默认日志被抑制，以避免上游输出完整用户路径；开发基线用合成输入，原始上游日志只留在忽略目录。
 
@@ -64,17 +87,17 @@ ctest --test-dir build/native-release --output-on-failure
 2026-09-30 23:45 UTC，[固定提交 d3d7cf2 的 Windows CI](https://github.com/Naza3/Nexa/actions/runs/36791679663) 全部通过。选定 2 线程 / 2 逻辑 CPU 配置的上游生成、五次 bench、自有 suite 和真实恢复测试通过；探索性 4 线程配置仍超时。具体统计、模型与 artifact 校验见本轮验证记录；不把 CI 配置推广为任意目标硬件或线程数的性能保证。
 
 
-2026-10-01 00:37 UTC，T02实现提交`bc316da6a66eb52a24ee7a5cb56d8f8c45d1ad37`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36796147278)全部通过：原生/整体Rust检查、固定模型身份、上游与native suite、三项adapter真实回归和store→actor→host真实链路。shim2的mid-prefill观察取消3.4101ms，经actor取消至公共终态15.7851ms（各单次功能测量）。精确artifact完整性与边界见[T02报告](verification/2026-10-01-t02-runtime.md)。
+2026-10-01 00:37 UTC，T02实现提交`bc316da6a66eb52a24ee7a5cb56d8f8c45d1ad37`的[Windows CI](https://github.com/Naza3/Nexa/actions/runs/36796147278)全部通过：原生/整体Rust检查、固定模型身份、上游与native suite、三项adapter真实回归和store→actor→host真实链路。shim2的mid-prefill观察取消3.4101ms，经actor取消至公共终态15.7851ms（各单次功能测量）。精确artifact完整性与边界见[T02报告](../../../verification/2026-10-01-t02-runtime.md)。
 
 
-2026-10-01 01:47:46 UTC，T03实现`a8930494f62909cccb11876011a650d9713bc74c`的[Windows CI36801681068](https://github.com/Naza3/Nexa/actions/runs/36801681068)全部通过。新增纯Rust process-host/runtime-ipc及native runtime-worker；Windows FFI使用锁定windows-sys0.61.2。在native构建前以不存在AIR_NATIVE_DIR独立构建父端，实际Job/父退出/强杀、信用和真实双进程链路通过；仅固定Server2022/2逻辑CPU/2推理线程/context2048组合，4线程超配诊断仍60秒超时。ZIP摘要、测试数量、CRLF锁文件摘要等精确证据见[T03报告](verification/2026-10-01-t03-worker.md)。
+2026-10-01 01:47:46 UTC，T03实现`a8930494f62909cccb11876011a650d9713bc74c`的[Windows CI36801681068](https://github.com/Naza3/Nexa/actions/runs/36801681068)全部通过。新增纯Rust process-host/runtime-ipc及native runtime-worker；Windows FFI使用锁定windows-sys0.61.2。在native构建前以不存在AIR_NATIVE_DIR独立构建父端，实际Job/父退出/强杀、信用和真实双进程链路通过；仅固定Server2022/2逻辑CPU/2推理线程/context2048组合，4线程超配诊断仍60秒超时。ZIP摘要、测试数量、CRLF锁文件摘要等精确证据见[T03报告](../../../verification/2026-10-01-t03-worker.md)。
 
 
 ## T04 HTTP 依赖锁（固定 Windows CI 已通过）
 
 新增依赖已实际在Linux和Windows构建/运行；T04实现ccb2053的Windows CI36816604494通过，具体结果见T04记录。Cargo.lock固定：Axum0.8.9、Tokio1.53.1、Hyper1.11.1、hyper-util0.1.21、bytes1.12.1、http-body-util0.1.5、tower0.5.3、hmac0.12.1、subtle2.6.1、getrandom0.4.3、toml0.9.12+spec-1.1.0；Windows直接FFI使用windows-sys0.61.2（旧间接依赖另保留0.59.0）。Hyper在workspace manifest也精确锁1.11.1，Queue/writev与Bytes owner源码假设不能无验证升级。
 
-T04基线LF Cargo.lock SHA-256为`5df74f8dae12b0e546551fa20e087e9c0595eb3cbe6811fb2f9d18f07cfe94da`；Windows checkout换行与artifact摘要另记，不混为同一字节文件。管理CLI/API正常依赖不含engine-host/llama-adapter/runtime-worker；实际缺失native目录的独立构建结果见[T04记录](verification/2026-10-01-t04-http-cli.md)。
+T04基线LF Cargo.lock SHA-256为`5df74f8dae12b0e546551fa20e087e9c0595eb3cbe6811fb2f9d18f07cfe94da`；Windows checkout换行与artifact摘要另记，不混为同一字节文件。管理CLI/API正常依赖不含engine-host/llama-adapter/runtime-worker；实际缺失native目录的独立构建结果见[T04记录](../../../verification/2026-10-01-t04-http-cli.md)。
 
 
 ## T05 Windows Release 便携构建（固定 Server2022 CI 与Win10短验通过，A20待验）
@@ -83,7 +106,7 @@ T05保留同一锁定源码/CPU范围和既有`build/native-release`，不并排
 
 `cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu`使用`build/windows-x64-cpu/cargo/x86_64-pc-windows-msvc/release`构建两个产品及独立验收器。MSVC/SDK具体版本和实际VS edition来自本次构建manifest，不能把早期19.44/SDK10.0.26100.0硬套到新runner。产品与验收器各自解析普通/延迟PE依赖并补齐既有VS所提供的未修改Release x64 CRT。额外运行库安装、新协议接受或不一致源需另行报告，不能从System32搬DLL或静默更换工具链。
 
-manifest/SHA256SUMS、许可原文/清单、ZIP/hash分别核对。包内不包含模型、数据、测试凭据、PDB或验收程序；验收器为独立ZIP且自带所需CRT。CI要求产品与工具manifest均为GITHUB_SHA且project_dirty=false；解压后重新校验identity与字节hash。精确交付与法律边界见[ADR0006](decisions/0006-t05-windows-portable-package.md)，结果见[T05报告](verification/2026-10-01-t05-windows-package.md)。
+manifest/SHA256SUMS、许可原文/清单、ZIP/hash分别核对。包内不包含模型、数据、测试凭据、PDB或验收程序；验收器为独立ZIP且自带所需CRT。CI要求产品与工具manifest均为GITHUB_SHA且project_dirty=false；解压后重新校验identity与字节hash。精确交付与法律边界见[ADR0006](../../../decisions/0006-t05-windows-portable-package.md)，结果见[T05报告](../../../verification/2026-10-01-t05-windows-package.md)。
 
 T05源码6a7e9d0的Cargo.lock LF SHA-256为`4c7533fa5c496faafc6c74bf4b222120d6dd7331dcfe80ec230337e02a8ecf20`；Windows checkout的CRLF hash为`826a1be2f952d934a85c525c240780f0223755f8390e64e58da9fa506f2883cb`，已从同一LF源换行转换精确复算。以上T04的锁hash只指其历史基线。CI证据通过`scripts/stage_ci_evidence.py`闭合允许列表输出，保留模型/模板/fixture/工具/失败身份，不再上传任意artifacts目录正文。
 
@@ -100,7 +123,7 @@ Linux壳使用专用target完成5共享模块测试、clippy/fmt；Windows-targe
 
 桌面原许可库存含registry省略原文的精确补件，以及已核对的Microsoft WebView2 SDK1.0.3800.47静态x64loader原LICENSE/NOTICE。SDK整包SHA256为`56c9f26bdd07916a2d1949fb58a5c7e434dfa1173577dca879206050c4e718db`，registry crate中的loader与SDK原件逐字节一致，SHA256为`89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8`。来源/许可校验清单见`packaging/desktop-windows/third-party/`，打包时再次按hash/源revision验证，不在打包时联网下载补件。
 
-锁文件实际字节hash写入每次桌面manifest，Windows checkout换行差异不以Linux字节hash硬断言。完整来源一致性必须与同次T05 runtime manifest匹配，不能拿另一源码版本的runtime目录拼包。首轮CI36838790221真实Windows编译/PE/许可打包已过，因Tauri CLI对manifest注入空features导致dirty，T05/T06解压验收均被洁净源码门槛拦下。修复将本版CLI确切生成的features数组纳入源码，并在Tauri后早期断言clean，保持后续门槛；第二轮CI36844727718实际通过上述洁净检查、T05解压真实验收和桌面诊断，探测已装WebView2为131.0.2903.86。后续真实bridge验收返回exit1，尚不能交付已验收桌面包。具体结果见[T06验证](verification/2026-10-01-t06-desktop.md)。
+锁文件实际字节hash写入每次桌面manifest，Windows checkout换行差异不以Linux字节hash硬断言。完整来源一致性必须与同次T05 runtime manifest匹配，不能拿另一源码版本的runtime目录拼包。首轮CI36838790221真实Windows编译/PE/许可打包已过，因Tauri CLI对manifest注入空features导致dirty，T05/T06解压验收均被洁净源码门槛拦下。修复将本版CLI确切生成的features数组纳入源码，并在Tauri后早期断言clean，保持后续门槛；第二轮CI36844727718实际通过上述洁净检查、T05解压真实验收和桌面诊断，探测已装WebView2为131.0.2903.86。后续真实bridge验收返回exit1，尚不能交付已验收桌面包。具体结果见[T06验证](../../../verification/2026-10-01-t06-desktop.md)。
 
 
 Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package = "tauri", version = "=2.12.1", features = [] }`与`tauri-build = { version = "=2.7.1", features = [] }`是本次实际CLI生成并二次运行保持字节不变的形式；没有改变依赖版本或根锁。源码清洁度断言属于必要发行门槛，不能因工具写回而忽略manifest。
@@ -113,13 +136,28 @@ Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package 
 
 外部目录扩展的独立Tauri锁仅新增desktop-bridge→model-store、nexa-desktop→已存在的windows-sys 0.61.2两条依赖边；后者用于只读GetDriveTypeW本地盘类型检查，不升级registry版本或更换框架。新目录版Windows CI及产物独立复核已通过，原生目录UI仍待验；依赖图保持不含native推理crate。
 
-2026-10-02，目录/诊断功能源码`75e458f60cbbfc2b136d8396d7e824c3fc07f23e`的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功，native job`110657335010`含真实模型/runtime/HTTP/CLI、桌面包构建和解压后bridge验收通过。下载产物独立完整性复核已通过并交付：原ZIP9,785,013bytes，SHA256 `1d4f89eeb9c03b14aecaa7199c847413ee85b215cd44ee8bf9436bbb14596858`，source tree `8cec0b3be1d8c4f3442d72f2c27f87f8506d9523`、dirty=false。实际750文件、两层manifest/hash、6个PE/依赖闭包及许可均核验，根/壳锁按该提交Windows CRLF字节复核；原始构建工作树未独立重建。新目录原生UI仍未测，不将CI/包核验等同完整桌面验收，精确结果见[T06记录](verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。本轮范围收敛不改变该提交的工具链。
+2026-10-02，目录/诊断功能源码`75e458f60cbbfc2b136d8396d7e824c3fc07f23e`的[Windows CI36948947690](https://github.com/Naza3/Nexa/actions/runs/36948947690)已成功，native job`110657335010`含真实模型/runtime/HTTP/CLI、桌面包构建和解压后bridge验收通过。下载产物独立完整性复核已通过并交付：原ZIP9,785,013bytes，SHA256 `1d4f89eeb9c03b14aecaa7199c847413ee85b215cd44ee8bf9436bbb14596858`，source tree `8cec0b3be1d8c4f3442d72f2c27f87f8506d9523`、dirty=false。实际750文件、两层manifest/hash、6个PE/依赖闭包及许可均核验，根/壳锁按该提交Windows CRLF字节复核；原始构建工作树未独立重建。新目录原生UI仍未测，不将CI/包核验等同完整桌面验收，精确结果见[T06记录](../../../verification/2026-10-01-t06-desktop.md#第七轮目录版windows-ci成功独立复核与交付2026-10-02)。Android文档迁移不改变该提交的工具链。
 
 
+## T07-B1 MNN独立构建锁
 
-## 当前Windows范围与后续门槛
+原生三补丁、13个修改文件的before/after与patch-set/policy身份由[lock.json](../../../../native/mnn-patches/lock.json)精确锁定；不修改pristine MNN。ABI1头文件与全部静态archive、真实编译器/NDK/API绑定在导出artifact.json，Rust再次核验并公开完整manifest SHA256。独立mobile/runtime锁不修改Windows根workspace/lock。
 
-- 最新389eeef未升级上述llama/工具链；[最终CI/交付记录](verification/2026-10-02-windows-model-compatibility.md)覆盖模型兼容性增量
-- Windows10 x64/i5-8400是首要目标，其他Intel/AMD桌面CPU和Windows11按实际指令集/设备扩大；SSE4.2/AVX/AVX2/F16C/FMA/BMI2要求不能由GGML_NATIVE=OFF自动消除
-- W02新增模型、模板/工具能力或引擎升级分别锁定并回归；W04独立记录dsh/pi-ai精确依赖与真实出站fixture，不影响现有运行时依赖锁
-- 旧移动工具链/SDK和许可研究见[原构建锁快照](archive/windows-focus-2026-10-03/docs/build-lock.md)与[历史索引](archive/windows-focus-2026-10-03/INDEX.md)；源码/隔离CI不改
+本地已验证Debian GCC14.2.0；Ubuntu24.04 GCC13.3.0已在c0c0927精确提交的完整native CI通过；历史失败另行保留。Rust1.98.1、CMake4.4.3、Ninja发行包1.13.2、Android NDKr30/Clang21/API28/arm64-v8a保持固定。Android完整链接同时设置max-page-size与common-page-size为16384并检查LOAD/RELRO，不只检查静态库或cargo check。详见[原生验证](../../../../native/mnn-shim/VERIFICATION.md)、[Rust验证](../../../../mobile/runtime/VERIFICATION.md)与[CI说明](../../../../scripts/android_mnn/B1_CI.md)。
+
+当前仅研究CPU文本profile，未授予模型生产准入或Android运行结论。APK工具链、实际MNN/FRB设备研究包和第三方notice闭包已完成构建/独立复核；目标手机仍未验收。最终产物与vendor ELF例外见后文交付记录。
+
+### APK工具链候选（安装与独立模板构建已核验）
+
+2026-10-02云端实际安装并核对Flutter3.47.6（revision `5fc346839b5d0eef006ed8404392afb4dfae428d`）/Dart3.13.5、Temurin17.0.20.1+1、Gradle9.3.1、Android command-line22.0、platform36 revision2、Build-Tools36.0.0；复用NDK30.0.16248370。独立官方模板的AGP9.1.0/Kotlin2.4.0已核实；minSdk28、compile/target36、arm64单ABI及固定NDK为本项目固定研究配置；当时独立模板不包含Nexa，后续真实集成包见最终交付记录。
+
+Flutter/Dart首次执行前设置 `FLUTTER_SUPPRESS_ANALYTICS=true`、`DASH__SUPPRESS_ANALYTICS=true`、`CI=true`，仅CI变量不足。SDK官方ZIP下载核对尺寸及官方SHA1，另记录本次SHA256：platform36r2 `37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e`；build-tools36 `5d9ac77fb6ff43d9da518a337b4fcf8f9097113df531d99ccefe80ef7ce8250b`。后两项SHA256是本次观测，不冒称Google公开校验值。Gradle分发SHA256 `b266d5ff6b90eada6dc3b20cb090e3731302e553a27c5d3e4df1f0d76beaff06`写入wrapper约束。
+
+独立Flutter模板生成、Pub获取与最终Gradle debug构建已通过。早期Java联网/证书信任失败保留：在本次授权下仅构建进程使用系统现成truststore并保持TLS；JAVA_TOOL_OPTIONS与GRADLE_OPTS需同用当次环境代理，旧后者可覆盖前者。Flutter须通过SDK目录视图发现现有NDKr30，仅app.ndkPath不足；没有补装额外NDK。独立模板APK81,664,735bytes，SHA256 `79dbb1c9037154817100c9de3e8b5c0abf1de3ee49a6333a29bca3cc3300f0b8`，ZIP CRC/debug v2签名/16KiB ZIP对齐、min28/target36/compile36、仅arm64和两个ELF64库LOAD65536已核验。它未包含FRB/Rust/MNN，不替代Nexa集成/真机验收，也不作为产品交付。模板旧wrapper bootstrap jar未单靠其校验配置保证Gradle摘要，本次分发ZIP另独立核hash；正式工程需生成现代wrapper。
+
+
+### c0c0927 真实 MNN 设备研究包
+
+同一Flutter/Dart/JDK/Gradle/AGP/Kotlin/NDK组合，新增精确FRB2.13.0，现代Gradle wrapper含固定分发SHA256。实际release编译/内部debug签名、arm64/API28/target36包已通过独立审核并发送；固定输入hash、最终APK/ZIP/证书、原生指纹及43个Maven运行archive许可闭包见[交付记录](../../../verification/2026-10-02-android-device-verifier-delivery.md)。
+
+恢复后AGP曾自动补装官方platform-tools37.0.1，与旧四包SDK清单不同；原ZIP按官方SHA1及逐文件核验后保留，没有运行adb或接受新的未披露协议。工程已设置android.builder.sdkDownload=false，最终构建前后SDK清单一致。此前模板APK已在环境丢失时失效，其历史hash不作为当前可交付文件。

@@ -1,6 +1,6 @@
 # 模型验证矩阵
 
-日期：2026-10-02。该表记录精确资产与验证范围，不将小模型的链路结果当作 Telegram 摘要质量或未测试平台支持。Windows GGUF与Android MNN包分开，不能互相继承hash或validated声明。
+日期：2026-10-03。记录Windows精确模型资产与验证范围。小模型链路结果不等于桌面实用质量、工具能力或未测CPU支持；旧移动研究资产见历史快照。
 
 ## Windows / Linux 开发 GGUF 基线
 
@@ -23,32 +23,28 @@ Qwen3.5-4B仍未列入运行矩阵；不能用文件名、量化后缀或当前l
 | 模板模式 | common/chat，Jinja，enable_thinking=false；不向用户文本添加控制词 |
 | llama commit | `2149c00f4442dc59302e134a02e4c99d5f7ed9fc` |
 | Windows x64 CPU | 已验证T00/T01原生、T02存储/调度及T03独立worker/Job隔离：Server2022 / EPYC7763 CI、2逻辑CPU / 2推理线程、context2048；[T03运行](https://github.com/Naza3/Nexa/actions/runs/36801681068)。真实信用取消与无native父端链通过；4线程超配探针仍60秒超时，不在通过配置内 |
-| Android | 不作为当前MNN资产；GGUF的Windows通过结果不能授予Android支持 |
 
 文件和模板 hash 已对实际下载文件计算；详细本轮 Linux 开发结果见对应验证记录。模型文件不提交源码仓库，不自动下载到最终产品。
 
-## Android MNN 候选矩阵（Linux探针已验证，Android运行未验证）
 
-采用[ADR0008](decisions/0008-android-mnn-engine-and-package.md)；当前是研究输入锁，不是生产schema或支持承诺。
+## 桌面实用模型与harness准入（W02规划）
 
-| 字段 | 固定值/边界 |
+现有0.6B用于链路验证，尚无已通过的4B实用模型或可靠工具模型。下一轮按CPU可用内存、文本/代码/工具质量和响应时间分档选候选，不把型号或参数量视为已支持。4B只是候选容量档，具体模型与量化在锁定资产与llama源码核对后选定。
+
+| 每个候选必须记录 | 准入门槛 |
 | --- | --- |
-| 来源 | [taobao-mnn/Qwen3-0.6B-MNN](https://huggingface.co/taobao-mnn/Qwen3-0.6B-MNN/tree/34dfccda1187ded6e07ea06426da576b0b793c6b) |
-| revision | `34dfccda1187ded6e07ea06426da576b0b793c6b` |
-| 文件 | config.json、llm_config.json、llm.mnn、llm.mnn.weight、tokenizer.txt |
-| 大小与SHA256 | [候选输入锁](../scripts/android_mnn/candidate-model.json)，逐文件对实际字节核对 |
-| 模板SHA256 | `87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5` |
-| MNN | `d407447ed56c4121a11ccbd266dc184ca1ead0c2`，无补丁 |
-| 配置 | CPU / precision high / 2线程 / load-time greedy / enable_thinking=false；功能输出预算16，边界预算8 |
-| 来源路径与限制 | [ADR0010](decisions/0010-model-artifact-and-conversion-provenance.md)公开预转换路径；exporter commit/原始Qwen revision未知，不宣称转换可复现，不因这两项未知单独否决运行资产准入；发布者/模型许可/发行闭包仍须复核 |
-| Linux x86_64 | 4类真实合成输入、重复一致、36/35预算边界通过；详见[T07-A](verification/2026-10-02-t07a-mnn-cpu-probe.md) |
-| Android arm64 CPU | 原生CLI交叉构建/16KiB LOAD对齐通过；模型加载/生成/真机性能与生命周期未验 |
+| 来源/许可证/revision/完整SHA256 | 真实文件与许可核验；不同量化/hash分别准入 |
+| llama commit/GGUF架构/量化/模板hash | 固定引擎实际支持；不采用最新上游宣传替代当前源码 |
+| CPU/OS/可用内存/加载参数 | Windows10/i5-8400优先，实际内存和最佳线程未知须实测 |
+| context/输出/tools+history token预算 | 模板后准确计数，不静默截断或放大声明窗口 |
+| 文本能力 | 中英文/多轮/质量样本、非思考模式与拒绝边界 |
+| 工具能力（独立标签） | 无害工具回合、tool名称/参数JSON、异常输出、取消与多轮；文本通过不授予工具通过 |
+| 可选思考能力 | 仅实际目标需要时独立字段/预算/模板验收，当前没有保证 |
+| 性能与资源 | 冷载、TTFT、prefill/decode、parent/worker内存、空闲/卸载、取消；至少预热后5次统计 |
+| 完整运行 | load/卸载/错误/目录完整性/worker与HTTP真实回归；支持范围精确到组合 |
 
-| 后端 | 资产与验收待办 | 当前状态 |
-| --- | --- | --- |
-| CPU生产资产 | 来源/许可、包schema/引用闭包、生产Executor与设备准入；运行输入锁与转换来源分别记录 | 未完成；研究候选不能称正式支持 |
-| OpenCL | 兼容变体、CPU对照、驱动/profile/fallback、生命周期 | 未开始 |
-| QNN v79/v81 | 各SoC图、量化/校准、SDK/runtime/图hash及兼容CPU资产 | 未开始 |
-| 直接Hexagon | 独立W4对称/C4候选、Host/DSP库、v79/v81分别验收 | 未开始；不能继承QNN结果 |
+初期每次只引入一个有明确用途的候选。需要升级llama才能支持新架构/模板时，单独记录升级并回归原有准入模型，不以UI放行或改hash名单代替真实验证。
 
-公开参考设备档和官方来源见[计划第3节](t07-android-mnn-plan.md#3-版本研究基线与设备矩阵)。ABI/页大小/内存/驱动与支持范围必须由实际诊断确认；文档中的型号或上游模型条目不构成设备通过证据。
+最新389eeef仅增加兼容原因可见性，没有扩充本表模型支持。固定模型在[最终CI](verification/2026-10-02-windows-model-compatibility.md)继续真实回归；原生窗口与目标CPU性能仍分开记录。
+
+旧Android/MNN输入锁与研究后端矩阵完整保留于[原矩阵快照](archive/windows-focus-2026-10-03/docs/model-matrix.md)，不构成Windows支持或发行条件。
