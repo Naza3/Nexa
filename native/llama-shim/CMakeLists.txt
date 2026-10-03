@@ -79,3 +79,19 @@ add_test(NAME air-template-test COMMAND air-template-test)
 add_test(NAME air-template-privacy-test COMMAND air-template-test --privacy-canary)
 set_tests_properties(air-template-privacy-test PROPERTIES
   FAIL_REGULAR_EXPRESSION "NEXA_PRIVATE_CANARY_930d46b1")
+
+# No weights or tool execution: inspect the locked template/parser boundary.
+add_executable(air-tool-parser-test tests/tool_parser_test.cpp)
+target_link_libraries(air-tool-parser-test PRIVATE air_llama llama-common llama)
+target_compile_definitions(air-tool-parser-test PRIVATE
+  AIR_TOOL_TEMPLATE="${LLAMA_SOURCE}/models/templates/Qwen-Qwen3-0.6B.jinja"
+  AIR_TOOL_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fixtures/tools/single-tool-cycle.json")
+if(MSVC)
+  target_compile_options(air-tool-parser-test PRIVATE /UNDEBUG)
+else()
+  target_compile_options(air-tool-parser-test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME air-tool-parser-test COMMAND air-tool-parser-test)
+set_tests_properties(air-tool-parser-test PROPERTIES
+  FAIL_REGULAR_EXPRESSION "NEXA_TOOL_PRIVATE_CANARY_26f074"
+  TIMEOUT 30)

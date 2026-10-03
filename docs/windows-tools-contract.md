@@ -1,8 +1,8 @@
-# Windows 工具调用纵向切片契约（设计，尚未实现）
+# Windows 工具调用纵向切片契约（生产未实现，T0合成诊断已有证据）
 
-日期：2026-10-03；审计源码：`35bfd85ca38d5e3c781c6b387794b265f29df18c`。本文件及其合成 fixture 只定义下一实现，不表示已经开放 tools、通过工具测试或兼容完整 DeepSeek Harness。既有文本基线见 [Harness 契约](windows-harness-contract.md) 和 [文本验证](../examples/harness/README.md)；当前生产行为仍以源码为准。
+日期：2026-10-03。原设计审计基线为35bfd85；本次按`93dae7e8f7168e631262f36bebc3a44fb1f0d008`及已交付43ad5c2更新现状，并新增T0无模型模板/parser诊断证据。生产tools/API/协议尚未实现；本文件后续接口与预算仍为设计，不等于完整DeepSeek Harness兼容。既有文本基线见[Harness契约](windows-harness-contract.md)和[文本验证](../examples/harness/README.md)，本轮13case与缺口见[T0记录](verification/2026-10-03-tool-parser-probe.md)。
 
-用户最新要求：目标机内存 **16 GB**，希望支持很多模型，而非限定几个模型。下面的模型 hash 用于复现实验，**不作为未来产品的模型白名单**。旧源码的精确 0.6B 准入是当前事实，开放模型兼容改造另行协调；本文件不暗中修改该门槛或已有主文档。工具生产实现等待开放模型纵向切片及其 Windows CI 收口，本设计可以先冻结审查。
+用户要求目标机内存**16GB**且广泛支持模型。当前50c9d41/43ad5c2已将loadable候选与历史validated证据分开，43ad5c2的混合目录、固定0.6B回归及WindowsCI/包交付已完成；未实测合法候选不因型号/hash未列矩阵而禁止尝试。下面的模型hash仅用于复现实验，不是产品许可名单。开放文本加载不授予工具能力；T0现已定位parser/文本分支缺口，尚不能建立所测模板的完整工具/文本接受判定，更不能授予整个模型家族支持。
 
 ## 1. 首片边界与完成定义
 
@@ -23,22 +23,28 @@
 | --- | --- | --- |
 | HTTP | `runtime-api/src/dto.rs` 拒绝 tools、null content、tool role；未知字段严格拒绝 | 有界 tools、小 schema、工具消息状态机；保持精确字段拒绝 |
 | 内部类型 | `runtime-types` 的 `Message.content:String`，三个 role，严格交替且末尾 user；无工具结束原因 | 自有工具 DTO，保留 null 语义，末尾 tool 合法，`ToolCalls` 完成原因 |
-| C ABI | `air_message` 只有 role/content；v2 文本回调 | 添加 v3 工具入口/结构化回调；不改 v1/v2 布局 |
-| 模板 | `air_prepare` 只取 applied.prompt，重复文本交替检查 | 传完整 tools/历史；保留 parser/特殊 token/额外 stops 配置 |
+| C ABI | `air_message`只有role/content；当前C ABI布局v2、shim行为identity3 | 未来工具入口/结构化回调及版本待另行冻结；不改旧文本布局 |
+| 模板 | 生产已用原始嵌入Jinja文本render及continuation检查，仍为文本角色/交替规则，无工具parser路径 | 未来传完整tools/历史；保留parser/特殊token/额外stops，并证明工具与普通文本双分支 |
 | 生成 | token_to_piece 的 special=false；只输出文本 | 模板识别所需特殊 token 保留、完整解析、完成校验与结构化分片 |
-| IPC/调度 | 本文审计基线私有 IPC v1、shim2，信用只认 TextDelta | 同一信用账本覆盖工具与保留输出；基于开放模型切片结果重新锁定一个原子版本元组 |
-| 安全 | API 父进程无 native；仅 `llama_log_set` 静音 | 继续无 native；先覆盖 common 独立日志及异常正文 |
+| IPC/调度 | 当前私有IPC2/shim行为identity3，信用仍只认TextDelta | 同一信用账本覆盖工具与保留输出；生产迁移版本尚未分配，T0不改版本 |
+| 安全 | API父进程无native；Engine初始化已强制llama静音、common阈值-1及Jinja debug关闭 | 保持既有边界，T0实际覆盖parser错误/正常文本canary；生产tools仍需完整生命周期隐私验证 |
 
-接口研究开始时本地子模块未物化，故通过远端精确 commit 只读核对；随后已恢复为 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`、tree `48255d3c5006bdefffcf8d0af5225b6cc5d4247c` 的干净子模块。本文没有执行 native 验证，未用 master 替代：
+接口研究开始时本地子模块未物化，故通过远端精确 commit 只读核对；随后已恢复为 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`、tree `48255d3c5006bdefffcf8d0af5225b6cc5d4247c` 的干净子模块。本次T0已在该精确锁定源码上执行无权重native诊断，未用master替代；下列上游接口不是生产工具完成证明：
 
 - [common/chat.h](https://github.com/ggml-org/llama.cpp/blob/2149c00f4442dc59302e134a02e4c99d5f7ed9fc/common/chat.h)：tool 的 name/description/parameters、消息 tool_calls/tool_call_id/tool_name、模板 tools/tool_choice、返回 parser/grammar/preserved_tokens/additional_stops、partial parse/diff/稳定 ID
 - [parser 初始化与解析](https://github.com/ggml-org/llama.cpp/blob/2149c00f4442dc59302e134a02e4c99d5f7ed9fc/common/chat.cpp#L1441)：`common_chat_parser_params(applied)` **没有加载 parser**；须显式 `parser_params.parser.load(applied.parser)`。空 parser 可能回退纯文本，不能把它当工具能力成功
 - [server 参考流程](https://github.com/ggml-org/llama.cpp/blob/2149c00f4442dc59302e134a02e4c99d5f7ed9fc/tools/server/server-task.cpp#L162)：累积 → partial/final parse → 稳定 ID → compute_diffs。复用 common 即可，不引入 llama-server
 - [common/log.h](https://github.com/ggml-org/llama.cpp/blob/2149c00f4442dc59302e134a02e4c99d5f7ed9fc/common/log.h)：独立日志线程；verbosity 与暂停接口不是线程安全。现有 llama 回调不覆盖该路径
 
+### T0已观察到的缺口（非生产接受算法）
+
+锁定实现的`common_chat_parse(raw,false,params)`仍无条件使用LENIENT；缺结束标签、截断arguments和尾随未结束工具结构均能映射出调用。另用`COMMON_PEG_PARSE_FLAG_NONE`对`generation_prompt + raw`做PEG完整匹配，可拒绝这三类本次反例，但会通过重复key、额外属性、错误enum和两个调用，不能替代独立JSON/schema/调用数验证。
+
+同一个严格全匹配对本次普通UTF-8答复失败；在显式`reasoning_format=NONE`下final mapper的content又带入generation prefix的空thinking标记。这表明当前尚无覆盖普通文本与工具双分支的可靠接受判定。不得用通用字符串剥前缀、宽松JSON补全或删断言把观察改成成功。本轮停在具体缺口，不进入生产tools开放；13case与初始错误假设见[T0记录](verification/2026-10-03-tool-parser-probe.md)。
+
 ### 原生隐私必须先于工具接入
 
-引擎唯一所有线程在首次 common 调用前设置 `common_log_set_verbosity_thold(-1)`、关闭 JSONL，并暂停 `common_log_main()`；保持现有 llama/ggml 静音，生命周期中不再恢复或由环境变量打开正文日志。具体调用顺序要按固定 log.cpp 核对；不向 common 配日志文件。
+当前Engine在获得唯一所有权后、首次native/template调用前，已设置`llama_log_set`静音、`common_log_set_verbosity_thold(-1)`及`jinja::enable_debug(false)`。T0主动先打开common/Jinja诊断，再经真实Engine初始化，确认它们被关闭；13case输出仅固定标签/布尔/计数，错误/文本canary未出现在stdout/stderr，stderr为0字节。此证据不表示已暂停common日志线程或完成所有日志/JSONL路径审计；不向common新增日志文件，未来工具生产接入仍需审查所有路径。
 
 parser 的 `LOG_WRN` 可能包含完整生成内容；compute_diffs 异常可能含 arguments。所有 C++ 异常映射为固定错误码与不含输入的短消息；不把 `what()`、原始 parser 错误、Debug DTO、工具结果或完整路径写进 HTTP、stderr、证据。回调 panic/异常不可跨 ABI。合成 canary 必须覆盖错误、取消和关闭，分别扫描 stdout、stderr、错误体与落盘报告；正常响应正文只允许发给已认证请求方。
 
@@ -131,21 +137,21 @@ worker 原生线程拥有模型、模板、prepared、parser、sampler；API/Rus
 
 `GenerationRequest` 增加 tools/choice；`RequestEventKind`、`ExecutorEvent`增加 `ToolCallStart { index,id,name }` 和 `ToolArgumentsDelta { index,arguments }`；不带独立工具终态。`FinishReason::ToolCalls` 只在全部调用验证且分片发完后出现。普通 CLI/desktop 不得把工具事件显示为“成功空文本”；当前自身不发送 tools，文本回归维持。
 
-以下以审计基线 shim2 的下一代 **ABI v3** 命名举例，是**新增入口与新类型**；若前置开放模型切片已占用该代，必须在工具实现前统一重定符号后缀、build_info、绑定和验收，不能碰撞复用：
+以下`_next`仅为未来新增入口/类型的设计占位名，不是已存在符号，也未冻结新的ABI数字。当前C ABI布局v2、shim行为identity3是不同概念；T0没有修改它们。生产工具实现前须统一选定实际符号后缀、build_info、绑定和验收：
 
-- `air_tool_v3`：name/description/parameters_json 三个 pointer+length
-- `air_tool_call_v3`：id/name/arguments 三个 pointer+length
-- `air_message_v3`：role、`has_content`、content、calls pointer/count、tool_call_id；None与空串不混淆
-- `air_prepare_chat_v3`：messages/tools/choice/options/cancel，返回 prepared 与准确 prompt_tokens
-- `air_generate_chat_v3`：结构化同步 callback（text/start/arguments + index）和既有 progress，最终返回新的 `air_usage_v3`；v3 finish值明确为0 stop、1 length、2 cancelled、3 failed、4 tool_calls。v1/v2入口永不返回新值
+- `air_tool_next`：name/description/parameters_json 三个 pointer+length
+- `air_tool_call_next`：id/name/arguments 三个 pointer+length
+- `air_message_next`：role、`has_content`、content、calls pointer/count、tool_call_id；None与空串不混淆
+- `air_prepare_chat_next`：messages/tools/choice/options/cancel，返回 prepared 与准确 prompt_tokens
+- `air_generate_chat_next`：结构化同步 callback（text/start/arguments + index）和既有 progress，最终返回新的 `air_usage_next`；新入口拟议finish值为0 stop、1 length、2 cancelled、3 failed、4 tool_calls。v1/v2入口永不返回新值
 - callback中的所有字符串仅借用至返回，单块上限同第4节；prepared每次generate调用消耗一次，异常/取消也如此。保持prepared→model→engine销毁、单线程所有权，不加 unsafe Send/Sync
-- 工具 ID 由adapter形成并检查，C++不生成另一个不一致ID；C++提供稳定index/name/arguments。旧 `air_message/air_usage/air_generate[_observed]` 布局和文本语义不变；build_info的shim_version变3
+- 工具 ID 由adapter形成并检查，C++不生成另一个不一致ID；C++提供稳定index/name/arguments。旧 `air_message/air_usage/air_generate[_observed]` 布局和文本语义不变；未来build_info行为身份与私有IPC迁移统一冻结，本轮仍保持shim3
 
 新接口不能把完整HTTP JSON塞进native，让两套API验证分叉；schema作为已验证规范化JSON传给common，shim仍复核边界/合法UTF-8/计数/必要语义。Rust与C++重复边界校验用同一 fixture，防止一个接受、另一个静默改写。
 
 ### 6.2 一个迁移单元，禁止模糊“各自升级”
 
-从本文35bfd85基线直接实施时，原子单元应为 **私有 IPC2 + shim3 + 同源码 worker/父端/验收器/包 manifest**。但开放模型切片正在先行，可能已改变私有协议：**工具实现开始前必须读取其已收口提交与实际Hello/build_info，冻结“前置版本元组→工具版本元组”**，以该前置IPC代际加1、shim新增ABI下一空闲代际为准；同时替换本文件中的示例v3后缀。尚未冻结这个确切元组就不得开始跨层生产修改，更不能把各层自行升级当策略。llama commit不变。Hello严格比对，不协商回退前代；未知variant/字段、旧worker/新父端、新worker/旧父端一律在接触模型前失败。不能父端仅更新DTO、worker还按文本解释tools。
+已交付43ad5c2的前置元组为**公共API/proof1、私有IPC2、shim行为identity3，C ABI布局v2**，不能把原35bfd85设计里的IPC2/shim3再当作未来工具迁移。T0只增加测试/构建目标，不变更任何生产版本。未来工具生产实现前，须基于届时已收口提交及实际Hello/build_info冻结完整“前置元组→新工具元组”，一并选定新增C符号/布局和同源码worker/父端/验收器/包manifest。本文不预先分配下一个版本；未冻结原子迁移就不开始跨层生产修改。llama commit不变。Hello严格比对，不协商回退前代；未知variant/字段、旧worker/新父端、新worker/旧父端一律在接触模型前失败。不能父端仅更新DTO、worker还按文本解释tools。
 
 同步清单包括 runtime-ipc 版本/Hello、worker实际build_info检查、process-host故障测试、adapter FFI/smoke、xtask smoke与package_acceptance、scripts/package_windows.py及其测试、发行文档中的版本断言。运行时公共发现/proof协议 `runtime-types::PROTOCOL_VERSION=1`/`PROOF_PROTOCOL_VERSION=1` 与私有IPC不同：首片保持1，除非另有公共不兼容设计；不要全仓替换所有“1”。桌面嵌套runtime与验收器必须取同一新包，不能混搭旧产物。
 
@@ -211,13 +217,13 @@ Harness测试composition仅注册该工具，关闭默认shell/文件工具、�
 
 ## 10. 可实施任务拆分与最小文件集合
 
-以下全为计划；本次只新建本文件和三份JSON，没有生产修改、模型下载、构建、提交或工作流变更。工具生产任务共同前置条件是开放模型切片及其Windows CI收口，并按第6节冻结实际新版本元组。每一任务单一写入者；Android 14项WIP和独立MNN项目不碰。
+T0已执行的是证据实验：新增tool_parser_test.cpp和CMake测试目标，Windows工作流只把该可执行程序加入既有显式native构建目标列表。生产源码、API/协议/版本、模型加载能力、工具fixture本体均未改，无权重下载/推理/DSH执行。T1–T7仍为计划，T0完整接受判定尚不具备，不能因13条观察断言和CTest通过就启动生产开放。开放模型前置基线已有43ad5c2 WindowsCI/交付证据；未来生产工具版本仍按第6节另行冻结。每任务单一写入者，Android14项WIP和独立MNN项目不碰。
 
 | 顺序/依赖 | 任务与最小修改面 | 该步验收 |
 | --- | --- | --- |
-| T0，无模型 | `native/llama-shim/src/air_llama.cpp` common日志隔离；新增 `native/llama-shim/tests/tool_parser_test.cpp`、CMake测试目标；必要小解析helper | 固定上游模板合成render/parse、空parser拒绝、完整性/坏JSON/截断、日志canary；不依赖模型权重 |
+| T0，无模型 | 已新增`native/llama-shim/tests/tool_parser_test.cpp`与CMake目标；Windows工作流仅补显式build目标，复用既有Engine日志设置，无生产helper | 13条模板/parser观察与canary、CTest4/4通过；完整工具/普通文本接受判定仍有缺口，Windows执行待验 |
 | T1，依赖本契约 | `runtime-types/src/{lib,scheduler,tools}.rs`、必要Cargo.toml引用已有serde_json；`runtime-api/src/dto.rs`有限schema/历史解析与测试，但HTTP功能先保持关闭 | request/关联/限额/未知字段测试；真实pi-ai工具serializer对照；不增加新schema依赖/lock升级 |
-| T2，依赖T0/T1 | `native/llama-shim/include/air_llama.h`、`src/air_llama.cpp`、`llama-adapter/src/{ffi,lib}.rs`、`engine-host/src/lib.rs` | v3所有权/回调/错误/准确模板预算/最终校验，保留v2文本；需要原生构建后才可声明通过 |
+| T2，依赖T0/T1 | `native/llama-shim/include/air_llama.h`、`src/air_llama.cpp`、`llama-adapter/src/{ffi,lib}.rs`、`engine-host/src/lib.rs` | 待定新增ABI的所有权/回调/错误/准确模板预算/最终校验，保留旧文本；需要原生构建后才可声明通过 |
 | T3，依赖T1/T2 | `runtime-core/src/{executor,output,scheduler}.rs`、`runtime-ipc/src/{lib,codec,validate}.rs`、`runtime-worker/src/{lib,tests}.rs`、`process-host/src/lib.rs`及fault_worker/协议测试 | 锁定新版本元组严格握手、96KiB保留证明、单payload信用、控制优先、唯一终态、断连/崩溃/下一请求 |
 | T4，依赖T3 | `runtime-api/src/{chat,errors,dto}.rs`及secure_transport_contract；`examples/harness/verify-pi-ai-tools.mjs`（拟新增）；现有CLI/bridge受影响构造器/穷举点 | 此时才开放工具stream；真实HTTP+合成executor+官方客户端；错误不执行；普通文本无回归 |
 | T5，与T2–T4原子发布 | adapter native-smoke、`xtask/src/{smoke,package_acceptance}.rs`、`scripts/package_windows.py`/对应测试，相关公共规范/ADR | 所有版本断言同步、管理端native-free、混版失败、Release包身份一致；本计划不直接改CI |
@@ -226,7 +232,7 @@ Harness测试composition仅注册该工具，关闭默认shell/文件工具、�
 
 这些文件是功能必要面的定位，不承诺只有这些文件会产生机械编译改动；全仓 `Message`/`GenerationRequest`/enum构造与match、Hello测试、包版本断言须检查。文件锁、外部依赖升级、生产工作流变更如需发生，另行说明范围。模型开放策略由并行契约统一，本片不建立第二套白名单。
 
-### 现存验收命令（本轮未运行）
+### 现存runtime验收命令（本次T0未运行）
 
 以下入口当前存在；运行它们只能验证当时已实现内容，不能凭零匹配的测试过滤器或旧248项通过宣称tools通过：
 
@@ -240,10 +246,13 @@ node examples/harness/verify-pi-ai.mjs <已准备的隔离客户端根目录>
 
 native-free断言另在全新target目录、`AIR_NATIVE_DIR`指向不存在目录，构建父端runtime-cli/API/bridge；既有构建缓存不能证明无native。已有原生/真实回归命令取 [build-lock](build-lock.md) 与 [xtask README](../xtask/README.md)，环境/锁定子模块未就绪时写受阻，不能偷偷升级或下载替代。
 
-### 拟新增命令（当前不存在，不得现在写为通过）
+### 已执行的T0入口
+
+隔离Release构建后实际运行`ctest --test-dir <隔离native目录> --output-on-failure`，完整现有native套件为4/4通过；只跑该探针时可加`-R '^air-tool-parser-test$'`。直接测试程序产生13条观察，stderr为0字节；主代理与独立审查均复验。具体命令/输入hash见[T0记录](verification/2026-10-03-tool-parser-probe.md)。Windows多配置运行时加`-C Release`，本轮Windows执行尚待精确提交CI。
+
+### 拟新增工具生产命令（当前不存在，不得现在写为通过）
 
 ```sh
-ctest --test-dir build/native-release -R '^air-tool-parser-test$' --output-on-failure
 node examples/harness/verify-pi-ai-tools.mjs <已准备的隔离客户端根目录>
 cargo test --locked -p runtime-api --test secure_transport_contract harness_official_pi_ai_tools_roundtrip -- --ignored --nocapture
 cargo test --locked -p llama-adapter --test tool_model -- --ignored --test-threads=1 --nocapture
@@ -256,12 +265,12 @@ cargo test --locked -p runtime-worker --test tool_credit -- --ignored --test-thr
 
 | 证据层 | 必须覆盖 | 本次状态 |
 | --- | --- | --- |
-| 文档/fixture | 引用有效、JSON语法、合成标记、正例关系/限额自洽、未伪造token数/模型结果 | 3份JSON语法/合成标记、正例关系/schema/字节限额、SSE拼接、26负例ID、7个本地链接、围栏与空白静态检查通过；未运行工具执行 |
-| T0原生无模型 | 模板/schema/history完整render，parser.load，严格完整性，canary隐私，字节/UTF-8边界 | 未执行 |
+| 文档/fixture | 引用有效、JSON语法、合成标记、正例关系/限额自洽、未伪造token数/模型结果 | 原设计阶段3份JSON语法/合成标记、正例关系/schema/字节限额、SSE拼接与26负例ID静态检查通过；本次沿用未改fixture并复核精确hash/文档链接，未执行工具 |
+| T0原生无模型 | 模板/schema/history render，parser.load，严格完整性与普通文本分支，canary隐私 | 13条合成观察/Release CTest4/4、主代理及独立审查通过；发现LENIENT与strict/schema/text缺口，尚未形成接受算法，Windows待验 |
 | Rust合成协议 | 新旧握手、首块/arguments/index/ID、预算、慢读、取消、重复终态/EOF/错误 | 未实现/未执行 |
 | 官方pi-ai+Nexa HTTP | 实际工具出站serializer、null history、usage、完整结果、零重试错误 | 未执行；已有文本测试不能代替 |
 | Windows真实模型 | 两次完整模板预算、真实tool输出与结果利用、性能/内存、恢复 | 未执行 |
 | 官方DSH受限agent | 精确lock/composition、一个无害工具最多执行一次、真实第二回合 | 未执行 |
 | 更广模型/默认DSH | 模型可尝试与能力诊断、不同模板、默认工具schema差异、资源行为 | 另阶段，不被本片通过自动覆盖 |
 
-通过后的表述最多分别为“指定版本工具wire子集通过”“所测模型/模板的小型工具闭环通过”。没有上述真实证据前，仍只沿用既有受控文本子集结论。
+T0目前仅可表述“锁定上游模板/parser的13条行为观察已复现，定位具体缺口”，不能表述“工具语法/工具能力通过”。后续生产验收通过后的表述最多分别为“指定版本工具wire子集通过”“所测模型/模板的小型工具闭环通过”。没有上述真实证据前，仍只沿用既有受控文本子集结论。

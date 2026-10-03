@@ -169,7 +169,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or !$vs) { throw 'Existing Visual Studio C++ instance missing' }
           cmake -S native/llama-shim -B build/native-release -G 'Visual Studio 17 2022' -A x64 "-DCMAKE_GENERATOR_INSTANCE=$vs" -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL 2>&1 | Tee-Object -FilePath artifacts/verification/windows-configure.log
           if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
-          cmake --build build/native-release --config Release --target air_llama air-stream-test air-template-test llama-completion llama-bench --parallel 4 2>&1 | Tee-Object -FilePath artifacts/verification/windows-native-build.log
+          cmake --build build/native-release --config Release --target air_llama air-stream-test air-template-test air-tool-parser-test llama-completion llama-bench --parallel 4 2>&1 | Tee-Object -FilePath artifacts/verification/windows-native-build.log
           if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
           ctest --test-dir build/native-release -C Release --output-on-failure 2>&1 | Tee-Object -FilePath artifacts/verification/windows-ctest.log
           if ($LASTEXITCODE -ne 0) { throw 'Native stream test failed' }
