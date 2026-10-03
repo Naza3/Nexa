@@ -12,7 +12,8 @@
 | [harness兼容契约](docs/windows-harness-contract.md) | 固定dsh/pi-ai接入路径、协议差异、H01–H12验收 |
 | [开放模型ADR0015](docs/decisions/0015-open-model-loading-and-validation-evidence.md) | 用户16GB/广泛模型目标，loadable与历史validated分离，50c9d41固定模型WindowsCI及发送完成，用户目标机待验 |
 | [混合目录ADR0016](docs/decisions/0016-mixed-model-directory-diagnostics.md) | 合法集合一次partial提交、完整有限诊断、全坏保旧及短context扫描；43ad5c2 WindowsCI/包复核及发送完成，用户目标机待验 |
-| [发现/双源下载ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md) | 当前优先实施：默认EXE/models发现、MS/HF固定目录、显式保存与扫描分离，完整产品待验 |
+| [发现/双源下载ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md) | 默认EXE/models发现、MS/HF固定目录、保存与扫描分离；33f0e17已发送，通用引擎另评估 |
+| [通用下载候选ADR0018](docs/decisions/0018-generic-download-engine-candidate.md) | aria2隔离PoC与Linux策略原型、下载socket/SChannel平台边界、安全发布与分发门槛；未集成，自建reqwest草稿暂停 |
 | [工具契约草案](docs/windows-tools-contract.md) | 生产tools尚未实现；T0已有无模型parser观察并定位严格完整性/schema/普通文本缺口 |
 | [构建锁](docs/build-lock.md) / [模型矩阵](docs/model-matrix.md) | 固定工具链/llama与精确模型验证证据，非运行许可名单 |
 | [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |
@@ -64,7 +65,8 @@
 | W04/T0无模型诊断 | [工具parser探针](docs/verification/2026-10-03-tool-parser-probe.md)，13条行为观察与独立审查通过；4d30bfa WindowsCI CTest4/4/常规Rust344/0/7通过，生产工具与完整模板接受仍未成立 |
 | W04可执行窄文本验证 | [官方pi-ai验证与精确客户端锁](examples/harness/README.md)，尚非DSH/真模型/Windows通过 |
 | W02开放模型 | [开放候选与验证分离](docs/verification/2026-10-03-windows-open-models.md)，50c9d41固定GGUF的WindowsCI及包发送通过，其他模型/用户目标机待验 |
-| W02发现/双源下载 | [本轮验证](docs/verification/2026-10-03-model-catalog-download.md)，本机完整Rust360/0/7、UI105、Python86（2平台skip）及独立审查通过；真实MS下载/Windows包待验 |
+| W02发现/双源下载 | [本轮验证](docs/verification/2026-10-03-model-catalog-download.md)，33f0e17 Windows363/0/7、MS固定0.6B实际下载与包复核/发送完成；用户4B下载故障另记，目标机完整验收未完成 |
+| W02下载故障诊断 | [MS重定向记录](docs/verification/2026-10-03-modelscope-redirect.md)；用户手动下载/扫描可用，具体被拒目标未知；最新CI状态见当前状态 |
 | W02混合目录 | [事务与诊断验证](docs/verification/2026-10-03-mixed-model-directory.md)，本机完整workspace343 pass/7 ignored、完整clippy/UI85项及独立审查通过，8crate266项不另加总；43ad5c2 Windows344/0/7与包复核/发送完成，目标机待验，不继承旧包手验 |
 
 历史报告是当时精确源码/设备的证据，不追溯覆盖新功能或新硬件。当前W阶段结果仍以状态与各自新报告为准。
