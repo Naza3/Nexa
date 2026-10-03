@@ -18,7 +18,7 @@ import tempfile
 from run_desktop_smoke import DIAGNOSTIC_REPORTS, PROBE_REPORTS, bridge_failure, external_library_report, launch_probe_report, startup_diagnostic
 
 JSON_REPORTS = (
-    "windows-baseline.json", "windows-catalog-download.json", "windows-native-smoke.json", "upstream-bench.json",
+    "windows-baseline.json", "windows-catalog-download.json", "windows-aria2-policy.json", "windows-native-smoke.json", "upstream-bench.json",
     "upstream-processes.json", "native-build-manifest.json",
     "windows-api-cli/api-smoke.json", "windows-api-cli/lifecycle.json",
     "windows-api-cli/cli-init.json", "windows-api-cli/cli-import.json",
@@ -75,7 +75,7 @@ def catalog_download_report(value):
             stages = {"platform", "prepare", "admit_directory", "scan", "download_start", "download_poll", "verify_file", "close", "cleanup"}
             codes = {"unsupported_platform", "io", "already_exists", "desktop_busy", "desktop_closing", "runtime_running", "runtime_stop_unconfirmed", "verification_failed",
                      "model_directory_required", "model_directory_unavailable", "model_directory_unsupported", "model_file_changed", "model_file_unavailable", "model_file_in_use",
-                     *("model_download_" + code for code in ("network_failed", "http_failed", "redirect_rejected", "identity_mismatch", "size_mismatch", "write_failed", "incomplete", "cancelled", "timeout", "cleanup_unconfirmed"))}
+                     *("model_download_" + code for code in ("engine_unavailable", "network_failed", "http_failed", "redirect_rejected", "identity_mismatch", "size_mismatch", "write_failed", "incomplete", "cancelled", "timeout", "cleanup_unconfirmed"))}
             if not isinstance(value["stage"], str) or value["stage"] not in stages or not isinstance(value["code"], str) or value["code"] not in codes:
                 raise ValueError("invalid catalog download failure code")
         return

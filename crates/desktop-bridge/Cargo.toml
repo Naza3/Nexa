@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+download-engine = { path = "../download-engine" }
 model-store = { path = "../model-store" }
 runtime-cli = { path = "../runtime-cli" }
 runtime-api = { path = "../runtime-api" }
@@ -16,7 +17,6 @@ hyper.workspace = true
 http-body-util.workspace = true
 uuid.workspace = true
 sha2.workspace = true
-reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "stream"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_JobObjects"] }

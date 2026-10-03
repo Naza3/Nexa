@@ -470,6 +470,8 @@ pub struct DownloadOperationState {
     pub directory_id: Uuid,
     pub target_display_path: String,
     pub downloaded_bytes: u64,
+    #[serde(default = "download_initial_attempt")]
+    pub attempt: u8,
     pub total_bytes: u64,
     pub phase: DownloadPhase,
     pub status: DownloadStatus,
@@ -480,4 +482,8 @@ pub struct DownloadOperationState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadStopping {
     pub stopping: bool,
+}
+
+fn download_initial_attempt() -> u8 {
+    1
 }

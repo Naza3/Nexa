@@ -187,6 +187,8 @@ export interface DownloadOperation {
   file_name: string;
   directory_id: string;
   target_display_path: string;
+  /** Current in-task transfer attempt; omitted by older bridges (defaults to 1). */
+  attempt?: number;
   downloaded_bytes: number;
   total_bytes: number | null;
   phase: "connecting" | "downloading" | "verifying" | "committing" | "finished";

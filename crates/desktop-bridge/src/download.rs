@@ -1,31 +1,47 @@
 //! A bounded, explicit, single catalog download. No executable content, URL input,
 //! implicit source failover, automatic loading, or registration is supported.
 use crate::*;
-use model_store::library::{ModelLibrary, download::DownloadFile};
-use reqwest::Url;
-use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeSet,
-    sync::{Arc, atomic::AtomicU8},
-    time::Instant,
+use download_engine::{
+    DownloadControl, DownloadProgress, DownloadSpec, SidecarConfig, StagingPaths, TransferOptions,
+    TransferReport,
 };
-use tokio::sync::{Notify, mpsc};
+use model_store::library::{
+    ModelLibrary,
+    download::{SidecarDownloadFile, VerifiedSidecarFile},
+};
+#[path = "source_adapter.rs"]
+mod source_adapter;
+use source_adapter::catalog;
+use std::sync::Arc;
+use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
-const BLOCK: usize = 64 * 1024;
-const WHOLE_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
-const READ_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Default)]
 pub(crate) struct DownloadSlot {
     current: Option<Arc<DownloadTask>>,
     previous: Option<Arc<DownloadTask>>,
+    verifier: Option<Arc<SidecarVerifier>>,
 }
 struct DownloadTask {
     state: Mutex<DownloadOperationState>,
-    control: AtomicU8, // 0 transferring, 1 cancelled, 2 committing
+    control: DownloadControl,
     changed: Notify,
-    cancelled: Notify,
-    deadline: Instant,
+    retained: Mutex<Option<Box<dyn Send>>>,
+}
+type SidecarVerifier = dyn Fn() -> Result<VerifiedSidecar> + Send + Sync;
+struct VerifiedSidecar {
+    config: SidecarConfig,
+    _guard: Box<dyn Send>,
+}
+impl Drop for DownloadTask {
+    fn drop(&mut self) {
+        if let Some(resources) = self.retained.get_mut().unwrap().take() {
+            // Only an unrecoverable supervisor failure reaches quarantine. Keep
+            // every guard and instance lock until process exit, never pretend
+            // an unconfirmed writer stopped merely because its task was dropped.
+            std::mem::forget(resources);
+        }
+    }
 }
 impl DownloadSlot {
     fn task(&self, id: Uuid) -> Result<Arc<DownloadTask>> {
@@ -38,26 +54,41 @@ impl DownloadSlot {
     }
 }
 impl DownloadTask {
-    fn check(&self) -> Result<()> {
-        if self.control.load(Ordering::Acquire) == 1 {
-            return Err(BridgeError::new("model_download_cancelled"));
-        }
-        if Instant::now() >= self.deadline {
-            return Err(BridgeError::new("model_download_timeout"));
-        }
-        Ok(())
-    }
     fn cancel(&self) {
-        if self
-            .control
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+        self.control.cancel();
+    }
+    fn progress(&self, progress: DownloadProgress) {
+        let mut state = self.state.lock().unwrap();
+        // Identity and total belong to the admitted catalog operation, not transport.
+        if progress.total_bytes != state.total_bytes
+            || progress.attempt < state.attempt
+            || !(1..=2).contains(&progress.attempt)
+            || progress.written_bytes > state.total_bytes
+            || (progress.attempt == state.attempt
+                && progress.written_bytes < state.downloaded_bytes)
         {
-            self.cancelled.notify_waiters();
+            return;
         }
+        state.downloaded_bytes = progress.written_bytes;
+        state.attempt = progress.attempt;
+        state.phase = match progress.phase {
+            download_engine::DownloadPhase::Connecting => DownloadPhase::Connecting,
+            download_engine::DownloadPhase::Downloading => DownloadPhase::Downloading,
+            download_engine::DownloadPhase::Verifying => DownloadPhase::Verifying,
+            download_engine::DownloadPhase::Committing => DownloadPhase::Committing,
+        };
+        drop(state);
+        self.changed.notify_waiters();
     }
     fn phase(&self, phase: DownloadPhase) {
         self.state.lock().unwrap().phase = phase;
+        self.changed.notify_waiters();
+    }
+    fn quarantine(&self, resources: impl Send + 'static) {
+        *self.retained.lock().unwrap() = Some(Box::new(resources));
+        self.state.lock().unwrap().error =
+            Some(BridgeError::new("model_download_cleanup_unconfirmed"));
+        self.changed.notify_waiters();
     }
     fn finish(&self, result: Result<bool>) {
         let mut state = self.state.lock().unwrap();
@@ -89,68 +120,39 @@ impl DownloadTask {
 fn store_error(error: runtime_types::RuntimeError) -> BridgeError {
     BridgeError::new(error.code.as_str())
 }
-fn hex(value: &str, length: usize) -> bool {
-    value.len() == length
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-/// Exact hosts only: a provider subdomain is not an unrestricted redirect grant.
-fn allowed_url(source: DownloadSource, url: &Url) -> bool {
-    if url.scheme() != "https"
-        || url.port().is_some_and(|p| p != 443)
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return false;
-    }
-    match source {
-        DownloadSource::Modelscope => matches!(url.host_str(), Some("modelscope.cn")),
-        DownloadSource::Huggingface => matches!(
-            url.host_str(),
-            Some("huggingface.co" | "us.aws.cdn.hf.co" | "cas-bridge.xethub.hf.co")
-        ),
-    }
-}
-fn catalog() -> Result<ModelCatalog> {
-    let catalog: ModelCatalog = serde_json::from_str(include_str!("model-catalog.json"))
-        .map_err(|_| BridgeError::new("model_catalog_invalid"))?;
-    let mut ids = BTreeSet::new();
-    if catalog.entries.is_empty() || catalog.entries.len() > 64 {
-        return Err(BridgeError::new("model_catalog_invalid"));
-    }
-    for entry in &catalog.entries {
-        if runtime_types::ModelId::new(&entry.catalog_id).is_err()
-            || !ids.insert(entry.catalog_id.clone())
-            || entry.file_name.len() > 200
-            || entry.file_name.contains(['/', '\\', ':', '\0'])
-            || !entry.file_name.ends_with(".gguf")
-            || entry.size_bytes < 4
-            || entry.size_bytes > model_store::library::MAX_MODEL_BYTES
-            || !hex(&entry.sha256, 64)
-            || entry.sources.is_empty()
-            || entry.sources.len() > 2
-        {
-            return Err(BridgeError::new("model_catalog_invalid"));
-        }
-        let mut seen = Vec::new();
-        for source in &entry.sources {
-            let url =
-                Url::parse(&source.url).map_err(|_| BridgeError::new("model_catalog_invalid"))?;
-            if !hex(&source.revision, 40)
-                || !source.url.contains(&source.revision)
-                || !allowed_url(source.source, &url)
-                || seen.contains(&source.source)
-            {
-                return Err(BridgeError::new("model_catalog_invalid"));
-            }
-            seen.push(source.source);
-        }
-    }
-    Ok(catalog)
-}
 impl DesktopBridge {
+    /// Native-shell-only dependency injection, never an invoke argument. The
+    /// verifier must validate and pin the fixed packaged binary, dependencies
+    /// and every ancestor for the returned guard's entire lifetime.
+    pub fn with_download_sidecar_verifier<F, G>(self, verifier: F) -> Self
+    where
+        F: Fn() -> Result<(PathBuf, G)> + Send + Sync + 'static,
+        G: Send + 'static,
+    {
+        self.downloads.lock().unwrap().verifier = Some(Arc::new(move || {
+            let (executable, guard) = verifier()?;
+            if !executable.is_absolute()
+                || executable.file_name() != Some(std::ffi::OsStr::new("nexa-aria2.exe"))
+            {
+                return Err(BridgeError::new("model_download_engine_unavailable"));
+            }
+            Ok(VerifiedSidecar {
+                config: SidecarConfig { executable },
+                _guard: Box::new(guard),
+            })
+        }));
+        self
+    }
+    fn verified_download_sidecar(&self) -> Result<VerifiedSidecar> {
+        let verifier = self
+            .downloads
+            .lock()
+            .unwrap()
+            .verifier
+            .clone()
+            .ok_or_else(|| BridgeError::new("model_download_engine_unavailable"))?;
+        verifier()
+    }
     pub fn model_catalog(&self) -> Result<ModelCatalog> {
         catalog()
     }
@@ -191,15 +193,17 @@ impl DesktopBridge {
             .find(|s| s.source == source)
             .cloned()
             .ok_or_else(|| BridgeError::new("model_download_source_unavailable"))?;
+        let spec = source_adapter::specification(&entry, &source_entry)?;
         let library = ModelLibrary::read(&self.root)
             .map_err(store_error)?
             .ok_or_else(|| BridgeError::new("model_directory_required"))?;
         if let Some(validate) = &self.directory_validator {
             validate(&library.directory)?;
         }
+        let sidecar = self.verified_download_sidecar()?;
         let id = Uuid::new_v4();
         let destination =
-            DownloadFile::create(&library, &entry.file_name, id).map_err(store_error)?;
+            SidecarDownloadFile::create(&library, &entry.file_name, id).map_err(store_error)?;
         let task = Arc::new(DownloadTask {
             state: Mutex::new(DownloadOperationState {
                 operation_id: id,
@@ -209,6 +213,7 @@ impl DesktopBridge {
                 directory_id: library.directory_id,
                 target_display_path: library.directory.to_string_lossy().into_owned(),
                 downloaded_bytes: 0,
+                attempt: 1,
                 total_bytes: entry.size_bytes,
                 phase: DownloadPhase::Connecting,
                 status: DownloadStatus::Running,
@@ -216,16 +221,27 @@ impl DesktopBridge {
                 result: None,
                 error: None,
             }),
-            control: AtomicU8::new(0),
+            control: DownloadControl::new(),
             changed: Notify::new(),
-            cancelled: Notify::new(),
-            deadline: Instant::now() + WHOLE_TIMEOUT,
+            retained: Mutex::new(None),
         });
         self.register_download_task(task.clone())?;
         tokio::spawn(async move {
-            let result = run_download(task.clone(), entry, source_entry, destination, lock).await;
+            let result = run_download(
+                task.clone(),
+                spec,
+                ModelDownloadTarget {
+                    destination,
+                    _lock: lock,
+                },
+                sidecar,
+                &ProductionSupervisor,
+            )
+            .await;
             // Writer and all protected handles have exited before publishing terminal.
-            task.finish(result);
+            if let Some(result) = result {
+                task.finish(result);
+            }
         });
         Ok(DownloadOperationHandle { operation_id: id })
     }
@@ -282,313 +298,229 @@ impl DesktopBridge {
         .map_err(|_| BridgeError::new("model_download_cleanup_unconfirmed"))
     }
 }
-enum Block {
-    Bytes(Vec<u8>),
-    Finish,
+struct ModelDownloadTarget {
+    destination: SidecarDownloadFile,
+    _lock: InstanceLock,
 }
-async fn run_download(
-    task: Arc<DownloadTask>,
-    entry: CatalogEntry,
-    source: CatalogSource,
-    destination: DownloadFile,
-    lock: InstanceLock,
-) -> Result<bool> {
-    let (send, receive) = mpsc::channel(2);
-    let writer_task = task.clone();
-    let writer_entry = entry.clone();
-    let writer = tokio::task::spawn_blocking(move || {
-        let _lock = lock;
-        write_download(&writer_task, &writer_entry, destination, receive)
-    });
-    let cancel = task.cancelled.notified();
-    tokio::pin!(cancel);
-    cancel.as_mut().enable();
-    let transfer = async {
-        task.check()?;
-        transfer(&task, &entry, &source, &send).await
-    };
-    let result = tokio::select! {
-        result = tokio::time::timeout(WHOLE_TIMEOUT, transfer) => result.unwrap_or_else(|_| Err(BridgeError::new("model_download_timeout"))),
-        _ = cancel => Err(BridgeError::new("model_download_cancelled")),
-    };
-    // Dropping the producer wakes the blocking writer even if HTTP is cancelled.
-    drop(send);
-    let written = writer
-        .await
-        .map_err(|_| BridgeError::new("model_download_write_failed"))?;
-    resolve_transfer(result, written)
+struct VerifiedModelDownload {
+    destination: VerifiedSidecarFile,
+    _lock: InstanceLock,
 }
-fn resolve_transfer(transfer: Result<()>, written: Result<bool>) -> Result<bool> {
-    // Actual publication is authoritative even if cancellation/deadline raced
-    // with receiving Finish. Never describe a saved file as rolled back.
-    match written {
-        Ok(cleaned) => Ok(cleaned),
-        Err(write_error) if write_error.code != "model_download_incomplete" => Err(write_error),
-        Err(write_error) => match transfer {
-            Err(network_error) => Err(network_error),
-            Ok(()) => Err(write_error),
-        },
-    }
+trait Destination: Send + 'static {
+    type Verified: Publication;
+    fn begin_attempt(&mut self) -> Result<StagingPaths>;
+    fn stopped(&mut self);
+    fn observed_size(&self) -> Result<u64>;
+    fn reset(&mut self) -> Result<()>;
+    fn verify(self, spec: &DownloadSpec, control: &DownloadControl) -> Result<Self::Verified>;
+    fn cleanup(self) -> bool;
 }
-fn write_download(
-    task: &DownloadTask,
-    entry: &CatalogEntry,
-    mut destination: DownloadFile,
-    mut receive: mpsc::Receiver<Block>,
-) -> Result<bool> {
-    let mut hasher = Sha256::new();
-    let mut written = 0u64;
-    while let Some(block) = receive.blocking_recv() {
-        task.check()?;
-        match block {
-            Block::Bytes(bytes) => {
-                if bytes.len() > BLOCK {
-                    return Err(BridgeError::new("model_download_size_mismatch"));
-                }
-                written = written
-                    .checked_add(bytes.len() as u64)
-                    .filter(|n| *n <= entry.size_bytes)
-                    .ok_or_else(|| BridgeError::new("model_download_size_mismatch"))?;
-                destination.write(&bytes).map_err(store_error)?;
-                hasher.update(&bytes);
-                task.state.lock().unwrap().downloaded_bytes = written;
-            }
-            Block::Finish => {
-                task.phase(DownloadPhase::Verifying);
-                if written != entry.size_bytes || format!("{:x}", hasher.finalize()) != entry.sha256
-                {
-                    return Err(BridgeError::new("model_download_identity_mismatch"));
-                }
-                task.check()?;
-                task.control
-                    .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
-                    .map_err(|_| BridgeError::new("model_download_cancelled"))?;
-                task.phase(DownloadPhase::Committing);
-                return destination.publish().map_err(store_error);
-            }
-        }
-    }
-    task.check()?;
-    Err(BridgeError::new("model_download_incomplete"))
+trait Publication: Send + 'static {
+    fn publish(self) -> Result<bool>;
 }
-// Only bounded, locally selected diagnostics cross the bridge. Never format a
-// reqwest error, upstream header, URL, certificate detail, or response body.
-#[derive(Clone, Copy)]
-enum NetworkStage {
-    Client,
-    Request,
-    Body,
-}
-fn network_io_reason(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
-    let mut current = Some(error);
-    // Inspect types only, with a fixed bound; third-party strings never leave here.
-    for _ in 0..16 {
-        let error = current?;
-        if let Some(io) = error.downcast_ref::<std::io::Error>() {
-            match io.kind() {
-                std::io::ErrorKind::PermissionDenied => {
-                    return Some("系统拒绝了网络访问权限（不是模型目录写入权限）");
-                }
-                std::io::ErrorKind::ConnectionRefused => return Some("网络连接被拒绝"),
-                std::io::ErrorKind::NetworkUnreachable => return Some("网络不可达"),
-                std::io::ErrorKind::HostUnreachable => return Some("下载源主机不可达"),
-                _ => {}
-            }
-        }
-        current = error.source();
-    }
-    None
-}
-fn network_error(stage: NetworkStage, error: &reqwest::Error) -> BridgeError {
-    let stage = match stage {
-        NetworkStage::Client => "建立下载客户端",
-        NetworkStage::Request => "请求下载源",
-        NetworkStage::Body => "读取模型数据",
-    };
-    let reason = if error.is_timeout() {
-        "网络等待超时"
-    } else if error.is_builder() {
-        "网络客户端配置失败"
-    } else if let Some(reason) = network_io_reason(error) {
-        reason
-    } else if error.is_connect() {
-        "无法建立连接（可能涉及 DNS、网络或 TLS，尚不能确定具体原因）"
-    } else {
-        "网络传输失败"
-    };
-    BridgeError {
-        code: "model_download_network_failed".into(),
-        message: format!("{stage}：{reason}。未切换下载源，未发布模型文件。"),
-    }
-}
-#[derive(Clone, Copy)]
-enum RedirectFailure {
-    Target,
-    Limit,
-    MissingLocation,
-    InvalidLocation,
-}
-fn redirect_error(reason: RedirectFailure) -> BridgeError {
-    let reason = match reason {
-        RedirectFailure::Target => "目标不符合当前下载源的 HTTPS、安全地址或精确域名限制",
-        RedirectFailure::Limit => "超过最多 5 次重定向",
-        RedirectFailure::MissingLocation => "响应缺少重定向地址",
-        RedirectFailure::InvalidLocation => "重定向地址无效或过长",
-    };
-    BridgeError {
-        code: "model_download_redirect_rejected".into(),
-        message: format!("请求下载源：重定向被拒绝，{reason}。未切换下载源，未发布模型文件。"),
-    }
-}
-fn rejected_target_error(target: &Url) -> BridgeError {
-    let mut error = redirect_error(RedirectFailure::Target);
-    // Only a normalized DNS name may be shown, never a Location value or URL.
-    // Non-HTTPS, credentials, nonstandard ports and fragments stay generic.
-    if target.scheme() != "https"
-        || target.port().is_some_and(|port| port != 443)
-        || !target.username().is_empty()
-        || target.password().is_some()
-        || target.fragment().is_some()
-    {
-        return error;
-    }
-    let Some(host) = target.domain() else {
-        return error;
-    };
-    if host.len() > 253
-        || !host.is_ascii()
-        || !host.contains('.')
-        || !host.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+impl Destination for ModelDownloadTarget {
+    type Verified = VerifiedModelDownload;
+    fn begin_attempt(&mut self) -> Result<StagingPaths> {
+        let paths = self.destination.begin_attempt().map_err(store_error)?;
+        Ok(StagingPaths {
+            directory: paths.directory,
+            file_name: "payload.part".into(),
         })
-    {
-        return error;
     }
-    error.message = format!(
-        "请求下载源：重定向域名 {host} 不在当前下载源允许列表内，未连接该域名。未切换下载源，未发布模型文件。"
-    );
-    error
+    fn stopped(&mut self) {
+        self.destination.confirm_writer_stopped();
+    }
+    fn observed_size(&self) -> Result<u64> {
+        self.destination.observed_size().map_err(store_error)
+    }
+    fn reset(&mut self) -> Result<()> {
+        self.destination.reset_for_retry().map_err(store_error)
+    }
+    fn verify(self, spec: &DownloadSpec, control: &DownloadControl) -> Result<Self::Verified> {
+        let destination = self
+            .destination
+            .verify(spec.expected_size, spec.sha256, || {
+                control.is_cancelled() || control.is_expired()
+            })
+            .map_err(|error| match error.code {
+                runtime_types::ErrorCode::RequestCancelled => control_error(control)
+                    .unwrap_or_else(|| BridgeError::new("model_download_cancelled")),
+                runtime_types::ErrorCode::IntegrityFailure => {
+                    BridgeError::new("model_download_identity_mismatch")
+                }
+                _ => store_error(error),
+            })?;
+        Ok(VerifiedModelDownload {
+            destination,
+            _lock: self._lock,
+        })
+    }
+    fn cleanup(self) -> bool {
+        self.destination.cleanup()
+    }
 }
-fn redirect_target(
-    source: DownloadSource,
-    current: &Url,
-    headers: &reqwest::header::HeaderMap,
-    hop: usize,
-) -> Result<Url> {
-    if hop >= 5 {
-        return Err(redirect_error(RedirectFailure::Limit));
+impl Publication for VerifiedModelDownload {
+    fn publish(self) -> Result<bool> {
+        self.destination.publish().map_err(store_error)
     }
-    let location = headers
-        .get(reqwest::header::LOCATION)
-        .ok_or_else(|| redirect_error(RedirectFailure::MissingLocation))?
-        .to_str()
-        .ok()
-        .filter(|v| !v.is_empty() && v.len() <= 16384)
-        .ok_or_else(|| redirect_error(RedirectFailure::InvalidLocation))?;
-    let target = current
-        .join(location)
-        .map_err(|_| redirect_error(RedirectFailure::InvalidLocation))?;
-    if !allowed_url(source, &target) {
-        return Err(rejected_target_error(&target));
-    }
-    Ok(target)
 }
-
-async fn transfer(
-    task: &DownloadTask,
-    entry: &CatalogEntry,
-    source: &CatalogSource,
-    send: &mpsc::Sender<Block>,
-) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .https_only(true)
-        .no_proxy()
-        .referer(false)
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(READ_TIMEOUT)
-        .timeout(WHOLE_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .build()
-        .map_err(|error| network_error(NetworkStage::Client, &error))?;
-    let mut url = Url::parse(&source.url).map_err(|_| BridgeError::new("model_catalog_invalid"))?;
-    for hop in 0..=5 {
-        task.check()?;
-        if !allowed_url(source.source, &url) {
-            return Err(rejected_target_error(&url));
+trait Supervisor: Sync {
+    fn transfer(
+        &self,
+        spec: DownloadSpec,
+        sidecar: SidecarConfig,
+        staging: StagingPaths,
+        control: DownloadControl,
+        options: TransferOptions,
+        progress: watch::Sender<DownloadProgress>,
+    ) -> impl std::future::Future<
+        Output = std::result::Result<TransferReport, download_engine::DownloadError>,
+    > + Send;
+}
+struct ProductionSupervisor;
+impl Supervisor for ProductionSupervisor {
+    async fn transfer(
+        &self,
+        spec: DownloadSpec,
+        sidecar: SidecarConfig,
+        staging: StagingPaths,
+        control: DownloadControl,
+        options: TransferOptions,
+        progress: watch::Sender<DownloadProgress>,
+    ) -> std::result::Result<TransferReport, download_engine::DownloadError> {
+        download_engine::transfer(spec, sidecar, staging, control, options, progress).await
+    }
+}
+fn control_error(control: &DownloadControl) -> Option<BridgeError> {
+    if control.is_cancelled() {
+        Some(BridgeError::new("model_download_cancelled"))
+    } else if control.is_expired() {
+        Some(BridgeError::new("model_download_timeout"))
+    } else {
+        None
+    }
+}
+fn cleanup_error(target: impl Destination, mut error: BridgeError) -> Result<bool> {
+    if !target.cleanup() {
+        error
+            .message
+            .push_str(" 临时文件清理未确认，请勿自动重试。");
+    }
+    Err(error)
+}
+async fn run_download<T: Destination>(
+    task: Arc<DownloadTask>,
+    spec: DownloadSpec,
+    mut target: T,
+    sidecar: VerifiedSidecar,
+    supervisor: &impl Supervisor,
+) -> Option<Result<bool>> {
+    let mut attempt = 1;
+    loop {
+        if let Some(error) = control_error(&task.control) {
+            return Some(cleanup_error(target, error));
         }
-        let response = client
-            .get(url.clone())
-            .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .send()
-            .await
-            .map_err(|error| network_error(NetworkStage::Request, &error))?;
-        if response.status().is_redirection() {
-            url = redirect_target(source.source, &url, response.headers(), hop)?;
-            continue;
+        let paths = match target.begin_attempt() {
+            Ok(paths) => paths,
+            Err(error) => return Some(cleanup_error(target, error)),
+        };
+        let mut initial = DownloadProgress::initial(spec.expected_size);
+        initial.attempt = attempt;
+        task.progress(initial);
+        let (progress, mut receive) = watch::channel(initial);
+        let transfer = supervisor.transfer(
+            spec.clone(),
+            sidecar.config.clone(),
+            paths,
+            task.control.clone(),
+            TransferOptions { attempt },
+            progress,
+        );
+        tokio::pin!(transfer);
+        let mut progress_open = true;
+        let mut watchdog = tokio::time::interval(Duration::from_millis(250));
+        watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut watchdog_error = None;
+        let result = loop {
+            tokio::select! {
+                result = &mut transfer => break result,
+                _ = watchdog.tick(), if watchdog_error.is_none() => {
+                    // This is a polling resource watchdog, not a per-write quota.
+                    // Preserve prior user cancellation/deadline and keep awaiting
+                    // actual OS/drainer shutdown after a watchdog stop request.
+                    if control_error(&task.control).is_none() {
+                        let error = match target.observed_size() {
+                            Ok(size) if size > spec.expected_size => Some(BridgeError::new("model_download_size_mismatch")),
+                            Err(error) => Some(error),
+                            _ => None,
+                        };
+                        if error.is_some() && control_error(&task.control).is_none()
+                            && task.control.try_cancel() {
+                            watchdog_error = error;
+                        }
+                    }
+                }
+                changed = receive.changed(), if progress_open => {
+                    if changed.is_ok() { task.progress(*receive.borrow_and_update()); }
+                    else { progress_open = false; }
+                }
+            }
+        };
+        task.progress(*receive.borrow_and_update());
+        if !match &result {
+            Ok(report) => report.writer_stopped,
+            Err(error) => error.writer_stopped(),
+        } {
+            task.quarantine((target, sidecar));
+            return None;
         }
-        return transfer_response(task, entry, response, send).await;
+        target.stopped();
+        if let Some(error) = watchdog_error {
+            return Some(cleanup_error(target, error));
+        }
+        if let Some(error) = control_error(&task.control) {
+            return Some(cleanup_error(target, error));
+        }
+        match result {
+            Ok(report) if report.exit_code == 0 => break,
+            Err(download_engine::DownloadError::SidecarExit { exit_code: 8, .. })
+                if attempt == 1 =>
+            {
+                if let Err(error) = target.reset() {
+                    return Some(cleanup_error(target, error));
+                }
+                attempt = 2;
+            }
+            Err(error) => return Some(cleanup_error(target, crate::error::download_error(error))),
+            Ok(_) => {
+                return Some(cleanup_error(
+                    target,
+                    BridgeError::new("model_download_incomplete"),
+                ));
+            }
+        }
     }
-    Err(redirect_error(RedirectFailure::Limit))
-}
-
-async fn transfer_response(
-    task: &DownloadTask,
-    entry: &CatalogEntry,
-    response: reqwest::Response,
-    send: &mpsc::Sender<Block>,
-) -> Result<()> {
-    if response.status() != reqwest::StatusCode::OK {
-        return Err(BridgeError {
-            code: "model_download_http_failed".into(),
-            message: format!(
-                "请求下载源：服务器返回 HTTP {}，预期为 200。未切换下载源，未发布模型文件。",
-                response.status().as_u16()
-            ),
+    task.phase(DownloadPhase::Verifying);
+    let verify_task = task.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let verified = target.verify(&spec, &verify_task.control)?;
+        if !verify_task.control.begin_publish() {
+            return Err(control_error(&verify_task.control)
+                .unwrap_or_else(|| BridgeError::new("model_download_cancelled")));
+        }
+        verify_task.progress(DownloadProgress {
+            phase: download_engine::DownloadPhase::Committing,
+            written_bytes: spec.expected_size,
+            total_bytes: spec.expected_size,
+            attempt,
         });
-    }
-    if response
-        .content_length()
-        .is_some_and(|n| n != entry.size_bytes)
-        || response
-            .headers()
-            .get(reqwest::header::CONTENT_ENCODING)
-            .is_some_and(|v| v != "identity")
-    {
-        return Err(BridgeError::new("model_download_size_mismatch"));
-    }
-    task.phase(DownloadPhase::Downloading);
-    let mut response = response;
-    let mut received = 0u64;
-    while let Some(bytes) = response
-        .chunk()
-        .await
-        .map_err(|error| network_error(NetworkStage::Body, &error))?
-    {
-        task.check()?;
-        received = received
-            .checked_add(bytes.len() as u64)
-            .filter(|n| *n <= entry.size_bytes)
-            .ok_or_else(|| BridgeError::new("model_download_size_mismatch"))?;
-        for bytes in bytes.chunks(BLOCK) {
-            send.send(Block::Bytes(bytes.to_vec()))
-                .await
-                .map_err(|_| BridgeError::new("model_download_write_failed"))?;
-        }
-    }
-    if received != entry.size_bytes {
-        return Err(BridgeError::new("model_download_size_mismatch"));
-    }
-    send.send(Block::Finish)
-        .await
-        .map_err(|_| BridgeError::new("model_download_write_failed"))?;
-    Ok(())
+        verified.publish()
+    })
+    .await
+    .unwrap_or_else(|_| Err(BridgeError::new("model_download_write_failed")));
+    // Binary/dependency pins outlive the sidecar, all drainers and verification.
+    drop(sidecar);
+    Some(result)
 }
 
 #[cfg(test)]
@@ -604,6 +536,7 @@ mod tests {
                 directory_id: Uuid::new_v4(),
                 target_display_path: "fixture".into(),
                 downloaded_bytes: 0,
+                attempt: 1,
                 total_bytes: entry.size_bytes,
                 phase: DownloadPhase::Connecting,
                 status: DownloadStatus::Running,
@@ -611,330 +544,10 @@ mod tests {
                 result: None,
                 error: None,
             }),
-            control: AtomicU8::new(0),
+            control: DownloadControl::new(),
             changed: Notify::new(),
-            cancelled: Notify::new(),
-            deadline: Instant::now() + Duration::from_secs(5),
+            retained: Mutex::new(None),
         })
-    }
-    async fn fixture_response(status: &str, headers: &str, body: Vec<u8>) -> reqwest::Response {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let header = format!("HTTP/1.1 {status}\r\nConnection: close\r\n{headers}\r\n");
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut request = [0; 4096];
-            let _ = stream.read(&mut request);
-            let _ = stream.write_all(header.as_bytes());
-            let _ = stream.write_all(&body);
-        });
-        // Loopback HTTP exists only in this bounded fixture, never the production policy.
-        reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .unwrap()
-            .get(format!("http://{address}/fixture"))
-            .send()
-            .await
-            .unwrap()
-    }
-    fn assert_private(error: &BridgeError) {
-        let serialized = serde_json::to_string(error).unwrap();
-        for secret in [
-            "CANARY_SECRET",
-            "secret.invalid",
-            "token=",
-            "C:\\Users",
-            "https://",
-            "http://",
-        ] {
-            assert!(!serialized.contains(secret), "diagnostic leaked {secret}");
-        }
-        assert!(error.message.len() <= 500);
-    }
-    #[test]
-    fn redirect_diagnostics_distinguish_safe_reasons_without_echoing_locations() {
-        use reqwest::header::{HeaderMap, HeaderValue, LOCATION};
-        let current = Url::parse("https://modelscope.cn/file?token=CANARY_SECRET").unwrap();
-        let mut headers = HeaderMap::new();
-        let missing =
-            redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
-        assert!(missing.message.contains("缺少"));
-        headers.insert(
-            LOCATION,
-            HeaderValue::from_static("https://CANARY_SECRET@secret.invalid/?token=CANARY_SECRET"),
-        );
-        let target =
-            redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
-        assert!(target.message.contains("精确域名"));
-        let limit = redirect_target(DownloadSource::Modelscope, &current, &headers, 5).unwrap_err();
-        assert!(limit.message.contains("5 次"));
-        headers.insert(LOCATION, HeaderValue::from_static(""));
-        // Empty Location now fails immediately as invalid, rather than retrying
-        // the same URL until the existing five-redirect limit is reached.
-        let empty = redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
-        assert!(empty.message.contains("无效"));
-        assert_private(&empty);
-        headers.insert(LOCATION, HeaderValue::from_static("https://[CANARY_SECRET"));
-        let invalid =
-            redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
-        assert!(invalid.message.contains("无效"));
-        headers.insert(LOCATION, HeaderValue::from_bytes(&[0xff]).unwrap());
-        assert!(
-            redirect_target(DownloadSource::Modelscope, &current, &headers, 0)
-                .unwrap_err()
-                .message
-                .contains("无效")
-        );
-        headers.insert(
-            LOCATION,
-            HeaderValue::from_str(&format!("/{}", "x".repeat(16384))).unwrap(),
-        );
-        assert!(
-            redirect_target(DownloadSource::Modelscope, &current, &headers, 0)
-                .unwrap_err()
-                .message
-                .contains("过长")
-        );
-        for error in [missing, target, limit, invalid] {
-            assert_eq!(error.code, "model_download_redirect_rejected");
-            assert_private(&error);
-        }
-        headers.insert(
-            LOCATION,
-            HeaderValue::from_static("/next?token=CANARY_SECRET"),
-        );
-        assert_eq!(
-            redirect_target(DownloadSource::Modelscope, &current, &headers, 4)
-                .unwrap()
-                .host_str(),
-            Some("modelscope.cn")
-        );
-    }
-    #[test]
-    fn rejected_domain_diagnostic_only_exposes_normalized_bounded_dns_names() {
-        let public =
-            Url::parse("https://cdn.modelscope.cn/CANARY_SECRET?token=CANARY_SECRET").unwrap();
-        let error = rejected_target_error(&public);
-        assert!(error.message.contains("cdn.modelscope.cn"));
-        assert!(error.message.contains("未连接该域名"));
-        assert_private(&error);
-        let longest_host = format!(
-            "{}.{}.{}.{}",
-            "a".repeat(63),
-            "b".repeat(63),
-            "c".repeat(63),
-            "d".repeat(61)
-        );
-        assert_eq!(longest_host.len(), 253);
-        let longest = Url::parse(&format!(
-            "https://{longest_host}/CANARY_SECRET?token=CANARY_SECRET"
-        ))
-        .unwrap();
-        let error = rejected_target_error(&longest);
-        assert!(error.message.contains(&longest_host));
-        assert!(error.message.contains("未连接该域名"));
-        assert_private(&error);
-        let idna = Url::parse("https://例子.测试/CANARY_SECRET?token=CANARY_SECRET").unwrap();
-        let error = rejected_target_error(&idna);
-        assert!(error.message.contains("xn--fsqu00a.xn--0zwm56d"));
-        assert_private(&error);
-        for input in [
-            "https://CANARY_SECRET@secret.invalid/path",
-            "https://user:CANARY_SECRET@secret.invalid/path",
-            "https://secret.invalid/path#CANARY_SECRET",
-            "https://secret.invalid:444/CANARY_SECRET",
-            "http://secret.invalid/CANARY_SECRET",
-            "https://127.0.0.1/CANARY_SECRET",
-            "https://[::1]/CANARY_SECRET",
-            "https://bad_label.secret.invalid/CANARY_SECRET",
-            "https://-bad.secret.invalid/CANARY_SECRET",
-        ] {
-            let error = rejected_target_error(&Url::parse(input).unwrap());
-            assert!(!error.message.contains("未连接该域名"));
-            assert_private(&error);
-        }
-        for host in [
-            format!("{}.invalid", "a".repeat(64)),
-            format!("{}.invalid", vec!["a".repeat(63); 4].join(".")),
-        ] {
-            let error = rejected_target_error(
-                &Url::parse(&format!("https://{host}/CANARY_SECRET")).unwrap(),
-            );
-            assert!(!error.message.contains(&host));
-            assert_private(&error);
-        }
-    }
-    #[test]
-    fn network_io_diagnostics_use_only_allowlisted_error_kinds() {
-        for (kind, expected) in [
-            (
-                std::io::ErrorKind::PermissionDenied,
-                "系统拒绝了网络访问权限（不是模型目录写入权限）",
-            ),
-            (std::io::ErrorKind::ConnectionRefused, "网络连接被拒绝"),
-            (std::io::ErrorKind::NetworkUnreachable, "网络不可达"),
-            (std::io::ErrorKind::HostUnreachable, "下载源主机不可达"),
-        ] {
-            let error = std::io::Error::new(kind, "https://secret.invalid/?token=CANARY_SECRET");
-            assert_eq!(network_io_reason(&error), Some(expected));
-        }
-        assert_eq!(
-            network_io_reason(&std::io::Error::other("CANARY_SECRET")),
-            None
-        );
-    }
-    #[tokio::test]
-    async fn http_diagnostic_preserves_only_numeric_status() {
-        let response = fixture_response(
-            "403 CANARY_SECRET",
-            "X-Secret: CANARY_SECRET\r\n",
-            b"CANARY_SECRET".to_vec(),
-        )
-        .await;
-        let entry = catalog().unwrap().entries.remove(0);
-        let task = task_for(&entry);
-        let (send, _) = mpsc::channel(2);
-        let error = transfer_response(&task, &entry, response, &send)
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "model_download_http_failed");
-        assert!(error.message.contains("HTTP 403"));
-        assert_eq!(task.state.lock().unwrap().downloaded_bytes, 0);
-        assert_private(&error);
-    }
-    #[tokio::test]
-    async fn network_diagnostics_distinguish_connect_and_timeouts_without_url_details() {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let raw = client
-            .get(format!("http://{address}/?token=CANARY_SECRET"))
-            .send()
-            .await
-            .unwrap_err();
-        assert!(raw.is_connect());
-        let error = network_error(NetworkStage::Request, &raw);
-        assert!(error.message.contains("网络连接被拒绝") || error.message.contains("无法建立连接"));
-        assert_private(&error);
-        // Exercise both actual header-wait and body-read timeout errors.
-        for body in [false, true] {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap();
-            let server = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut request = [0; 4096];
-                let _ = stream.read(&mut request);
-                if body {
-                    stream
-                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
-                        .unwrap();
-                    stream.flush().unwrap();
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            });
-            let client = reqwest::Client::builder()
-                .no_proxy()
-                .read_timeout(Duration::from_millis(40))
-                .build()
-                .unwrap();
-            let response = client
-                .get(format!("http://{address}/?token=CANARY_SECRET"))
-                .send()
-                .await;
-            let (raw, stage, label) = if body {
-                (
-                    response.unwrap().chunk().await.unwrap_err(),
-                    NetworkStage::Body,
-                    "读取模型数据",
-                )
-            } else {
-                (response.unwrap_err(), NetworkStage::Request, "请求下载源")
-            };
-            assert!(raw.is_timeout());
-            let error = network_error(stage, &raw);
-            assert_eq!(error.code, "model_download_network_failed");
-            assert!(error.message.contains("网络等待超时"));
-            assert!(error.message.contains(label));
-            assert_private(&error);
-            server.join().unwrap();
-        }
-        let raw = client.get("http://[CANARY_SECRET").build().unwrap_err();
-        let error = network_error(NetworkStage::Client, &raw);
-        assert!(error.message.contains("配置失败"));
-        assert_private(&error);
-    }
-    #[tokio::test]
-    async fn bounded_http_fixture_checks_headers_lengths_and_backpressure_chunks() {
-        for (status, headers, size, body, success) in [
-            (
-                "200 OK",
-                "",
-                (BLOCK * 3 + 7) as u64,
-                vec![b'x'; BLOCK * 3 + 7],
-                true,
-            ),
-            (
-                "200 OK",
-                "Content-Length: 5\r\n",
-                4,
-                b"12345".to_vec(),
-                false,
-            ),
-            ("200 OK", "", 4, b"12345".to_vec(), false),
-            ("200 OK", "", 5, b"1234".to_vec(), false),
-            (
-                "200 OK",
-                "Content-Encoding: gzip\r\n",
-                4,
-                b"1234".to_vec(),
-                false,
-            ),
-            ("403 Forbidden", "", 4, b"1234".to_vec(), false),
-        ] {
-            let response = fixture_response(status, headers, body).await;
-            let mut entry = catalog().unwrap().entries.remove(0);
-            entry.size_bytes = size;
-            let task = task_for(&entry);
-            let (send, mut receive) = mpsc::channel(2);
-            let producer = async {
-                let result = transfer_response(&task, &entry, response, &send).await;
-                drop(send);
-                result
-            };
-            let consumer = async {
-                let mut count = 0;
-                let mut finished = false;
-                while let Some(block) = receive.recv().await {
-                    match block {
-                        Block::Bytes(bytes) => {
-                            assert!(bytes.len() <= BLOCK);
-                            count += bytes.len();
-                        }
-                        Block::Finish => {
-                            assert!(!finished);
-                            finished = true;
-                        }
-                    }
-                }
-                (count, finished)
-            };
-            let (result, (count, finished)) = tokio::join!(producer, consumer);
-            assert_eq!(result.is_ok(), success);
-            assert_eq!(finished, success);
-            if success {
-                assert_eq!(count as u64, size);
-            }
-        }
     }
     #[tokio::test]
     async fn active_task_keeps_snapshot_responsive_and_close_waits_for_terminal() {
@@ -966,7 +579,7 @@ mod tests {
         let task_copy = task.clone();
         let complete = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            assert_eq!(task_copy.control.load(Ordering::Acquire), 1);
+            assert!(task_copy.control.is_cancelled());
             task_copy.finish(Err(BridgeError::new("model_download_cancelled")));
         });
         bridge.close().await.unwrap();
@@ -1008,153 +621,6 @@ mod tests {
         assert!(!bridge.download_active());
     }
     #[test]
-    fn published_result_wins_racing_transfer_cancel_or_timeout() {
-        for code in ["model_download_cancelled", "model_download_timeout"] {
-            assert!(resolve_transfer(Err(BridgeError::new(code)), Ok(true)).unwrap());
-            assert!(!resolve_transfer(Err(BridgeError::new(code)), Ok(false)).unwrap());
-            assert_eq!(
-                resolve_transfer(
-                    Err(BridgeError::new(code)),
-                    Err(BridgeError::new("model_download_incomplete"))
-                )
-                .unwrap_err()
-                .code,
-                code
-            );
-        }
-    }
-    #[test]
-    fn commit_cancel_race_and_cleanup_warning_keep_saved_truthful() {
-        let entry = catalog().unwrap().entries.remove(0);
-        let task = task_for(&entry);
-        task.control.store(2, Ordering::Release);
-        task.cancel();
-        assert_eq!(task.control.load(Ordering::Acquire), 2);
-        task.finish(Ok(false));
-        let state = task.state.lock().unwrap();
-        assert_eq!(state.status, DownloadStatus::Completed);
-        let result = state.result.as_ref().unwrap();
-        assert!(result.saved);
-        assert!(!result.registered);
-        assert_eq!(
-            result.cleanup_warning.as_deref(),
-            Some("partial_cleanup_unconfirmed")
-        );
-        let cancelled = task_for(&entry);
-        cancelled.cancel();
-        assert_eq!(
-            cancelled.check().unwrap_err().code,
-            "model_download_cancelled"
-        );
-    }
-    #[cfg(windows)]
-    #[test]
-    fn windows_fixture_bytes_verify_size_hash_cancel_and_publish_without_registration() {
-        for mode in ["success", "hash", "short", "cancel", "oversize"] {
-            let root = tempfile::tempdir().unwrap();
-            let models = root.path().join("models");
-            fs::create_dir(&models).unwrap();
-            let scan = model_store::library::scan_directory(
-                root.path(),
-                &models,
-                None,
-                &model_store::library::ScanControl::default(),
-            )
-            .unwrap();
-            let library = scan.library().unwrap().clone();
-            drop(scan);
-            let body = b"GGUF bounded fixture bytes";
-            let mut entry = catalog().unwrap().entries.remove(0);
-            entry.size_bytes = body.len() as u64;
-            entry.sha256 = format!("{:x}", Sha256::digest(body));
-            if mode == "hash" {
-                entry.sha256 = "0".repeat(64);
-            }
-            if mode == "short" {
-                entry.size_bytes += 1;
-            }
-            if mode == "oversize" {
-                entry.size_bytes -= 1;
-            }
-            let task = task_for(&entry);
-            if mode == "cancel" {
-                task.cancel();
-            }
-            let id = task.state.lock().unwrap().operation_id;
-            let destination = DownloadFile::create(&library, &entry.file_name, id).unwrap();
-            let (send, receive) = mpsc::channel(2);
-            send.try_send(Block::Bytes(body.to_vec())).unwrap();
-            send.try_send(Block::Finish).unwrap();
-            drop(send);
-            let result = write_download(&task, &entry, destination, receive);
-            assert_eq!(result.is_ok(), mode == "success", "{mode}");
-            assert_eq!(
-                models.join(&entry.file_name).exists(),
-                mode == "success",
-                "{mode}"
-            );
-            assert!(
-                !models.join(format!(".nexa-download-{id}.part")).exists(),
-                "{mode}"
-            );
-            assert!(
-                !root
-                    .path()
-                    .join(model_store::library::LIBRARY_FILE)
-                    .exists()
-            );
-            if mode == "success" {
-                assert_eq!(
-                    task.state.lock().unwrap().downloaded_bytes,
-                    body.len() as u64
-                );
-            }
-        }
-    }
-    #[test]
-    fn pinned_catalog_has_both_sources_without_granting_validation() {
-        let catalog = catalog().unwrap();
-        assert!(catalog.entries.len() >= 2);
-        for item in catalog.entries {
-            assert_eq!(item.sources.len(), 2);
-            assert!(
-                item.sources
-                    .iter()
-                    .any(|s| s.source == DownloadSource::Modelscope)
-            );
-            assert!(
-                item.sources
-                    .iter()
-                    .any(|s| s.source == DownloadSource::Huggingface)
-            );
-        }
-    }
-    #[test]
-    fn redirects_are_exact_https_provider_hosts_without_credentials() {
-        for bad in [
-            "http://huggingface.co/file",
-            "https://huggingface.co.evil.invalid/file",
-            "https://127.0.0.1/file",
-            "https://user:pass@huggingface.co/file",
-            "https://huggingface.co:444/file",
-            "https://evil.hf.co/file",
-            "https://modelscope.cn/file",
-        ] {
-            assert!(
-                !allowed_url(DownloadSource::Huggingface, &Url::parse(bad).unwrap()),
-                "{bad}"
-            );
-        }
-        assert!(allowed_url(
-            DownloadSource::Huggingface,
-            &Url::parse("https://us.aws.cdn.hf.co/file?signature=opaque").unwrap()
-        ));
-        assert!(!allowed_url(
-            DownloadSource::Modelscope,
-            &Url::parse("https://huggingface.co/file").unwrap()
-        ));
-    }
-    #[test]
     fn old_preferences_default_to_modelscope_and_invalid_source_rejected() {
         let mut value = serde_json::to_value(DesktopPreferences::default()).unwrap();
         value.as_object_mut().unwrap().remove("download_source");
@@ -1166,5 +632,398 @@ mod tests {
         );
         value["download_source"] = json!("arbitrary-url");
         assert!(serde_json::from_value::<DesktopPreferences>(value).is_err());
+    }
+    #[test]
+    fn progress_resets_only_with_new_attempt_and_keeps_identity_immutable() {
+        let entry = catalog().unwrap().entries.remove(0);
+        let task = task_for(&entry);
+        let initial = task.state.lock().unwrap().clone();
+        let mut progress = DownloadProgress::initial(entry.size_bytes);
+        progress.written_bytes = 10;
+        task.progress(progress);
+        progress.written_bytes = 0;
+        task.progress(progress);
+        assert_eq!(task.state.lock().unwrap().downloaded_bytes, 10);
+        progress.attempt = 2;
+        task.progress(progress);
+        let state = task.state.lock().unwrap().clone();
+        assert_eq!(state.downloaded_bytes, 0);
+        assert_eq!(state.attempt, 2);
+        assert_eq!(state.source, initial.source);
+        assert_eq!(state.directory_id, initial.directory_id);
+        assert_eq!(state.file_name, initial.file_name);
+        progress.total_bytes += 1;
+        progress.attempt = 3;
+        task.progress(progress);
+        assert_eq!(task.state.lock().unwrap().attempt, 2);
+    }
+    #[test]
+    fn older_state_defaults_to_first_attempt_and_cleanup_warning_is_truthful() {
+        let task = task_for(&catalog().unwrap().entries.remove(0));
+        let mut value = serde_json::to_value(task.state.lock().unwrap().clone()).unwrap();
+        value.as_object_mut().unwrap().remove("attempt");
+        assert_eq!(
+            serde_json::from_value::<DownloadOperationState>(value)
+                .unwrap()
+                .attempt,
+            1
+        );
+        task.finish(Ok(false));
+        let state = task.state.lock().unwrap();
+        assert_eq!(state.status, DownloadStatus::Completed);
+        assert!(state.result.as_ref().unwrap().saved);
+        assert_eq!(
+            state.result.as_ref().unwrap().cleanup_warning.as_deref(),
+            Some("partial_cleanup_unconfirmed")
+        );
+    }
+    #[derive(Default)]
+    struct FakeState {
+        events: Vec<&'static str>,
+        attempts: Vec<u8>,
+        cancel_verification: bool,
+        late_cancel: bool,
+        cleanup_warning: bool,
+        observed_size: u64,
+    }
+    struct FakeDestination {
+        state: Arc<Mutex<FakeState>>,
+        active: bool,
+    }
+    struct FakePublication {
+        state: Arc<Mutex<FakeState>>,
+        control: DownloadControl,
+    }
+    impl Destination for FakeDestination {
+        type Verified = FakePublication;
+        fn begin_attempt(&mut self) -> Result<StagingPaths> {
+            assert!(!self.active);
+            self.active = true;
+            self.state.lock().unwrap().events.push("begin");
+            Ok(StagingPaths {
+                directory: PathBuf::from("fixture"),
+                file_name: "payload.part".into(),
+            })
+        }
+        fn stopped(&mut self) {
+            assert!(self.active);
+            self.active = false;
+            self.state.lock().unwrap().events.push("stopped");
+        }
+        fn observed_size(&self) -> Result<u64> {
+            Ok(self.state.lock().unwrap().observed_size)
+        }
+        fn reset(&mut self) -> Result<()> {
+            assert!(!self.active);
+            self.state.lock().unwrap().events.push("reset");
+            Ok(())
+        }
+        fn verify(self, _: &DownloadSpec, control: &DownloadControl) -> Result<Self::Verified> {
+            assert!(!self.active);
+            let mut state = self.state.lock().unwrap();
+            state.events.push("verify");
+            if state.cancel_verification {
+                control.cancel();
+                return Err(BridgeError::new("model_download_cancelled"));
+            }
+            drop(state);
+            Ok(FakePublication {
+                state: self.state,
+                control: control.clone(),
+            })
+        }
+        fn cleanup(self) -> bool {
+            assert!(!self.active);
+            self.state.lock().unwrap().events.push("cleanup");
+            true
+        }
+    }
+    impl Publication for FakePublication {
+        fn publish(self) -> Result<bool> {
+            let mut state = self.state.lock().unwrap();
+            state.events.push("publish");
+            if state.late_cancel {
+                self.control.cancel();
+            }
+            Ok(!state.cleanup_warning)
+        }
+    }
+    struct FakeSupervisor {
+        state: Arc<Mutex<FakeState>>,
+        outcomes: Mutex<
+            std::collections::VecDeque<
+                std::result::Result<TransferReport, download_engine::DownloadError>,
+            >,
+        >,
+    }
+    impl Supervisor for FakeSupervisor {
+        async fn transfer(
+            &self,
+            spec: DownloadSpec,
+            _: SidecarConfig,
+            staging: StagingPaths,
+            _: DownloadControl,
+            options: TransferOptions,
+            progress: watch::Sender<DownloadProgress>,
+        ) -> std::result::Result<TransferReport, download_engine::DownloadError> {
+            assert_eq!(staging.file_name, "payload.part");
+            self.state.lock().unwrap().attempts.push(options.attempt);
+            let _ = progress.send(DownloadProgress {
+                phase: download_engine::DownloadPhase::Downloading,
+                written_bytes: 10.min(spec.expected_size),
+                total_bytes: spec.expected_size,
+                attempt: options.attempt,
+            });
+            self.outcomes.lock().unwrap().pop_front().unwrap()
+        }
+    }
+    struct FakeGuard(Arc<Mutex<FakeState>>);
+    impl Drop for FakeGuard {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().events.push("guard_dropped");
+        }
+    }
+    fn fake_fixture(
+        outcomes: Vec<std::result::Result<TransferReport, download_engine::DownloadError>>,
+    ) -> (
+        Arc<DownloadTask>,
+        DownloadSpec,
+        FakeDestination,
+        VerifiedSidecar,
+        FakeSupervisor,
+        Arc<Mutex<FakeState>>,
+    ) {
+        let entry = catalog().unwrap().entries.remove(0);
+        let spec = source_adapter::specification(&entry, &entry.sources[0]).unwrap();
+        let task = task_for(&entry);
+        let state = Arc::new(Mutex::new(FakeState::default()));
+        let target = FakeDestination {
+            state: state.clone(),
+            active: false,
+        };
+        let sidecar = VerifiedSidecar {
+            config: SidecarConfig {
+                executable: PathBuf::from("fixture-never-launched"),
+            },
+            _guard: Box::new(FakeGuard(state.clone())),
+        };
+        let supervisor = FakeSupervisor {
+            state: state.clone(),
+            outcomes: Mutex::new(outcomes.into()),
+        };
+        (task, spec, target, sidecar, supervisor, state)
+    }
+    fn successful_transfer() -> std::result::Result<TransferReport, download_engine::DownloadError>
+    {
+        Ok(TransferReport {
+            exit_code: 0,
+            writer_stopped: true,
+        })
+    }
+    #[tokio::test]
+    async fn only_exit_eight_restarts_once_after_confirmed_stop_and_reset() {
+        use download_engine::DownloadError as E;
+        let range = Err(E::SidecarExit {
+            exit_code: 8,
+            error_code: Some(8),
+        });
+        let (task, spec, target, sidecar, supervisor, state) =
+            fake_fixture(vec![range, successful_transfer()]);
+        let deadline = task.control.deadline();
+        assert!(
+            run_download(task.clone(), spec, target, sidecar, &supervisor)
+                .await
+                .unwrap()
+                .unwrap()
+        );
+        assert_eq!(task.control.deadline(), deadline);
+        {
+            let state = state.lock().unwrap();
+            assert_eq!(state.attempts, [1, 2]);
+            assert_eq!(
+                state.events,
+                [
+                    "begin",
+                    "stopped",
+                    "reset",
+                    "begin",
+                    "stopped",
+                    "verify",
+                    "publish",
+                    "guard_dropped"
+                ]
+            );
+            assert_eq!(task.state.lock().unwrap().attempt, 2);
+        }
+        let (task, spec, target, sidecar, supervisor, state) = fake_fixture(vec![range, range]);
+        assert!(
+            run_download(task, spec, target, sidecar, &supervisor)
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(state.lock().unwrap().attempts, [1, 2]);
+        assert!(!state.lock().unwrap().events.contains(&"verify"));
+        for code in [2, 6, 9, 19, 32] {
+            let (task, spec, target, sidecar, supervisor, state) =
+                fake_fixture(vec![Err(E::SidecarExit {
+                    exit_code: code,
+                    error_code: Some(8),
+                })]);
+            assert!(
+                run_download(task, spec, target, sidecar, &supervisor)
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+            assert_eq!(state.lock().unwrap().attempts, [1]);
+            assert!(!state.lock().unwrap().events.contains(&"reset"));
+        }
+    }
+    #[tokio::test]
+    async fn verification_cancellation_prevents_publish_and_late_cancel_keeps_saved_warning() {
+        let (task, spec, target, sidecar, supervisor, state) =
+            fake_fixture(vec![successful_transfer()]);
+        state.lock().unwrap().cancel_verification = true;
+        let error = run_download(task, spec, target, sidecar, &supervisor)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "model_download_cancelled");
+        assert!(!state.lock().unwrap().events.contains(&"publish"));
+        let (task, spec, target, sidecar, supervisor, state) =
+            fake_fixture(vec![successful_transfer()]);
+        state.lock().unwrap().late_cancel = true;
+        state.lock().unwrap().cleanup_warning = true;
+        let result = run_download(task.clone(), spec, target, sidecar, &supervisor)
+            .await
+            .unwrap();
+        assert!(!result.as_ref().unwrap());
+        assert!(!task.control.is_cancelled());
+        task.finish(result);
+        let state = task.state.lock().unwrap();
+        assert_eq!(state.status, DownloadStatus::Completed);
+        assert!(state.result.as_ref().unwrap().saved);
+        assert!(state.result.as_ref().unwrap().cleanup_warning.is_some());
+    }
+    #[tokio::test]
+    async fn unconfirmed_writer_keeps_every_guard_and_never_claims_terminal() {
+        let (task, spec, target, sidecar, supervisor, state) = fake_fixture(vec![Err(
+            download_engine::DownloadError::CleanupUnconfirmed,
+        )]);
+        assert!(
+            run_download(task.clone(), spec, target, sidecar, &supervisor)
+                .await
+                .is_none()
+        );
+        assert_eq!(state.lock().unwrap().events, ["begin"]);
+        assert!(!task.state.lock().unwrap().terminal);
+        assert!(task.retained.lock().unwrap().is_some());
+        // Only this synthetic test has no OS writer; release its fake resources
+        // explicitly rather than leaking any production handles during tests.
+        drop(task.retained.lock().unwrap().take());
+        assert_eq!(state.lock().unwrap().events, ["begin", "guard_dropped"]);
+    }
+    #[test]
+    fn native_verifier_is_required_and_never_falls_back_to_path() {
+        let root = tempfile::tempdir().unwrap();
+        let bridge = DesktopBridge::new(
+            root.path().join("private"),
+            root.path().join(if cfg!(windows) {
+                "ai-runtime.exe"
+            } else {
+                "ai-runtime"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            bridge.verified_download_sidecar().err().unwrap().code,
+            "model_download_engine_unavailable"
+        );
+        let bad = root.path().join("aria2c.exe");
+        let bridge = bridge.with_download_sidecar_verifier(move || Ok((bad.clone(), ())));
+        assert_eq!(
+            bridge.verified_download_sidecar().err().unwrap().code,
+            "model_download_engine_unavailable"
+        );
+    }
+    struct WaitingSupervisor {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+    impl Supervisor for WaitingSupervisor {
+        async fn transfer(
+            &self,
+            _: DownloadSpec,
+            _: SidecarConfig,
+            _: StagingPaths,
+            control: DownloadControl,
+            _: TransferOptions,
+            _: watch::Sender<DownloadProgress>,
+        ) -> std::result::Result<TransferReport, download_engine::DownloadError> {
+            self.entered.notify_one();
+            while !control.is_cancelled() && !control.is_expired() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            // Simulates an OS writer still exiting after the stop request.
+            self.release.notified().await;
+            Err(download_engine::DownloadError::Cancelled)
+        }
+    }
+    #[tokio::test]
+    async fn size_watchdog_waits_for_writer_and_preserves_prior_cancel_or_deadline() {
+        let (task, spec, target, sidecar, _, state) = fake_fixture(vec![]);
+        state.lock().unwrap().observed_size = spec.expected_size + 1;
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let supervisor = WaitingSupervisor {
+            entered: entered.clone(),
+            release: release.clone(),
+        };
+        let run_task = task.clone();
+        let run = tokio::spawn(async move {
+            run_download(run_task, spec, target, sidecar, &supervisor).await
+        });
+        entered.notified().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !task.control.is_cancelled() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!run.is_finished());
+        assert_eq!(state.lock().unwrap().events, ["begin"]);
+        release.notify_one();
+        let error = run.await.unwrap().unwrap().unwrap_err();
+        assert_eq!(error.code, "model_download_size_mismatch");
+        assert_eq!(
+            state.lock().unwrap().events,
+            ["begin", "stopped", "cleanup", "guard_dropped"]
+        );
+        for expired in [false, true] {
+            let (mut task, spec, target, sidecar, supervisor, state) = fake_fixture(vec![]);
+            state.lock().unwrap().observed_size = spec.expected_size + 1;
+            if expired {
+                Arc::get_mut(&mut task).unwrap().control = DownloadControl::with_deadline(
+                    std::time::Instant::now() - Duration::from_secs(1),
+                );
+            } else {
+                task.cancel();
+            }
+            let error = run_download(task, spec, target, sidecar, &supervisor)
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                if expired {
+                    "model_download_timeout"
+                } else {
+                    "model_download_cancelled"
+                }
+            );
+            assert!(state.lock().unwrap().attempts.is_empty());
+        }
     }
 }

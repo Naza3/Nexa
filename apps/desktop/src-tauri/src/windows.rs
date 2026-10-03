@@ -516,9 +516,14 @@ pub fn run() {
         return;
     };
     let validation_root = layout.package_root.clone();
+    let download_root = layout.package_root.clone();
+    let download_commit = layout.project_commit.clone();
     let bridge = match DesktopBridge::new(data_dir.clone(), layout.runtime_executable) {
         Ok(bridge) => Arc::new(
             bridge
+                .with_download_sidecar_verifier(move || {
+                    crate::download_component::verify(&download_root, &download_commit)
+                })
                 .with_default_model_directory(layout.package_root.join("models"))
                 .with_directory_validator(move |path| {
                     desktop_bridge::validate_model_directory_path(path)?;

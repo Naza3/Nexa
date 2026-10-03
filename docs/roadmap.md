@@ -65,6 +65,12 @@ managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限�
 
 本轮[验证记录](verification/2026-10-03-model-catalog-download.md)独立于43ad5c2混合目录和4d30bfa T0测试CI。33f0e17新包已通过CI和独立复核，并于13:42:49 UTC原字节发送获接受；用户下载/运行未确认，W01与完整W02仍未收口，旧43ad5c2不追溯获得自动发现/下载能力。
 
+### W02 当前增量：受控aria2下载引擎
+
+用户要求复用通用开源下载能力，已采纳[ADR0018](decisions/0018-generic-download-engine-candidate.md)的aria2 1.37.0 sidecar。工作树已实现来源适配、进程监督、任务内恢复、exit8一次全量重启、数值进度及父端完整性/发布；不再自建HTTP/Range。源构建、三份本地补丁与产品组件身份/对应源码材料独立固定。
+
+本片门槛为最终回归/独立审查、Windows真实sidecar/进程与文件保护、MS/HF实际下载和完整包闭环；新证据未完成前不把原拒绝错误称为已修，也不宣称已交付新引擎。跨App重启恢复/代理留后续，清洁机、离线、长期稳定性维持W05，不追加为本片完成条件。SChannel平台证书联网边界、崩溃残留规则与当前分层结果见[aria2记录](verification/2026-10-03-aria2-download-engine.md)。Harness新实施保持暂停。
+
 ## 5. W04 兼容门槛
 
 准确目标是官方deepseek-ai/deepseek-harness（dsh），研究基线rc2 `639ed015`。优先走其pi-ai自定义openai-completions provider，复用Nexa现有`/v1/chat/completions`；默认deepseek-official讲Messages，只改base URL不兼容，不在首期增加第二协议网关。

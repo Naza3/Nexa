@@ -78,6 +78,77 @@ describe("download ownership and directory discovery", () => {
       expect(controller.getSnapshot().error?.code).toBe("invalid_download_operation");
     }
   });
+  it.each([2, 3])("accepts reset bytes on a later attempt, including missed polls: %i", async (attempt) => {
+    const { api, controller } = await create({ downloadNext: vi.fn().mockResolvedValueOnce(progress()).mockResolvedValueOnce(progress({ attempt, downloaded_bytes: 0 })) });
+    await controller.startDownload(entry.catalog_id); await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().download?.attempt).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(controller.getSnapshot().download_phase).toBe("running");
+    expect(controller.getSnapshot().download).toMatchObject({ attempt, downloaded_bytes: 0 });
+    expect(api.downloadStart).toHaveBeenCalledTimes(1);
+    expect(api.downloadCancel).not.toHaveBeenCalled();
+  });
+  it.each([0, -1, 4, 1.5, NaN, Infinity, "2", null, {}, true])("rejects malformed or out-of-budget attempts: %j", async (attempt) => {
+    const { api, controller } = await create({ downloadNext: vi.fn(async () => progress({ attempt: attempt as number })) });
+    await controller.startDownload(entry.catalog_id); await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().download_phase).toBe("recovery");
+    expect(controller.getSnapshot().download).toBeNull();
+    expect(controller.getSnapshot().error?.code).toBe("invalid_download_operation");
+    expect(api.downloadCancel).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    { attempt: 1, downloaded_bytes: 256 },
+    { attempt: undefined, downloaded_bytes: 256 },
+    { attempt: 2, downloaded_bytes: 0 },
+    { attempt: 3, downloaded_bytes: 0, source: "huggingface" },
+    { attempt: 3, downloaded_bytes: 0, directory_id: "other" },
+    { attempt: 3, downloaded_bytes: 0, operation_id: "other" },
+    { attempt: 3, downloaded_bytes: 0, catalog_id: "other" },
+    { attempt: 3, downloaded_bytes: 0, file_name: "other.gguf" },
+    { attempt: 3, downloaded_bytes: 0, target_display_path: "other" },
+    { attempt: 3, downloaded_bytes: 0, total_bytes: 2048 },
+    { attempt: 3, downloaded_bytes: 0, total_bytes: null },
+  ])("preserves attempt monotonicity and identity binding during retries: %j", async (patch) => {
+    const { controller } = await create({ downloadNext: vi.fn().mockResolvedValueOnce(progress({ attempt: 2 })).mockResolvedValueOnce(progress(patch as Partial<DownloadOperation>)) });
+    await controller.startDownload(entry.catalog_id); await vi.advanceTimersByTimeAsync(1001);
+    expect(controller.getSnapshot().download_phase).toBe("recovery");
+    expect(controller.getSnapshot().download).toMatchObject({ attempt: 2, downloaded_bytes: 128 });
+    expect(controller.getSnapshot().error?.code).toBe("invalid_download_operation");
+  });
+  it("keeps retry exhaustion terminal without automatically starting a new operation", async () => {
+    const failure = { code: "model_download_network_failed", message: "下载尝试已结束。" };
+    const { api, controller } = await create({ downloadNext: vi.fn().mockResolvedValueOnce(progress()).mockResolvedValueOnce(progress({ attempt: 3, downloaded_bytes: 0, status: "failed", phase: "finished", terminal: true, error: failure })) });
+    await controller.startDownload(entry.catalog_id); await vi.advanceTimersByTimeAsync(5001);
+    expect(controller.getSnapshot().download_phase).toBe("idle");
+    expect(controller.getSnapshot().download).toMatchObject({ attempt: 3, status: "failed", downloaded_bytes: 0 });
+    expect(controller.getSnapshot().error).toEqual(failure);
+    expect(api.downloadStart).toHaveBeenCalledTimes(1);
+    expect(api.downloadNext).toHaveBeenCalledTimes(2);
+    expect(api.scanModels).not.toHaveBeenCalled();
+  });
+  it("cancels the same operation after a retry and waits for authoritative terminal status", async () => {
+    const { api, controller } = await create({ downloadNext: vi.fn().mockResolvedValueOnce(progress()).mockResolvedValueOnce(progress({ attempt: 2, downloaded_bytes: 0 })).mockResolvedValueOnce(progress({ attempt: 2, downloaded_bytes: 0, status: "cancelled", phase: "finished", terminal: true })) });
+    await controller.startDownload(entry.catalog_id); await vi.advanceTimersByTimeAsync(1001);
+    await controller.cancelDownload();
+    expect(controller.getSnapshot().download_phase).toBe("stopping");
+    expect(api.downloadCancel).toHaveBeenCalledWith("download-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(controller.getSnapshot().download_phase).toBe("idle");
+    expect(controller.getSnapshot().download?.status).toBe("cancelled");
+    expect(api.downloadStart).toHaveBeenCalledTimes(1);
+  });
+  it("retains verification and saved-but-unregistered semantics after a retry", async () => {
+    const { api, controller } = await create({ downloadNext: vi.fn().mockResolvedValueOnce(progress()).mockResolvedValueOnce(progress({ attempt: 2, downloaded_bytes: 1024, phase: "verifying" })).mockResolvedValueOnce(progress({ attempt: 2, downloaded_bytes: 1024, status: "completed", phase: "finished", terminal: true, result: { saved: true, registered: false, file_name: "test.gguf", cleanup_warning: null } })) });
+    await controller.startDownload(entry.catalog_id); await vi.advanceTimersByTimeAsync(1001);
+    expect(controller.getSnapshot().download_phase).toBe("running");
+    expect(controller.getSnapshot().download?.phase).toBe("verifying");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(controller.getSnapshot().download_phase).toBe("idle");
+    expect(controller.getSnapshot().notice).toMatch(/尚未登记/);
+    expect(api.downloadStart).toHaveBeenCalledTimes(1);
+    expect(api.scanModels).not.toHaveBeenCalled();
+    expect(api.loadModel).not.toHaveBeenCalled();
+  });
   it("finishes a discovered directory through existing library polling without auto starting", async () => {
     const value = stopped(); value.model_directory = { configured: null, effective: null, state: "default" };
     const { api, controller } = await create({ snapshot: vi.fn(async () => value), discoverDirectory: vi.fn(async () => ({ operation_id: "library-1" })) });

@@ -1,6 +1,6 @@
 # 开发与平台构建锁
 
-日期：2026-10-03。本文保留Windows/开发Linux的实际构建锁与历史证据；Linux是开发/验证环境，不是当前发布平台。最新Windows交付为389eeef，真实CI与包复核已过，新包原生UI及后期条件待验；详见当前状态。Android构建锁已归历史快照，不驱动本轮开发。
+日期：2026-10-03。本文保留Windows/开发Linux的实际构建锁与历史证据；Linux是开发/验证环境，不是当前发布平台。已发送产品与当前实现以[当前状态](../PROJECT_STATE.md)为准；aria2下载器有独立来源锁与待验分支，不升级下述llama/推理工具链。Android构建锁已归历史快照，不驱动本轮开发。
 
 ## 固定输入
 
@@ -17,6 +17,20 @@
 | Windows 编译器/SDK | MSVC 19.44.35229.0 / SDK 10.0.26100.0；Windows Server 2022 10.0.20348；原生Release、CTest与Rust静态链接已在d3d7cf2的CI通过 |
 
 没有升级跟随 master 的构建脚本。CMake 检查 submodule HEAD，不匹配直接失败。原生模型默认日志被抑制，以避免上游输出完整用户路径；开发基线用合成输入，原始上游日志只留在忽略目录。
+
+## aria2下载组件锁（工作树集成，最终Windows待验）
+
+受控sidecar使用[`third_party/aria2/source-lock.json`](../third_party/aria2/source-lock.json)，不使用系统aria2或用户提供的可执行文件。官方1.37.0源码归档SHA256为`60a420ad7085eb616cb6e2bdf0a7206d68ff3d37fb5a956dc44242eb2f79b66b`；llvm-mingw 20240619/UCRT/LLVM18.1.8工具包SHA256为`27d33157cc252c29ad6f777a96a0d94176fea1b534ff09b5071485def143b90e`。此工具链只用于下载组件，不替换runtime的MSVC链。
+
+| 本地补丁 | SHA256 | 作用 |
+| --- | --- | --- |
+| network policy | `797bd6205909e0a762ac3973aa2b5b7df1ebbc50eb703123cd9eda0692bda966` | 初始/redirect与实际下载socket HTTPS/443/公网约束 |
+| payload limit | `c027a39e84cf8e669c6256643e7498f3fe22aed083feebb36d40d73db9b95800` | 可信size控制写入/截断/分配前单payload硬限 |
+| IOFile NUL | `c052132bc5e94cc2187544d89c954fd73a6ad94f19c6cf70684cc66f26f7fb86` | 本地修复`strlen==0`后`len-1`下溢，非官方release已修声明 |
+
+构建使用系统SChannel/UCRT，静态链接锁定LLVM/MinGW支持库；不随包引入OpenSSL/CA bundle，保留OS证书链与吊销语义。完整对应源码归档、原始上游/补丁/锁/脚本与版权许可随组件，实际来源/PE/字节身份绑定同一产品提交；测试EXE与fixture/log不入产品。
+
+辅助分支`codex/nexa-aria2-build`的`01db921354be64b67b38f1afdaa23e09dc79c4bd`、tree`a8724e0ce3f07353de6cbd25f57c84683e89e792`在[CI37138664930](https://github.com/Naza3/Nexa/actions/runs/37138664930)已通过Linux构建/fixture；Windows job无runner、steps为空而失败，已于17:05请求重跑，尚无该版Windows结果。Linux交叉构建出AMD64 PE不等于Windows实际运行；旧18bb仅有68/26/4测试通过后被错误WinTLS banner断言终止，后续未执行不追认为通过。原版Windows4 fixture、旧下载器CI与本三补丁构建均分开记录，见[aria2验证页](verification/2026-10-03-aria2-download-engine.md)。
 
 ## 已实现的原生入口
 

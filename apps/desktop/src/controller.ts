@@ -76,6 +76,7 @@ function validDownloadOperation(value: DownloadOperation): boolean {
   if (!value || typeof value !== "object" || byteLength(JSON.stringify(value)) > 64 * 1024 ||
       !text(value.operation_id, 128) || !text(value.catalog_id, 256) || !text(value.directory_id, 128) ||
       !text(value.file_name, 1024) || /[/\\]/.test(value.file_name) || !text(value.target_display_path, 32768) ||
+      (value.attempt !== undefined && (!Number.isSafeInteger(value.attempt) || value.attempt < 1 || value.attempt > 3)) ||
       !bytes(value.downloaded_bytes) || (value.total_bytes !== null && (!bytes(value.total_bytes) || value.total_bytes === 0)) ||
       typeof value.terminal !== "boolean" ||
       (value.error !== null && (!value.error || typeof value.error !== "object" ||
@@ -691,13 +692,15 @@ export class DesktopController {
             (value.status !== "completed" && value.result !== null) ||
             (value.status === "failed" && !value.error))
           throw new DesktopError("invalid_download_operation", "下载状态数据无效，尚未确认下载结束。请重新确认，勿重复下载。");
+        const attempt = value.attempt ?? 1;
         const previous = this.state.download;
         if (previous && (previous.source !== value.source || previous.directory_id !== value.directory_id ||
             previous.file_name !== value.file_name || previous.target_display_path !== value.target_display_path ||
             (previous.total_bytes !== null && previous.total_bytes !== value.total_bytes) ||
-            value.downloaded_bytes < previous.downloaded_bytes))
+            attempt < (previous.attempt ?? 1) ||
+            (attempt === (previous.attempt ?? 1) && value.downloaded_bytes < previous.downloaded_bytes)))
           throw new DesktopError("invalid_download_operation", "下载身份或进度发生异常，尚未确认下载结束。");
-        this.update({ download: value });
+        this.update({ download: { ...value, attempt } });
         if (!terminal) continue;
         this.downloadTask = null;
         this.update({ download_phase: "idle" });

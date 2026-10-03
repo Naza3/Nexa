@@ -7,6 +7,9 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "model_download_engine_unavailable" => {
+                "已验证的下载组件尚未就绪。请使用包含受控下载组件的完整安装包，或手动下载后扫描模型目录。"
+            }
             "model_download_active" => {
                 "A download is active. Cancel it or wait before changing models, directories or settings."
             }
@@ -167,3 +170,75 @@ impl From<runtime_cli::client::ClientError> for BridgeError {
     }
 }
 pub type Result<T> = std::result::Result<T, BridgeError>;
+
+/// Only typed sidecar outcomes cross this boundary; never echo console output,
+/// URLs, response bodies, signed queries, executable paths or OS error strings.
+pub(crate) fn download_error(error: download_engine::DownloadError) -> BridgeError {
+    use download_engine::DownloadError as E;
+    match error {
+        E::InvalidSpec => BridgeError::new("model_catalog_invalid"),
+        E::InvalidOptions | E::UnsupportedPlatform | E::SpawnFailed => {
+            BridgeError::new("model_download_engine_unavailable")
+        }
+        E::Cancelled => BridgeError::new("model_download_cancelled"),
+        E::Timeout => BridgeError::new("model_download_timeout"),
+        E::CleanupUnconfirmed => BridgeError::new("model_download_cleanup_unconfirmed"),
+        E::PipeFailed => BridgeError {
+            code: "model_download_network_failed".into(),
+            message: "下载进程输出读取失败。未切换下载源，未发布模型文件。".into(),
+        },
+        E::SidecarExit { exit_code, .. } => {
+            let (code, reason) = match exit_code {
+                2 => ("model_download_timeout", "下载源等待超时"),
+                3 | 4 => ("model_download_http_failed", "下载源未找到指定文件"),
+                6 => ("model_download_network_failed", "下载源网络连接或传输失败"),
+                8 => (
+                    "model_download_http_failed",
+                    "下载源不支持本次续传，有限全量恢复后仍未完成",
+                ),
+                9 => ("model_download_write_failed", "模型目录可用空间不足"),
+                13 => ("already_exists", "下载目标已存在，未覆盖"),
+                14..=18 => ("model_download_write_failed", "本任务临时文件操作失败"),
+                19 => ("model_download_network_failed", "下载源域名解析失败"),
+                22 => ("model_download_http_failed", "下载源 HTTP 响应不符合要求"),
+                23 => (
+                    "model_download_redirect_rejected",
+                    "下载源重定向次数超过限制",
+                ),
+                24 => (
+                    "model_download_http_failed",
+                    "下载源要求认证，本下载器不使用账户凭据",
+                ),
+                29 => ("model_download_http_failed", "下载源服务暂不可用"),
+                32 => (
+                    "model_download_identity_mismatch",
+                    "下载字节不符合固定 SHA256",
+                ),
+                _ => ("model_download_network_failed", "下载进程未成功完成"),
+            };
+            BridgeError {
+                code: code.into(),
+                message: format!(
+                    "{reason}（下载进程退出码 {exit_code}）。未切换下载源，未发布模型文件。"
+                ),
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod download_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn sidecar_diagnostics_use_only_known_numeric_facts() {
+        for exit_code in [1, 2, 3, 6, 8, 9, 13, 17, 19, 22, 23, 24, 29, 32, u32::MAX] {
+            let error = download_error(download_engine::DownloadError::SidecarExit {
+                exit_code,
+                error_code: Some(999),
+            });
+            assert!(error.message.contains(&format!("退出码 {exit_code}")));
+            assert!(!error.message.contains("999"));
+            assert!(!error.message.contains("https://"));
+            assert!(error.message.len() < 400);
+        }
+    }
+}

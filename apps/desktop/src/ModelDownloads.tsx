@@ -39,6 +39,7 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
       {task && <>
         <p>{task.file_name} · {sourceName(task.source)}</p>
         <p className="directory-path">保存到：{displayDirectory(task.target_display_path)}</p>
+        <p>第{task.attempt ?? 1}次传输尝试</p>
         <p>已接收 {size(task.downloaded_bytes)}{task.total_bytes !== null ? ` / ${size(task.total_bytes)}` : " · 总大小未知"}</p>
         {task.total_bytes !== null && task.total_bytes > 0 && <progress aria-label="模型文件已接收字节" max={task.total_bytes} value={task.downloaded_bytes} />}
         {task.phase === "verifying" && <p>网络接收已结束，正在核验真实文件；尚未保存完成。</p>}

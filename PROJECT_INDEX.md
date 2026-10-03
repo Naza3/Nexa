@@ -13,7 +13,7 @@
 | [开放模型ADR0015](docs/decisions/0015-open-model-loading-and-validation-evidence.md) | 用户16GB/广泛模型目标，loadable与历史validated分离，50c9d41固定模型WindowsCI及发送完成，用户目标机待验 |
 | [混合目录ADR0016](docs/decisions/0016-mixed-model-directory-diagnostics.md) | 合法集合一次partial提交、完整有限诊断、全坏保旧及短context扫描；43ad5c2 WindowsCI/包复核及发送完成，用户目标机待验 |
 | [发现/双源下载ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md) | 默认EXE/models发现、MS/HF固定目录、保存与扫描分离；33f0e17已发送，通用引擎另评估 |
-| [通用下载候选ADR0018](docs/decisions/0018-generic-download-engine-candidate.md) | aria2隔离PoC与Linux策略原型、下载socket/SChannel平台边界、安全发布与分发门槛；未集成，自建reqwest草稿暂停 |
+| [aria2下载引擎ADR0018](docs/decisions/0018-generic-download-engine-candidate.md) | 已采纳受控aria2；工作树监督/发布/组件集成与下载socket/SChannel边界，最终Windows及新包待验 |
 | [工具契约草案](docs/windows-tools-contract.md) | 生产tools尚未实现；T0已有无模型parser观察并定位严格完整性/schema/普通文本缺口 |
 | [构建锁](docs/build-lock.md) / [模型矩阵](docs/model-matrix.md) | 固定工具链/llama与精确模型验证证据，非运行许可名单 |
 | [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |
@@ -34,6 +34,7 @@
 | `apps/desktop/src-tauri/` | 独立Rust workspace/锁、ACL、原生Windows壳 |
 | [xtask](xtask/README.md)、`tests/fixtures/`、`scripts/` | 实际可执行验证、真实输入与打包脚本 |
 | `crates/desktop-bridge/src/model-catalog.json`、`download.rs`、`crates/model-store/src/library_download.rs` | 进行中的固定双源元信息、显式有界传输及受保护文件事务；不授予模型能力 |
+| `crates/download-engine/`、`third_party/aria2/`、`scripts/build_aria2_windows.*` | 工作树受控sidecar监督、三补丁来源锁/构建与组件身份，HTTP/Range由aria2负责；最终Windows待验 |
 | `native/llama-shim/tests/tool_parser_test.cpp` | T0合成上游模板/parser诊断，13case/无权重，不是生产工具接受算法 |
 | `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
@@ -66,6 +67,7 @@
 | W04可执行窄文本验证 | [官方pi-ai验证与精确客户端锁](examples/harness/README.md)，尚非DSH/真模型/Windows通过 |
 | W02开放模型 | [开放候选与验证分离](docs/verification/2026-10-03-windows-open-models.md)，50c9d41固定GGUF的WindowsCI及包发送通过，其他模型/用户目标机待验 |
 | W02发现/双源下载 | [本轮验证](docs/verification/2026-10-03-model-catalog-download.md)，33f0e17 Windows363/0/7、MS固定0.6B实际下载与包复核/发送完成；用户4B下载故障另记，目标机完整验收未完成 |
+| W02 aria2下载引擎 | [分层验证记录](docs/verification/2026-10-03-aria2-download-engine.md)，区分原版/策略原型/源码构建/工作树/产品结果，未宣称新引擎已交付 |
 | W02下载故障诊断 | [MS重定向记录](docs/verification/2026-10-03-modelscope-redirect.md)；用户手动下载/扫描可用，具体被拒目标未知；最新CI状态见当前状态 |
 | W02混合目录 | [事务与诊断验证](docs/verification/2026-10-03-mixed-model-directory.md)，本机完整workspace343 pass/7 ignored、完整clippy/UI85项及独立审查通过，8crate266项不另加总；43ad5c2 Windows344/0/7与包复核/发送完成，目标机待验，不继承旧包手验 |
 

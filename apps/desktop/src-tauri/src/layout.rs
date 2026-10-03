@@ -166,6 +166,44 @@ fn owned_download_partial(root: &Path, relative: &str) -> Result<bool, &'static 
         <= 16 * 1024 * 1024 * 1024)
 }
 
+fn owned_sidecar_task(root: &Path, relative: &str) -> Result<bool, &'static str> {
+    let parts: Vec<_> = relative.split('/').collect();
+    if !(parts.len() == 1
+        || (parts.len() == 2
+            && (parts[0].eq_ignore_ascii_case("model") || parts[0].eq_ignore_ascii_case("models"))))
+    {
+        return Ok(false);
+    }
+    let Some(id) = parts.last().unwrap().strip_prefix(".nexa-download-") else {
+        return Ok(false);
+    };
+    if !uuid::Uuid::parse_str(id).is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == id) {
+        return Ok(false);
+    }
+    // Inert crash leftovers are never resumed, adopted, executed or deleted.
+    // inventory() already rejects indirect directories, including ancestors.
+    let mut count = 0;
+    for entry in fs::read_dir(root.join(relative)).map_err(|_| "package_directory_unavailable")? {
+        let entry = entry.map_err(|_| "package_directory_unavailable")?;
+        let max = match entry.file_name().to_str() {
+            Some("payload.part") => 16 * 1024 * 1024 * 1024u64,
+            Some("payload.part.aria2" | "payload.part.aria2__temp") => 1024 * 1024,
+            _ => return Err("package_unlisted_file"),
+        };
+        let file = regular_file(&entry.path())?;
+        count += 1;
+        if count > 3
+            || fs::metadata(file)
+                .map_err(|_| "package_file_unavailable")?
+                .len()
+                > max
+        {
+            return Err("package_unlisted_file");
+        }
+    }
+    Ok(true)
+}
+
 fn external_root_model(root: &Path, relative: &str) -> Result<bool, &'static str> {
     // Only undeclared direct children of root, model/ or models/ are candidates.
     // This is not model validation or import, and never hashes the model body.
@@ -246,8 +284,25 @@ fn verify(
     inventory(root, root, &mut actual, &mut directories)?;
     actual.remove("SHA256SUMS");
     let declared_names = declared.keys().cloned().collect::<BTreeSet<_>>();
-    let mut partial_count = 0;
+    let mut task_directories = BTreeSet::new();
+    if allow_external_root_models {
+        for directory in &directories {
+            if owned_sidecar_task(root, directory)? {
+                task_directories.insert(directory.clone());
+                if task_directories.len() > 64 {
+                    return Err("package_unlisted_file");
+                }
+            }
+        }
+    }
+    let mut partial_count = task_directories.len();
     for name in actual.difference(&declared_names) {
+        if name
+            .rsplit_once('/')
+            .is_some_and(|(parent, _)| task_directories.contains(parent))
+        {
+            continue;
+        }
         if allow_external_root_models && owned_download_partial(root, name)? {
             partial_count += 1;
             if partial_count > 64 {
@@ -278,6 +333,9 @@ fn verify(
         }
     }
     for directory in directories.difference(&declared_directories) {
+        if task_directories.contains(directory) {
+            continue;
+        }
         if !(allow_external_root_models
             && (directory.eq_ignore_ascii_case("model")
                 || directory.eq_ignore_ascii_case("models")))
@@ -305,6 +363,13 @@ pub fn validate(executable: &Path) -> Result<ProductLayout, &'static str> {
     {
         return Err("runtime_source_identity_mismatch");
     }
+    let download = verify(&root.join("download"), "nexa-download", false)?;
+    if download.project_commit != desktop.project_commit
+        || download.project_dirty != desktop.project_dirty
+    {
+        return Err("runtime_source_identity_mismatch");
+    }
+    regular_file(&root.join("download/nexa-aria2.exe"))?;
     let runtime_executable = regular_file(&runtime_root.join("ai-runtime.exe"))?;
     regular_file(&runtime_root.join("ai-runtime-worker.exe"))?;
     Ok(ProductLayout {
@@ -340,6 +405,9 @@ pub(crate) mod tests {
             fs::write(root.join("runtime").join(name), name).unwrap();
         }
         fixture(&root.join("runtime"), "nexa-runtime");
+        fs::create_dir(root.join("download")).unwrap();
+        fs::write(root.join("download/nexa-aria2.exe"), "synthetic component").unwrap();
+        fixture(&root.join("download"), "nexa-download");
         fs::write(root.join("nexa-desktop.exe"), "desktop").unwrap();
         fixture(root, "nexa-desktop");
     }
@@ -523,6 +591,141 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn bounded_sidecar_crash_leftovers_are_inert_and_do_not_block_restart() {
+        for folder in ["", "model", "models"] {
+            let temp = tempfile::tempdir().unwrap();
+            complete_fixture(temp.path());
+            let task = temp
+                .path()
+                .join(folder)
+                .join(format!(".nexa-download-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&task).unwrap();
+            let executable = temp.path().join("nexa-desktop.exe");
+            assert!(validate(&executable).is_ok());
+            for name in [
+                "payload.part",
+                "payload.part.aria2",
+                "payload.part.aria2__temp",
+            ] {
+                fs::write(task.join(name), b"inert incomplete bytes").unwrap();
+            }
+            assert!(validate(&executable).is_ok());
+            for unknown in ["unknown.dll", "other.part", "payload.part.exe"] {
+                fs::write(task.join(unknown), b"untrusted").unwrap();
+                assert!(matches!(
+                    validate(&executable),
+                    Err("package_unlisted_file")
+                ));
+                fs::remove_file(task.join(unknown)).unwrap();
+            }
+            fs::create_dir(task.join("nested")).unwrap();
+            assert!(validate(&executable).is_err());
+            fs::remove_dir(task.join("nested")).unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .open(task.join("payload.part.aria2"))
+                .unwrap()
+                .set_len(1024 * 1024 + 1)
+                .unwrap();
+            assert!(validate(&executable).is_err());
+            fs::remove_file(task.join("payload.part.aria2")).unwrap();
+            fs::write(temp.path().join("runtime/ai-runtime.exe"), b"tampered").unwrap();
+            assert!(matches!(
+                validate(&executable),
+                Err("package_file_hash_mismatch")
+            ));
+        }
+    }
+    #[test]
+    fn sidecar_leftover_names_and_count_remain_bounded() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        let executable = temp.path().join("nexa-desktop.exe");
+        for name in [
+            ".nexa-download-invalid",
+            ".nexa-download-AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+            ".nexa-download-aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
+            ".nexa-download-00000000-0000-0000-0000-000000000000",
+        ] {
+            fs::create_dir(temp.path().join(name)).unwrap();
+            assert!(validate(&executable).is_err());
+            fs::remove_dir(temp.path().join(name)).unwrap();
+        }
+        for _ in 0..64 {
+            fs::create_dir(
+                temp.path()
+                    .join(format!(".nexa-download-{}", uuid::Uuid::new_v4())),
+            )
+            .unwrap();
+        }
+        assert!(validate(&executable).is_ok());
+        fs::create_dir(
+            temp.path()
+                .join(format!(".nexa-download-{}", uuid::Uuid::new_v4())),
+        )
+        .unwrap();
+        assert!(validate(&executable).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_leftover_symlinks_are_never_followed() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        let task = temp
+            .path()
+            .join(format!(".nexa-download-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&task).unwrap();
+        std::os::unix::fs::symlink(
+            temp.path().join("nexa-desktop.exe"),
+            task.join("payload.part"),
+        )
+        .unwrap();
+        assert!(matches!(
+            validate(&temp.path().join("nexa-desktop.exe")),
+            Err("package_indirect_path")
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_payload_size_budget_is_enforced_without_reading_body() {
+        let temp = tempfile::tempdir().unwrap();
+        complete_fixture(temp.path());
+        let task = temp
+            .path()
+            .join(format!(".nexa-download-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&task).unwrap();
+        let file = fs::File::create(task.join("payload.part")).unwrap();
+        // Unix sparse extension tests the metadata bound without writing 16GiB.
+        file.set_len(16 * 1024 * 1024 * 1024).unwrap();
+        assert!(validate(&temp.path().join("nexa-desktop.exe")).is_ok());
+        file.set_len(16 * 1024 * 1024 * 1024 + 1).unwrap();
+        assert!(validate(&temp.path().join("nexa-desktop.exe")).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn sidecar_leftover_junction_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("package");
+        fs::create_dir(&root).unwrap();
+        complete_fixture(&root);
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let task = root.join(format!(".nexa-download-{}", uuid::Uuid::new_v4()));
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&task)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "junction fixture creation failed");
+        assert!(matches!(
+            validate(&root.join("nexa-desktop.exe")),
+            Err("package_indirect_path")
+        ));
+        fs::remove_dir(task).unwrap();
+        assert!(outside.is_dir());
+    }
     #[test]
     fn unknown_empty_directory_is_not_a_model_directory() {
         let temp = tempfile::tempdir().unwrap();

@@ -1,12 +1,12 @@
 # ADR0017：默认模型目录发现与固定双源下载目录
 
-日期：2026-10-03。状态：进行中。用户2026-10-03 10:47 UTC确认优先完成模型加载；本片恢复目录发现、下载后扫描/加载流程。源码已冻结，本机完整聚合及后端/UI/CI与许可门禁增量审查通过；精确提交Windows真实下载与最终产品验证待完成。基线为4d30bfa，已发送产品仍43ad5c2。本文规定本轮契约，不追溯修改已交付包或T0实验结论。
+日期：2026-10-03。原始目录发现/双源下载切片已由33f0e17 WindowsCI、包复核及发送验证，用户目标机完整验收未完成；当时基线4d30bfa与历史步骤保留在[原验证记录](../verification/2026-10-03-model-catalog-download.md)。随后用户要求通用下载引擎，已采纳[ADR0018](0018-generic-download-engine-candidate.md)的受控aria2 sidecar；该替代实现已落入工作树，最终Windows/真实源/新包仍待验。本文目录、来源、设置与保存后显式登记契约保持；下文标明的原传输实现不追溯赋能旧包。
 
 ## 背景与范围
 
 用户反馈把模型放入models文件夹后没有自动识别，并要求在设置中选择下载源、默认ModelScope（魔搭），从Hugging Face/ModelScope候选列表直接下载到已选模型目录。原目录扫描、零复制、partial诊断和开放loadable规则继续复用；本片不新增模型运行许可名单或工具能力。
 
-本片涉及桌面/bridge的目录发现、固定候选目录、显式下载任务和设置；model-store提供受保护的目标文件事务，网络请求留在bridge。公共runtime HTTP、worker/native协议及API凭据不参与下载，不升级引擎。
+本片涉及桌面/bridge的目录发现、固定候选目录、显式下载任务和设置；model-store提供受保护的目标文件事务；原版网络请求在bridge，ADR0018工作树改由bridge源适配器调用download-engine监督的aria2。公共runtime HTTP、worker/native协议及API凭据不参与下载，不升级引擎。
 
 ## 1. 本地发现优先级
 
@@ -34,9 +34,11 @@
 
 第一片要求服务已停止；若运行中即明确拒绝，不自动停服务。下载与目录应用/扫描等写入协调，后台网络不长期占用控制请求异步互斥锁。任务有独立ID、真实已写入/总字节、阶段、取消及有限关闭等待（当前实现最多10秒，否则保留窗口并报告cleanup未确认）；不能用点击取消或连接断开推定已清理。
 
-目录/来源/精确条目在接纳时冻结。临时文件只用本任务新建的`.nexa-download-<UUID>.part`，已有任何同名最终文件拒绝，途中他人创建目标也不覆盖。目录祖先及目标身份继续拒绝reparse/链接等间接路径，受保护句柄覆盖写入、校验和发布。
+目录/来源/精确条目在接纳时冻结。原固定下载器的临时文件只用本任务新建的`.nexa-download-<UUID>.part`，已有任何同名最终文件拒绝，途中他人创建目标也不覆盖。目录祖先及目标身份继续拒绝reparse/链接等间接路径，受保护句柄覆盖写入、校验和发布。
 
-流式读取、计数与SHA256有界，实际总字节必须与固定目录完全相等；超长/短流、错误hash、HTTP错误、意外编码、非法重定向、取消或超时均不发布最终模型。发布前flush/sync，完成后一次原子no-clobber发布；不把`.part`当GGUF注册。当前实施的网络策略为HTTPS、MS精确host modelscope.cn，HF精确host huggingface.co/us.aws.cdn.hf.co/cas-bridge.xethub.hf.co，至多5次重定向；15秒连接、30秒读、2小时整体上限，禁代理/referer/自动重试，不记录URL。64KiB写块与容量2的队列提供背压；不预分配大文件，磁盘写错安全失败。限额与清理细节已过源码审查，Windows真实执行仍待验。
+流式读取、计数与SHA256有界，实际总字节必须与固定目录完全相等；超长/短流、错误hash、HTTP错误、意外编码、非法重定向、取消或超时均不发布最终模型。发布前flush/sync，完成后一次原子no-clobber发布；不把`.part`当GGUF注册。原33f0e17固定下载器的网络策略为HTTPS、MS精确host modelscope.cn，HF精确host huggingface.co/us.aws.cdn.hf.co/cas-bridge.xethub.hf.co，至多5次重定向；15秒连接、30秒读、2小时整体上限，禁代理/referer/自动重试，不记录URL。64KiB写块与容量2的队列提供背压；不预分配大文件，磁盘写错安全失败。原版限额与清理已有33f0e17 Windows证据，但不转授后续aria2工作树。
+
+后续ADR0018执行器改为固定aria2进程：初始来源仍匹配所选MS/HF，重定向由HTTPS/实际公网socket策略负责；HTTP/Range/内部重试复用aria2。只有exit8可由上层在确认退出后执行一次全量重启，attempt1→2共享两小时deadline。model-store改用本任务UUID目录与固定payload/control文件，停写后独立size/SHA和取消CAS决定no-clobber发布；跨重启恢复/代理不属于首片。该替代当前仅工作树实现，验证见[aria2记录](../verification/2026-10-03-aria2-download-engine.md)。
 
 取消先赢则不发布；已提交的保存事实优先于晚到取消。发布成功但自有临时文件清理未确认时，仍明确`saved=true`并给受控cleanup_warning，不能改称回滚或重试覆盖。
 
@@ -46,7 +48,7 @@
 
 普通目录扫描/加载继续只读，不写源文件。用户明确下载是独立、狭窄的写入授权，仅创建本任务临时文件和不覆盖的目录条目；不改既有GGUF/manifest，不把源目录改造成managed store，不复制下载成品到AppData。
 
-包内仅程序根、`model/`、`models/`的直接子级可有严格命名的自有UUID `.part`例外，用于中断残留不阻止重启；至多64项、单项≤16GiB、普通文件/reparse仍受限。任意.part、其他层级、未声明DLL/EXE/脚本、产品manifest/hash变更均不放行。扫描忽略普通非GGUF临时文件，但仍计目录条目预算；不按命名推断任意残留可删除，只清理本次实际持有的对象。
+原版包内仅程序根、`model/`、`models/`的直接子级可有严格命名的自有UUID `.part`例外，用于中断残留不阻止重启；至多64项、单项≤16GiB、普通文件/reparse仍受限。任意.part、其他层级、未声明DLL/EXE/脚本、产品manifest/hash变更均不放行。aria2新增严格UUID任务目录惰性识别：仅相同三位置、空目录或三固定普通文件；payload≤16GiB、两个control各≤1MiB，新旧残留合计≤64。未知/nested/reparse拒绝，不自动恢复/信任/删除；Linux壳回归已过，Windows仍待验，详见ADR0018及新记录。扫描忽略普通非GGUF临时文件，但仍计目录条目预算；不按命名推断任意残留可删除，只清理本次实际持有的对象。
 
 ## 6. 验证与交付门槛
 

@@ -37,7 +37,8 @@ API 进程是调度和模型注册状态的唯一所有者。worker 不创建第
 | engine-host | 专用原生线程、执行器与取消句柄 | 只有独立取消标志可跨线程 |
 | llama-adapter / C++ shim | 模板、tokenizer、采样、prefill/decode与资源 | 使用锁定llama.cpp，原生类型不向上泄漏 |
 | runtime-api / runtime-cli | HTTP/SSE/鉴权/管理命令、发现/启动/关停 | 不在父进程加载原生库 |
-| desktop-bridge / Tauri / React | 安全本机客户端、模型/服务管理与验证聊天 | token不交给前端脚本；桌面不复制推理队列 |
+| desktop-bridge / Tauri / React | 安全本机客户端、模型/服务管理、来源适配与验证聊天 | token不交给前端脚本；桌面不复制推理队列 |
+| download-engine / 固定aria2 | 工作树已实现的独立下载进程监督、有限恢复与数值进度 | HTTP/Range由aria2负责，父端独立校验/发布；最终Windows与真实源待验 |
 | dsh或其他调用应用 | 会话、工具执行、业务数据、重试策略 | 不从模型输出自动获得额外权限 |
 
 Executor、ModelResolver、DTO/IPC边界已有Windows进程隔离、测试和解耦用途，保留这些合理角色；不为“桌面化”重写成上游server转发，不为可能的移动需求新建空trait/crate。依赖层级由实际功能决定。
@@ -82,13 +83,17 @@ dsh接入复用既有HTTP路径，先准确配置pi-ai provider，再增加真�
 
 external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/hash/metadata与候选资格，不以精确验证表限制模型名。目录应用/重扫需先显式停止服务，不自动终止其他客户端。本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)已由43ad5c2 WindowsCI/包发送验证，目标机待验：明确内容拒绝可列逐文件诊断，完整合法集合一次原子替换并以partial区分；全坏保留旧目录/index/generation，无候选可空提交。所有预算（含parser）、I/O、身份/路径/reparse、取消/超时和保存问题仍硬失败，坏文件仍计预算。scan-only核旧目录身份，apply可显式更换；成功/软拒guard覆盖提交或放弃决定，确定不可发布的硬失败退出后可释放。诊断只在本App内存，≤512KiB/完整operation≤1MiB；不改HTTP、worker/native或library schema。详见 [目录契约](t06-model-directory-contract.md)。
 
-### 本地默认发现与显式下载（ADR0017，进行中）
+### 本地默认发现与显式下载（ADR0017/0018）
 
 原生壳提供EXE/models的默认位置，UI仅在无配置/服务停止时尝试一次发现；已有配置失效也不转用其他目录，不用CWD，不创建不存在目录。扫描仍只读与单文件原子索引事务。默认位置只是本地发现入口，不触发网络或账户/凭据初始化。
 
-固定8条HF/MS候选元信息属于desktop-bridge，本地展示不联网，网络只由显式catalog_id下载触发。源偏好在desktop-settings内（默认MS），任务开始冻结源和目录；bridge负责有界HTTPS/精确redirect/传输/取消，model-store仅负责受保护UUID.part和no-clobber新文件发布。已有文件不改；保存完成registered=false，显式扫描/加载继续走原有结构、身份、模板和预算门槛。目录列表不构成运行名单。
+固定8条HF/MS候选元信息属于desktop-bridge，本地展示不联网，网络只由显式catalog_id下载触发。源偏好在desktop-settings内（默认MS），任务开始冻结源和目录。原33f0e17版在bridge执行reqwest传输；最新工作树按ADR0018采用源适配器→download-engine→固定aria2独立进程，初始源身份不变，公开HTTPS重定向与实际socket由固定策略补丁约束。model-store持有本任务UUID目录/固定payload保护，确认停写后独立size/SHA、取消CAS及no-clobber新文件发布。已有文件不改；保存完成registered=false，显式扫描/加载继续走原有结构、身份、模板和预算门槛。目录列表不构成运行名单。
 
-下载保持服务停止前置，不自动关停；后台持实例锁及目录/文件保护，快拒冲突写入而允许snapshot。发布后清理未确认如实警告，不能把saved文件说成回滚。下载源是严格设置新字段，旧版回退需旧备份或仅移除该key，重设默认无效。协议/worker/native不变；资源、源host与包内.part精确例外见[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)，实际证据见[新验证页](verification/2026-10-03-model-catalog-download.md)。
+下载保持服务停止前置，不自动关停；后台持实例锁及目录/文件保护，快拒冲突写入而允许snapshot。发布后清理未确认如实警告，不能把saved文件说成回滚。下载源是严格设置新字段，旧版回退需旧备份或仅移除该key，重设默认无效。公开API/私有IPC/shim不变；原固定下载器见[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)，新执行器与工作树验证见[ADR0018](decisions/0018-generic-download-engine-candidate.md)/[aria2记录](verification/2026-10-03-aria2-download-engine.md)。
+
+aria2仅从核验过的`download/nexa-aria2.exe`启动，组件来源锁/字节/许可/对应源码与实际PE导入都参与校验；Windows原子Job/句柄列表/System32优先策略不允许无保护降级。固定argv/env、无RPC/代理/用户参数，stdout/stderr持续有界读取，不原样记录网络输出。exit8只可触发一次attempt2，复用同一总deadline；常规aria2内部恢复与上层全量重启分开显示。
+
+下载socket gate不接管Windows OS的SChannel AIA/CRL/OCSP检索，保留标准证书链与吊销检查。payload补丁在写入/截断/分配前限制单文件逻辑长度，不是内存、流量或整盘配额；暂存保护与最终完整性检查不可删。跨App重启恢复/代理未作为本片产品能力。当前新引擎仍待最终Windows/真实源/包闭环，旧CI不能转授。
 
 ## 7. 桌面CPU与模型扩展
 

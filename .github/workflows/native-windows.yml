@@ -32,7 +32,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  download-component:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build the same-source pinned download component
+        run: |
+          python3 -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_aria2_build*.py'
+          bash scripts/build_aria2_windows.sh "$RUNNER_TEMP/aria2-build"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-download-source-build-${{ github.sha }}
+          path: ${{ runner.temp }}/aria2-build/artifacts/
+          if-no-files-found: error
+          retention-days: 14
   native:
+    needs: download-component
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -47,6 +65,17 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nexa-download-source-build-${{ github.sha }}
+          path: artifacts/aria2-build
+      - name: Verify Windows component policy and prepare product closure
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python third_party/aria2/tests/windows_probe.py --artifacts artifacts/aria2-build --output artifacts/verification/windows-aria2-policy.json
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows component policy failed' }
+          python scripts/package_desktop_windows.py --prepare-download-component artifacts/aria2-build --component-dir build/download
+          if ($LASTEXITCODE -ne 0) { throw 'Download component source/hash closure failed' }
       - name: Install fixed development tools
         run: |
           $ErrorActionPreference = 'Stop'
@@ -214,7 +243,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Catalog download verifier build failed' }
           # Exercise the same default ModelScope bridge path as the desktop.
           # Download once, then retain the independent baseline hash checks.
-          & (Join-Path $PWD 'target/debug/nexa-catalog-download-verify.exe') --directory (Join-Path $PWD 'models') --output (Join-Path $PWD 'artifacts/verification/windows-catalog-download.json')
+          & (Join-Path $PWD 'target/debug/nexa-catalog-download-verify.exe') --directory (Join-Path $PWD 'models') --output (Join-Path $PWD 'artifacts/verification/windows-catalog-download.json') --component-dir (Join-Path $PWD 'build/download')
           if ($LASTEXITCODE -ne 0) { throw 'Real default-source catalog download failed' }
           $downloaded = Join-Path $PWD 'models/Qwen3-0.6B-Q8_0.gguf'
           if (Test-Path models/qa-small.gguf) { throw 'Baseline destination already exists' }

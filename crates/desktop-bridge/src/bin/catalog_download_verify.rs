@@ -14,13 +14,19 @@ use std::{
 use uuid::Uuid;
 
 const CATALOG_ID: &str = "qwen3-0.6b-q8-0";
-fn arguments(args: &[std::ffi::OsString]) -> Option<(PathBuf, PathBuf)> {
-    if args.len() != 4 || args[0] != "--directory" || args[2] != "--output" {
+fn arguments(args: &[std::ffi::OsString]) -> Option<(PathBuf, PathBuf, PathBuf)> {
+    if args.len() != 6
+        || args[0] != "--directory"
+        || args[2] != "--output"
+        || args[4] != "--component-dir"
+    {
         return None;
     }
     let directory = PathBuf::from(&args[1]);
     let output = PathBuf::from(&args[3]);
-    (directory.is_absolute() && output.is_absolute()).then_some((directory, output))
+    let component = PathBuf::from(&args[5]);
+    (directory.is_absolute() && output.is_absolute() && component.is_absolute())
+        .then_some((directory, output, component))
 }
 #[derive(Debug)]
 struct ProbeFailure {
@@ -42,6 +48,7 @@ fn failure(stage: &'static str, code: &str) -> ProbeFailure {
         "model_file_changed" => "model_file_changed",
         "model_file_unavailable" => "model_file_unavailable",
         "model_file_in_use" => "model_file_in_use",
+        "model_download_engine_unavailable" => "model_download_engine_unavailable",
         "model_download_network_failed" => "model_download_network_failed",
         "model_download_http_failed" => "model_download_http_failed",
         "model_download_redirect_rejected" => "model_download_redirect_rejected",
@@ -59,7 +66,7 @@ fn failure(stage: &'static str, code: &str) -> ProbeFailure {
 fn bridge_failure(stage: &'static str, error: desktop_bridge::BridgeError) -> ProbeFailure {
     failure(stage, &error.code)
 }
-async fn verify(directory: PathBuf) -> Result<serde_json::Value, ProbeFailure> {
+async fn verify(directory: PathBuf, component: PathBuf) -> Result<serde_json::Value, ProbeFailure> {
     let started = Instant::now();
     if !cfg!(windows) {
         return Err(failure("platform", "unsupported_platform"));
@@ -68,7 +75,15 @@ async fn verify(directory: PathBuf) -> Result<serde_json::Value, ProbeFailure> {
     runtime_api::token::create_private_dir(&private).map_err(|_| failure("prepare", "io"))?;
     let bridge = Arc::new(
         DesktopBridge::new(private.clone(), private.join("ai-runtime.exe"))
-            .map_err(|e| bridge_failure("prepare", e))?,
+            .map_err(|e| bridge_failure("prepare", e))?
+            .with_download_sidecar_verifier(move || {
+                download_engine::identity::verify_component(&component, None).map_err(|_| {
+                    desktop_bridge::BridgeError {
+                        code: "model_download_engine_unavailable".into(),
+                        message: "Download component verification failed".into(),
+                    }
+                })
+            }),
     );
     let result = async {
         let item = bridge.model_catalog().map_err(|e| bridge_failure("prepare", e))?.entries.into_iter().find(|e| e.catalog_id == CATALOG_ID).ok_or_else(|| failure("prepare", "verification_failed"))?;
@@ -125,7 +140,7 @@ async fn verify(directory: PathBuf) -> Result<serde_json::Value, ProbeFailure> {
 #[tokio::main]
 async fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let Some((directory, output)) = arguments(&args) else {
+    let Some((directory, output, component)) = arguments(&args) else {
         println!("{{\"schema_version\":1,\"success\":false,\"error\":\"invalid_arguments\"}}");
         std::process::exit(2);
     };
@@ -139,7 +154,7 @@ async fn main() {
         println!("{{\"schema_version\":1,\"success\":false,\"error\":\"report_unavailable\"}}");
         std::process::exit(2);
     };
-    let result = verify(directory).await;
+    let result = verify(directory, component).await;
     let success = result.is_ok();
     let value = result.unwrap_or_else(|fault| json!({"schema_version":1,"success":false,"source":"modelscope","catalog_id":CATALOG_ID,"error":"catalog_download_verification_failed","stage":fault.stage,"code":fault.code}));
     let bytes = serde_json::to_vec(&value).unwrap();
@@ -192,7 +207,9 @@ mod tests {
                 "--directory".into(),
                 base.join("models").into_os_string(),
                 "--output".into(),
-                base.join("report.json").into_os_string()
+                base.join("report.json").into_os_string(),
+                "--component-dir".into(),
+                base.join("download").into_os_string()
             ])
             .is_some()
         );
@@ -201,7 +218,9 @@ mod tests {
                 "--url".into(),
                 "https://untrusted.invalid".into(),
                 "--output".into(),
-                base.join("report.json").into_os_string()
+                base.join("report.json").into_os_string(),
+                "--component-dir".into(),
+                base.join("download").into_os_string()
             ])
             .is_none()
         );

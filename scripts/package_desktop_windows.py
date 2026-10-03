@@ -15,12 +15,75 @@ import sys
 import tempfile
 import zipfile
 import package_windows as base
+import build_aria2_windows as aria2_build
 
 ROOT = base.ROOT
 SHELL = ROOT / "apps/desktop/src-tauri"
 # These are Windows inbox components, never copied from System32. Unknown imports
 # remain a hard failure and must be reviewed before adding an OS classification.
 DESKTOP_OS = base.OS_DLLS | set("comctl32 d3d11 d3d12 d3dcompiler_47 dcomp dwmapi dxgi imm32 msimg32 propsys shcore uiautomationcore urlmon usp10 uxtheme windowscodecs wininet winspool wintrust wtsapi32".split())
+
+
+DOWNLOAD_LICENSES = {"COPYING", "COPYING.MinGW-w64-runtime.txt", "COPYING.MinGW-w64.txt",
+    "COPYING.winpthreads.txt", "COPYING.winstorecompat.txt", "aria2-COPYING",
+    "compiler-rt-LICENSE.TXT", "libcxx-LICENSE.TXT", "libcxxabi-LICENSE.TXT",
+    "libunwind-LICENSE.TXT", "llvm-mingw-LICENSE.TXT"}
+DOWNLOAD_SOURCE = "aria2-1.37.0-nexa-corresponding-source.tar.gz"
+DOWNLOAD_FILES = {"nexa-aria2.exe", DOWNLOAD_SOURCE, "build-manifest.json"} | {"licenses/" + name for name in DOWNLOAD_LICENSES}
+
+
+def verify_download(stage, commit, dirty):
+    manifest = json.loads(base.regular(stage / "manifest.json").read_text(encoding="utf-8"))
+    entries = base.entries(stage)
+    payload = [item for item in entries if item["path"] not in {"manifest.json", "SHA256SUMS"}]
+    if (manifest.get("product") != "nexa-download" or manifest.get("project_commit") != commit or
+            manifest.get("project_dirty") != dirty or manifest.get("files") != payload or
+            {item["path"] for item in payload} != DOWNLOAD_FILES):
+        base.fail("download component inventory/source mismatch")
+    # No unknown empty directory is part of the closed component either.
+    if {p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_dir()} != {"licenses"}:
+        base.fail("download component directory mismatch")
+    build = json.loads(base.regular(stage / "build-manifest.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "third_party/aria2/source-lock.json").read_text(encoding="utf-8"))
+    if (build.get("schema_version") != 1 or build.get("source_commit") != commit or
+            build.get("source_lock") != lock or build.get("binary_name") != "nexa-aria2.exe" or
+            build.get("product_relative_path") != "download/nexa-aria2.exe" or
+            build.get("target") != "x86_64-w64-mingw32" or build.get("tls_backend") != "Schannel"):
+        base.fail("download build provenance mismatch")
+    if (build.get("features", {}).get("SECURITY_WIN32") is not True or build.get("features", {}).get("ENABLE_SSL") is not True or
+            any(build.get("features", {}).get(name) is not False for name in aria2_build.FORBIDDEN)):
+        base.fail("download build feature profile mismatch")
+    for item in payload:
+        if item["path"] == "build-manifest.json":
+            continue
+        expected = build["files"].get(item["path"])
+        if expected != {"sha256": item["sha256"], "bytes": item["size_bytes"]}:
+            base.fail("download payload differs from source-build artifact")
+    base.pe_machine(stage / "nexa-aria2.exe")
+    expected = "".join(f"{item['sha256']}  {item['path']}\n" for item in entries if item["path"] != "SHA256SUMS")
+    if base.regular(stage / "SHA256SUMS").read_text(encoding="utf-8") != expected:
+        base.fail("download component checksum mismatch")
+    return build
+
+
+def prepare_download(artifact, destination, commit, dirty):
+    if not re.fullmatch(r"[a-f0-9]{40}", commit) or destination.exists():
+        base.fail("download component source/destination invalid")
+    build = json.loads(base.regular(artifact / "build-manifest.json").read_text(encoding="utf-8"))
+    # Verify the original artifact's complete hash inventory before selecting roles.
+    records = {item["path"]: {"sha256": item["sha256"], "bytes": item["size_bytes"]}
+               for item in base.entries(artifact) if item["path"] != "build-manifest.json"}
+    if records != build["files"]:
+        base.fail("original download build artifact closure mismatch")
+    destination.mkdir(parents=True)
+    for name in sorted(DOWNLOAD_FILES):
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(base.regular(artifact / name), target)
+    base.write_json(destination / "manifest.json", {"schema_version": 1, "product": "nexa-download",
+        "project_commit": commit, "project_dirty": dirty, "files": base.entries(destination)})
+    (destination / "SHA256SUMS").write_text("".join(f"{item['sha256']}  {item['path']}\n" for item in base.entries(destination)), encoding="utf-8")
+    verify_download(destination, commit, dirty)
 
 
 def dependency_kind(name, redist):
@@ -165,7 +228,7 @@ def verify(stage, manifest):
     payload = [item for item in actual if item["path"] not in ("manifest.json", "SHA256SUMS")]
     if manifest["product"] != "nexa-desktop" or manifest["files"] != payload:
         base.fail("desktop manifest inventory/hash/size mismatch")
-    required = {"nexa-desktop.exe", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/index.json", "licenses/npm-index.json", "runtime/manifest.json", "runtime/SHA256SUMS"}
+    required = {"nexa-desktop.exe", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/index.json", "licenses/npm-index.json", "runtime/manifest.json", "runtime/SHA256SUMS", "download/manifest.json", "download/SHA256SUMS", "download/nexa-aria2.exe"}
     names = {item["path"] for item in payload}
     if not required <= names:
         base.fail("required desktop package files missing")
@@ -176,7 +239,10 @@ def verify(stage, manifest):
         base.fail("desktop and runtime source identity differ")
     if base.digest(runtime_root / "manifest.json") != manifest["runtime_manifest_sha256"]:
         base.fail("nested runtime manifest differs from package identity")
+    verify_download(stage / "download", manifest["project_commit"], manifest["project_dirty"])
     for name in names:
+        if name.startswith("download/"):
+            continue
         if name.startswith("runtime/"):
             continue  # Entire nested closure was verified with the T05 verifier.
         if name.startswith("licenses/"):
@@ -227,7 +293,7 @@ def promote(stage, archive, checksum, dist):
         shutil.rmtree(backup) if backup.is_dir() else backup.unlink()
 
 
-def build(executable):
+def build(executable, component):
     if os.name != "nt":
         base.fail("desktop packaging requires actual Windows x64 PE inspection")
     selected, vs, env, _, redist = base.selected_visual_studio()
@@ -265,8 +331,22 @@ def build(executable):
         stage.mkdir()
         shutil.copyfile(base.regular(executable), stage / "nexa-desktop.exe")
         shutil.copytree(runtime_root, stage / "runtime")
+        verify_download(component, source["commit"], source["dirty"])
+        shutil.copytree(component, stage / "download")
+        download_build = verify_download(stage / "download", source["commit"], source["dirty"])
+        actual_imports = set(inspect(stage / "download/nexa-aria2.exe"))
+        if actual_imports != {name.lower() for name in download_build["pe"]["imports"]}:
+            base.fail("download PE imports differ from build manifest")
+        if any(name not in aria2_build.SYSTEM_IMPORTS and not re.fullmatch(r"api-ms-win-crt-[a-z0-9-]+-l1-1-0\.dll", name) for name in actual_imports):
+            base.fail("download PE has undeclared non-system dependency")
         for name in ("README.md", "THIRD_PARTY_NOTICES.md"):
             shutil.copyfile(base.regular(ROOT / "packaging/desktop-windows" / name), stage / name)
+        with (stage / "THIRD_PARTY_NOTICES.md").open("a", encoding="utf-8") as notices:
+            notices.write("\n\n## Nexa download component\n\n"
+                          "The separately executed nexa-aria2.exe is a modified aria2 1.37.0, licensed under GPL-2.0-or-later. "
+                          "The exact corresponding patched source, build materials and dependency license originals accompany it under download/. "
+                          "See download/licenses/aria2-COPYING and download/" + DOWNLOAD_SOURCE + ". "
+                          "LLVM/MinGW runtime notices are included in download/licenses/.\n")
         dependencies = collect_dependencies(stage, redist, inspect, copy_crt)
         copy_rust_licenses(stage, metadata, env)
         npm_licenses(stage)
@@ -293,6 +373,7 @@ def build(executable):
         checksum.write_text(f"{base.digest(archive)}  desktop-windows.zip\n", encoding="utf-8")
         result = {"schema_version":1, "build_status":"pass", "project_commit":source["commit"], "package_sha256":base.digest(archive), "compressed_bytes":archive.stat().st_size,
                   "installed_bytes":sum(item["size_bytes"] for item in base.entries(stage)), "runtime_bytes":sum(item["size_bytes"] for item in base.entries(stage / "runtime")),
+                  "download_component_bytes":sum(item["size_bytes"] for item in base.entries(stage / "download")),
                   "ui_executable_bytes":(stage / "nexa-desktop.exe").stat().st_size, "ui_app_local_crt_bytes":sum(item["size_bytes"] for item in crt_sources), "model_bytes":0, "manifest_sha256":base.digest(stage / "manifest.json"), "native_window_tested":False}
         if source_identity(env) != source:
             base.fail("source changed during desktop packaging")
@@ -307,8 +388,15 @@ def build(executable):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--desktop-exe", type=Path, default=ROOT / "build/desktop/cargo" / base.TARGET / "release/nexa-desktop.exe")
+    parser.add_argument("--component-dir", type=Path, default=ROOT / "build/download")
+    parser.add_argument("--prepare-download-component", type=Path)
     args = parser.parse_args()
-    build(args.desktop_exe)
+    if args.prepare_download_component:
+        commit = base.command(["git", "rev-parse", "HEAD"], os.environ.copy())
+        dirty = bool(base.command(["git", "status", "--porcelain", "--untracked-files=all"], os.environ.copy()))
+        prepare_download(args.prepare_download_component, args.component_dir, commit, dirty)
+    else:
+        build(args.desktop_exe, args.component_dir)
 
 if __name__ == "__main__":
     try:

@@ -3,12 +3,89 @@ from pathlib import Path
 import tempfile
 import tomllib
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 import package_desktop_windows as pack
 
 
 class DesktopPackageTests(unittest.TestCase):
+    def download_fixture(self, root):
+        component = root / "download"
+        component.mkdir()
+        for name in pack.DOWNLOAD_FILES - {"build-manifest.json"}:
+            path = component / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+        pe = bytearray(128)
+        pe[:2] = b"MZ"
+        pe[0x3c:0x40] = (64).to_bytes(4, "little")
+        pe[64:70] = b"PE\0\0\x64\x86"
+        (component / "nexa-aria2.exe").write_bytes(pe)
+        files = {item["path"]: {"sha256": item["sha256"], "bytes": item["size_bytes"]} for item in pack.base.entries(component)}
+        build = {"schema_version": 1, "source_commit": "a" * 40, "source_lock": json.loads((pack.ROOT / "third_party/aria2/source-lock.json").read_text(encoding="utf-8")),
+                 "binary_name": "nexa-aria2.exe", "product_relative_path": "download/nexa-aria2.exe", "target": "x86_64-w64-mingw32", "tls_backend": "Schannel", "features": {"SECURITY_WIN32": True, "ENABLE_SSL": True, **dict.fromkeys(pack.aria2_build.FORBIDDEN, False)}, "files": files}
+        pack.base.write_json(component / "build-manifest.json", build)
+        self.seal_download(component)
+
+    def seal_download(self, component):
+        for name in ("manifest.json", "SHA256SUMS"):
+            (component / name).unlink(missing_ok=True)
+        pack.base.write_json(component / "manifest.json", {"product": "nexa-download", "project_commit": "a" * 40, "project_dirty": False, "files": pack.base.entries(component)})
+        (component / "SHA256SUMS").write_text("".join(f"{item['sha256']}  {item['path']}\n" for item in pack.base.entries(component)), encoding="utf-8")
+
+    def test_source_identity_does_not_depend_on_package_stage(self):
+        with mock.patch.object(pack.base, "command", side_effect=["", "a" * 40, ""]):
+            identity = pack.source_identity({})
+        self.assertEqual(identity["commit"], "a" * 40)
+        self.assertFalse(identity["dirty"])
+
+    def test_build_runs_source_identity_before_runtime_admission(self):
+        # Exercise the production entry path without pretending to inspect PE or
+        # run Visual Studio on Linux. The deliberate next-stage failure proves
+        # source identity does not reference a not-yet-created package stage.
+        with mock.patch.object(pack, "os", SimpleNamespace(name="nt", environ={})), \
+             mock.patch.object(pack.base, "selected_visual_studio", return_value=({}, Path("vs"), {}, None, {})), \
+             mock.patch.object(pack.base, "command", side_effect=["", "a" * 40, ""]), \
+             mock.patch.object(pack.base, "regular", side_effect=ValueError("runtime-admission-reached")):
+            with self.assertRaisesRegex(ValueError, "runtime-admission-reached"):
+                pack.build(Path("desktop.exe"), Path("download"))
+
+    def test_nested_download_is_independently_reverified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self.fixture(root)
+            (root / "download/licenses/aria2-COPYING").write_bytes(b"changed")
+            self.seal_download(root / "download")
+            manifest["files"] = pack.base.entries(root)
+            with self.assertRaises(ValueError):
+                pack.verify(root, manifest)
+
+    def test_download_closed_roles_and_provenance(self):
+        for mutation in ("extra", "missing-license", "source", "lock", "payload", "empty-dir", "test-exe"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.download_fixture(root)
+                component = root / "download"
+                pack.verify_download(component, "a" * 40, False)
+                if mutation in ("source", "lock"):
+                    path = component / "build-manifest.json"
+                    value = json.loads(path.read_text(encoding="utf-8"))
+                    value["source_commit" if mutation == "source" else "source_lock"] = "wrong"
+                    pack.base.write_json(path, value)
+                elif mutation == "missing-license":
+                    (component / "licenses/aria2-COPYING").unlink()
+                elif mutation == "empty-dir":
+                    (component / "unknown").mkdir()
+                elif mutation == "payload":
+                    (component / pack.DOWNLOAD_SOURCE).write_bytes(b"changed")
+                else:
+                    (component / ("extra.txt" if mutation == "extra" else "policy_unit.exe")).write_bytes(b"unexpected")
+                self.seal_download(component)
+                with self.assertRaises(ValueError):
+                    pack.verify_download(component, "a" * 40, False)
+
     def fixture(self, root):
+        self.download_fixture(root)
         runtime = root / "runtime"
         runtime.mkdir()
         for name in ("ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/index.json"):

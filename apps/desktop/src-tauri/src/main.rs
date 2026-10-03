@@ -4,6 +4,8 @@
 mod diagnostics;
 #[cfg(any(windows, test))]
 mod directory_selection;
+#[cfg(windows)]
+mod download_component;
 #[cfg(any(windows, test))]
 mod layout;
 #[cfg(any(windows, test))]

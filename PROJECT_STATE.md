@@ -20,13 +20,15 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 
 当前用户反馈：Qwen3-4B-Q4_K_M经ModelScope下载时0B立即失败，诊断码为`model_download_redirect_rejected`；同一链接在浏览器可用，用户随后确认手动下载后扫描可以。该确认不包含加载、聊天或性能；具体被拒目标仍未知，不能归因为目录权限。诊断与探针已提交5266ab6，本机bridge79/UI119、Python97项（95通过/2平台skip）及独立审查通过；[Windows诊断CI37132080750](https://github.com/Naza3/Nexa/actions/runs/37132080750)已成功（产物待复核），[有界路由观察37132080792](https://github.com/Naza3/Nexa/actions/runs/37132080792)成功记录0.6B与4B均为MS200、无重定向、各4096字节GGUF前缀，只是该CI路径观察，不能复现或解释用户被拒host。见[排查记录](docs/verification/2026-10-03-modelscope-redirect.md)。
 
-用户要求通用下载引擎并允许开源组件，现优先评估aria2 1.37.0单任务伴随进程，拟随包提供、无需用户另装，但尚未选定。自建reqwest通用草稿未验证且已暂停保留；隔离Linux本地HTTP PoC已冻结，7/7有限判据通过（含错误Range/hash拒绝），19项证据hash已核；不代表Windows/真实MS或产品集成通过。官方原版所缺逐跳策略已有隔离Linux专用补丁原型：68策略/26真实Request/31 integration/socket通过，独立重跑68+26并核对31项；Windows/真实MS/HF/产品仍未验。首版候选约束initial/redirect与aria2实际下载socket，保留SChannel自动证书/吊销检查；OS的AIA/CRL/OCSP联网是已披露独立平台边界，不承诺所有OS网络受gate控制，也不要求为此更换TLS或重造PKI。DNS预查加最终SHA仍不能替代下载连接约束。GPL2+分发准备与Nexa自身LICENSE安排待明确。详见[候选ADR0018](docs/decisions/0018-generic-download-engine-candidate.md)。跨重启恢复/代理仍是PoC/后续边界，Harness新实施继续暂停。
+用户要求通用下载引擎并允许开源组件，已采纳aria2 1.37.0受控sidecar，不再自建HTTP/Range。主线8c82203上的工作树已实现监督器、model-store事务、bridge/壳组件身份、原生下载验证器与打包/CI；最终Windows/真实MS/HF及新包未完成，旧具体被拒host仍未知。主代理在崩溃残留layout收尾前已完成全workspace all-targets40组389/0/7及clippy/格式、UI149项/typecheck/lint/build、Python126项（124通过/2平台skip）；其后最终残留规则追加壳28项/clippy/格式及独立补审通过，desktop11为Python126子集不累加；未重跑完整workspace，局部engine20/store11/bridge79也不重复相加。辅助源码构建01db921的[CI37138664930](https://github.com/Naza3/Nexa/actions/runs/37138664930)已过Linux构建/fixture；Windows首次job111249100173及17:05重跑的job111249990877均在runner_id=0、steps为空时失败，代码未执行；启动原因未知，17:10已请用户提供run顶部错误，等待证据而不第三次盲重跑。最终集成Windows验收受阻；本轮整合使用待验检查点分支`codex/nexa-aria2-integration`保存，不更新主开发分支、不触发其CI或表示发布通过。旧实现8c82203的[CI37135712318](https://github.com/Naza3/Nexa/actions/runs/37135712318)已成功，52份证据独立核对通过（Rust368/0/7、CTest4/4、旧下载器MS固定0.6B成功），不转授本轮aria2实现。
+
+首版保持无RPC/固定argv/env、受核验的download/nexa-aria2.exe、任务内恢复及仅exit8的一次全量restart，attempt1→2共享deadline。父端独立size/SHA、no-clobber与取消CAS决定发布。网络gate仅约束initial/redirect/aria2实际下载socket，SChannel自动证书/吊销与OS AIA/CRL/OCSP仍是独立平台边界；跨App重启恢复/代理不属于首片。见[ADR0018](docs/decisions/0018-generic-download-engine-candidate.md)与[新验证记录](docs/verification/2026-10-03-aria2-download-engine.md)。新引擎尚未交付，Harness新实施继续暂停。
 
 ## 已有工程与最新交付
 
 | 范围 | 状态与证据 |
 | --- | --- |
-| 检查基线 | `codex/nexa-native-baseline`；当前诊断/探针提交`5266ab6a31917354646253cbc5705aebf43e19d7`，Windows诊断CI成功（产物待复核）、有界路由观察通过；aria2候选未集成，自建通用草稿暂停。最新已发送产品仍33f0e17，其精确下载/包证据独立保留 |
+| 检查基线 | 主线`8c82203c1ff2f73981575733bd81a88c6cfd4f8a`；aria2整合为`codex/nexa-aria2-integration`待验检查点，辅助源码分支01db921的Windows启动受阻，旧实现主线CI已通过，最终新引擎待验；最新已发送仍33f0e17 |
 | 推理核心 | llama.cpp固定`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；C++ shim、模板/token预算/采样、UTF-8/stop、取消/释放已有真实回归 |
 | T00–T04 | 固定 Windows CPU 的原生链、model-store、单actor/队列、独立worker/IPC/Job、HTTP/CLI阶段已完成；详情见[索引](PROJECT_INDEX.md) |
 | T05 | Release便携包/独立工具、PE/依赖/许可/hash及独立Windows10短验已按阶段范围收口；A19/A20后期条件未完成 |
@@ -67,7 +69,7 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 ## 最小下一步
 
 1. W00已完成；W04窄文本切片已提交35bfd85，其[WindowsCI37087595998](https://github.com/Naza3/Nexa/actions/runs/37087595998)已于02:27 UTC成功，50项证据/身份/hash核验通过；只覆盖35bfd85，不覆盖本次开放模型工作区变更
-2. 复核5266ab6诊断CI产物并保留用户实际被拒分支未知；在已完成Linux策略原型基础上，按已裁决的下载socket/SChannel平台边界验证Windows候选，再决定集成；未验证自建下载草稿继续暂停。目标机下载→显式扫描/加载完整验收仍未完成
+2. 收口aria2工作树与三补丁Windows源码构建，按同source运行真实源/进程/文件事务/完整包闭环；旧具体被拒分支仍未知，不预称修复。目标机下载→显式扫描/加载完整验收仍未完成
 3. W02混合目录43ad5c2已通过WindowsCI、包内验收与独立下载包复核，原字节包已发送；等待用户目标机验收，按[本轮矩阵](docs/verification/2026-10-03-mixed-model-directory.md)逐层记录；旧50c9d41 CI不覆盖该增量。继续其他模型/目标16GB机实测，不扩大已验证矩阵。W04完整DSH/真实模型文本与工具能力缺口保留，按用户要求暂停新实施；pi-ai fixture仍非DSH本体捕获
 4. ADR0017的33f0e17已过精确WindowsCI、真实MS固定模型链和独立包/新依赖许可复核并发送；后续记录用户目标机发现、下载→显式扫描/加载与取消分支。HF实际下载与其他7个候选另验。W04新实施暂停，生产工具仍未实现，不恢复Android或绑定Telegram业务
 

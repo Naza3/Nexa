@@ -47,6 +47,14 @@ describe("GGUF catalog interface", () => {
     render(<DownloadProgress state={{ ...state, download: task, download_phase: "running" }} controller={controller} />);
     expect(screen.getByText(/129 B/)).toBeInTheDocument(); expect(screen.getByText(/总大小未知/)).toBeInTheDocument(); expect(screen.queryByRole("progressbar")).not.toBeInTheDocument(); expect(screen.getByRole("button", { name: "取消下载" })).toBeEnabled();
   });
+  it.each([undefined, 1, 2, 3])("shows the reported in-task attempt without inventing resume or restart: %j", (attempt) => {
+    const api = makeApi(); const controller = new DesktopController(api);
+    render(<DownloadProgress state={{ ...controller.getSnapshot(), snapshot: stopped(), download: failedDownload({ attempt }) }} controller={controller} />);
+    expect(screen.getByText(`第${attempt ?? 1}次传输尝试`)).toBeInTheDocument();
+    expect(screen.queryByText(/断点续传|代理|重新开始传输|恢复传输/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新下载" })).toBeEnabled();
+    expect(api.downloadStart).not.toHaveBeenCalled();
+  });
   it("keeps a download visible when changing pages", async () => {
     const { controller } = await mount(); fireEvent.click(screen.getByRole("button", { name: "下载模型" }));
     await screen.findByRole("heading", { name: "候选模型 2B" });
