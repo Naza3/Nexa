@@ -145,6 +145,7 @@ export function createPreviewApi(): DesktopApi {
         result: null,
         error: null,
         failed_file_name: null,
+        file_errors: [],
       };
       if (libraryCancelled) {
         libraryTerminal = {
@@ -200,6 +201,7 @@ export function createPreviewApi(): DesktopApi {
           directory_id: identity.directory_id,
           registered_files: 1,
           available_files: 1,
+          rejected_files: 0,
         },
       };
       return libraryTerminal;

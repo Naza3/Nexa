@@ -1422,3 +1422,7 @@ h3 {
 .failed-file-name strong {
   font-weight: 550;
 }
+.library-diagnostics li {
+  overflow-wrap: anywhere;
+  margin-block: 0.5rem;
+}

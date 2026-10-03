@@ -1,6 +1,6 @@
 # T06 Windows 最小桌面契约
 
-2026-10-01。实施定界，不是完成报告。以执行规格8.2为基础；T05已有固定Windows Release CI与独立Windows 10手工短验，无开发工具、离线及长期稳定性仍待后期验证。Windows 10优先，Windows 11后续，不更换Tauri 2 + React/TypeScript/Vite，不扩Telegram或runtime职责；2026-10-03模型范围按[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)更新为开放候选，源码/本地回归已完成，Windows与新包窗口验收待完成，不追溯既有包。
+2026-10-01。实施定界，不是完成报告。以执行规格8.2为基础；T05已有固定Windows Release CI与独立Windows 10手工短验，无开发工具、离线及长期稳定性仍待后期验证。Windows 10优先，Windows 11后续，不更换Tauri 2 + React/TypeScript/Vite，不扩Telegram或runtime职责；2026-10-03模型范围按[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)更新为开放候选，50c9d41已过WindowsCI并发送，用户新包窗口验收仍待完成。本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)的混合目录/诊断源码已冻结并通过本机合成回归/独立审查，WindowsCI及原生窗口待验，不追溯已交付包。
 
 ## 1. 三个工位与唯一写入范围
 
@@ -20,7 +20,7 @@
 
 ## 3. 最小产品范围
 
-- 模型：区分历史validated、可尝试loadable与当前available，未实测合法候选不因型号/hash缺少批准而禁用；旧服务缺loadable要求匹配版本。实际加载/模板/资源失败明确提示，目录仍可能因单个坏文件整批失败。原生选择本地 GGUF、显示文件名/大小和复制目标、输入模型 ID、导入、列表/分页、加载/卸载、状态与错误。API 无字节进度，显示真实“导入中”忙碌指示，不制造百分比。
+- 模型：区分历史validated、可尝试loadable与当前available，未实测合法候选不因型号/hash缺少批准而禁用；旧服务缺loadable要求匹配版本。实际加载/模板/资源失败明确提示。50c9d41目录仍可能因单个坏文件整批失败；本轮在完整安全扫描后对合法集合一次原子提交，partial展示完整有界诊断，全坏保留旧索引，空目录允许清空。只有当前App生命周期保留诊断，不声称重启后可找回；硬失败与取消不得伪报部分成功。原生选择本地 GGUF、显示文件名/大小和复制目标、输入模型 ID、导入、列表/分页、加载/卸载、状态与错误。API 无字节进度，显示真实“导入中”忙碌指示，不制造百分比。
 - 聊天：当前会话消息、发送、批量流式文本、停止、清空。正文作为纯文本渲染；不执行 HTML、链接、模型指令。没有持久化聊天。
 - 设置：CPU、上下文、线程/批次、默认输出预算、空闲卸载、关闭时同时退出开关、只读本机 API 地址和原生复制令牌按钮。
 - 新 UI 偏好可采用已验预设 `cpu / context2048 / threads2 / batch128 / max_output512`；清楚显示为 UI 的下一次加载/发送参数。不得悄悄覆盖既有 runtime 配置/已加载参数，也不把配置值称为原生实测后端。
@@ -35,7 +35,7 @@
 - `model_pick()` → null 或 `{ selection_id, file_name, size_bytes, destination }`。原生壳保存选中路径，前端只传一次性选择 ID；取消选择不改变当前模型。`destination` 是供用户确认的管理目录显示文本。
 - `model_import({ selection_id, model_id })` → 安全 ModelSummary。壳将受控路径交 bridge，后者走现有 `/runtime/models/import`；同一选择不能并发提交。失败时不自动重试，特别是 `import_committed_durability_unconfirmed` 必须先刷新模型列表。
 - `models_page({ after: string|null, generation: UUID|null })` → `{ generation, data: ModelSummary[], next_after: string|null }`。第一页两个参数均null；后续携带generation，陈旧页拒绝并从第一页重新取。固定页大小64，前端只保留当前页。ModelSummary增加managed/external来源与安全不可用原因，显示名为主；选中模型显示名来自实际服务，不依赖当前页。
-- 新桌面主流程使用`model_directory_pick()`、`model_directory_apply({selection_id})`、`models_scan()`、`model_library_next({operation_id})`、`model_library_cancel({operation_id})`五个固定命令，完整DTO/预算/取消与停止条件见[外部目录契约](t06-model-directory-contract.md)。原生目录选择允许支持的本地可读目录，不写源目录；JS只有一次性选择ID与只读展示路径，绝不提交自由路径。仅bridge真正接纳apply后消费ID，busy拒绝保留选择。新流程自动命名/生成内部ID、不复制已有GGUF，原model_pick/import及公开复制API只保留兼容。
+- 新桌面主流程使用`model_directory_pick()`、`model_directory_apply({selection_id})`、`models_scan()`、`model_library_next({operation_id})`、`model_library_cancel({operation_id})`五个固定命令，完整DTO/预算/取消与停止条件见[外部目录契约](t06-model-directory-contract.md)。原生目录选择允许支持的本地可读目录，不写源目录；JS只有一次性选择ID与只读展示路径，绝不提交自由路径。仅bridge真正接纳apply后消费ID，busy拒绝保留选择。新流程自动命名/生成内部ID、不复制已有GGUF，原model_pick/import及公开复制API只保留兼容。本轮私有operation增量为partial/file_errors/rejected_files；旧completed缺新增字段按[]/0兼容；完整diagnostics≤512KiB、operation≤1MiB，超限拒绝而非截断。自动扫描default_context取min(2048,metadata)，显式load/import及UI设置不静默改变。
 - `model_load({ model_id, context_size, threads, batch_size })` → runtime status，固定 `backend=cpu,gpu_layers=0`。已加载参数与UI参数不同必须明确展示；不静默换模型。16GB总内存不是可用量或模型容量保证，metadata/131072硬限也不是建议值；不宣称已有Job RAM硬限。`model_unload()` → runtime status。
 - `chat_start({ model_id, messages, max_output_tokens })` → `{ request_id }`。messages 只含受控 role/content。bridge 原子占用本 UI 唯一生成槽，先创建并登记 UUID，然后返回；后台发送 HTTP，并在同一请求带 `X-Request-ID`。重复发送返回 `desktop_busy`，不排出第二条本 UI 生成任务。模型加载通过独立 model_load 完成，UI 未就绪时不误称已开始生成。
 - `chat_next({ request_id })` → `{ request_id, events, terminal }`。单一未完成消费者、长轮询至事件或最多 1 秒心跳；顺序与上次连续。event 为 `{ type:"started" }`、`{ type:"delta", text }`、`{ type:"completed", finish_reason, usage }`、`{ type:"cancelled" }` 或 `{ type:"failed", code, message }`。终态后保留一个小型终态记录，重复读取返回同一终态摘要、无重复文本。
@@ -71,7 +71,7 @@
 ## 7. 首包与验证门槛
 
 - 私有开发 `desktop-windows` ZIP：Tauri EXE/嵌入前端 + `runtime/`下完整匹配T05产品包及其manifest/许可；额外桌面依赖按实际PE闭包补齐。模型仍外部导入，不复制用户数据/token；UI与runtime大小分开统计。
-- 发行 ZIP 继续严格无模型、文件集合与 manifest/SHA256SUMS 一致。用户解压后的程序根目录，以及固定`model/`、`models/`目录允许直接普通`.gguf`输入，扩展名大小写不敏感、只读四字节GGUF头、保持symlink/reparse拒绝；不hash整个输入、不计产品清单或体积、不自动导入。两个固定目录可为空，不允许未知文件或嵌套目录；runtime/licenses等其他位置、未声明EXE/DLL/脚本继续严格拒绝，全部声明文件hash/来源校验不变。原生选择其他包内目录时立即明确拒绝，不等重启；选包内允许目录时在pick/apply/重扫前复用layout校验，以拒绝UI打开后新增的不合法文件。重扫validator使用bridge持实例锁时确定的实际目录/索引，不能从display_path读取授权。包外任意受支持目录不属于产品库存。包校验不读取用户配置决定豁免，四字节识别不代替注册/加载的完整核验。
+- 发行 ZIP 继续严格无模型、文件集合与 manifest/SHA256SUMS 一致。用户解压后的程序根目录，以及固定`model/`、`models/`目录允许直接普通`.gguf`输入，扩展名大小写不敏感、只读四字节GGUF头、保持symlink/reparse拒绝；不hash整个输入、不计产品清单或体积、不自动导入。两个固定目录可为空，不允许未知文件或嵌套目录；runtime/licenses等其他位置、未声明EXE/DLL/脚本继续严格拒绝，全部声明文件hash/来源校验不变。原生选择其他包内目录时立即明确拒绝，不等重启；选包内允许目录时在pick/apply/重扫前复用layout校验，以拒绝UI打开后新增的不合法文件。重扫validator使用bridge持实例锁时确定的实际目录/索引，不能从display_path读取授权。包外任意受支持目录不属于产品库存。包校验不读取用户配置决定豁免，四字节识别不代替注册/加载的完整核验。混合坏文件诊断验收使用包外授权目录，不为本轮partial功能放宽包内preflight。
 - 启动包校验保留固定错误码到原生中文提示与 `--diagnose` schema 2；不回显用户绝对路径或任意错误文本。CI wrapper 与 evidence stager 对成功/失败报告执行同一闭合字段/错误码白名单，非零退出的合法失败报告也保存。
 - 本轮用已安装的Evergreen WebView2，不自动下载、安装或改变系统权限。缺失时在WebView建立前给原生可读错误及微软官方安装入口；不能只做网页内错误（网页根本无法启动）。检测实际版本并纳入验证证据，Windows 10或装有Edge都不等于WebView2一定存在。
 - 不新增fixed WebView2；微软当前文档说明Win10非打包Win32使用fixed v120+涉及AppContainer目录ACL要求，不适合本轮未经批准的系统权限变化。

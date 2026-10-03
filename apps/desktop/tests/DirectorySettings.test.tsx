@@ -292,3 +292,25 @@ it("displays post-rename durability ambiguity with the refreshed path and no rol
   expect(api.applyDirectory).toHaveBeenCalledTimes(1);
   expect(api.stop).not.toHaveBeenCalled();
 });
+
+it("shows partial registration and rejected basenames as text across navigation", async () => {
+  const partial: LibraryOperation = {
+    ...cancelled, status: "partial", candidate_files: 3, examined_entries: 3, verified_files: 1,
+    result: { directory_id: "new-dir", library_generation: "new-generation", registered_files: 1, available_files: 1, rejected_files: 2 },
+    file_errors: [
+      { file_name: "坏 <script>.gguf", code: "invalid_manifest", message: "Invalid structure" },
+      { file_name: "缺模板 中文.gguf", code: "unsupported_chat_template", message: "Missing template" },
+    ],
+  };
+  const { user, controller } = await setup({ snapshot: vi.fn(async () => stopped()), libraryNext: vi.fn(async () => partial) });
+  await apply(user);
+  expect(await screen.findByText("目录已部分登记：1 个已登记，2 个未登记")).toBeInTheDocument();
+  expect(screen.getByText("坏 <script>.gguf")).toBeInTheDocument();
+  expect(screen.getByText("缺模板 中文.gguf")).toBeInTheDocument();
+  expect(screen.queryByText(/模型目录已保存，登记/)).not.toBeInTheDocument();
+  expect(controller.getSnapshot().notice).toBeNull();
+  expect(document.querySelector(".library-diagnostics script")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "模型" }));
+  expect(screen.getByLabelText("模型目录核验结果")).toHaveTextContent("仅保留在当前窗口");
+  expect(screen.getByText("坏 <script>.gguf")).toBeInTheDocument();
+});

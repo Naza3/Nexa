@@ -202,7 +202,7 @@ fn windows_preexisting_writable_mapping_observation() {
     match scan {
         Ok(scanned) => {
             observed.scan_admitted = true;
-            assert_eq!(scanned.library().models.len(), 1);
+            assert_eq!(scanned.library().unwrap().models.len(), 1);
             // This open has no truncate flag and never writes, even if a
             // regression unexpectedly permits it. Drop it before the mapping
             // observation so it cannot be the writer of the changed byte.
@@ -252,7 +252,7 @@ fn windows_preexisting_writable_mapping_observation() {
     // scanned after release. This temporary scan guard is dropped here.
     observed.scan_after_release_admitted =
         scan_directory(data.path(), source.path(), None, &ScanControl::default())
-            .map(|scanned| scanned.library().models.len() == 1)
+            .map(|scanned| scanned.library().unwrap().models.len() == 1)
             .unwrap_or(false);
     observed.source_removed = fs::remove_file(&path).is_ok() && !path.exists();
     let source_path = source.path().to_path_buf();

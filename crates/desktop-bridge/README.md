@@ -18,6 +18,14 @@
 
 Token 复制属于原生壳按钮：调用现有私有 Token 读取校验，直接写系统剪贴板；本 crate 没有 Token getter。
 
+## 混合模型目录增量（本机回归通过，Windows待验）
+
+按[ADR0016](../../docs/decisions/0016-mixed-model-directory-diagnostics.md)，本轮源码已冻结、本机合成回归及独立审查通过，WindowsCI/整包/窗口待验，已交付50c9d41不含此行为。directory_apply/models_scan仍先要求停止服务并持实例锁；scan-only核旧目录身份，显式apply可选新目录。合法集合完整核验后一次发布：全合法completed，好坏混合partial，全坏failed/model_scan_no_usable_files保旧index/generation；无候选可completed空提交。
+
+私有LibraryOperationState新增file_errors（默认[]）及partial终态，LibraryOperationResult新增rejected_files（默认0），兼容旧completed缺字段。诊断仅安全basename和三种静态内容code/message；完整序列化diagnostics≤512KiB、operation≤1MiB，包含JSON转义，不截断。completed/partial有result无error，全坏result=null。诊断仅当前App生命周期及一份有界旧终态，不持久化；terminal在工作/实例锁释放后发布，避免读取终态即重扫仍误报busy。
+
+所有资源/解析预算及I/O、身份、路径/reparse、取消/超时、保存失败仍硬失败；成功/软拒guard覆盖提交或放弃决定，硬失败确定不可发布退出后可释放。自动扫描context默认值min(2048,metadata)，显式load/import/UI参数保持。公共HTTP、worker/native/library schema和包内preflight不变，混合坏文件验收使用包外目录。详细DTO/事务见[目录契约](../../docs/t06-model-directory-contract.md)，实际结果见[验证记录](../../docs/verification/2026-10-03-mixed-model-directory.md)。
+
 ## 安全与关闭边界
 
 所有请求通过 `runtime_cli::client::VerifiedConnection` 的同一 TCP endpoint-bound proof 后发送 Bearer。每项控制请求独立连接，不代理、重定向、自动重连、重放或用失败的 proof 接管既有实例。`start(false)` 永不隐式初始化。启动仅固定原生 Command/参数/路径，stdio 均为 null；Windows 显式 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，正常继承外部 Job，不请求 breakaway、不变更 Job 限制或提权，也无失败后换 flags 重试。Nexa 不新建随 UI 关闭而杀掉 runtime 的 Job；默认 UI 退出保留 runtime 的保证受外部宿主 Job 生命周期约束。启动错误仅暴露 OS 数字错误码用于定位。

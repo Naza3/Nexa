@@ -244,6 +244,7 @@ pub struct LibraryOperationHandle {
 pub enum LibraryOperationStatus {
     Running,
     Completed,
+    Partial,
     Cancelled,
     Failed,
 }
@@ -262,6 +263,14 @@ pub struct LibraryOperationResult {
     pub directory_id: Uuid,
     pub registered_files: usize,
     pub available_files: usize,
+    #[serde(default)]
+    pub rejected_files: usize,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibraryFileError {
+    pub file_name: String,
+    pub code: String,
+    pub message: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibraryOperationState {
@@ -272,6 +281,8 @@ pub struct LibraryOperationState {
     pub candidate_files: usize,
     pub verified_files: usize,
     pub failed_file_name: Option<String>,
+    #[serde(default)]
+    pub file_errors: Vec<LibraryFileError>,
     pub terminal: bool,
     pub result: Option<LibraryOperationResult>,
     pub error: Option<crate::BridgeError>,
@@ -326,5 +337,55 @@ mod compatibility_tests {
                 Some("model_file_changed")
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod library_protocol_tests {
+    use super::*;
+    #[test]
+    fn legacy_complete_defaults_and_worst_case_diagnostics_fit_full_response() {
+        let old = serde_json::json!({
+            "operation_id": Uuid::new_v4(), "status": "completed", "phase": "finished",
+            "examined_entries": 0, "candidate_files": 0, "verified_files": 0,
+            "failed_file_name": null, "terminal": true, "error": null,
+            "result": {"library_generation": Uuid::new_v4(), "directory_id": Uuid::new_v4(), "registered_files": 0, "available_files": 0}
+        });
+        let mut state: LibraryOperationState = serde_json::from_value(old).unwrap();
+        assert!(state.file_errors.is_empty());
+        assert_eq!(state.result.as_ref().unwrap().rejected_files, 0);
+        state.status = LibraryOperationStatus::Failed;
+        state.result = None;
+        state.examined_entries = 1025;
+        state.candidate_files = 64;
+        state.error = Some(crate::BridgeError::new("settings_durability_unconfirmed"));
+        let longest = [
+            "invalid_manifest",
+            "unsupported_model",
+            "unsupported_chat_template",
+        ]
+        .map(crate::BridgeError::new)
+        .into_iter()
+        .max_by_key(|e| e.message.len())
+        .unwrap();
+        state.file_errors = (0..64)
+            .map(|index| LibraryFileError {
+                file_name: format!("{}{:02}.gguf", "\u{1}".repeat(1017), index),
+                code: longest.code.clone(),
+                message: longest.message.clone(),
+            })
+            .collect();
+        assert!(
+            state
+                .file_errors
+                .iter()
+                .all(|failure| failure.file_name.len() == 1024)
+        );
+        state.failed_file_name = Some(state.file_errors[0].file_name.clone());
+        assert!(
+            serde_json::to_vec(&state.file_errors).unwrap().len()
+                <= model_store::library::MAX_SCAN_DIAGNOSTIC_BYTES
+        );
+        assert!(serde_json::to_vec(&state).unwrap().len() < 1024 * 1024);
     }
 }

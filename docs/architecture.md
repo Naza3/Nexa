@@ -80,17 +80,17 @@ dsh接入复用既有HTTP路径，先准确配置pi-ai provider，再增加真�
 | 会话、harness工具状态、Telegram等业务数据 | 调用应用 |
 | 性能/验证报告 | 验证体系，默认不记录私有正文、token或完整用户路径 |
 
-external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/hash/metadata与候选资格，不以精确验证表限制模型名。目录应用/重扫需先显式停止服务，不自动终止其他客户端。详见 [目录契约](t06-model-directory-contract.md)。
+external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/hash/metadata与候选资格，不以精确验证表限制模型名。目录应用/重扫需先显式停止服务，不自动终止其他客户端。本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)源码/本机合成回归/独立审查已完成，Windows待验：明确内容拒绝可列逐文件诊断，完整合法集合一次原子替换并以partial区分；全坏保留旧目录/index/generation，无候选可空提交。所有预算（含parser）、I/O、身份/路径/reparse、取消/超时和保存问题仍硬失败，坏文件仍计预算。scan-only核旧目录身份，apply可显式更换；成功/软拒guard覆盖提交或放弃决定，确定不可发布的硬失败退出后可释放。诊断只在本App内存，≤512KiB/完整operation≤1MiB；不改HTTP、worker/native或library schema。详见 [目录契约](t06-model-directory-contract.md)。
 
 ## 7. 桌面CPU与模型扩展
 
-按[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)，W02源码已把历史validated证据与独立loadable候选分开，本地回归通过、新Windows验收待完成，不保留模型名/hash许可名单。原0.6B/context2048只是已测链路基线；1.7B/4B等用于16GB桌面性能/质量抽样，不是产品支持名单。实际架构/张量由锁定llama loader判断，结构/模板边界仍可明确拒绝。
+按[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)，W02源码已把历史validated证据与独立loadable候选分开，50c9d41已通过WindowsCI并发送、用户目标机待验，不保留模型名/hash许可名单。原0.6B/context2048只是已测链路基线；1.7B/4B等用于16GB桌面性能/质量抽样，不是产品支持名单。实际架构/张量由锁定llama loader判断，结构/模板边界仍可明确拒绝。
 
 每个实测模型分别记录文本/工具/可选思考能力、上下文预算、内存和速度；未出现在证据矩阵不自动禁止尝试。不由GGUF扩展名或上游新版宣传授予本项目固定版本支持。新llama版本须单独升级决策与原有模型回归。
 
 现有线程/context/batch/输出与空闲卸载设置继续复用；性能优化围绕正确参数、目标CPU实测、背压与UI刷新，禁止无基线重做调度。测量parent/worker/UI、冷加载、TTFT、prefill、decode、取消与空闲成本；配置值与未知实测值严格区分。
 
-当前切片只接单文件GGUF及已实现tensor结构；原始嵌入Jinja须符合文本continuation和vocab结束规则，禁止fallback与role/system改写。分片、encoder/diffusion/noncausal、未知结构或输出framing明确拒绝。context取metadata与131072硬限，16GB不等于可运行该窗口；Job没有RAM硬限制，进程隔离不构成完整OOM保障。目录整批失败策略仍保留，逐文件诊断另做。开放源码已冻结在工作区、本地回归通过，但仍未由新提交WindowsCI或新包验收；旧交付版本不能追溯宣称完成。
+当前切片只接单文件GGUF及已实现tensor结构；原始嵌入Jinja须符合文本continuation和vocab结束规则，禁止fallback与role/system改写。分片、encoder/diffusion/noncausal、未知结构或输出framing明确拒绝。context取metadata与131072硬限，16GB不等于可运行该窗口；Job没有RAM硬限制，进程隔离不构成完整OOM保障。50c9d41仍使用目录整批失败策略；本轮ADR0016混合目录/有界诊断增量已冻结并通过本机合成回归及独立审查，精确提交WindowsCI/包待验。仅扫描登记默认context取min(2048,metadata)，不夹紧显式import/load或UI设置。开放模型基线50c9d41已有固定GGUF的WindowsCI/包与发送证据，其他模型/用户目标机未因此通过；本轮目录增量不继承旧CI结论。
 
 原始模板、metadata key与tensor name含NUL时拒绝，避免Rust/native的C-string身份截断；普通tokenizer metadata values含NUL不一概禁止。Engine初始化强制关闭common/Jinja日志并使用受控静态模板错误，最终隐私canary只证明被覆盖的成功/异常路径，不作绝对无泄漏承诺。
 

@@ -375,6 +375,23 @@ function LibraryProgress({
     </section>
   );
 }
+function LibraryDiagnostics({ state }: { state: ViewState }) {
+  const operation = state.library;
+  if (!operation?.terminal || !(operation.file_errors?.length)) return null;
+  const partial = operation.status === "partial";
+  const uncertain = operation.error?.code === "settings_durability_unconfirmed";
+  return <section className="notice-band warning library-diagnostics" aria-label="模型目录核验结果" role="status">
+    <div>
+      <strong>{partial ? `目录已部分登记：${operation.result!.registered_files} 个已登记，${operation.file_errors.length} 个未登记` : "本次核验发现未通过的文件"}</strong>
+      <p>{partial ? "合法文件已一次保存；下列文件未登记。可尝试加载不代表已实测，请启动服务读取实际可用性。" : uncertain ? "索引可能已保存，持久化尚未确认；请先核对实际配置，不能假定已回滚。" : "本次未发布新索引，原目录与索引保留。下列原因仅表示本次已检查的文件。"}</p>
+      <ul>{operation.file_errors.map((failure) => <li key={failure.file_name}>
+        <strong>{failure.file_name}</strong>：{failure.code === "invalid_manifest" ? "GGUF 结构或必需元数据无效，或超出当前结构支持范围" : failure.code === "unsupported_model" ? "当前仅支持受保护的单文件文本 GGUF，分片不受支持" : "缺少有效的原始嵌入聊天模板，不使用替代模板"}
+        <span className="subtle">（{failure.code}）</span>
+      </li>)}</ul>
+      <p>源文件未被移动、删除或改写。修复后请显式重新扫描；这些诊断仅保留在当前窗口中。</p>
+    </div>
+  </section>;
+}
 function DirectorySettings({
   state,
   controller,
@@ -523,7 +540,7 @@ function DirectorySettings({
               {confirm === "apply"
                 ? "只读核验待应用目录内的直接子级 GGUF；成功后一次保存新目录与索引。"
                 : "只读重新核验已保存目录；重命名或内容变化会产生新的内部 ID。"}
-              提交前失败或取消会保留原目录与索引。若提交后的持久化确认失败，将重新读取实际配置，不假定已回滚。不会自动启动运行服务，也不会复制或删除模型文件。
+              单文件内容不支持时，将一次保存其他合法文件，并列出未登记文件；全部文件拒绝、安全检查失败或提交前取消会保留原目录与索引。没有 GGUF 时会保存空外部索引。若提交后的持久化确认失败，将重新读取实际配置，不假定已回滚。不会自动启动运行服务，也不会复制或删除模型文件。
             </p>
           )}
         </Modal>
@@ -1541,6 +1558,7 @@ export default function App({
               </div>
             )}
           <LibraryProgress state={state} controller={controller} />
+          <LibraryDiagnostics state={state} />
           {state.notice && (
             <div className="success-notice" role="status">
               {state.notice}

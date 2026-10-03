@@ -1,6 +1,6 @@
 # T06 外部模型目录与自动名称契约
 
-2026-10-03更新。目录事务/身份/文件保护沿用既有契约；模型资格按ADR0015开发增量更新，源码已冻结且本地回归通过，仍需新提交WindowsCI/目标机验收，不表示已交付。限额、runtime-lifetime lease及轻量启动/首次加载核验已确认；不是实现或验收报告。工程要求为设置可选择模型目录、直接使用已有GGUF且不复制，并按GGUF文件名自动命名。现有壳侧14文件的包校验/诊断修复保持独立，不混入本次改动。
+2026-10-03更新。ADR0015开放模型基线50c9d41已过WindowsCI并发送，用户目标机仍待验；本轮按[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)实施混合目录partial/有界诊断和短context扫描默认值，源码已冻结、本机合成回归及独立审查通过，精确提交WindowsCI/包/目标机待验。下述增量是本轮实施契约，不追溯授予50c9d41新行为。runtime-lifetime lease及轻量启动/首次加载核验保持；实际结果见[本轮验证记录](verification/2026-10-03-mixed-model-directory.md)。
 
 ## 1. 现状与最小范围
 
@@ -17,7 +17,7 @@
 
 - 使用现有私有文件与原子替换机制，不将新设置写入隐藏注释，不承诺两个文件联合原子。既有 config.toml、secrets、runtime 与 managed models 保持位置。
 - 应用新目录或重新扫描都必须先确认 runtime 已停止、无存活 discovery，并持有同一 data root 的实例锁直到提交或取消完成。仅卸载不够。不得自动 shutdown 其他客户端。
-- 完整枚举和核验先在内存构建有界候选索引，成功后一次原子发布上述文件。取消、超限、目录不可读、损坏 GGUF、文件变动或保存失败均不提交半份索引，保留原已选目录及索引。不可静默跳过坏 GGUF 后把结果称为完整成功。
+- 完整枚举、核验和有界诊断先在内存完成，合法集合一次原子发布上述文件；不边扫描边保存。全合法为completed，好坏混合为partial并返回全部内容拒绝诊断。有候选但全部内容拒绝时failed/model_scan_no_usable_files、result=null，保留原目录/index/generation；完整枚举后没有GGUF候选则可completed提交空集合。取消、所有预算触限、IO/路径/reparse/身份变化和保存失败均不部分发布；确定内容错误才可逐文件拒绝，不能静默跳过后称完整成功。
 - 无扩展名匹配的普通文件不作为候选；符合本版结构/manifest边界但未在验证矩阵中的GGUF可登记为未实测loadable候选，不再仅因validated=false设为不可用。分片、未知tensor布局、缺模板/损坏文件、模板/key/tensor-name的NUL身份歧义仍拒绝；普通tokenizer值NUL不一概禁止。
 - 取消与明确的原子提交决策竞争：取消先赢则不保存；提交决策已赢则完成发布，晚到取消不能谎称回滚。原子保存成功后，独立网络刷新失败不把它改称保存失败。rename已发布而目录fsync失败沿用settings_durability_unconfirmed，明确可能已保存并刷新真实generation，不承诺回滚旧索引。
 - 新目录选择不等于长期凭据初始化；保存模型库元数据不得隐式创建或轮换 token。
@@ -35,9 +35,9 @@
 以下预算已获父级确认，不能把触限当作只读取前若干项的成功：
 
 - 目录路径至多32KiB UTF-8、64个components（包含平台root/prefix），候选picker与后端复用同一校验；超界拒绝，不截断路径
-- 每次目录枚举至多 1024 个直接条目、64 个 GGUF 候选；最多同时核验 1 个文件
-- 单GGUF至多16GiB；本次候选总字节至多32GiB；metadata沿用64MiB header / 1MiB string / 100000 entries。W02将同一16GiB单文件限额同步到managed导入前、manifest与load；这不是16GB机器能运行该模型的保证
-- model-library.json 至多 4 MiB；所有文件名、显示名、列表及错误记录同时受数量和字节预算约束
+- 每次目录枚举至多 1024 个直接条目、64 个 GGUF 候选；最多同时核验 1 个文件，坏文件同样计入候选及单文件/总字节预算。成功及软拒文件的guard保留到提交或放弃决定；硬失败确定不可发布并退出后可释放
+- 单GGUF至多16GiB；本次候选总字节至多32GiB；metadata沿用64MiB header / 1MiB string / metadata与tensor各100000项 / 数组1000000项等全部既有parser预算；触限一律硬失败。私有read_for_scan用typed来源映射ModelLibraryLimit，不改既有managed read错误语义。W02将同一16GiB单文件限额同步到managed导入前、manifest与load；这不是16GB机器能运行该模型的保证
+- model-library.json 至多 4 MiB；所有文件名、显示名、列表及错误记录同时受数量和字节预算约束。本轮新增完整序列化file_errors≤512KiB、完整operation DTO≤1MiB（包含JSON转义），不得截断后伪报partial成功
 - apply/scan 总 deadline 300 秒，64 KiB 流式块检查取消及时间；不将大文件整体读入内存
 - 运行时核验沿用同一有限循环，不能在 scheduler actor 内做全文件 hash；既有 start/load/stop deadline 不因本功能偷偷放宽
 - 每个 bridge 最多一个库操作，最多一个待处理 poll；只保留当前操作和一份有界终态；前端最多 1 Hz、不重叠拉取
@@ -66,8 +66,10 @@
 
 - `model_directory_pick()` → null 或 `{ selection_id, display_path }`。原生 folder picker，Rust保存原路径与选择身份。取消不改变配置；selection只能被一个 apply 接纳一次。壳不自行扫描或 hash。
 - `model_directory_apply({ selection_id })` → `{ operation_id }`。壳取出候选路径交 bridge；bridge先登记操作ID，后台完成停止条件/锁/有界扫描/单文件提交。仅真正接纳后消费selection；重复动作返回 desktop_busy。
-- `models_scan()` → `{ operation_id }`。按已选目录重新核验；没有选择返回 model_directory_required。与 apply 同样要求停止并持实例锁。
-- `model_library_next({ operation_id })` → `{ operation_id, status, phase, examined_entries, candidate_files, verified_files, failed_file_name, terminal, result, error }`。status=`running|completed|cancelled|failed`；phase=`checking|enumerating|verifying|committing|finished`；result=null 或 `{ library_generation, directory_id, registered_files, available_files }`；error=null 或现有受控 `{code,message}`。failed_file_name=null 或当前失败的受控basename（≤1024 UTF-8字节，仅原生授权UI使用），不含目录；成功/取消可为null，日志/CI不写此名称。最多等待1秒；不传模型正文、完整错误或原生路径。终态重复读取返回同一小型摘要。
+- `models_scan()` → `{ operation_id }`。按已选目录重新核验；没有选择返回 model_directory_required。与 apply 同样要求停止并持实例锁；在同一次DirectoryGuard中核旧目录身份，路径相同但对象已替换仍硬失败。apply可由新的显式selection选择不同目录。
+- `model_library_next({ operation_id })` → `{ operation_id, status, phase, examined_entries, candidate_files, verified_files, failed_file_name, file_errors, terminal, result, error }`。status=`running|completed|partial|cancelled|failed`；phase=`checking|enumerating|verifying|committing|finished`；result=null 或 `{ library_generation, directory_id, registered_files, available_files, rejected_files }`。completed/partial必须有result且error=null；partial为已提交合法集合，rejected_files与完整file_errors一致。全坏为failed/model_scan_no_usable_files且result=null，不发布；硬失败只保留已观察诊断，不声称后续文件已检查。
+- `file_errors`为`[{ file_name, code, message }]`，仅invalid_manifest/unsupported_model/unsupported_chat_template及静态受控message。basename≤1024 UTF-8字节，不含目录；`failed_file_name`仍可指具体硬失败basename。原生授权UI可显示，日志/CI不写文件名。旧completed缺file_errors/rejected_files按[]/0读取。诊断不持久化，仅当前App生命周期内一项操作和一份有界旧终态；重启不承诺找回。
+- 每次next最多等1秒，不传模型正文、原始异常或完整路径。terminal在工作/实例锁释放后发布；重复读取返回同一有界结果。soft-reject guard覆盖最终提交或放弃决定，不为等待UI poll继续持有已确定硬失败的资源。
 - `model_library_cancel({ operation_id })` → `{ operation_id, status:"stopping" }`。只取消本UI持有操作；真正终态由 next 返回。早取消不得丢失，不得取消另一个UI操作。关闭UI复用此取消并有限等待真实扫描结束，不能提前释放仍被blocking任务持有的实例锁。
 - 原 `model_import` 与公开复制导入 HTTP/CLI 保留兼容；新桌面主流程不要求手填 model_id，也不把扫描叫做复制导入。
 
@@ -103,23 +105,21 @@ ModelSummary新增loadable和候选context_limit信息；manifest schema1保留�
 
 compatibility保留字符串兼容读取；新写入以admitted表示有原精确历史证据、unvalidated表示未实测，旧architecture_unsupported等枚举可读取，不再依赖它们作为人工模型名单。旧服务缺loadable时UI保守禁用并要求启动匹配版本，不把旧validated当新loadable伪造。
 
-未实测合法候选显示“未实测，可尝试加载”；实际引擎、模板、输出framing与资源限制仍可导致失败。文件/目录消失或变动等具体错误优先；不把失败改称历史未入名单，也不静默换模板。旧389eeef的UI/字段门槛保持历史事实，本节增量源码已冻结，本地回归通过，CI和新包窗口验收仍待完成。
+未实测合法候选显示“未实测，可尝试加载”；实际引擎、模板、输出framing与资源限制仍可导致失败。文件/目录消失或变动等具体错误优先；不把失败改称历史未入名单，也不静默换模板。旧389eeef的UI/字段门槛保持历史事实；ADR0015增量已由50c9d41 WindowsCI回归并发送，新包原生窗口/用户目标机仍待验。本轮ADR0016扫描增量另行验证。
 
 context_limit按模型metadata和131072既有硬限约束；历史验证context2048只表明测过2048，不能阻止合法更大参数尝试，也不保证16GB能容纳131072。没有新增Job RAM硬限制，UI须如实提示内存/资源风险。
 
-### 目录整批失败的当前限制
+### 混合目录增量与已交付版本边界
 
-目录应用/重扫仍先完整建立候选索引，再一次原子发布；一个结构不支持/分片/缺模板/损坏GGUF即可使整批登记失败。旧目录和索引保持，不删除源文件。必须明确提示本次扫描未完成，不能让用户误以为其他文件已注册。
+已交付50c9d41仍可能因单个坏GGUF整批失败。本轮ADR0016在完整安全扫描后，将明确内容拒绝与硬失败分开；合法集合一次原子替换并标partial，全坏保旧index/generation，空目录可空提交。被拒文件仅列本轮诊断，不持久注册为不可用模型。成功partial不混入旧坏条目，未扫描部分不冒充完整。
 
-metadata context小于默认2048时，当前默认登记仍失败；自动扫描取min与逐文件诊断为下一片，用户显式参数不能静默夹紧。
-
-逐文件诊断、列出单个不可用项及可用文件部分登记是下一片设计，不属于本次已实现能力；在其事务/结果契约完成前不静默跳过失败文件。
+仅自动扫描的登记默认context改取min(2048, metadata.context_length)；显式import/load和UI参数不夹紧。扫描登记成功不保证当前加载参数适合该模型。该增量已冻结并通过本机合成回归/独立审查，尚未新提交WindowsCI或新版本交付，不追溯修改50c9d41事实。
 
 ## 8. 受控错误与验收
 
-复用 runtime_running、desktop_busy、request_not_owned 等既有错误；新边界需要明确安全code：model_library_unsupported、model_directory_required、model_directory_unavailable、model_directory_unsupported、model_library_limit、model_library_changed、model_list_changed、model_scan_timeout、model_scan_cancelled、model_file_changed、model_file_unavailable、model_file_in_use、model_library_write_failed。错误正文不包含token、完整源路径或任意底层异常。
+复用 runtime_running、desktop_busy、request_not_owned 等既有错误；新边界需要明确安全code：model_library_unsupported、model_directory_required、model_directory_unavailable、model_directory_unsupported、model_library_limit、model_library_changed、model_list_changed、model_scan_timeout、model_scan_cancelled、model_scan_no_usable_files、model_file_changed、model_file_unavailable、model_file_in_use、model_library_write_failed。错误正文不包含token、完整源路径或任意底层异常。
 
-至少覆盖：非白名单模型的loadable/validated分离、伪造证据拒绝、旧服务缺字段保守处理、混合目录整批失败；中文/空格文件自动显示名；旧managed可见/ID不变；只读目录零写入且GGUF hash/长度不变；新目录不复制；同名/重命名/同hash多文件规则；取消/失败原配置与索引不变；目录/文件消失；超限不部分提交；旧runtime身份不匹配；分页generation拒绝陈旧页；Windows外部文件lease对抗矩阵；真实外部GGUF加载/生成/取消/卸载/停止；停止后原文件可再次编辑；程序旁目录不会令严格产品inventory把合法模型误拒，也不会放行任意DLL/EXE/reparse。
+至少覆盖：非白名单模型的loadable/validated分离、伪造证据拒绝、旧服务缺字段保守处理；混合目录partial/全坏保旧/真空清空、诊断完整与预算、parser预算硬失败、scan-only旧身份、软拒guard与短context仅扫描默认值；中文/空格文件自动显示名；旧managed可见/ID不变；只读目录零写入且GGUF hash/长度不变；新目录不复制；同名/重命名/同hash多文件规则；取消/失败原配置与索引不变；目录/文件消失；超限不部分提交；旧runtime身份不匹配；分页generation拒绝陈旧页；Windows外部文件lease对抗矩阵；真实外部GGUF加载/生成/取消/卸载/停止；停止后原文件可再次编辑；程序旁目录不会令严格产品inventory把合法模型误拒，也不会放行任意DLL/EXE/reparse。
 
 壳包校验只给指定数据类别建立准确边界。不能整棵`model/`或`models/`无条件跳过；所选目录在产品外无需改产品清单；产品内部的源GGUF目录只允许受控目录/普通GGUF与必要的精确规则，产品EXE、runtime、DLL、manifest及SHA清单仍原样严格验证。新目录注册元数据不在产品里，因此无须为model-library.json/imports/model-store.lock放开发行包。
 

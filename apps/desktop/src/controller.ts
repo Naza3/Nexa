@@ -32,6 +32,41 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 const encoder = new TextEncoder();
 export const byteLength = (value: string) => encoder.encode(value).byteLength;
+// Native responses are still validated before accepting a committed outcome.
+// New fields are optional only for the old complete/failed desktop protocol.
+function validLibraryOperation(value: LibraryOperation): boolean {
+  const integer = (n: number, maximum: number) => Number.isSafeInteger(n) && n >= 0 && n <= maximum;
+  const failures = value.file_errors ?? [];
+  const published = value.status === "completed" || value.status === "partial";
+  if (!["running", "completed", "partial", "cancelled", "failed"].includes(value.status) ||
+    !["checking", "enumerating", "verifying", "committing", "finished"].includes(value.phase) ||
+    !integer(value.examined_entries, 1025) || !integer(value.candidate_files, 64) ||
+    !integer(value.verified_files, value.candidate_files) || value.candidate_files > value.examined_entries || !Array.isArray(failures) || failures.length > 64 ||
+    failures.some((failure) => !failure || typeof failure.file_name !== "string" ||
+      !failure.file_name || /[/\\\0]/.test(failure.file_name) || byteLength(failure.file_name) > 1024 ||
+      !["invalid_manifest", "unsupported_model", "unsupported_chat_template"].includes(failure.code) ||
+      typeof failure.message !== "string" || byteLength(failure.message) > 500) ||
+    new Set(failures.map((failure) => failure.file_name)).size !== failures.length ||
+    byteLength(JSON.stringify(failures)) > 512 * 1024 || byteLength(JSON.stringify(value)) > 1024 * 1024 ||
+    value.verified_files + failures.length > value.candidate_files ||
+    (value.status === "running" && (value.result !== null || value.error !== null)) ||
+    (!published && value.result !== null) ||
+    (value.status === "failed" && !value.error) ||
+    (value.status === "cancelled" && value.error !== null && value.error?.code !== "model_scan_cancelled")) return false;
+  if (published) {
+    const result = value.result;
+    const rejected = result?.rejected_files ?? 0;
+    if (!result || value.error || !result.directory_id || !result.library_generation ||
+      !integer(result.registered_files, 64) || !integer(result.available_files, result.registered_files) ||
+      !integer(rejected, 64) || rejected !== failures.length || result.registered_files !== value.verified_files ||
+      value.candidate_files !== result.registered_files + rejected || value.examined_entries > 1024 ||
+      (value.status === "partial" && (!result.registered_files || !rejected)) ||
+      (value.status === "completed" && rejected !== 0)) return false;
+  }
+  if (value.error?.code === "model_scan_no_usable_files" &&
+    (value.status !== "failed" || value.verified_files !== 0 || failures.length === 0 || failures.length !== value.candidate_files)) return false;
+  return true;
+}
 export type MessageState = "complete" | "streaming" | "incomplete";
 export interface SessionMessage extends WireMessage {
   id: number;
@@ -438,10 +473,10 @@ export class DesktopController {
         if (this.libraryTask !== task) return;
         const terminal = progress.status !== "running";
         if (
-          progress.operation_id !== task.id ||
+          !validLibraryOperation(progress) || progress.operation_id !== task.id ||
           progress.terminal !== terminal ||
           (terminal && progress.phase !== "finished") ||
-          (progress.status === "completed" &&
+          ((progress.status === "completed" || progress.status === "partial") &&
             (!progress.result || progress.error)) ||
           (progress.status === "failed" && !progress.error)
         )
@@ -465,13 +500,15 @@ export class DesktopController {
             page_after: null,
           });
         }
-        if (progress.status === "completed") {
+        if (progress.status === "completed" || progress.status === "partial") {
           ++this.modelsEpoch;
           this.modelsLoaded = false;
           this.update({
             models: { data: [], next_after: null, generation: null },
             page_after: null,
-            notice: `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个可尝试加载（不代表已实测）。请启动运行服务读取实际可用性。`,
+            notice: progress.status === "partial" ? null : progress.result!.registered_files === 0
+              ? "模型目录已保存，未发现直接子级 GGUF 文件；当前外部索引为空。"
+              : `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个可尝试加载（不代表已实测）。请启动运行服务读取实际可用性。`,
           });
         } else if (progress.status === "cancelled")
           this.update({ notice: "模型库操作已取消，原目录与索引保持不变。" });

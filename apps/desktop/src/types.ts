@@ -109,10 +109,16 @@ export interface LibraryResult {
   directory_id: string;
   registered_files: number;
   available_files: number;
+  rejected_files?: number;
+}
+export interface LibraryFileError {
+  file_name: string;
+  code: "invalid_manifest" | "unsupported_model" | "unsupported_chat_template";
+  message: string;
 }
 export interface LibraryOperation {
   operation_id: string;
-  status: "running" | "completed" | "cancelled" | "failed";
+  status: "running" | "completed" | "partial" | "cancelled" | "failed";
   phase: "checking" | "enumerating" | "verifying" | "committing" | "finished";
   examined_entries: number;
   candidate_files: number;
@@ -121,6 +127,7 @@ export interface LibraryOperation {
   result: LibraryResult | null;
   error: SafeError | null;
   failed_file_name: string | null;
+  file_errors?: LibraryFileError[];
 }
 export interface ModelPage {
   data: ModelSummary[];

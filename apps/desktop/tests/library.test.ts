@@ -452,3 +452,64 @@ describe("post-rename durability ambiguity", () => {
     expect(controller.getSnapshot().operation).toBeNull();
   });
 });
+
+function partialProgress(): LibraryOperation {
+  return {
+    ...progress("completed"), status: "partial", verified_files: 1,
+    result: { directory_id: "new-directory", library_generation: "new-generation", registered_files: 1, available_files: 1, rejected_files: 1 },
+    file_errors: [{ file_name: "坏 文件.gguf", code: "invalid_manifest", message: "Invalid GGUF structure" }],
+  };
+}
+it("accepts partial publication after late cancellation without claiming complete success", async () => {
+  const terminal = deferred<LibraryOperation>();
+  const { api, controller } = await create({ libraryNext: vi.fn(() => terminal.promise) });
+  await controller.pickDirectory(); await controller.applyDirectory(); await vi.advanceTimersByTimeAsync(0);
+  await controller.cancelLibrary(); terminal.resolve(partialProgress()); await vi.advanceTimersByTimeAsync(0);
+  expect(controller.getSnapshot().library?.status).toBe("partial");
+  expect(controller.getSnapshot().library?.file_errors).toHaveLength(1);
+  expect(controller.getSnapshot().models.generation).toBeNull();
+  expect(controller.getSnapshot().notice).toBeNull();
+  expect(controller.getSnapshot().error).toBeNull();
+  expect(api.snapshot).toHaveBeenCalledTimes(2);
+  expect(api.applyDirectory).toHaveBeenCalledTimes(1);
+});
+it("retains all-rejected diagnostics and the original configured directory", async () => {
+  const failed: LibraryOperation = { ...partialProgress(), status: "failed", verified_files: 0, candidate_files: 1, result: null, error: { code: "model_scan_no_usable_files", message: "No usable GGUF files" } };
+  const { controller } = await create({ libraryNext: vi.fn(async () => failed) });
+  await controller.pickDirectory(); await controller.applyDirectory(); await vi.advanceTimersByTimeAsync(0);
+  expect(controller.getSnapshot().library_phase).toBe("idle");
+  expect(controller.getSnapshot().library?.file_errors).toHaveLength(1);
+  expect(controller.getSnapshot().snapshot?.model_directory.configured).toEqual(identity);
+  expect(controller.getSnapshot().error?.code).toBe("model_scan_no_usable_files");
+});
+it("accepts a 1025-entry hard failure instead of hiding its terminal", async () => {
+  const { controller } = await create({ libraryNext: vi.fn(async () => ({ ...progress("failed"), examined_entries: 1025 })) });
+  await controller.pickDirectory(); await controller.applyDirectory(); await vi.advanceTimersByTimeAsync(0);
+  expect(controller.getSnapshot().library_phase).toBe("idle");
+  expect(controller.getSnapshot().error?.code).toBe("model_library_limit");
+});
+it.each([
+  (value: LibraryOperation) => ({ ...value, status: "future_status" }),
+  (value: LibraryOperation) => ({ ...value, file_errors: [] }),
+  (value: LibraryOperation) => ({ ...value, examined_entries: 0 }),
+  (value: LibraryOperation) => ({ ...value, result: { ...value.result!, registered_files: 2 } }),
+  (value: LibraryOperation) => ({ ...value, result: { ...value.result!, rejected_files: 0 } }),
+  (value: LibraryOperation) => ({ ...value, file_errors: [...value.file_errors!, ...value.file_errors!] }),
+  (value: LibraryOperation) => ({ ...value, file_errors: [{ ...value.file_errors![0], file_name: "D:\\secret\\bad.gguf" }] }),
+  (value: LibraryOperation) => ({ ...value, status: "cancelled", result: null, error: { code: "settings_durability_unconfirmed", message: "uncertain" } }),
+])("does not accept inconsistent or unknown partial outcomes", async (change) => {
+  const invalid = change(partialProgress()) as LibraryOperation;
+  const { api, controller } = await create({ libraryNext: vi.fn(async () => invalid) });
+  await controller.pickDirectory(); await controller.applyDirectory(); await vi.advanceTimersByTimeAsync(0);
+  expect(controller.getSnapshot().library_phase).toBe("recovery");
+  expect(controller.getSnapshot().error?.code).toBe("invalid_library_operation");
+  expect(controller.getSnapshot().notice).toBeNull();
+  expect(api.applyDirectory).toHaveBeenCalledTimes(1);
+});
+it("keeps a partial commit even when its independent refresh fails", async () => {
+  const { controller } = await create({ snapshot: vi.fn().mockResolvedValueOnce(stopped()).mockRejectedValue({ code: "connection_failed", message: "Refresh failed" }), libraryNext: vi.fn(async () => partialProgress()) });
+  await controller.pickDirectory(); await controller.applyDirectory(); await vi.advanceTimersByTimeAsync(0);
+  expect(controller.getSnapshot().library?.status).toBe("partial");
+  expect(controller.getSnapshot().library?.file_errors).toHaveLength(1);
+  expect(controller.getSnapshot().library_phase).toBe("idle");
+});

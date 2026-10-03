@@ -58,8 +58,8 @@ Qwen3.5-4B及其他模型未实测不等于被产品名称名单永久禁止；�
 
 新模型可先作为“未实测，可尝试加载”候选；运行失败返回具体原因，不自动升级validated，也不通过换模板/换模型假装成功。需要新llama版本时另立升级验证，不自动跟随上游。
 
-managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。metadata context小于默认2048时，当前默认登记仍失败；自动扫描改取min与逐文件诊断属于下一片，用户显式参数不会静默夹紧。
+managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。已发送50c9d41在metadata context小于默认2048时扫描登记仍失败；本轮ADR0016源码已冻结并过本机合成回归/独立审查，仅自动扫描default_context改取min(2048,metadata)，用户显式import/load/UI参数不静默夹紧，尚无本切片WindowsCI/新包/真实短context模型验证。
 
-当前结构子集包括GGUF v2/v3及已实现常规/K tensor布局；未知layout、分片、无嵌入模板或非受支持执行方式明确拒绝。目录扫描仍一个不兼容文件可能使整次登记失败；逐文件诊断尚未实现。[W02记录](verification/2026-10-03-windows-open-models.md)单列逻辑、模板fixture、真实模型和WindowsCI，不混用通过结论。
+当前结构子集包括GGUF v2/v3及已实现常规/K tensor布局；未知layout、分片、无嵌入模板或非受支持执行方式明确拒绝。已发送50c9d41仍可能因单个不兼容文件整批登记失败；本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)在完整安全扫描后一次发布合法集合，partial带完整有界诊断、全坏保旧、空目录可空提交。所有预算/IO/身份/路径/reparse/取消/timeout/save仍硬失败；实现及本机合成回归/独立审查已完成，WindowsCI/整包待验，见[新记录](verification/2026-10-03-mixed-model-directory.md)。候选扫描改进不新增任何模型实测标签。[W02记录](verification/2026-10-03-windows-open-models.md)单列逻辑、模板fixture、真实模型和WindowsCI，不混用通过结论。
 
 旧Android/MNN研究矩阵完整保留于[原矩阵快照](archive/windows-focus-2026-10-03/docs/model-matrix.md)，不构成当前Windows依赖。

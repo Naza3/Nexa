@@ -5,7 +5,7 @@
 - 项目名：Nexa；命令与原生符号沿用 `ai-runtime` / `ai-runtime-worker` / `air_*`
 - 文档对象：实现项目的开发者、编码 AI、验收人员
 
-> 本文定义Windows runtime契约与后续验收，不代表所有规划已经实现。ADR0015开放模型字段/行为已在工作区冻结并通过本地回归，尚未新提交Windows验收或交付；35bfd85及已交付389eeef仍保持旧模型门槛。实现/真实模型/CI/目标设备结果见当前状态；旧混合平台v1.3保留于历史快照，不再作为当前要求。
+> 本文定义Windows runtime契约与后续验收，不代表所有规划已经实现。ADR0015开放模型字段/行为已由50c9d41 WindowsCI固定GGUF回归并发送，用户目标机待验；ADR0016混合目录与诊断源码已冻结、本机合成回归/独立审查通过，WindowsCI/整包及交付仍待完成。35bfd85/389eeef不能追溯获得新行为。实现/真实模型/CI/目标设备结果见当前状态；旧混合平台v1.3保留于历史快照，不再作为当前要求。
 
 本文负责runtime具体契约；[架构](docs/architecture.md)负责职责，[ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)负责范围，[路线](docs/roadmap.md)负责W00–W05依赖，[当前状态](PROJECT_STATE.md)记录事实。deepseek harness接入新增门槛见[harness契约](docs/windows-harness-contract.md)。
 
@@ -155,7 +155,7 @@ llama.cpp 提供 C API；复杂聊天模板还需要关注同版本的 common/ch
 
 上下文预算规则：`prompt_tokens + max_tokens <= context_size`。prompt_tokens 必须包含模板和特殊 token。第一版不静默截断历史，不自动摘要，也不开启上下文滑动。
 
-### 4.4 开放模型与历史验证（ADR0015，新Windows验收待完成）
+### 4.4 开放模型与历史验证（ADR0015，用户目标机待验）
 
 用户要求16GB目标机支持很多模型，不将运行范围固化为特定几个型号。候选加载不依赖模型名、文件名、架构名列表或预先批准的hash；锁定llama.cpp实际loader判断架构、张量与执行能力。精确[模型矩阵](docs/model-matrix.md)仍记录已测输入/设备/参数，不能把未列入表等同禁止尝试。
 
@@ -199,7 +199,11 @@ Windows使用用户数据目录，支持`--data-dir`显式覆盖；同一实例�
 
 现有 Windows GGUF manifest 至少包含：schema_version、id、display_name、relative_file、size_bytes、sha256、source、architecture、quantization、template_sha256、context_limit、default_context、validated_llama_commit、capabilities。未知字段可保留；缺失关键校验字段不标记为已验证；无历史validated不等于不能成为受控加载候选。T02目录原子提交、Windows保留文件名限制和验证缓存决策见 [ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)，不改变公共model_id语法。
 
-managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。metadata context小于默认2048时，当前默认登记仍失败；自动扫描改取min与逐文件诊断属于下一片，用户显式参数不会静默夹紧。
+managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。已交付50c9d41在metadata context小于默认2048时默认扫描登记仍失败。本轮ADR0016仅自动扫描改取min(2048,metadata)，显式import/load和UI设置不静默夹紧；增量已过本机合成回归/独立审查，WindowsCI与目标机另验。
+
+外部目录应用/重扫按[ADR0016](docs/decisions/0016-mixed-model-directory-diagnostics.md)：完整有界扫描后一次原子发布合法集合；好坏混合为partial并返回完整内容拒绝诊断，全坏failed/model_scan_no_usable_files保旧目录/index/generation，无GGUF候选可空提交。坏文件计全部候选/字节预算，GGUF parser的header/string/metadata/tensor等限额，以及I/O、路径/reparse、身份、取消/timeout/save均硬失败。私有read_for_scan只为扫描将typed预算映射既有ModelLibraryLimit，不改变managed读取语义。
+
+scan-only在同一DirectoryGuard核旧目录身份，apply可由显式selection换新目录；成功与软拒source guard保持到提交或放弃决定，已确定不可发布的硬失败退出后可释放。私有DTO增加partial/file_errors/rejected_files，旧completed缺字段按[]/0；完整diagnostics≤512KiB、operation≤1MiB，诊断只在当前App生命周期内保存。terminal在工作/实例锁释放后发布。公共HTTP、worker/native/library schema及包内preflight均不改；详见[目录契约](docs/t06-model-directory-contract.md)，本轮结果另行登记。
 
 ### 5.2 默认配置
 
@@ -327,7 +331,7 @@ shutdown始终等待安全边界并调用close。关闭进行中新发生且未�
 - 首次取消开始五秒宽限，重复取消不重置期限。未获安全清理ACK时终止并回收整个worker，确认死亡后才报告Faulted；正常终态在资源清理后发送，槽位一直保留到ACK/已回收故障
 - EOF、破损帧、异常退出、握手或退出超时使受影响请求内部各终结一次；不重放任何部分输出。Faulted后只由显式Load启动新worker；旧worker已回收时显式Load恢复链内部的ExecutorCommand::Unload可直接确认；Faulted下公共unload仍返回RuntimeFaulted。Runtime shutdown还等待Executor::close完成并报告回收错误
 
-W02内部ResolvedModel由validated改为独立loadable，私有IPC现为2，shim行为身份为3，公共协议仍1，C ABI布局保持v2。adapter Engine::new核对实际build_info，旧AIR_NATIVE_DIR archive、旧父/worker混搭和伪造identity均拒绝；worker Hello及包manifest/独立验收器同步。此tuple本地已验证，新提交WindowsCI和交付仍待完成；其他信用、终态及取消门槛不降低。
+W02内部ResolvedModel由validated改为独立loadable，私有IPC现为2，shim行为身份为3，公共协议仍1，C ABI布局保持v2。adapter Engine::new核对实际build_info，旧AIR_NATIVE_DIR archive、旧父/worker混搭和伪造identity均拒绝；worker Hello及包manifest/独立验收器同步。此tuple已在50c9d41 WindowsCI回归并随包发送，用户目标机待验；本轮目录增量不改该tuple；其他信用、终态及取消门槛不降低。
 
 Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md) 及 [T03验证](docs/verification/2026-10-01-t03-worker.md)，不把Linux开发探针当作Windows目标验收。
 
@@ -541,7 +545,7 @@ W00–W05是当前唯一后续路线，最小增量、依赖与验收见[Windows
 | 当前阶段 | 范围 |
 | --- | --- |
 | W00 | Windows桌面CPU/API范围与文档收敛，历史设计归档 |
-| W01 | 当前389eeef包目录/自动名/零复制/剪贴板与独立API短验 |
+| W01 | 最新已发送50c9d41包目录/自动名/零复制/剪贴板与独立API短验，原生窗口及用户目标机待验 |
 | W02 | 开放模型候选/历史验证分离、16GB基准样本、独立工具能力与CPU资源性能 |
 | W03 | 托盘与管理器体验，复用现有服务/设置能力 |
 | W04 | dsh/pi-ai准确配置、协议差异和真实harness工具回合 |

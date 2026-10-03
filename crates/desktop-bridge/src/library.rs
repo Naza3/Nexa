@@ -44,6 +44,7 @@ impl LibraryTask {
             state.examined_entries = progress.examined_entries;
             state.candidate_files = progress.candidate_files;
             state.verified_files = progress.verified_files;
+            state.file_errors = file_errors(&progress);
         }
         state
     }
@@ -55,9 +56,14 @@ impl LibraryTask {
         state.examined_entries = progress.examined_entries;
         state.candidate_files = progress.candidate_files;
         state.verified_files = progress.verified_files;
+        state.file_errors = file_errors(&progress);
         match result {
             Ok(result) => {
-                state.status = LibraryOperationStatus::Completed;
+                state.status = if result.rejected_files == 0 {
+                    LibraryOperationStatus::Completed
+                } else {
+                    LibraryOperationStatus::Partial
+                };
                 state.result = Some(result);
             }
             Err(error) => {
@@ -97,6 +103,20 @@ impl Drop for OwnsInstance {
 }
 fn error(error: runtime_types::RuntimeError) -> BridgeError {
     BridgeError::new(error.code.as_str())
+}
+fn file_errors(progress: &model_store::library::ScanProgress) -> Vec<LibraryFileError> {
+    progress
+        .file_errors
+        .iter()
+        .map(|failure| {
+            let error = BridgeError::new(failure.reason.as_str());
+            LibraryFileError {
+                file_name: failure.file_name.clone(),
+                code: error.code,
+                message: error.message,
+            }
+        })
+        .collect()
 }
 impl DesktopBridge {
     pub fn with_directory_validator(
@@ -151,6 +171,7 @@ impl DesktopBridge {
                 candidate_files: 0,
                 verified_files: 0,
                 failed_file_name: None,
+                file_errors: Vec::new(),
                 terminal: false,
                 result: None,
                 error: None,
@@ -195,6 +216,7 @@ impl DesktopBridge {
             task.owns_instance.store(true, Ordering::Release);
             let _owner = OwnsInstance(task.clone());
             let previous = ModelLibrary::read(&root).map_err(error)?;
+            let rescan = candidate.is_none();
             let directory = candidate
                 .or_else(|| previous.as_ref().map(|old| old.directory.clone()))
                 .ok_or_else(|| BridgeError::new("model_directory_required"))?;
@@ -202,33 +224,59 @@ impl DesktopBridge {
                 validator(&directory)?;
             }
             task.control.check().map_err(error)?;
-            let scanned = model_store::library::scan_directory(
-                &root,
-                &directory,
-                previous.as_ref(),
-                &task.control,
-            )
+            let scanned = if rescan {
+                model_store::library::rescan_directory(
+                    &root,
+                    previous
+                        .as_ref()
+                        .ok_or_else(|| BridgeError::new("model_directory_required"))?,
+                    &task.control,
+                )
+            } else {
+                model_store::library::scan_directory(
+                    &root,
+                    &directory,
+                    previous.as_ref(),
+                    &task.control,
+                )
+            }
             .map_err(error)?;
-            let bytes = scanned.library().encode().map_err(error)?;
-            task.control.begin_commit().map_err(error)?;
-            settings::atomic_replace(&root.join(LIBRARY_FILE), &bytes).map_err(|cause| {
-                if cause.code == "settings_durability_unconfirmed" {
-                    cause
-                } else {
-                    BridgeError::new("model_library_write_failed")
+            // Resolve publication or abandonment while all guards and the lock
+            // are held. Publish the terminal only after this scope is released.
+            (|| {
+                task.control.check().map_err(error)?;
+                let library = scanned
+                    .library()
+                    .ok_or_else(|| BridgeError::new("model_scan_no_usable_files"))?;
+                let diagnostics = file_errors(&task.control.progress());
+                if serde_json::to_vec(&diagnostics)
+                    .map_err(|_| BridgeError::new("model_library_limit"))?
+                    .len()
+                    > model_store::library::MAX_SCAN_DIAGNOSTIC_BYTES
+                {
+                    return Err(BridgeError::new("model_library_limit"));
                 }
-            })?;
-            let library = scanned.library();
-            Ok(LibraryOperationResult {
-                library_generation: library.library_generation,
-                directory_id: library.directory_id,
-                registered_files: library.models.len(),
-                available_files: library
-                    .models
-                    .iter()
-                    .filter(|entry| entry.manifest.load_candidate())
-                    .count(),
-            })
+                let bytes = library.encode().map_err(error)?;
+                task.control.begin_commit().map_err(error)?;
+                settings::atomic_replace(&root.join(LIBRARY_FILE), &bytes).map_err(|cause| {
+                    if cause.code == "settings_durability_unconfirmed" {
+                        cause
+                    } else {
+                        BridgeError::new("model_library_write_failed")
+                    }
+                })?;
+                Ok(LibraryOperationResult {
+                    library_generation: library.library_generation,
+                    directory_id: library.directory_id,
+                    registered_files: library.models.len(),
+                    available_files: library
+                        .models
+                        .iter()
+                        .filter(|entry| entry.manifest.load_candidate())
+                        .count(),
+                    rejected_files: diagnostics.len(),
+                })
+            })()
         })
         .await
         .map_err(|_| BridgeError::new("model_library_write_failed"))?
@@ -245,7 +293,17 @@ impl DesktopBridge {
         if !task.state.lock().unwrap().terminal {
             let _ = tokio::time::timeout(Duration::from_secs(1), changed).await;
         }
-        Ok(task.snapshot())
+        let snapshot = task.snapshot();
+        // Diagnostics have a separate 512 KiB bound; the complete private
+        // operation response, including fixed terminal metadata, stays bounded.
+        if serde_json::to_vec(&snapshot)
+            .map_err(|_| BridgeError::new("model_library_limit"))?
+            .len()
+            > 1024 * 1024
+        {
+            return Err(BridgeError::new("model_library_limit"));
+        }
+        Ok(snapshot)
     }
     pub async fn library_cancel(&self, id: Uuid) -> Result<LibraryStopping> {
         let task = self.library.lock().unwrap().task(id)?;
@@ -392,7 +450,7 @@ mod tests {
             &ScanControl::default(),
         )
         .unwrap();
-        let library = scan.library().clone();
+        let library = scan.library().unwrap().clone();
         drop(scan);
         std::fs::write(root.path().join(LIBRARY_FILE), library.encode().unwrap()).unwrap();
         let configured = directory_snapshot(root.path(), None)

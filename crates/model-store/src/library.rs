@@ -25,7 +25,18 @@ pub const MAX_DIRECTORY_COMPONENTS: usize = 64;
 pub const MAX_MODEL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 pub const MAX_SCAN_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 pub const SCAN_TIMEOUT: Duration = Duration::from_secs(300);
+pub const MAX_SCAN_DIAGNOSTIC_BYTES: usize = 512 * 1024;
 const BLOCK: usize = 64 * 1024;
+
+fn add_scan_bytes(total: u64, size: u64) -> Result<u64> {
+    if size > MAX_MODEL_BYTES {
+        return Err(library_error(ErrorCode::ModelLibraryLimit));
+    }
+    total
+        .checked_add(size)
+        .filter(|total| *total <= MAX_SCAN_BYTES)
+        .ok_or_else(|| library_error(ErrorCode::ModelLibraryLimit))
+}
 
 pub fn library_error(code: ErrorCode) -> RuntimeError {
     RuntimeError::new(code, "external model library operation failed safely")
@@ -48,6 +59,30 @@ pub struct ScanProgress {
     pub candidate_files: usize,
     pub verified_files: usize,
     pub current_file_name: Option<String>,
+    pub file_errors: Vec<ScanFileFailure>,
+}
+/// Content rejection only; filesystem, resource and cancellation failures never
+/// become one of these per-file diagnostics.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanRejectionReason {
+    InvalidManifest,
+    UnsupportedModel,
+    UnsupportedChatTemplate,
+}
+impl ScanRejectionReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidManifest => "invalid_manifest",
+            Self::UnsupportedModel => "unsupported_model",
+            Self::UnsupportedChatTemplate => "unsupported_chat_template",
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScanFileFailure {
+    pub file_name: String,
+    pub reason: ScanRejectionReason,
 }
 /// Cancellation wins until the explicit commit decision. Once committing,
 /// publication finishes and a late cancellation cannot claim a rollback.
@@ -98,6 +133,24 @@ impl ScanControl {
     }
     pub fn progress(&self) -> ScanProgress {
         self.progress.lock().unwrap().clone()
+    }
+    fn reject(&self, name: String, reason: ScanRejectionReason) -> Result<()> {
+        let mut progress = self.progress.lock().unwrap();
+        if !valid_file_name(&name) || progress.file_errors.len() >= MAX_EXTERNAL_MODELS {
+            return Err(library_error(ErrorCode::ModelLibraryLimit));
+        }
+        progress.file_errors.push(ScanFileFailure {
+            file_name: name,
+            reason,
+        });
+        if serde_json::to_vec(&progress.file_errors)
+            .map_err(|_| library_error(ErrorCode::ModelLibraryLimit))?
+            .len()
+            > MAX_SCAN_DIAGNOSTIC_BYTES
+        {
+            return Err(library_error(ErrorCode::ModelLibraryLimit));
+        }
+        Ok(())
     }
 }
 
@@ -244,13 +297,15 @@ impl ModelLibrary {
 }
 
 pub struct ScannedLibrary {
-    library: ModelLibrary,
+    // None means every candidate was rejected. There is deliberately no empty
+    // replacement library to accidentally publish in that case.
+    library: Option<ModelLibrary>,
     _directory: Arc<DirectoryGuard>,
     _sources: Vec<File>,
 }
 impl ScannedLibrary {
-    pub fn library(&self) -> &ModelLibrary {
-        &self.library
+    pub fn library(&self) -> Option<&ModelLibrary> {
+        self.library.as_ref()
     }
 }
 
@@ -260,8 +315,37 @@ pub fn scan_directory(
     previous: Option<&ModelLibrary>,
     control: &ScanControl,
 ) -> Result<ScannedLibrary> {
+    scan_directory_inner(root, directory, previous, None, control)
+}
+
+/// Rescanning must bind to the saved directory object, not merely its path.
+/// Applying a newly selected directory deliberately uses `scan_directory`.
+pub fn rescan_directory(
+    root: &Path,
+    previous: &ModelLibrary,
+    control: &ScanControl,
+) -> Result<ScannedLibrary> {
+    scan_directory_inner(
+        root,
+        &previous.directory,
+        Some(previous),
+        Some(&previous.directory_identity),
+        control,
+    )
+}
+
+fn scan_directory_inner(
+    root: &Path,
+    directory: &Path,
+    previous: Option<&ModelLibrary>,
+    expected_directory: Option<&FileIdentity>,
+    control: &ScanControl,
+) -> Result<ScannedLibrary> {
     control.check()?;
     let directory = Arc::new(DirectoryGuard::open(directory)?);
+    if expected_directory.is_some_and(|expected| !same_object(expected, &directory.identity)) {
+        return Err(library_error(ErrorCode::ModelFileChanged));
+    }
     let mut candidates = Vec::new();
     let mut total = 0_u64;
     control.progress.lock().unwrap().phase = "enumerating";
@@ -300,14 +384,9 @@ pub fn scan_directory(
         if !valid_file_name(&name) {
             return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
         }
-        if metadata.len() == 0 || metadata.len() > MAX_MODEL_BYTES {
-            return Err(library_error(ErrorCode::ModelLibraryLimit));
-        }
-        total = total
-            .checked_add(metadata.len())
-            .ok_or_else(|| library_error(ErrorCode::ModelLibraryLimit))?;
+        total = add_scan_bytes(total, metadata.len())?;
         candidates.push(name);
-        if candidates.len() > MAX_EXTERNAL_MODELS || total > MAX_SCAN_BYTES {
+        if candidates.len() > MAX_EXTERNAL_MODELS {
             return Err(library_error(ErrorCode::ModelLibraryLimit));
         }
         control.progress.lock().unwrap().candidate_files = candidates.len();
@@ -327,17 +406,27 @@ pub fn scan_directory(
         control.check()?;
         let mut source = open_read_file(&directory.path.join(&name), true)?;
         let before = identity(&source)?;
-        if before.size == 0 || before.size > MAX_MODEL_BYTES {
-            return Err(library_error(ErrorCode::ModelLibraryLimit));
-        }
-        verified_total = verified_total
-            .checked_add(before.size)
-            .filter(|n| *n <= MAX_SCAN_BYTES)
-            .ok_or_else(|| library_error(ErrorCode::ModelLibraryLimit))?;
-        let (hash, metadata) = inspect(&mut source, before.size, control)?;
-        if identity(&source)? != before {
-            return Err(library_error(ErrorCode::ModelFileChanged));
-        }
+        verified_total = add_scan_bytes(verified_total, before.size)?;
+        let inspected = inspect_input(&mut source, before.size, control, true);
+        // Even a content rejection must not conceal cancellation, real I/O or
+        // a changing source. Inspect the same held handle before classifying it.
+        let (hash, metadata) = checked_inspection(&source, &before, control, inspected)?;
+        let metadata = match metadata {
+            Ok(metadata) => metadata,
+            Err(failure) => {
+                let reason = match failure.code {
+                    ErrorCode::InvalidManifest => ScanRejectionReason::InvalidManifest,
+                    ErrorCode::UnsupportedModel => ScanRejectionReason::UnsupportedModel,
+                    ErrorCode::UnsupportedChatTemplate => {
+                        ScanRejectionReason::UnsupportedChatTemplate
+                    }
+                    _ => return Err(failure),
+                };
+                control.reject(name, reason)?;
+                sources.push(source);
+                continue;
+            }
+        };
         let existing = prior.and_then(|old| {
             old.models.iter().find(|m| {
                 file_key(&m.manifest.relative_file) == file_key(&name) && m.manifest.sha256 == hash
@@ -366,6 +455,9 @@ pub fn scan_directory(
             ModelSource::local("user-selected read-only model directory"),
         );
         request.source.file_name = Some(name.clone());
+        // Only directory discovery chooses this default. Explicit import/load
+        // contexts retain their existing validation and are never clamped.
+        request.default_context = request.default_context.min(metadata.context_length);
         let mut manifest = ModelManifest::build(request, before.size, hash, metadata)?;
         manifest.storage = ModelStorage::External;
         manifest.relative_file = name;
@@ -385,7 +477,12 @@ pub fn scan_directory(
         directory_identity: directory.identity.clone(),
         models,
     };
-    library.encode()?;
+    let library = if library.models.is_empty() && !control.progress().file_errors.is_empty() {
+        None
+    } else {
+        library.encode()?;
+        Some(library)
+    };
     control.check()?;
     Ok(ScannedLibrary {
         library,
@@ -404,11 +501,36 @@ fn fresh_id(root: &Path) -> Result<ModelId> {
     }
     Err(library_error(ErrorCode::ModelLibraryChanged))
 }
+type ContentInspection = Result<(String, Result<gguf::Metadata>)>;
+fn checked_inspection(
+    source: &File,
+    before: &FileIdentity,
+    control: &ScanControl,
+    inspected: ContentInspection,
+) -> ContentInspection {
+    control.check()?;
+    if identity(source)? != *before {
+        return Err(library_error(ErrorCode::ModelFileChanged));
+    }
+    inspected
+}
+#[cfg(windows)]
 fn inspect(
     source: &mut File,
     size: u64,
     control: &ScanControl,
 ) -> Result<(String, gguf::Metadata)> {
+    let (hash, metadata) = inspect_input(source, size, control, false)?;
+    Ok((hash, metadata?))
+}
+/// The outer Result contains I/O/control failures. The inner Result contains
+/// only the structural reader's content verdict, never an unobserved read error.
+fn inspect_input(
+    source: &mut File,
+    size: u64,
+    control: &ScanControl,
+    scan: bool,
+) -> ContentInspection {
     let mut buffer = [0_u8; BLOCK];
     let mut hasher = Sha256::new();
     let mut read = 0_u64;
@@ -429,31 +551,84 @@ fn inspect(
     }
     control.check()?;
     source.seek(SeekFrom::Start(0)).map_err(file_error)?;
-    let metadata = gguf::read(ControlledRead { source, control });
-    control.check()?;
-    let metadata = metadata?;
+    let metadata = inspect_metadata(source, control, scan)?;
     Ok((format!("{:x}", hasher.finalize()), metadata))
 }
-
-struct ControlledRead<'a> {
-    source: &'a mut File,
-    control: &'a ScanControl,
+fn inspect_metadata<R: Read + Seek>(
+    source: &mut R,
+    control: &ScanControl,
+    scan: bool,
+) -> Result<Result<gguf::Metadata>> {
+    let mut observed = ReadObservation::default();
+    let reader = ControlledRead {
+        source,
+        control,
+        observed: &mut observed,
+    };
+    let metadata = if scan {
+        gguf::read_for_scan(reader)
+    } else {
+        gguf::read(reader)
+    };
+    control.check()?;
+    if let Some(error) = observed.failure {
+        return Err(error);
+    }
+    // read_exact produces UnexpectedEof after an otherwise successful zero-byte
+    // read. Only that observed parser EOF is a content error; a syscall error,
+    // including an actual UnexpectedEof error, remains fatal above.
+    let metadata = match metadata {
+        Err(error) if error.code == ErrorCode::Io && observed.eof => {
+            Err(crate::invalid_manifest("truncated GGUF content"))
+        }
+        other => other,
+    };
+    Ok(metadata)
 }
-impl Read for ControlledRead<'_> {
+
+#[derive(Default)]
+struct ReadObservation {
+    failure: Option<RuntimeError>,
+    eof: bool,
+}
+struct ControlledRead<'a, R> {
+    source: &'a mut R,
+    control: &'a ScanControl,
+    observed: &'a mut ReadObservation,
+}
+impl<R: Read> Read for ControlledRead<'_, R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.control
             .check()
             .map_err(|_| std::io::Error::other("model verification interrupted"))?;
         let limit = buffer.len().min(BLOCK);
-        self.source.read(&mut buffer[..limit])
+        let result = self.source.read(&mut buffer[..limit]);
+        match &result {
+            Ok(0) if limit != 0 => self.observed.eof = true,
+            Err(error) => {
+                self.observed.failure = Some(library_error(
+                    if matches!(error.raw_os_error(), Some(32 | 33)) && cfg!(windows) {
+                        ErrorCode::ModelFileInUse
+                    } else {
+                        ErrorCode::ModelFileUnavailable
+                    },
+                ))
+            }
+            _ => (),
+        }
+        result
     }
 }
-impl Seek for ControlledRead<'_> {
+impl<R: Seek> Seek for ControlledRead<'_, R> {
     fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
         self.control
             .check()
             .map_err(|_| std::io::Error::other("model verification interrupted"))?;
-        self.source.seek(position)
+        let result = self.source.seek(position);
+        if result.is_err() {
+            self.observed.failure = Some(library_error(ErrorCode::ModelFileUnavailable));
+        }
+        result
     }
 }
 
@@ -852,7 +1027,7 @@ mod saved_directory_tests {
         let source = tempfile::tempdir().unwrap();
         let scan =
             scan_directory(root.path(), source.path(), None, &ScanControl::default()).unwrap();
-        let mut library = scan.library().clone();
+        let mut library = scan.library().unwrap().clone();
         drop(scan);
         // No probe or filesystem access to this old letter is authorized by
         // deserialization. Current access is checked separately on use.
@@ -866,7 +1041,125 @@ mod saved_directory_tests {
             &ScanControl::default(),
         )
         .unwrap();
-        assert_eq!(replacement.library().directory, source.path());
-        assert_ne!(replacement.library().directory_id, previous.directory_id);
+        assert_eq!(replacement.library().unwrap().directory, source.path());
+        assert_ne!(
+            replacement.library().unwrap().directory_id,
+            previous.directory_id
+        );
+    }
+}
+
+#[cfg(test)]
+mod scan_rejection_tests {
+    use super::*;
+    use std::io::{Cursor, ErrorKind};
+
+    #[test]
+    fn byte_budget_boundaries_use_the_same_counter_on_every_platform() {
+        assert_eq!(add_scan_bytes(0, 0).unwrap(), 0);
+        assert_eq!(add_scan_bytes(0, MAX_MODEL_BYTES).unwrap(), MAX_MODEL_BYTES);
+        assert_eq!(
+            add_scan_bytes(MAX_MODEL_BYTES, MAX_MODEL_BYTES).unwrap(),
+            MAX_SCAN_BYTES
+        );
+        assert_eq!(
+            add_scan_bytes(MAX_SCAN_BYTES - 1, 1).unwrap(),
+            MAX_SCAN_BYTES
+        );
+        for (total, size) in [
+            (0, MAX_MODEL_BYTES + 1),
+            (MAX_SCAN_BYTES, 1),
+            (u64::MAX, 1),
+            (u64::MAX, 0),
+        ] {
+            assert_eq!(
+                add_scan_bytes(total, size).unwrap_err().code,
+                ErrorCode::ModelLibraryLimit
+            );
+        }
+    }
+
+    struct FaultReader {
+        cursor: Cursor<Vec<u8>>,
+        read_error: bool,
+        seek_error: bool,
+        eof: bool,
+    }
+    impl Read for FaultReader {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if self.read_error {
+                return Err(std::io::Error::from(ErrorKind::UnexpectedEof));
+            }
+            if self.eof {
+                return Ok(0);
+            }
+            self.cursor.read(bytes)
+        }
+    }
+    impl Seek for FaultReader {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            if self.seek_error {
+                return Err(std::io::Error::from(ErrorKind::PermissionDenied));
+            }
+            self.cursor.seek(position)
+        }
+    }
+    #[test]
+    fn parser_eof_is_distinct_from_actual_read_and_seek_errors() {
+        for (read_error, seek_error, eof) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let mut reader = FaultReader {
+                cursor: Cursor::new(vec![0; 64]),
+                read_error,
+                seek_error,
+                eof,
+            };
+            let result = inspect_metadata(&mut reader, &ScanControl::default(), true);
+            if eof {
+                assert_eq!(
+                    result.unwrap().unwrap_err().code,
+                    ErrorCode::InvalidManifest
+                );
+            } else {
+                assert_eq!(result.unwrap_err().code, ErrorCode::ModelFileUnavailable);
+            }
+        }
+    }
+    #[test]
+    fn cancellation_and_source_change_precede_content_rejection() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        fs::write(source.path(), b"bad").unwrap();
+        let file = File::open(source.path()).unwrap();
+        let before = identity(&file).unwrap();
+        let rejected = || Ok(("hash".into(), Err(crate::invalid_manifest("bad content"))));
+        let cancelled = ScanControl::default();
+        cancelled.cancel();
+        assert_eq!(
+            checked_inspection(&file, &before, &cancelled, rejected())
+                .unwrap_err()
+                .code,
+            ErrorCode::ModelScanCancelled
+        );
+        assert_eq!(
+            checked_inspection(
+                &file,
+                &before,
+                &ScanControl::with_timeout(Duration::ZERO),
+                rejected()
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::ModelScanTimeout
+        );
+        fs::write(source.path(), b"changed").unwrap();
+        assert_eq!(
+            checked_inspection(&file, &before, &ScanControl::default(), rejected())
+                .unwrap_err()
+                .code,
+            ErrorCode::ModelFileChanged
+        );
     }
 }

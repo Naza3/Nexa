@@ -21,7 +21,15 @@ pub(crate) struct Metadata {
 }
 
 pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
-    let mut input = Input::new(reader)?;
+    read_with_budget_policy(reader, false)
+}
+/// Directory scans distinguish resource exhaustion from stable malformed
+/// content. Existing import/load callers keep their historical error contract.
+pub(crate) fn read_for_scan<R: Read + Seek>(reader: R) -> Result<Metadata> {
+    read_with_budget_policy(reader, true)
+}
+fn read_with_budget_policy<R: Read + Seek>(reader: R, scan: bool) -> Result<Metadata> {
+    let mut input = Input::new(reader, scan)?;
     if input.bytes::<4>()? != *b"GGUF" {
         return Err(invalid_manifest("invalid GGUF magic"));
     }
@@ -30,7 +38,10 @@ pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
     }
     let tensors = input.u64()?;
     let count = input.u64()?;
-    if tensors == 0 || tensors > MAX_ENTRIES || count > MAX_ENTRIES {
+    if tensors > MAX_ENTRIES || count > MAX_ENTRIES {
+        return Err(input.budget_error("GGUF entry count outside inspection bounds"));
+    }
+    if tensors == 0 {
         return Err(invalid_manifest(
             "GGUF entry count outside inspection bounds",
         ));
@@ -225,26 +236,39 @@ struct Input<R> {
     reader: R,
     position: u64,
     length: u64,
-    limit: u64,
+    scan: bool,
 }
 impl<R: Read + Seek> Input<R> {
-    fn new(mut reader: R) -> Result<Self> {
+    fn new(mut reader: R, scan: bool) -> Result<Self> {
         let length = reader.seek(SeekFrom::End(0)).map_err(io_error)?;
         reader.seek(SeekFrom::Start(0)).map_err(io_error)?;
         Ok(Self {
             reader,
             position: 0,
             length,
-            limit: length.min(MAX_HEADER_BYTES),
+            scan,
         })
     }
     fn reserve(&mut self, length: u64) -> Result<()> {
-        self.position = self
+        let position = self
             .position
             .checked_add(length)
-            .filter(|&n| n <= self.limit)
-            .ok_or_else(|| invalid_manifest("truncated or oversized GGUF header"))?;
+            .ok_or_else(|| self.budget_error("truncated or oversized GGUF header"))?;
+        if position > MAX_HEADER_BYTES {
+            return Err(self.budget_error("truncated or oversized GGUF header"));
+        }
+        if position > self.length {
+            return Err(invalid_manifest("truncated or oversized GGUF header"));
+        }
+        self.position = position;
         Ok(())
+    }
+    fn budget_error(&self, message: &str) -> runtime_types::RuntimeError {
+        if self.scan {
+            crate::library::library_error(runtime_types::ErrorCode::ModelLibraryLimit)
+        } else {
+            invalid_manifest(message)
+        }
     }
     fn bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
         self.reserve(N as u64)?;
@@ -261,7 +285,7 @@ impl<R: Read + Seek> Input<R> {
     fn string(&mut self, maximum: u64) -> Result<String> {
         let length = self.u64()?;
         if length > maximum {
-            return Err(invalid_manifest("GGUF string exceeds inspection limit"));
+            return Err(self.budget_error("GGUF string exceeds inspection limit"));
         }
         self.reserve(length)?;
         let mut bytes = vec![0; length as usize];
@@ -284,7 +308,10 @@ impl<R: Read + Seek> Input<R> {
             9 => {
                 let element = self.u32()?;
                 let count = self.u64()?;
-                if count > 1_000_000 || element == 9 {
+                if count > 1_000_000 {
+                    return Err(self.budget_error("unsupported or oversized GGUF array"));
+                }
+                if element == 9 {
                     return Err(invalid_manifest("unsupported or oversized GGUF array"));
                 }
                 if element == 8 {
@@ -487,10 +514,80 @@ mod tests {
         let mut non_utf8 = 1_u64.to_le_bytes().to_vec();
         non_utf8.push(0xff);
         assert!(
-            Input::new(Cursor::new(non_utf8))
+            Input::new(Cursor::new(non_utf8), false)
                 .unwrap()
                 .string(16)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod scan_budget_tests {
+    use super::*;
+    use runtime_types::ErrorCode;
+    use std::io::Cursor;
+    fn prefix(tensors: u64, count: u64) -> Vec<u8> {
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3_u32.to_le_bytes());
+        bytes.extend(tensors.to_le_bytes());
+        bytes.extend(count.to_le_bytes());
+        bytes
+    }
+    fn string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend((value.len() as u64).to_le_bytes());
+        bytes.extend(value.as_bytes());
+    }
+    #[test]
+    fn scan_budgets_are_hard_while_legacy_reader_errors_are_unchanged() {
+        let mut key = prefix(1, 1);
+        key.extend(4097_u64.to_le_bytes());
+        let mut template = prefix(1, 1);
+        string(&mut template, "tokenizer.chat_template");
+        template.extend(8_u32.to_le_bytes());
+        template.extend((MAX_STRING_BYTES + 1).to_le_bytes());
+        let mut array = prefix(1, 1);
+        string(&mut array, "tokenizer.tokens");
+        array.extend(9_u32.to_le_bytes());
+        array.extend(0_u32.to_le_bytes());
+        array.extend(1_000_001_u64.to_le_bytes());
+        for bytes in [
+            prefix(MAX_ENTRIES + 1, 0),
+            prefix(1, MAX_ENTRIES + 1),
+            key,
+            template,
+            array,
+        ] {
+            assert_eq!(
+                read_for_scan(Cursor::new(&bytes)).unwrap_err().code,
+                ErrorCode::ModelLibraryLimit
+            );
+            assert_eq!(
+                read(Cursor::new(&bytes)).unwrap_err().code,
+                ErrorCode::InvalidManifest
+            );
+        }
+        for scan in [false, true] {
+            let mut input = Input {
+                reader: Cursor::new(Vec::<u8>::new()),
+                position: MAX_HEADER_BYTES - 1,
+                length: MAX_HEADER_BYTES + 100,
+                scan,
+            };
+            assert_eq!(
+                input.reserve(2).unwrap_err().code,
+                if scan {
+                    ErrorCode::ModelLibraryLimit
+                } else {
+                    ErrorCode::InvalidManifest
+                }
+            );
+            input.position = 1;
+            input.length = 2;
+            assert_eq!(
+                input.reserve(2).unwrap_err().code,
+                ErrorCode::InvalidManifest
+            );
+        }
     }
 }

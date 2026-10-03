@@ -114,7 +114,7 @@ async fn selection_applies_without_copy_or_token_initialization_and_rescans_stab
     );
 }
 #[tokio::test]
-async fn running_instance_and_failed_scan_preserve_original_configuration() {
+async fn running_instance_preserves_config_and_mixed_scan_commits_valid_subset() {
     let temp = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();
     let root = temp.path().join("private");
@@ -135,9 +135,18 @@ async fn running_instance_and_failed_scan_preserve_original_configuration() {
     fs::write(source.path().join("坏 文件.gguf"), b"invalid").unwrap();
     let id = bridge.models_scan().unwrap().operation_id;
     let result = terminal(&bridge, id).await;
-    assert_eq!(result.status, LibraryOperationStatus::Failed);
-    assert_eq!(result.failed_file_name.as_deref(), Some("坏 文件.gguf"));
-    assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), original);
+    assert_eq!(result.status, LibraryOperationStatus::Partial);
+    assert_eq!(result.file_errors[0].file_name, "坏 文件.gguf");
+    assert_eq!(result.file_errors[0].code, "invalid_manifest");
+    assert!(result.failed_file_name.is_none());
+    assert_eq!(result.result.as_ref().unwrap().registered_files, 1);
+    assert_eq!(result.result.as_ref().unwrap().rejected_files, 1);
+    assert_ne!(fs::read(root.join(LIBRARY_FILE)).unwrap(), original);
+    let repeated = bridge.library_next(id).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(repeated).unwrap(),
+        serde_json::to_value(result).unwrap()
+    );
 }
 #[tokio::test]
 async fn early_cancel_and_close_finish_without_hidden_publication() {
@@ -238,4 +247,136 @@ async fn foreign_operation_is_rejected_without_cancelling_owned_work() {
     let id = bridge.models_scan().unwrap().operation_id;
     let result = terminal(&bridge, id).await;
     assert_eq!(result.error.unwrap().code, "model_directory_required");
+}
+
+#[tokio::test]
+async fn all_rejected_keeps_old_index_and_empty_directory_can_replace_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let original_source = tempfile::tempdir().unwrap();
+    let rejected_source = tempfile::tempdir().unwrap();
+    let empty_source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    tiny_model(&original_source.path().join("old.gguf"));
+    let id = bridge
+        .directory_apply(original_source.path().to_owned())
+        .unwrap()
+        .operation_id;
+    assert_eq!(
+        terminal(&bridge, id).await.status,
+        LibraryOperationStatus::Completed
+    );
+    let original = fs::read(root.join(LIBRARY_FILE)).unwrap();
+    fs::write(rejected_source.path().join("坏 中文.gguf"), []).unwrap();
+    fs::write(rejected_source.path().join("bad.gguf"), b"bad").unwrap();
+    let id = bridge
+        .directory_apply(rejected_source.path().to_owned())
+        .unwrap()
+        .operation_id;
+    let rejected = terminal(&bridge, id).await;
+    assert_eq!(rejected.status, LibraryOperationStatus::Failed);
+    assert_eq!(
+        rejected.error.as_ref().unwrap().code,
+        "model_scan_no_usable_files"
+    );
+    assert_eq!(rejected.file_errors.len(), 2);
+    assert!(rejected.result.is_none());
+    assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), original);
+    let id = bridge
+        .directory_apply(empty_source.path().to_owned())
+        .unwrap()
+        .operation_id;
+    let empty = terminal(&bridge, id).await;
+    assert_eq!(empty.status, LibraryOperationStatus::Completed);
+    assert_eq!(empty.result.unwrap().registered_files, 0);
+    assert!(empty.file_errors.is_empty());
+    assert_ne!(fs::read(root.join(LIBRARY_FILE)).unwrap(), original);
+}
+
+#[tokio::test]
+async fn mixed_rescans_preserve_valid_ids_and_repair_rejected_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    tiny_model(&source.path().join("good.gguf"));
+    fs::write(source.path().join("repair.gguf"), b"bad").unwrap();
+    let id = bridge
+        .directory_apply(source.path().to_owned())
+        .unwrap()
+        .operation_id;
+    assert_eq!(
+        terminal(&bridge, id).await.status,
+        LibraryOperationStatus::Partial
+    );
+    let first = ModelLibrary::read(&root).unwrap().unwrap();
+    let id = bridge.models_scan().unwrap().operation_id;
+    assert_eq!(
+        terminal(&bridge, id).await.status,
+        LibraryOperationStatus::Partial
+    );
+    let second = ModelLibrary::read(&root).unwrap().unwrap();
+    assert_eq!(first.models[0].manifest.id, second.models[0].manifest.id);
+    assert_ne!(first.library_generation, second.library_generation);
+    tiny_model(&source.path().join("repair.gguf"));
+    let id = bridge.models_scan().unwrap().operation_id;
+    assert_eq!(
+        terminal(&bridge, id).await.status,
+        LibraryOperationStatus::Completed
+    );
+    let repaired = ModelLibrary::read(&root).unwrap().unwrap();
+    assert_eq!(repaired.models.len(), 2);
+    assert_eq!(repaired.models[0].manifest.id, first.models[0].manifest.id);
+    fs::write(source.path().join("good.gguf"), b"now bad").unwrap();
+    let id = bridge.models_scan().unwrap().operation_id;
+    assert_eq!(
+        terminal(&bridge, id).await.status,
+        LibraryOperationStatus::Partial
+    );
+    let last = ModelLibrary::read(&root).unwrap().unwrap();
+    assert_eq!(last.models.len(), 1);
+    assert_eq!(last.models[0].manifest.relative_file, "repair.gguf");
+}
+
+#[tokio::test]
+async fn replaced_saved_directory_requires_explicit_apply_and_bounds_still_roll_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let directory = source.path().join("selected");
+    fs::create_dir(&directory).unwrap();
+    tiny_model(&directory.join("good.gguf"));
+    let bridge = bridge(&root);
+    let id = bridge
+        .directory_apply(directory.clone())
+        .unwrap()
+        .operation_id;
+    terminal(&bridge, id).await;
+    let original = fs::read(root.join(LIBRARY_FILE)).unwrap();
+    fs::rename(&directory, source.path().join("old")).unwrap();
+    fs::create_dir(&directory).unwrap();
+    tiny_model(&directory.join("new.gguf"));
+    let id = bridge.models_scan().unwrap().operation_id;
+    assert_eq!(
+        terminal(&bridge, id).await.error.unwrap().code,
+        "model_file_changed"
+    );
+    assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), original);
+    let id = bridge
+        .directory_apply(directory.clone())
+        .unwrap()
+        .operation_id;
+    assert_eq!(
+        terminal(&bridge, id).await.status,
+        LibraryOperationStatus::Completed
+    );
+    let replaced = fs::read(root.join(LIBRARY_FILE)).unwrap();
+    for index in 0..64 {
+        fs::write(directory.join(format!("bad-{index}.gguf")), []).unwrap();
+    }
+    let id = bridge.models_scan().unwrap().operation_id;
+    let bounded = terminal(&bridge, id).await;
+    assert_eq!(bounded.status, LibraryOperationStatus::Failed);
+    assert_eq!(bounded.error.unwrap().code, "model_library_limit");
+    assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), replaced);
 }

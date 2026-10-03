@@ -60,6 +60,9 @@ impl BridgeError {
                 "The embedded template is missing or cannot preserve this plain-text conversation. No replacement template is used."
             }
             "invalid_manifest" => "The selected GGUF structure or model registration is invalid.",
+            "model_scan_no_usable_files" => {
+                "Every GGUF candidate was rejected. The previous directory and index were preserved."
+            }
             "settings_invalid" | "invalid_request" | "invalid_argument" => {
                 "The supplied settings or request are invalid."
             }
