@@ -23,7 +23,7 @@ W04的官方dsh rc2/pi-ai协议研究已完成，可与W01并行建立客户端f
 | 阶段 | 已有基础 | 本次最小增量 | 阶段验收 |
 | --- | --- | --- | --- |
 | W00 主线收敛 | 已有 Windows runtime、历史混合平台文档 | 当前文档去移动依赖，归档历史，冻结 CPU/API 产品边界 | 入口/架构/规格/路线一致；历史可追溯；源码、工作流、Android WIP 未改 |
-| W01 当前版本短验 | 已发送50c9d41包、目录/零复制/自动名/兼容原因、聊天/取消、HTTP与CLI已实现 | 收口新包原生 UI 和一个独立 API 调用方最短闭环，修复有证据的问题 | Windows10 上选择目录→识别名称/准入→加载→生成/停止→关闭窗口后另一客户端仍可调用；剪贴板与错误分支逐项记实 |
+| W01 当前版本短验 | 已发送43ad5c2包、混合目录/诊断、零复制/自动名/兼容原因、聊天/取消、HTTP与CLI已实现 | 收口新包原生 UI 和一个独立 API 调用方最短闭环，修复有证据的问题 | Windows10 上选择目录→识别名称/准入→加载→生成/停止→关闭窗口后另一客户端仍可调用；剪贴板与错误分支逐项记实 |
 | W02 开放模型与 CPU 性能 | context/threads/batch/输出预算、空闲卸载控件已有；状态有部分指标 | 开放多模型候选加载、历史validated与loadable分离、16GB桌面基准样本/工具能力验证、资源观测与参数推荐；明确 CPU 指令集范围 | 固定模型/参数/版本；上游与 Nexa 对照；冷加载、TTFT、prefill/decode、内存、取消、空闲成本；Win10/i5-8400 首测，其他 Intel/AMD 各有证据 |
 | W03 桌面管理器 | 模型/聊天/设置页、启动/停止、两种关闭行为已有 | 托盘状态/重新打开、清晰区分关窗口与停服务、API 接入状态/诊断入口；复用现有服务控制 | 原生窗口/托盘反复打开关闭；运行中退出提示不误停其他客户端；服务故障/恢复、单实例和重连无重复服务；harness 所需设置随 W04 契约接入 |
 | W04 API 与 deepseek harness | 严格文本 Chat Completions 子集、SSE、鉴权、模型列表/管理、取消已有 | 基于已确认dsh rc2/pi-ai契约冻结实际lockfile/出站fixture，补工具协议和可复现接入示例 | 精确客户端版本/配置连本机 Nexa；请求/流式/错误/取消与必要工具回合逐项通过；不支持项明确报错；无云 API 冒充本地通过 |
@@ -31,8 +31,8 @@ W04的官方dsh rc2/pi-ai协议研究已完成，可与W01并行建立客户端f
 
 ## 3. W01 最小下一步
 
-1. 使用已交付 `Nexa-Windows-x64-50c9d41.zip`，退出旧 UI 和服务后解压到新目录，记录 OS/CPU、包 hash 和模型 hash
-2. 选择含已验证GGUF的本地目录，再按能力尝试其他合法候选；确认只读、零复制、自动名称、历史validated与未实测提示；目录取消/更换/重扫不破坏原文件
+1. 使用已交付 `Nexa-Windows-x64-43ad5c2.zip`，退出旧 UI 和服务后解压到新目录，记录 OS/CPU、包 hash 和模型 hash
+2. 选择含已验证GGUF的本地目录，再按能力尝试其他合法候选；确认只读、零复制、自动名称、历史validated与未实测提示；在包外测试目录分别检查好坏混合partial、全坏保旧和空目录清空；目录取消/更换/重扫不破坏原文件
 3. 真实聊天、停止、再请求，检查剪贴板；明确记录未执行分支
 4. 用同一个 data-dir 与本机端点完成独立 HTTP 调用；关闭 UI 后 API 仍可服务，同时退出时能确认 worker 与实例清理
 5. 将通过、失败、未执行分别记入新报告。没有新包窗口证据时，不能借旧包 UI 或 CI bridge 结果收口
@@ -49,7 +49,7 @@ W01 不重复造目录选择、自动命名、API、聊天、线程控件或两�
 
 开放模型50c9d41已由WindowsCI验证固定GGUF并发送，其他模型/用户目标机仍待验，不能授予新模型成功结论。单文件常规tensor子集之外、分片、缺模板或不支持文本输出明确报错；没有新增Job RAM硬限制，不承诺16GB可装下任意模型或完全隔离OOM。
 
-本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)混合目录切片已冻结并过本机合成回归/独立审查，WindowsCI/整包待验：完整安全扫描后只把确定内容问题作为逐文件拒绝，合法集合一次partial原子发布并显示完整有限诊断；全坏保旧目录/index/generation，无候选可空提交。所有预算（含parser）、I/O、身份/路径/reparse、取消/timeout/save仍硬失败，坏文件计全部预算；诊断不持久化，公共协议/native/library schema不改。scan-only核旧目录身份，apply可显式换目录；原包50c9d41仍整批失败，不追溯赋能。
+本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)混合目录切片43ad5c2已通过本机回归/独立审查及[WindowsCI37108375458](https://github.com/Naza3/Nexa/actions/runs/37108375458)（344 pass/0 fail/7 ignored、external17、CTest3/3、固定GGUF/包/bridge）；下载原字节包独立复核通过，43ad5c2于08:45:45 UTC发送获接受，用户下载/运行、原生窗口/目标机仍待验：完整安全扫描后只把确定内容问题作为逐文件拒绝，合法集合一次partial原子发布并显示完整有限诊断；全坏保旧目录/index/generation，无候选可空提交。所有预算（含parser）、I/O、身份/路径/reparse、取消/timeout/save仍硬失败，坏文件计全部预算；诊断不持久化，公共协议/native/library schema不改。scan-only核旧目录身份，apply可显式换目录；旧50c9d41包仍整批失败，不追溯赋能；43ad5c2的partial已获合成事务/Windows guard证据，但未据此宣称多模型质量或目标机性能通过。
 
 managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。50c9d41默认2048扫描对短context的限制仍在；本轮仅自动扫描default_context改取min(2048,metadata)，显式import/load及UI设置保持。新结果见[验证记录](verification/2026-10-03-mixed-model-directory.md)，不能把候选登记当真实加载/性能已验。
 
