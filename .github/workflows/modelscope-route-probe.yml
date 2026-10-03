@@ -1,0 +1,35 @@
+name: Bounded ModelScope route observation
+
+on:
+  push:
+    branches: ['codex/nexa-native-baseline']
+    paths:
+      - 'scripts/probe_modelscope_routes.py'
+      - 'scripts/test_modelscope_routes.py'
+      - '.github/workflows/modelscope-route-probe.yml'
+      - 'crates/desktop-bridge/src/model-catalog.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify bounded probe without network
+        run: python -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p test_modelscope_routes.py
+      - name: Observe fixed public routes without downloading models
+        run: python scripts/probe_modelscope_routes.py --output artifacts/modelscope-route-probe.json
+      - name: Upload sanitized route observations only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: modelscope-route-probe
+          path: artifacts/modelscope-route-probe.json
+          if-no-files-found: error
+          retention-days: 7

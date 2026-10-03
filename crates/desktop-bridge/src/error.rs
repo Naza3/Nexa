@@ -23,7 +23,7 @@ impl BridgeError {
             "model_download_network_failed"
             | "model_download_http_failed"
             | "model_download_redirect_rejected" => {
-                "The selected source could not be downloaded safely. No alternative source was used."
+                "当前下载源连接、响应或重定向失败。未切换下载源，未发布模型文件。"
             }
             "already_exists" => {
                 "A file with this name already exists. It was not changed or overwritten."

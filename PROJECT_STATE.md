@@ -16,13 +16,15 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 
 当前W04/T0进行无模型工具parser证据实验：13条锁定上游模板/parser观察、Release CTest4/4、主代理复验与独立审查通过；发现final LENIENT可接受不完整调用、strict全匹配不验证schema/调用数且普通文本分支不成立的具体缺口。尚无完整工具/文本接受算法，生产API/tools/版本均未改，其精确4d30bfa WindowsCI37115797798现已success（CTest4/4、常规Rust344/0/7、50报告hash已核），无模型工具实验和真实DSH/工具能力结论仍分开；未另发T0二进制，也不覆盖新目录下载增量，见[T0记录](docs/verification/2026-10-03-tool-parser-probe.md)。
 
-当前优先事项按用户2026-10-03 10:47 UTC最新要求恢复模型加载流程：修复无配置时EXE/models自动发现，增加默认ModelScope/HF可选的固定8条目录下载，保存后显式扫描/加载。见[ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md)与[本轮记录](docs/verification/2026-10-03-model-catalog-download.md)。本机完整聚合与独立源码审查通过；前三次WindowsCI的构建预算、preview超时、路径显示断言失败及修正均保留。最终33f0e17的WindowsCI37124146573成功，52项证据身份/大小/hash已核，常规Rust49组363/0/7、CTest4/4通过。产品下载器经默认MS实际下载固定0.6B Q8_0共639,446,688字节，完整hash符合基线，47,149ms后发布且registered=false；后续独立基线、真实推理/停止/core/worker/HTTP/CLI、Release包与解压bridge链路通过。原生窗口未执行，HF实际下载、其他7个模型和Win10/i5-8400/16GB仍待验。新包独立字节闭包审查通过，原字节33f0e17包于13:42:49 UTC发送获接受，用户下载/运行尚未确认；Harness新实施继续暂停。
+当前优先事项按用户2026-10-03 10:47 UTC最新要求恢复模型加载流程：修复无配置时EXE/models自动发现，增加默认ModelScope/HF可选的固定8条目录下载，保存后显式扫描/加载。见[ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md)与[本轮记录](docs/verification/2026-10-03-model-catalog-download.md)。本机完整聚合与独立源码审查通过；前三次WindowsCI的构建预算、preview超时、路径显示断言失败及修正均保留。最终33f0e17的WindowsCI37124146573成功，52项证据身份/大小/hash已核，常规Rust49组363/0/7、CTest4/4通过。产品下载器经默认MS实际下载固定0.6B Q8_0共639,446,688字节，完整hash符合基线，47,149ms后发布且registered=false；后续独立基线、真实推理/停止/core/worker/HTTP/CLI、Release包与解压bridge链路通过。原生窗口未执行，HF实际下载、其他7个模型和Win10/i5-8400/16GB仍待验。新包独立字节闭包审查通过，原字节33f0e17包于13:42:49 UTC发送获接受；交付当时下载/运行未确认，后续用户下载流程反馈见下文。Harness新实施继续暂停。
+
+当前用户反馈：Qwen3-4B-Q4_K_M经ModelScope下载时0B立即失败，诊断码为`model_download_redirect_rejected`，同一链接在浏览器可用，用户随后确认手动下载后扫描可以。该确认不包含加载、聊天或性能。被拒的实际跳转目标及具体分支尚未确定，不能归因为目录权限，也不能用云端代理环境的GET前缀200结果解释用户直连。正在补充受控网络/重定向诊断与Windows固定两模型的有界路由观察，未放宽host、TLS或代理策略，尚未证明故障修复。见[重定向排查记录](docs/verification/2026-10-03-modelscope-redirect.md)。已完成本机bridge79项、UI119项及相关静态检查；路由探针11项离线测试及4份诊断/3份探针独立审查通过，主代理全量格式检查与Python97项（95通过/2平台skip，含11项探针）通过，新CI待完成。用户随后要求通用下载引擎，下一切片拟采用源适配器与通用执行器，支持受控公开HTTPS重定向、有限重试、任务内续传、进度/取消与完整校验；跨重启续传及代理留后续。目前仅方案审查，尚未实施，本次诊断/探针不等于新引擎或根因修复。Harness新实施继续暂停。
 
 ## 已有工程与最新交付
 
 | 范围 | 状态与证据 |
 | --- | --- |
-| 检查基线 | `codex/nexa-native-baseline`；目录发现/下载最终源码`33f0e17a5bdaf5e5d234034af0c946d878e0e4ae`、tree`e2aa33f7852c09514361fe94178156bfaa95d481`的[WindowsCI37124146573](https://github.com/Naza3/Nexa/actions/runs/37124146573)成功，52项报告已核；独立新包复核通过，最新已发送实现33f0e17，用户下载/运行未确认 |
+| 检查基线 | `codex/nexa-native-baseline`；目录发现/下载最终源码`33f0e17a5bdaf5e5d234034af0c946d878e0e4ae`、tree`e2aa33f7852c09514361fe94178156bfaa95d481`的[WindowsCI37124146573](https://github.com/Naza3/Nexa/actions/runs/37124146573)成功，52项报告已核；独立新包复核通过，最新已发送实现33f0e17；用户已反馈下载流程错误，目标机完整验收未完成 |
 | 推理核心 | llama.cpp固定`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；C++ shim、模板/token预算/采样、UTF-8/stop、取消/释放已有真实回归 |
 | T00–T04 | 固定 Windows CPU 的原生链、model-store、单actor/队列、独立worker/IPC/Job、HTTP/CLI阶段已完成；详情见[索引](PROJECT_INDEX.md) |
 | T05 | Release便携包/独立工具、PE/依赖/许可/hash及独立Windows10短验已按阶段范围收口；A19/A20后期条件未完成 |
@@ -63,7 +65,7 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 ## 最小下一步
 
 1. W00已完成；W04窄文本切片已提交35bfd85，其[WindowsCI37087595998](https://github.com/Naza3/Nexa/actions/runs/37087595998)已于02:27 UTC成功，50项证据/身份/hash核验通过；只覆盖35bfd85，不覆盖本次开放模型工作区变更
-2. 33f0e17桌面包独立字节闭包复核及发送完成；待用户下载/运行后做W01 Win10发现、下载→显式扫描/加载短验，消息发送获接受不等于已运行
+2. 优先定位用户Qwen3-4B-Q4_K_M的MS重定向拒绝：补安全诊断，比较固定Windows路由观察与用户实际分支；根因明确后再修正并复验。目标机下载→显式扫描/加载验收尚未完成
 3. W02混合目录43ad5c2已通过WindowsCI、包内验收与独立下载包复核，原字节包已发送；等待用户目标机验收，按[本轮矩阵](docs/verification/2026-10-03-mixed-model-directory.md)逐层记录；旧50c9d41 CI不覆盖该增量。继续其他模型/目标16GB机实测，不扩大已验证矩阵。W04完整DSH/真实模型文本与工具能力缺口保留，按用户要求暂停新实施；pi-ai fixture仍非DSH本体捕获
 4. ADR0017的33f0e17已过精确WindowsCI、真实MS固定模型链和独立包/新依赖许可复核并发送；后续记录用户目标机发现、下载→显式扫描/加载与取消分支。HF实际下载与其他7个候选另验。W04新实施暂停，生产工具仍未实现，不恢复Android或绑定Telegram业务
 

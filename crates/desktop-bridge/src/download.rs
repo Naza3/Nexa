@@ -371,6 +371,135 @@ fn write_download(
     task.check()?;
     Err(BridgeError::new("model_download_incomplete"))
 }
+// Only bounded, locally selected diagnostics cross the bridge. Never format a
+// reqwest error, upstream header, URL, certificate detail, or response body.
+#[derive(Clone, Copy)]
+enum NetworkStage {
+    Client,
+    Request,
+    Body,
+}
+fn network_io_reason(error: &(dyn std::error::Error + 'static)) -> Option<&'static str> {
+    let mut current = Some(error);
+    // Inspect types only, with a fixed bound; third-party strings never leave here.
+    for _ in 0..16 {
+        let error = current?;
+        if let Some(io) = error.downcast_ref::<std::io::Error>() {
+            match io.kind() {
+                std::io::ErrorKind::PermissionDenied => {
+                    return Some("系统拒绝了网络访问权限（不是模型目录写入权限）");
+                }
+                std::io::ErrorKind::ConnectionRefused => return Some("网络连接被拒绝"),
+                std::io::ErrorKind::NetworkUnreachable => return Some("网络不可达"),
+                std::io::ErrorKind::HostUnreachable => return Some("下载源主机不可达"),
+                _ => {}
+            }
+        }
+        current = error.source();
+    }
+    None
+}
+fn network_error(stage: NetworkStage, error: &reqwest::Error) -> BridgeError {
+    let stage = match stage {
+        NetworkStage::Client => "建立下载客户端",
+        NetworkStage::Request => "请求下载源",
+        NetworkStage::Body => "读取模型数据",
+    };
+    let reason = if error.is_timeout() {
+        "网络等待超时"
+    } else if error.is_builder() {
+        "网络客户端配置失败"
+    } else if let Some(reason) = network_io_reason(error) {
+        reason
+    } else if error.is_connect() {
+        "无法建立连接（可能涉及 DNS、网络或 TLS，尚不能确定具体原因）"
+    } else {
+        "网络传输失败"
+    };
+    BridgeError {
+        code: "model_download_network_failed".into(),
+        message: format!("{stage}：{reason}。未切换下载源，未发布模型文件。"),
+    }
+}
+#[derive(Clone, Copy)]
+enum RedirectFailure {
+    Target,
+    Limit,
+    MissingLocation,
+    InvalidLocation,
+}
+fn redirect_error(reason: RedirectFailure) -> BridgeError {
+    let reason = match reason {
+        RedirectFailure::Target => "目标不符合当前下载源的 HTTPS、安全地址或精确域名限制",
+        RedirectFailure::Limit => "超过最多 5 次重定向",
+        RedirectFailure::MissingLocation => "响应缺少重定向地址",
+        RedirectFailure::InvalidLocation => "重定向地址无效或过长",
+    };
+    BridgeError {
+        code: "model_download_redirect_rejected".into(),
+        message: format!("请求下载源：重定向被拒绝，{reason}。未切换下载源，未发布模型文件。"),
+    }
+}
+fn rejected_target_error(target: &Url) -> BridgeError {
+    let mut error = redirect_error(RedirectFailure::Target);
+    // Only a normalized DNS name may be shown, never a Location value or URL.
+    // Non-HTTPS, credentials, nonstandard ports and fragments stay generic.
+    if target.scheme() != "https"
+        || target.port().is_some_and(|port| port != 443)
+        || !target.username().is_empty()
+        || target.password().is_some()
+        || target.fragment().is_some()
+    {
+        return error;
+    }
+    let Some(host) = target.domain() else {
+        return error;
+    };
+    if host.len() > 253
+        || !host.is_ascii()
+        || !host.contains('.')
+        || !host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return error;
+    }
+    error.message = format!(
+        "请求下载源：重定向域名 {host} 不在当前下载源允许列表内，未连接该域名。未切换下载源，未发布模型文件。"
+    );
+    error
+}
+fn redirect_target(
+    source: DownloadSource,
+    current: &Url,
+    headers: &reqwest::header::HeaderMap,
+    hop: usize,
+) -> Result<Url> {
+    if hop >= 5 {
+        return Err(redirect_error(RedirectFailure::Limit));
+    }
+    let location = headers
+        .get(reqwest::header::LOCATION)
+        .ok_or_else(|| redirect_error(RedirectFailure::MissingLocation))?
+        .to_str()
+        .ok()
+        .filter(|v| !v.is_empty() && v.len() <= 16384)
+        .ok_or_else(|| redirect_error(RedirectFailure::InvalidLocation))?;
+    let target = current
+        .join(location)
+        .map_err(|_| redirect_error(RedirectFailure::InvalidLocation))?;
+    if !allowed_url(source, &target) {
+        return Err(rejected_target_error(&target));
+    }
+    Ok(target)
+}
+
 async fn transfer(
     task: &DownloadTask,
     entry: &CatalogEntry,
@@ -387,37 +516,26 @@ async fn transfer(
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .build()
-        .map_err(|_| BridgeError::new("model_download_network_failed"))?;
+        .map_err(|error| network_error(NetworkStage::Client, &error))?;
     let mut url = Url::parse(&source.url).map_err(|_| BridgeError::new("model_catalog_invalid"))?;
     for hop in 0..=5 {
         task.check()?;
         if !allowed_url(source.source, &url) {
-            return Err(BridgeError::new("model_download_redirect_rejected"));
+            return Err(rejected_target_error(&url));
         }
         let response = client
             .get(url.clone())
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .send()
             .await
-            .map_err(|_| BridgeError::new("model_download_network_failed"))?;
+            .map_err(|error| network_error(NetworkStage::Request, &error))?;
         if response.status().is_redirection() {
-            if hop == 5 {
-                return Err(BridgeError::new("model_download_redirect_rejected"));
-            }
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .filter(|v| v.len() <= 16384)
-                .ok_or_else(|| BridgeError::new("model_download_redirect_rejected"))?;
-            url = url
-                .join(location)
-                .map_err(|_| BridgeError::new("model_download_redirect_rejected"))?;
+            url = redirect_target(source.source, &url, response.headers(), hop)?;
             continue;
         }
         return transfer_response(task, entry, response, send).await;
     }
-    Err(BridgeError::new("model_download_redirect_rejected"))
+    Err(redirect_error(RedirectFailure::Limit))
 }
 
 async fn transfer_response(
@@ -427,7 +545,13 @@ async fn transfer_response(
     send: &mpsc::Sender<Block>,
 ) -> Result<()> {
     if response.status() != reqwest::StatusCode::OK {
-        return Err(BridgeError::new("model_download_http_failed"));
+        return Err(BridgeError {
+            code: "model_download_http_failed".into(),
+            message: format!(
+                "请求下载源：服务器返回 HTTP {}，预期为 200。未切换下载源，未发布模型文件。",
+                response.status().as_u16()
+            ),
+        });
     }
     if response
         .content_length()
@@ -445,7 +569,7 @@ async fn transfer_response(
     while let Some(bytes) = response
         .chunk()
         .await
-        .map_err(|_| BridgeError::new("model_download_network_failed"))?
+        .map_err(|error| network_error(NetworkStage::Body, &error))?
     {
         task.check()?;
         received = received
@@ -517,6 +641,237 @@ mod tests {
             .send()
             .await
             .unwrap()
+    }
+    fn assert_private(error: &BridgeError) {
+        let serialized = serde_json::to_string(error).unwrap();
+        for secret in [
+            "CANARY_SECRET",
+            "secret.invalid",
+            "token=",
+            "C:\\Users",
+            "https://",
+            "http://",
+        ] {
+            assert!(!serialized.contains(secret), "diagnostic leaked {secret}");
+        }
+        assert!(error.message.len() <= 500);
+    }
+    #[test]
+    fn redirect_diagnostics_distinguish_safe_reasons_without_echoing_locations() {
+        use reqwest::header::{HeaderMap, HeaderValue, LOCATION};
+        let current = Url::parse("https://modelscope.cn/file?token=CANARY_SECRET").unwrap();
+        let mut headers = HeaderMap::new();
+        let missing =
+            redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
+        assert!(missing.message.contains("缺少"));
+        headers.insert(
+            LOCATION,
+            HeaderValue::from_static("https://CANARY_SECRET@secret.invalid/?token=CANARY_SECRET"),
+        );
+        let target =
+            redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
+        assert!(target.message.contains("精确域名"));
+        let limit = redirect_target(DownloadSource::Modelscope, &current, &headers, 5).unwrap_err();
+        assert!(limit.message.contains("5 次"));
+        headers.insert(LOCATION, HeaderValue::from_static(""));
+        // Empty Location now fails immediately as invalid, rather than retrying
+        // the same URL until the existing five-redirect limit is reached.
+        let empty = redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
+        assert!(empty.message.contains("无效"));
+        assert_private(&empty);
+        headers.insert(LOCATION, HeaderValue::from_static("https://[CANARY_SECRET"));
+        let invalid =
+            redirect_target(DownloadSource::Modelscope, &current, &headers, 0).unwrap_err();
+        assert!(invalid.message.contains("无效"));
+        headers.insert(LOCATION, HeaderValue::from_bytes(&[0xff]).unwrap());
+        assert!(
+            redirect_target(DownloadSource::Modelscope, &current, &headers, 0)
+                .unwrap_err()
+                .message
+                .contains("无效")
+        );
+        headers.insert(
+            LOCATION,
+            HeaderValue::from_str(&format!("/{}", "x".repeat(16384))).unwrap(),
+        );
+        assert!(
+            redirect_target(DownloadSource::Modelscope, &current, &headers, 0)
+                .unwrap_err()
+                .message
+                .contains("过长")
+        );
+        for error in [missing, target, limit, invalid] {
+            assert_eq!(error.code, "model_download_redirect_rejected");
+            assert_private(&error);
+        }
+        headers.insert(
+            LOCATION,
+            HeaderValue::from_static("/next?token=CANARY_SECRET"),
+        );
+        assert_eq!(
+            redirect_target(DownloadSource::Modelscope, &current, &headers, 4)
+                .unwrap()
+                .host_str(),
+            Some("modelscope.cn")
+        );
+    }
+    #[test]
+    fn rejected_domain_diagnostic_only_exposes_normalized_bounded_dns_names() {
+        let public =
+            Url::parse("https://cdn.modelscope.cn/CANARY_SECRET?token=CANARY_SECRET").unwrap();
+        let error = rejected_target_error(&public);
+        assert!(error.message.contains("cdn.modelscope.cn"));
+        assert!(error.message.contains("未连接该域名"));
+        assert_private(&error);
+        let longest_host = format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        );
+        assert_eq!(longest_host.len(), 253);
+        let longest = Url::parse(&format!(
+            "https://{longest_host}/CANARY_SECRET?token=CANARY_SECRET"
+        ))
+        .unwrap();
+        let error = rejected_target_error(&longest);
+        assert!(error.message.contains(&longest_host));
+        assert!(error.message.contains("未连接该域名"));
+        assert_private(&error);
+        let idna = Url::parse("https://例子.测试/CANARY_SECRET?token=CANARY_SECRET").unwrap();
+        let error = rejected_target_error(&idna);
+        assert!(error.message.contains("xn--fsqu00a.xn--0zwm56d"));
+        assert_private(&error);
+        for input in [
+            "https://CANARY_SECRET@secret.invalid/path",
+            "https://user:CANARY_SECRET@secret.invalid/path",
+            "https://secret.invalid/path#CANARY_SECRET",
+            "https://secret.invalid:444/CANARY_SECRET",
+            "http://secret.invalid/CANARY_SECRET",
+            "https://127.0.0.1/CANARY_SECRET",
+            "https://[::1]/CANARY_SECRET",
+            "https://bad_label.secret.invalid/CANARY_SECRET",
+            "https://-bad.secret.invalid/CANARY_SECRET",
+        ] {
+            let error = rejected_target_error(&Url::parse(input).unwrap());
+            assert!(!error.message.contains("未连接该域名"));
+            assert_private(&error);
+        }
+        for host in [
+            format!("{}.invalid", "a".repeat(64)),
+            format!("{}.invalid", vec!["a".repeat(63); 4].join(".")),
+        ] {
+            let error = rejected_target_error(
+                &Url::parse(&format!("https://{host}/CANARY_SECRET")).unwrap(),
+            );
+            assert!(!error.message.contains(&host));
+            assert_private(&error);
+        }
+    }
+    #[test]
+    fn network_io_diagnostics_use_only_allowlisted_error_kinds() {
+        for (kind, expected) in [
+            (
+                std::io::ErrorKind::PermissionDenied,
+                "系统拒绝了网络访问权限（不是模型目录写入权限）",
+            ),
+            (std::io::ErrorKind::ConnectionRefused, "网络连接被拒绝"),
+            (std::io::ErrorKind::NetworkUnreachable, "网络不可达"),
+            (std::io::ErrorKind::HostUnreachable, "下载源主机不可达"),
+        ] {
+            let error = std::io::Error::new(kind, "https://secret.invalid/?token=CANARY_SECRET");
+            assert_eq!(network_io_reason(&error), Some(expected));
+        }
+        assert_eq!(
+            network_io_reason(&std::io::Error::other("CANARY_SECRET")),
+            None
+        );
+    }
+    #[tokio::test]
+    async fn http_diagnostic_preserves_only_numeric_status() {
+        let response = fixture_response(
+            "403 CANARY_SECRET",
+            "X-Secret: CANARY_SECRET\r\n",
+            b"CANARY_SECRET".to_vec(),
+        )
+        .await;
+        let entry = catalog().unwrap().entries.remove(0);
+        let task = task_for(&entry);
+        let (send, _) = mpsc::channel(2);
+        let error = transfer_response(&task, &entry, response, &send)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "model_download_http_failed");
+        assert!(error.message.contains("HTTP 403"));
+        assert_eq!(task.state.lock().unwrap().downloaded_bytes, 0);
+        assert_private(&error);
+    }
+    #[tokio::test]
+    async fn network_diagnostics_distinguish_connect_and_timeouts_without_url_details() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let raw = client
+            .get(format!("http://{address}/?token=CANARY_SECRET"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(raw.is_connect());
+        let error = network_error(NetworkStage::Request, &raw);
+        assert!(error.message.contains("网络连接被拒绝") || error.message.contains("无法建立连接"));
+        assert_private(&error);
+        // Exercise both actual header-wait and body-read timeout errors.
+        for body in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request);
+                if body {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                        .unwrap();
+                    stream.flush().unwrap();
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            });
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .read_timeout(Duration::from_millis(40))
+                .build()
+                .unwrap();
+            let response = client
+                .get(format!("http://{address}/?token=CANARY_SECRET"))
+                .send()
+                .await;
+            let (raw, stage, label) = if body {
+                (
+                    response.unwrap().chunk().await.unwrap_err(),
+                    NetworkStage::Body,
+                    "读取模型数据",
+                )
+            } else {
+                (response.unwrap_err(), NetworkStage::Request, "请求下载源")
+            };
+            assert!(raw.is_timeout());
+            let error = network_error(stage, &raw);
+            assert_eq!(error.code, "model_download_network_failed");
+            assert!(error.message.contains("网络等待超时"));
+            assert!(error.message.contains(label));
+            assert_private(&error);
+            server.join().unwrap();
+        }
+        let raw = client.get("http://[CANARY_SECRET").build().unwrap_err();
+        let error = network_error(NetworkStage::Client, &raw);
+        assert!(error.message.contains("配置失败"));
+        assert_private(&error);
     }
     #[tokio::test]
     async fn bounded_http_fixture_checks_headers_lengths_and_backpressure_chunks() {

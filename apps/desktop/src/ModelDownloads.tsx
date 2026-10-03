@@ -3,6 +3,22 @@ import type { DesktopController, ViewState } from "./controller";
 import type { DownloadSource } from "./types";
 
 const sourceName = (source: DownloadSource) => source === "modelscope" ? "ModelScope" : "Hugging Face";
+const fallbackDownloadMessage = "下载未完成，请提供诊断码和当前进度以便排查。";
+function DownloadError({ error }: { error: unknown }) {
+  // The bridge produces controlled messages, never raw network error strings.
+  // Also fail closed for malformed display data without rendering objects or HTML.
+  const value = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const code = typeof value.code === "string" && /^[a-z0-9_]{1,80}$/.test(value.code) ? value.code : "invalid_download_error";
+  const message = typeof value.message === "string" && value.message.trim() &&
+    new TextEncoder().encode(value.message).byteLength <= 500 &&
+    !Array.from(value.message).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) &&
+    !/[<>\\]|:\/\/|www\.|\b(?:bearer|authorization|cookie|token|password|secret|signature|credential)\b/i.test(value.message)
+    ? value.message : fallbackDownloadMessage;
+  return <><p>{message}</p><p>诊断码：{code}</p></>;
+}
+function displayDirectory(path: unknown) {
+  return typeof path === "string" && path.trim() && path.length <= 32768 && !path.includes("\0") ? path : "路径信息不可用";
+}
 function size(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -22,11 +38,11 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
     <div role="status"><strong>{status}</strong>
       {task && <>
         <p>{task.file_name} · {sourceName(task.source)}</p>
-        <p className="directory-path">保存到：{task.target_display_path}</p>
+        <p className="directory-path">保存到：{displayDirectory(task.target_display_path)}</p>
         <p>已接收 {size(task.downloaded_bytes)}{task.total_bytes !== null ? ` / ${size(task.total_bytes)}` : " · 总大小未知"}</p>
         {task.total_bytes !== null && task.total_bytes > 0 && <progress aria-label="模型文件已接收字节" max={task.total_bytes} value={task.downloaded_bytes} />}
         {task.phase === "verifying" && <p>网络接收已结束，正在核验真实文件；尚未保存完成。</p>}
-        {task.error && <p>{task.error.message}</p>}
+        {task.error !== null && <DownloadError error={task.error} />}
         {task.status === "completed" && state.snapshot?.model_directory.configured?.directory_id !== task.directory_id && <p>当前目录已变化。请回到上方保存目标后扫描登记。</p>}
         {task.result?.cleanup_warning && <p className="warning-text">文件已保存，部分下载文件清理未确认，请勿重复下载。{task.result.cleanup_warning}</p>}
       </>}
