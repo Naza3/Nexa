@@ -184,7 +184,7 @@ fn real_store_core_lifecycle() {
     let (_dir, mut store) = imported();
     let snapshot = store.snapshot().unwrap();
     let candidate = snapshot.resolve_candidate(&model_id()).unwrap();
-    assert!(!candidate.validated);
+    assert!(!candidate.loadable);
     assert_eq!(candidate.path.file_name().unwrap(), "manifest.json");
     let (production, mut executor) = MnnExecutor::composition(snapshot.clone()).unwrap();
     assert_eq!(

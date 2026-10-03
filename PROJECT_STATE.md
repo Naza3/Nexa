@@ -60,3 +60,8 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 ## 历史与保留工作
 
 完整旧状态原文（含T00–T08、Android研究及历次失败/交付）见 [状态快照](docs/archive/windows-focus-2026-10-03/PROJECT_STATE.md)。既有验证报告仍原位保存。`apps/android-verifier/` 14项修改/未跟踪文件是暂停的B3b WIP，不属于本轮；不得删除、暂存或覆盖。它不构成可交付的新APK或生产支持。
+
+
+### 开放模型提交与构建待验
+
+开放模型实现已推送 `8522514cac6c287fb43ef9052e677346b24a45ef`；对应Windows37101303658启动，但尚未最终验收/交付。随后正在修正Windows新CTest构建目标遗漏及保留MNN共享DTO机械引用，不恢复Android功能、也不改B3b WIP；最终以修正提交CI为准，见[验证记录](docs/verification/2026-10-03-windows-open-models.md#提交恢复与ci闭包修正2026-10-03)。

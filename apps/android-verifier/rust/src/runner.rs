@@ -286,7 +286,7 @@ fn checkpoint(op: &Operation) -> Result<()> {
 pub fn run(h: &Arc<Host>, op: &Arc<Operation>) -> Result<Vec<Value>> {
     let snapshot = h.store.lock().unwrap().snapshot().map_err(runtime_error)?;
     let resolved = snapshot.resolve_candidate(&id()).map_err(runtime_error)?;
-    if resolved.validated {
+    if resolved.loadable {
         return Err(failure("integrity_failure"));
     }
     let (resolver, mut executor) = MnnExecutor::composition(snapshot).map_err(runtime_error)?;

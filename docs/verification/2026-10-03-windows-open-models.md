@@ -86,3 +86,15 @@ Windows产品worker由父进程独立计时：加载使用load_timeout，prepare
 独立审查无未解阻断，由主代理精确提交并运行WindowsCI，要求旧固定GGUF真实回归、原生身份、HTTP/CLI、产品包和desktop bridge均覆盖这次源提交；新包原生窗口/目标Win10/16GB设备仍分别验收。模型验证矩阵只新增真实有证据的组合，开放尝试不自动给validated。
 
 无工具协议实现或真实harness工具闭环；无GPU/NPU/Android/WIP改动。本页本地通过不等于Windows、真实模型或完整W02完成。后续提交、CI与交付另行追加，不回写旧报告为本次证据。
+
+
+## 提交恢复与CI闭包修正（2026-10-03）
+
+开放模型提交 `8522514cac6c287fb43ef9052e677346b24a45ef` 已推送，tree为 `25ad5853acd3ecc8932cd73821e5a54f9b69fdf9`。其Windows运行37101303658与历史MNN运行37101303651已启动；本段编写时尚未完成，不记为通过。此前上传中断，代码和冻结清单均保留；恢复后46源码/68暂存路径与14项Android WIP再次核对一致。
+
+复查发现两个确定的静态闭包缺口，补丁不跳过门禁：
+
+- Windows显式CMake构建目标遗漏新 `air-template-test`，而CTest已包含其模板/隐私测试。将该可执行目标加入原列表，保留全量CTest；这是运行到该步骤前发现的配置问题，不伪称已经观察到CI失败日志。
+- 共享 `ResolvedModel` 字段改为 `loadable` 后，保留的MNN workspace与原先干净的设备runner仍有旧字段引用。仅同步四处构造/读取；研究候选仍不可被生产resolver加载，测试专用研究分支保持原语义，不开放Android模型，不构建新APK。14项B3b未提交WIP未改，其中旧字段引用仍可能导致该私有工作区不能编译，不能把CI检查推广到WIP。
+
+实际轻量验证：固定Rust1.98.1的mobile workspace `cargo fmt --check`、runner `rustfmt --check`、`git diff --check`及三个CTest到显式目标的静态闭包检查均退出0。未运行本地cargo/native编译；actionlint不可用且未安装替代。后续须以修正提交的实际CI为准。

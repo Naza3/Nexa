@@ -91,7 +91,7 @@ impl ModelResolver for MnnModelResolver {
         #[cfg(test)]
         if self.research.is_some() {
             return Ok(ResolvedModel {
-                validated: true,
+                loadable: true,
                 ..resolved
             });
         }

@@ -615,7 +615,7 @@ impl MnnRegistrySnapshot {
             path: e.path.join("manifest.json"),
             context_limit: 2048,
             default_context: 2048,
-            validated: false,
+            loadable: false,
         })
     }
     pub fn acquire(
