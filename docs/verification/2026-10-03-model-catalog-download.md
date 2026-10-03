@@ -31,7 +31,7 @@
 
 ## 实际实现与验证
 
-后端18文件检查点集合hash为`2f1a2887a84a3714f9e2642e06b6f8b04c0addf2d617ddad7b99c67d38c6dc13`，尚未Git提交。该检查点先有下列定向结果；其后完整聚合与主代理补充检查单列，不把计数相加：
+后端18文件检查点集合hash为`2f1a2887a84a3714f9e2642e06b6f8b04c0addf2d617ddad7b99c67d38c6dc13`，为提交前的局部检查点。该检查点先有下列定向结果；其后完整聚合与主代理补充检查单列，不把计数相加：
 
 | 范围 | 检查点结果 | 边界 |
 | --- | --- | --- |
@@ -57,7 +57,13 @@
 
 后端/UI独立审查通过。主代理随后将Windows流程改为先经产品下载器从默认MS取得固定0.6B，再保留原独立基线hash及真实模型链；新增封闭JSON证据门禁、固定目录source fixture，并显式收集AWS-LC的aws-lc/LICENSE与嵌套fiat LICENSE。上层aggregate LICENSE已有相关内容（末尾空格有差异），本轮仍保留嵌套原文以完成可审计闭包；最终Windows产物许可尚待实际构建核验。初次desktop ACL检查因5个新命令失败，已更新精确预期集合和catalog_id-only请求断言后通过，没有跳过门禁。
 
-后端新增opt-in下载验证器，可在Windows明确调用后经MS获取固定0.6B并独立复算hash；本机没有执行权重下载。许可文件收集测试不等于最终Windows产物许可/PE闭包已审；Windows guard/hardlink/disposition、实际MS传输、完整包与目标设备仍待验证。本片尚无精确提交WindowsCI、独立新包复核或发送事实。主代理补充6文件审查范围SHA256为`210b4a72b083eec757e64d4246f0ad02367bcf62b50a72b5629e117b2dbb4b6d`，独立审查与最终格式/86项脚本/前端检查通过；该范围hash不等于最终Git或产品身份。后端18文件检查点、root6增量及最终前端范围分别保留，不能把较早检查点hash当作最终全树hash。
+后端新增opt-in下载验证器，可在Windows明确调用后经MS获取固定0.6B并独立复算hash；本机没有执行权重下载。许可文件收集测试不等于最终Windows产物许可/PE闭包已审；Windows guard/hardlink/disposition、实际MS传输、完整包与目标设备仍待验证。本片首次精确提交WindowsCI因桌面构建步骤超时失败，详情见下节；尚无独立新包复核或发送事实。主代理补充6文件审查范围SHA256为`210b4a72b083eec757e64d4246f0ad02367bcf62b50a72b5629e117b2dbb4b6d`，独立审查与最终格式/86项脚本/前端检查通过；该范围hash不等于最终Git或产品身份。后端18文件检查点、root6增量及最终前端范围分别保留，不能把较早检查点hash当作最终全树hash。
+
+## 首次精确提交 Windows CI：桌面构建超时
+
+实现提交为`817ad7d6174ea16ff6210438a8ea641562a9e84a`，tree为`31b6d681271f2bf4d814357b0307a81c0ab5ce03`。[Windows run37118858126 / job111190859892](https://github.com/Naza3/Nexa/actions/runs/37118858126/job/111190859892)失败于“Check independent desktop Rust graph + Tauri Release”步骤：2026-10-03 11:17:16–11:37:21 UTC达到20分钟步骤时限。主代理与独立审查核查日志：Windows壳23项测试于11:24:45通过，clippy于11:26:32通过；Release于11:26:33才开始，在共享步骤预算中实际得到10分48秒。最后在11:34 UTC仍为desktop-bridge/nexa-desktop正常编译，超时前未见编译错误。
+
+模型下载、native、全workspace与包步骤均未执行，本次不能证明模型运行成功或失败。重试准备仅将该步骤时限从20改为35分钟，全局90分钟和全部检查保持，独立审查通过；重试提交与结果另记。历史Android研究[run37118858122](https://github.com/Naza3/Nexa/actions/runs/37118858122)由根Cargo.lock变化另行触发，现已成功，仅为native研究回归，没有APK或设备验收，与Windows产品验收无关。最新已发送产品仍为43ad5c2。
 
 ## 设置回退与当前限制
 

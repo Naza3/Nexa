@@ -117,7 +117,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Frontend production build failed' }
       - name: Check independent desktop Rust graph and build actual Tauri Release
         id: desktop_build
-        timeout-minutes: 20
+        # Cold Rust/Tauri + rustls/AWS-LC builds exceeded the former 20-minute
+        # step budget while still compiling; keep checks intact and bounded.
+        timeout-minutes: 35
         run: |
           $ErrorActionPreference = 'Stop'
           $env:CARGO_TARGET_DIR = Join-Path $PWD 'build/desktop/cargo'

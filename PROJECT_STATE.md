@@ -16,13 +16,13 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 
 当前W04/T0进行无模型工具parser证据实验：13条锁定上游模板/parser观察、Release CTest4/4、主代理复验与独立审查通过；发现final LENIENT可接受不完整调用、strict全匹配不验证schema/调用数且普通文本分支不成立的具体缺口。尚无完整工具/文本接受算法，生产API/tools/版本均未改，其精确4d30bfa WindowsCI37115797798现已success（CTest4/4、常规Rust344/0/7、50报告hash已核），无模型工具实验和真实DSH/工具能力结论仍分开；未另发T0二进制，也不覆盖新目录下载增量，见[T0记录](docs/verification/2026-10-03-tool-parser-probe.md)。
 
-当前优先事项按用户2026-10-03 10:47 UTC最新要求恢复模型加载流程：修复无配置时EXE/models自动发现，增加默认ModelScope/HF可选的固定8条目录下载，保存后显式扫描/加载。见[ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md)与[本轮记录](docs/verification/2026-10-03-model-catalog-download.md)。后端检查点之后本机49组360 pass/0 fail/7 ignored、全workspace/壳strict clippy及壳Linux24/UI105项通过，后端/UI独立审查通过；主代理CI/许可/证据6文件增量已独立审查，源码冻结，完整Python86项（84通过/2平台skip）与最终格式/前端检查通过；Windows live下载/包仍待验。本片未提交/交付，已发送仍43ad5c2；其他Harness新实施暂缓。
+当前优先事项按用户2026-10-03 10:47 UTC最新要求恢复模型加载流程：修复无配置时EXE/models自动发现，增加默认ModelScope/HF可选的固定8条目录下载，保存后显式扫描/加载。见[ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md)与[本轮记录](docs/verification/2026-10-03-model-catalog-download.md)。后端检查点之后本机49组360 pass/0 fail/7 ignored、全workspace/壳strict clippy及壳Linux24/UI105项通过，后端/UI独立审查通过；主代理CI/许可/证据6文件增量已独立审查，完整Python86项（84通过/2平台skip）与最终格式/前端检查通过。实现已提交817ad7d；首次WindowsCI37118858126在独立桌面Rust图/Tauri Release步骤达到20分钟时限失败，超时前日志仍为正常编译，未见编译错误。模型下载/native/全workspace/包步骤未执行，Windows真实链仍待验；重试准备仅将该步骤改为35分钟，保留全局90分钟及全部检查。本片未交付，已发送仍43ad5c2；其他Harness新实施暂缓。
 
 ## 已有工程与最新交付
 
 | 范围 | 状态与证据 |
 | --- | --- |
-| 检查基线 | `codex/nexa-native-baseline`；当前HEAD`4d30bfae815dbdce888f58ec6bf911834dc8dca9`、tree`ba0a30d4f56dfcb86d8fc85cf1cb86ccab2cf1c5`为T0证据实验；其WindowsCI37115797798与当前自动发现/下载工作区增量分开，已交付混合目录源码43ad5c2/WindowsCI通过；最新已发送Windows实现为43ad5c2，尚未确认用户下载或运行 |
+| 检查基线 | `codex/nexa-native-baseline`；自动发现/下载实现`817ad7d6174ea16ff6210438a8ea641562a9e84a`、tree`31b6d681271f2bf4d814357b0307a81c0ab5ce03`的[WindowsCI37118858126](https://github.com/Naza3/Nexa/actions/runs/37118858126)因桌面构建步骤超时失败，后续产品验证未执行；旧4d30bfa的T0 CI成功不覆盖本片；最新已发送Windows实现仍43ad5c2，用户下载/运行未确认 |
 | 推理核心 | llama.cpp固定`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；C++ shim、模板/token预算/采样、UTF-8/stop、取消/释放已有真实回归 |
 | T00–T04 | 固定 Windows CPU 的原生链、model-store、单actor/队列、独立worker/IPC/Job、HTTP/CLI阶段已完成；详情见[索引](PROJECT_INDEX.md) |
 | T05 | Release便携包/独立工具、PE/依赖/许可/hash及独立Windows10短验已按阶段范围收口；A19/A20后期条件未完成 |
