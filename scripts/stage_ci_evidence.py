@@ -36,7 +36,7 @@ LOG_REPORTS = tuple(f"windows-{name}.log" for name in (
     "native-build", "native-identity-tests", "ctest", "rustfmt", "rust-tests", "clippy", "real-model",
     "real-runtime", "worker-real-credit", "real-process-runtime",
     "desktop-dependencies", "desktop-rust-tests", "desktop-clippy", "desktop-build", "desktop-source-status", "desktop-transport-tests",
-    "desktop-external-store-tests", "desktop-external-guard-tests", "desktop-mapping-observation",
+    "desktop-external-store-tests", "desktop-external-guard-tests", "desktop-mapping-observation", "desktop-discovery-download-tests",
 ))
 # These files are never copied, but their byte identities keep synthetic baseline
 # validation auditable when generated text and raw upstream stderr are omitted.

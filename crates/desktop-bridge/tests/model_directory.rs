@@ -407,7 +407,13 @@ async fn startup_discovery_registers_existing_models_and_preserves_configured_di
     );
     let library = ModelLibrary::read(&root).unwrap().unwrap();
     assert_eq!(library.models.len(), 1);
-    assert_eq!(library.directory, fs::canonicalize(&models).unwrap());
+    // Windows may preserve the selected DOS/8.3 spelling in the library while
+    // canonicalization returns a verbatim long path. Compare both normalized
+    // filesystem paths rather than treating display spelling as identity.
+    assert_eq!(
+        fs::canonicalize(&library.directory).unwrap(),
+        fs::canonicalize(&models).unwrap()
+    );
     assert!(bridge.directory_discover().unwrap().is_none());
     let saved = fs::read(root.join(LIBRARY_FILE)).unwrap();
     fs::rename(&models, temp.path().join("missing-models")).unwrap();

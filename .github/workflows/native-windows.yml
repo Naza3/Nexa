@@ -73,6 +73,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Bounded desktop harness report transport tests failed' }
           cargo test --locked -p model-store --test external -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-external-store-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'External model catalog and source access tests failed' }
+          # Run native-free discovery/download platform regressions before the
+          # expensive desktop build; the later full-workspace run remains intact.
+          cargo test --locked -p desktop-bridge --lib --test model_directory -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-discovery-download-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop discovery/download regressions failed' }
           cargo test --locked -p model-store --lib store::external_guard_lifetime_tests:: -- --test-threads=1 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-external-guard-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'External model guard lifetime tests failed' }
           # Records both positive and negative platform observations. A mapping

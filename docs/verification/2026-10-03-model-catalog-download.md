@@ -21,7 +21,7 @@
 | D05 | 默认MS/保存HF、旧设置缺字段兼容、新设置回退旧版步骤 | 偏好持久化/缺字段/非法源回归通过；旧版严格unknown-field边界已核，真实降级窗口未跑 |
 | D06 | 服务运行快拒，不自动停服务；重复下载/扫描等并发互斥 | admission、实例锁、active任务快拒及snapshot/close合成回归通过 |
 | D07 | 受控HTTPS/host/redirect，无凭据/代理/隐式源fallback | 精确URL策略/反例及UI无fallback通过；真实TLS/重定向网络仍待验 |
-| D08 | 真实字节/精确size/hash、短流/超长/错误编码/HTTP失败不发布 | 本地有界HTTP响应fixture通过；Windows完整写者hash/发布用例与真实MS传输待验 |
+| D08 | 真实字节/精确size/hash、短流/超长/错误编码/HTTP失败不发布 | 本地有界HTTP响应fixture通过；第三次WindowsCI的受控写者size/hash/取消/发布用例通过，真实MS传输待验 |
 | D09 | UUID.part、目录身份/reparse、no-clobber与途中目标竞争 | Linux文件事务/竞争测试通过；Windows句柄/祖先/hardlink/disposition未执行 |
 | D10 | 取消/超时/关闭终态与清理；发布成功后警告不谎称回滚 | 控制竞争/关闭/结果解析单元与UI通过；真实Windows取消及清理故障未实测 |
 | D11 | completed saved=true registered=false；手动扫描后才可加载 | DTO/UI成功反例及显式扫描关联通过；真实下载→扫描/加载链待验 |
@@ -57,7 +57,7 @@
 
 后端/UI独立审查通过。主代理随后将Windows流程改为先经产品下载器从默认MS取得固定0.6B，再保留原独立基线hash及真实模型链；新增封闭JSON证据门禁、固定目录source fixture，并显式收集AWS-LC的aws-lc/LICENSE与嵌套fiat LICENSE。上层aggregate LICENSE已有相关内容（末尾空格有差异），本轮仍保留嵌套原文以完成可审计闭包；最终Windows产物许可尚待实际构建核验。初次desktop ACL检查因5个新命令失败，已更新精确预期集合和catalog_id-only请求断言后通过，没有跳过门禁。
 
-后端新增opt-in下载验证器，可在Windows明确调用后经MS获取固定0.6B并独立复算hash；本机没有执行权重下载。许可文件收集测试不等于最终Windows产物许可/PE闭包已审；Windows guard/hardlink/disposition、实际MS传输、完整包与目标设备仍待验证。本片首次精确提交WindowsCI因桌面构建步骤超时失败，详情见下节；尚无独立新包复核或发送事实。主代理补充6文件审查范围SHA256为`210b4a72b083eec757e64d4246f0ad02367bcf62b50a72b5629e117b2dbb4b6d`，独立审查与最终格式/86项脚本/前端检查通过；该范围hash不等于最终Git或产品身份。后端18文件检查点、root6增量及最终前端范围分别保留，不能把较早检查点hash当作最终全树hash。
+后端新增opt-in下载验证器，可在Windows明确调用后经MS获取固定0.6B并独立复算hash；本机没有执行权重下载。许可文件收集测试不等于最终Windows产物许可/PE闭包已审；初始本机检查未执行Windows guard/hardlink/disposition；其后Windows分支的有限测试结果按各次CI单列，实际MS传输、完整包与目标设备仍待验证。本片各次精确提交WindowsCI失败与修正详见下节；尚无独立新包复核或发送事实。主代理补充6文件审查范围SHA256为`210b4a72b083eec757e64d4246f0ad02367bcf62b50a72b5629e117b2dbb4b6d`，独立审查与最终格式/86项脚本/前端检查通过；该范围hash不等于最终Git或产品身份。后端18文件检查点、root6增量及最终前端范围分别保留，不能把较早检查点hash当作最终全树hash。
 
 ## 首次精确提交 Windows CI：桌面构建超时
 
@@ -69,7 +69,15 @@
 
 重试提交为`4fa622cc0b97ebabb0251c774d8506a826577a85`，tree为`2fbb9909d3ff9752b48b8bf7dcd061755cb87102`。[Windows run37120635638 / job111195882779](https://github.com/Naza3/Nexa/actions/runs/37120635638/job/111195882779)在前端`preview.test.tsx`单项达到15秒时限后失败，其余104项通过。817ad7d同一preview测试此前在6878ms通过；目前没有证据证明生产竞态。
 
-本次未到达独立桌面Rust图/Tauri Release步骤，不能据此判断新35分钟预算是否足够；模型下载、native、全workspace与包步骤仍未执行。下一次修正限定于preview测试的虚拟时钟：保留完整流程和全局15秒时限，以50ms步进、每阶段3秒虚拟预算明确等待ready与操作完成，并在finally恢复真实时钟。修正后的单例五次重复分别为1878/1973/1809/2024/1777ms，均通过；typecheck、lint、全105项、build及diff检查全退出0，独立审查通过。精确测试文件SHA256为`767103c32b3129974800d91aa07f40c5da93a847e509d6f31f866f5b313dcd02`；嵌套finally覆盖setup/render和unmount失败，恢复原URL、真实时钟与测试wrapper。生产功能源码未因此修改。原Windows超时未在本机复现，目前只能确认已移除该测试的墙钟等待与隐含就绪依赖，修正后的WindowsCI仍待验。
+本次未到达独立桌面Rust图/Tauri Release步骤，不能据此判断新35分钟预算是否足够；模型下载、native、全workspace与包步骤仍未执行。下一次修正限定于preview测试的虚拟时钟：保留完整流程和全局15秒时限，以50ms步进、每阶段3秒虚拟预算明确等待ready与操作完成，并在finally恢复真实时钟。修正后的单例五次重复分别为1878/1973/1809/2024/1777ms，均通过；typecheck、lint、全105项、build及diff检查全退出0，独立审查通过。精确测试文件SHA256为`767103c32b3129974800d91aa07f40c5da93a847e509d6f31f866f5b313dcd02`；嵌套finally覆盖setup/render和unmount失败，恢复原URL、真实时钟与测试wrapper。生产功能源码未因此修改。原Windows超时未在本机复现，目前只能确认已移除该测试的墙钟等待与隐含就绪依赖，该修正随后在第三次WindowsCI通过前端105项；其余产品链路结果见下节。
+
+## 第三次 Windows CI：目录测试路径显示断言
+
+提交为`21cfb408d7a3254f0afa91aeb7b874e38cb7bd78`，tree为`8541a044d1aa7bbbe0281be47ee922e24c8832e9`。[Windows run37121623438 / job111198689967](https://github.com/Naza3/Nexa/actions/runs/37121623438/job/111198689967)已通过前端105项、Tauri Release和native构建/CTest4/4。Release耗时11分11秒，于2026-10-03 12:29:52 UTC完成，本轮35分钟共享步骤预算足够。
+
+主代理核查job日志：Windows desktop-bridge单元测试18项通过，包含`windows_fixture_bytes_verify_size_hash_cancel_and_publish_without_registration`，只证明受控fixture的size/hash、取消、发布且不登记分支，不是真实MS下载。随后model_directory集成测试11通过/1失败；启动发现用例第410行直接比较`C:\Users\RUNNER~1...`和`\\?\C:\Users\runneradmin...`显示字符串，两者指向同一路径对象。真实MS下载、全workspace完成、native真实推理及完整包步骤均未执行。
+
+修正仅在该测试断言两侧调用canonicalize，生产路径/身份保护未改。精确测试文件SHA256为`8d270aa012c5ad1179a24ba0611117be5fd269491db69e84f15e6fa3e5564562`；本机desktop-bridge74项（含目录12项）、clippy与格式检查通过。流程增加同一bridge的`--lib --test model_directory`前置检查，后续全workspace检查保留；证据stager增加该精确日志并通过22项测试。三文件修正独立审查通过，范围SHA256为`013c7d90661c5c7286511336ce07e6306345dff348896de4807184db6268c218`；前置检查与后续完整门禁均保留，实际目录断言仍有效。修正后的Windows结果另记。
 
 ## 设置回退与当前限制
 
