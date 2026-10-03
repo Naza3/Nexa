@@ -1,6 +1,6 @@
 # T06 外部模型目录与自动名称契约
 
-2026-10-01。此文件为冻结实施契约。限额、runtime-lifetime lease及轻量启动/首次加载核验已确认；不是实现或验收报告。工程要求为设置可选择模型目录、直接使用已有GGUF且不复制，并按GGUF文件名自动命名。现有壳侧14文件的包校验/诊断修复保持独立，不混入本次改动。
+2026-10-03更新。目录事务/身份/文件保护沿用既有契约；模型资格按ADR0015开发增量更新，源码已冻结且本地回归通过，仍需新提交WindowsCI/目标机验收，不表示已交付。限额、runtime-lifetime lease及轻量启动/首次加载核验已确认；不是实现或验收报告。工程要求为设置可选择模型目录、直接使用已有GGUF且不复制，并按GGUF文件名自动命名。现有壳侧14文件的包校验/诊断修复保持独立，不混入本次改动。
 
 ## 1. 现状与最小范围
 
@@ -9,7 +9,7 @@
 - 保留现有 managed 模型、原始 ID、manifest 与复制导入 API。新增一个外部目录并与旧 managed 列表合并展示，不自动迁移、删除或重命名任何原文件。
 - 外部目录只读；不在其中写锁、manifest、缓存或临时导入文件。程序旁 `model/` 或 `models/` 只是用户可选择的位置，不是强制默认，也不以启动 CWD 推导目录。
 - 目录须为支持的本地普通目录，非递归读取直接子级 GGUF。目录本身无需可写；配置与元数据写权限仍要求 AppData 可写。拒绝 UNC/网络/设备路径、路径穿越、任意祖先及最终文件的 symlink/reparse 间接路径。拒绝非普通文件；不扫描子目录、不跟随链接。
-- 不变更 ModelId 字符规则、模型兼容矩阵、推理预算或现有实例 proof/锁/停止约束。
+- ModelId、精确历史验证证据、模板后推理预算与实例proof/锁/停止约束保持；ADR0015将loadable与validated分离，不以验证矩阵作为型号/hash许可名单。
 
 ## 2. 单文件持久化与事务
 
@@ -18,7 +18,7 @@
 - 使用现有私有文件与原子替换机制，不将新设置写入隐藏注释，不承诺两个文件联合原子。既有 config.toml、secrets、runtime 与 managed models 保持位置。
 - 应用新目录或重新扫描都必须先确认 runtime 已停止、无存活 discovery，并持有同一 data root 的实例锁直到提交或取消完成。仅卸载不够。不得自动 shutdown 其他客户端。
 - 完整枚举和核验先在内存构建有界候选索引，成功后一次原子发布上述文件。取消、超限、目录不可读、损坏 GGUF、文件变动或保存失败均不提交半份索引，保留原已选目录及索引。不可静默跳过坏 GGUF 后把结果称为完整成功。
-- 无扩展名匹配的普通文件不作为候选；有效但不在当前已验证矩阵中的 GGUF 可登记，available=false，保持已有 unsupported_model 语义。
+- 无扩展名匹配的普通文件不作为候选；符合本版结构/manifest边界但未在验证矩阵中的GGUF可登记为未实测loadable候选，不再仅因validated=false设为不可用。分片、未知tensor布局、缺模板/损坏文件、模板/key/tensor-name的NUL身份歧义仍拒绝；普通tokenizer值NUL不一概禁止。
 - 取消与明确的原子提交决策竞争：取消先赢则不保存；提交决策已赢则完成发布，晚到取消不能谎称回滚。原子保存成功后，独立网络刷新失败不把它改称保存失败。rename已发布而目录fsync失败沿用settings_durability_unconfirmed，明确可能已保存并刷新真实generation，不承诺回滚旧索引。
 - 新目录选择不等于长期凭据初始化；保存模型库元数据不得隐式创建或轮换 token。
 
@@ -36,7 +36,7 @@
 
 - 目录路径至多32KiB UTF-8、64个components（包含平台root/prefix），候选picker与后端复用同一校验；超界拒绝，不截断路径
 - 每次目录枚举至多 1024 个直接条目、64 个 GGUF 候选；最多同时核验 1 个文件
-- 单 GGUF 至多 16 GiB；本次候选总字节至多 32 GiB；元数据单文件沿用既有 GGUF parser 的 64 MiB header / 1 MiB string / 100000 entries 界限
+- 单GGUF至多16GiB；本次候选总字节至多32GiB；metadata沿用64MiB header / 1MiB string / 100000 entries。W02将同一16GiB单文件限额同步到managed导入前、manifest与load；这不是16GB机器能运行该模型的保证
 - model-library.json 至多 4 MiB；所有文件名、显示名、列表及错误记录同时受数量和字节预算约束
 - apply/scan 总 deadline 300 秒，64 KiB 流式块检查取消及时间；不将大文件整体读入内存
 - 运行时核验沿用同一有限循环，不能在 scheduler actor 内做全文件 hash；既有 start/load/stop deadline 不因本功能偷偷放宽
@@ -91,17 +91,35 @@ snapshot新增：
 
 ### 模型兼容性说明（Windows）
 
-ModelSummary新增向后兼容字符串字段`compatibility`，由注册manifest元数据与本版本固定矩阵纯计算，不额外在列表请求整文件hash。值为`admitted`、`architecture_unsupported`、`quantization_unvalidated`、`template_unvalidated`、`context_unvalidated`、`artifact_unvalidated`、`unvalidated`；旧服务缺字段或未来未知值在桌面端显示`unknown`，文案为“未提供兼容性详情”，不能据此授予运行支持。
+按[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)，当前开发增量分开三个维度：
 
-`validated`与实际load/chat准入规则不变。未准入时`availability_error`使用既有`unsupported_model`，细原因由compatibility承载；文件/目录失效等实际错误优先显示。例：同qwen3/Q8_0但非精确受审资产为validated=false、available=false、compatibility=artifact_unvalidated、availability_error=unsupported_model。
+| 字段 | 语义 | 不能据此推出 |
+| --- | --- | --- |
+| validated / validation / capabilities | 原有精确模型/参数/设备的历史验证证据 | 其他模型禁止加载、任意context/设备已验证 |
+| loadable | 有效受控manifest的独立候选资格；实际提交native前另须文件准备，不是当前完整性证明或型号/hash白名单 | 实际架构/原始模板/设备资源必成功 |
+| available / availability_error | 候选资格与当前观察到的源/准备错误，具体错误优先 | 永久文件完整性或模型质量 |
 
-UI区分登记时识别的GGUF/架构信息、当前引擎范围与精确运行矩阵；不把未准入叫“尚待校验”，也不把历史导入/扫描结果冒充当前完整性保证。外部文件仍在实际prepare/load时完整校验，源变更不得通过兼容性提示绕过。当前仅固定Qwen3-0.6B Q8_0组合准入，Qwen3.5和其他GGUF须另行验证引擎、模板、资产及真实运行。
+ModelSummary新增loadable和候选context_limit信息；manifest schema1保留验证字段与伪造声明拒绝。列表计算只用有界元数据，不增加整库hash；每次实际load/chat仍走源保护和完整性准备，不能由UI自行授予资格。
+
+compatibility保留字符串兼容读取；新写入以admitted表示有原精确历史证据、unvalidated表示未实测，旧architecture_unsupported等枚举可读取，不再依赖它们作为人工模型名单。旧服务缺loadable时UI保守禁用并要求启动匹配版本，不把旧validated当新loadable伪造。
+
+未实测合法候选显示“未实测，可尝试加载”；实际引擎、模板、输出framing与资源限制仍可导致失败。文件/目录消失或变动等具体错误优先；不把失败改称历史未入名单，也不静默换模板。旧389eeef的UI/字段门槛保持历史事实，本节增量源码已冻结，本地回归通过，CI和新包窗口验收仍待完成。
+
+context_limit按模型metadata和131072既有硬限约束；历史验证context2048只表明测过2048，不能阻止合法更大参数尝试，也不保证16GB能容纳131072。没有新增Job RAM硬限制，UI须如实提示内存/资源风险。
+
+### 目录整批失败的当前限制
+
+目录应用/重扫仍先完整建立候选索引，再一次原子发布；一个结构不支持/分片/缺模板/损坏GGUF即可使整批登记失败。旧目录和索引保持，不删除源文件。必须明确提示本次扫描未完成，不能让用户误以为其他文件已注册。
+
+metadata context小于默认2048时，当前默认登记仍失败；自动扫描取min与逐文件诊断为下一片，用户显式参数不能静默夹紧。
+
+逐文件诊断、列出单个不可用项及可用文件部分登记是下一片设计，不属于本次已实现能力；在其事务/结果契约完成前不静默跳过失败文件。
 
 ## 8. 受控错误与验收
 
 复用 runtime_running、desktop_busy、request_not_owned 等既有错误；新边界需要明确安全code：model_library_unsupported、model_directory_required、model_directory_unavailable、model_directory_unsupported、model_library_limit、model_library_changed、model_list_changed、model_scan_timeout、model_scan_cancelled、model_file_changed、model_file_unavailable、model_file_in_use、model_library_write_failed。错误正文不包含token、完整源路径或任意底层异常。
 
-至少覆盖：中文/空格文件自动显示名；旧managed可见/ID不变；只读目录零写入且GGUF hash/长度不变；新目录不复制；同名/重命名/同hash多文件规则；取消/失败原配置与索引不变；目录/文件消失；超限不部分提交；旧runtime身份不匹配；分页generation拒绝陈旧页；Windows外部文件lease对抗矩阵；真实外部GGUF加载/生成/取消/卸载/停止；停止后原文件可再次编辑；程序旁目录不会令严格产品inventory把合法模型误拒，也不会放行任意DLL/EXE/reparse。
+至少覆盖：非白名单模型的loadable/validated分离、伪造证据拒绝、旧服务缺字段保守处理、混合目录整批失败；中文/空格文件自动显示名；旧managed可见/ID不变；只读目录零写入且GGUF hash/长度不变；新目录不复制；同名/重命名/同hash多文件规则；取消/失败原配置与索引不变；目录/文件消失；超限不部分提交；旧runtime身份不匹配；分页generation拒绝陈旧页；Windows外部文件lease对抗矩阵；真实外部GGUF加载/生成/取消/卸载/停止；停止后原文件可再次编辑；程序旁目录不会令严格产品inventory把合法模型误拒，也不会放行任意DLL/EXE/reparse。
 
 壳包校验只给指定数据类别建立准确边界。不能整棵`model/`或`models/`无条件跳过；所选目录在产品外无需改产品清单；产品内部的源GGUF目录只允许受控目录/普通GGUF与必要的精确规则，产品EXE、runtime、DLL、manifest及SHA清单仍原样严格验证。新目录注册元数据不在产品里，因此无须为model-library.json/imports/model-store.lock放开发行包。
 

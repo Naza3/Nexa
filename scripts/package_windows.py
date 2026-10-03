@@ -488,7 +488,7 @@ def build():
         manifest = {
             "schema_version": 1, "product": "nexa-runtime", "package_version": tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"],
             "platform": "windows-x64", "backend": "cpu", "target": TARGET, "configuration": "Release", "architecture": "x86_64", "crt": "MD",
-            "protocol_version": 1, "worker_protocol_version": 1, "shim_version": 2,
+            "protocol_version": 1, "worker_protocol_version": 2, "shim_version": 3,
             "project_commit": project["commit"], "project_tree": project["tree"], "project_dirty": project["dirty"], "source": project,
             "llama_commit": LLAMA_COMMIT, "cargo_lock_sha256": digest(ROOT / "Cargo.lock"),
             "cpu_baseline": [k.removeprefix("GGML_").lower() for k in ("GGML_SSE42", "GGML_AVX", "GGML_AVX2", "GGML_F16C", "GGML_FMA", "GGML_BMI2", "GGML_AVX512") if identity.get(k) == "ON"],

@@ -1,0 +1,293 @@
+{
+  "fixture_version": 1,
+  "origin": "synthetic-design",
+  "execution_status": "not_run",
+  "scope": "Planned bounded tool slice; not a DSH capture or real model result",
+  "model": "synthetic-tools-fixture",
+  "base_fixture": "single-tool-cycle.json",
+  "case_format": "Design descriptions and construction recipes; a test runner does not exist yet. Do not count JSON decoding as a contract pass.",
+  "cases": [
+    {
+      "id": "unknown_schema_keyword",
+      "stage": "request",
+      "mutation": "Add pattern to tools[0].function.parameters.properties.code",
+      "expected": {
+        "http_status": 400,
+        "code": "unsupported_parameter",
+        "executions": 0
+      }
+    },
+    {
+      "id": "strict_true",
+      "stage": "request",
+      "mutation": "Set tools[0].function.strict=true",
+      "expected": {
+        "http_status": 400,
+        "code": "unsupported_parameter",
+        "executions": 0
+      }
+    },
+    {
+      "id": "tools_nonstream",
+      "stage": "request",
+      "mutation": "Set stream=false and remove stream_options",
+      "expected": {
+        "http_status": 400,
+        "code": "unsupported_parameter",
+        "executions": 0
+      }
+    },
+    {
+      "id": "force_named_tool",
+      "stage": "request",
+      "mutation": "Set tool_choice to a named-function object",
+      "expected": {
+        "http_status": 400,
+        "code": "unsupported_parameter",
+        "executions": 0
+      }
+    },
+    {
+      "id": "null_user",
+      "stage": "request",
+      "mutation": "Set messages[1].content=null",
+      "expected": {
+        "http_status": 400,
+        "code": "invalid_request",
+        "executions": 0
+      }
+    },
+    {
+      "id": "assistant_missing_call_id",
+      "stage": "request",
+      "mutation": "Delete second_request.messages[2].tool_calls[0].id",
+      "expected": {
+        "http_status": 400,
+        "code": "invalid_request",
+        "executions": 0
+      }
+    },
+    {
+      "id": "unknown_tool_result_id",
+      "stage": "request",
+      "mutation": "Set second_request.messages[3].tool_call_id=call_unknown",
+      "expected": {
+        "http_status": 400,
+        "code": "invalid_request",
+        "executions": 0
+      }
+    },
+    {
+      "id": "duplicate_tool_result",
+      "stage": "request",
+      "mutation": "Repeat second_request.messages[3]",
+      "expected": {
+        "http_status": 400,
+        "code": "invalid_request",
+        "executions": 0
+      }
+    },
+    {
+      "id": "unresolved_call_history",
+      "stage": "request",
+      "mutation": "Remove second_request.messages[3] leaving assistant with unresolved tool call at end",
+      "expected": {
+        "http_status": 400,
+        "code": "invalid_request",
+        "executions": 0
+      }
+    },
+    {
+      "id": "duplicate_request_json_key",
+      "stage": "request",
+      "raw_json": "{\"model\":\"synthetic-tools-fixture\",\"model\":\"duplicate\",\"messages\":[]}",
+      "expected": {
+        "http_status": 400,
+        "code": "invalid_request",
+        "executions": 0
+      }
+    },
+    {
+      "id": "duplicate_nested_argument_key",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"A1\",\"code\":\"B7\"}}</tool_call>",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0
+      }
+    },
+    {
+      "id": "unknown_generated_tool",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"run_unregistered_action\",\"arguments\":{\"code\":\"B7\"}}</tool_call>",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0
+      }
+    },
+    {
+      "id": "malformed_arguments",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":B7}}</tool_call>",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0
+      }
+    },
+    {
+      "id": "schema_enum_failure",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"Z9\"}}</tool_call>",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0
+      }
+    },
+    {
+      "id": "schema_missing_required",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{}}</tool_call>",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0
+      }
+    },
+    {
+      "id": "schema_extra_property",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"B7\",\"extra\":true}}</tool_call>",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0
+      }
+    },
+    {
+      "id": "lenient_repaired_truncation",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"B7\"",
+      "termination": "length",
+      "expected": {
+        "code": "incomplete_generation",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0,
+        "must_not_accept_repaired_parser_json": true
+      }
+    },
+    {
+      "id": "closed_json_missing_tool_boundary",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"B7\"}}",
+      "termination": "eos",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0
+      }
+    },
+    {
+      "id": "two_generated_calls_first_slice",
+      "stage": "generated",
+      "raw_output": "<tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"B7\"}}</tool_call><tool_call>{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"A1\"}}</tool_call>",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "tool_payload_events": 0,
+        "executions": 0,
+        "must_not_keep_only_first_call": true
+      }
+    },
+    {
+      "id": "tool_choice_none_call",
+      "stage": "generated",
+      "mutation": "Set tool_choice=none then produce a valid lookup_test_color call",
+      "expected": {
+        "code": "invalid_tool_output",
+        "success_finish": false,
+        "executions": 0
+      }
+    },
+    {
+      "id": "raw_output_plus_one",
+      "stage": "generated",
+      "construction": {
+        "repeat_utf8_text": "x",
+        "byte_count": 16385
+      },
+      "expected": {
+        "code": "tool_output_limit_exceeded",
+        "success_finish": false,
+        "executions": 0
+      }
+    },
+    {
+      "id": "oversized_result",
+      "stage": "request",
+      "mutation": "Set one role:tool content to 16385 ASCII bytes",
+      "expected": {
+        "http_status": 400,
+        "code": "invalid_request",
+        "executions": 0
+      }
+    },
+    {
+      "id": "template_budget_overflow",
+      "stage": "prepare",
+      "construction": "Use valid bounded tools/history whose actual complete prompt_tokens + max_tokens exceeds selected context by one",
+      "expected": {
+        "http_status_before_stream": 400,
+        "code": "context_length_exceeded",
+        "executions": 0,
+        "must_not_truncate_history": true
+      }
+    },
+    {
+      "id": "disconnect_while_waiting_credit",
+      "stage": "lifecycle",
+      "construction": "Keep the single tools payload credit outstanding then disconnect the client",
+      "expected": {
+        "internal_terminal_count": 1,
+        "executions": 0,
+        "cancel_must_not_wait_for_credit": true,
+        "next_request_usable_after_confirmed_cleanup": true
+      }
+    },
+    {
+      "id": "worker_lost_after_header",
+      "stage": "lifecycle",
+      "construction": "Drop the synthetic worker after a tool header or arguments prefix but before Completed",
+      "expected": {
+        "success_finish": false,
+        "executions": 0,
+        "must_not_replay": true,
+        "cleanup_must_be_confirmed": true
+      }
+    },
+    {
+      "id": "common_log_privacy",
+      "stage": "privacy",
+      "canary": "NEXA_SYNTHETIC_TOOLS_PRIVACY_CANARY_20261003",
+      "construction": "Use this synthetic string in input, description, result and failing parser output",
+      "expected": {
+        "stdout_contains_canary": false,
+        "stderr_contains_canary": false,
+        "error_body_contains_canary": false,
+        "evidence_contains_canary": false
+      }
+    }
+  ],
+  "generated_raw_format_notice": "The raw tool markers above are Qwen-style synthetic parser examples, not evidence of the still-undownloaded candidate GGUF template; other templates need their own complete-boundary cases."
+}

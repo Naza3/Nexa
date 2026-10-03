@@ -15,7 +15,7 @@
 
 ## 2. 产品边界
 
-当前产品范围按 [ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)：Windows 桌面 CPU 本地 LLM runtime，以固定 llama.cpp/GGUF 为推理核心，为其他应用提供本机 API。Windows 10 x64 / i5-8400 优先，后续按真实证据扩展 Intel/AMD 桌面 CPU 和 Windows 11。
+当前产品范围按 [ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)：Windows 桌面 CPU 本地 LLM runtime，以固定 llama.cpp/GGUF 为推理核心，为其他应用提供本机 API。Windows 10 x64 / i5-8400 / 16GB内存优先，后续按真实证据扩展Intel/AMD桌面CPU和Windows11；16GB是用户提供总内存，不是实测可用量。
 
 - Rust 保留模型、安全、单 actor 调度、队列、取消/超时、worker 生命周期、HTTP/CLI 与桌面桥职责；计算内核、模板/tokenizer/采样由锁定 llama.cpp 与 shim 处理
 - API 管理进程不链接原生推理库；独立 worker 和原生线程约束保持。不为移动端复用新增泛化层，也不因范围收敛重写已有可靠服务边界
@@ -36,7 +36,7 @@
 - 状态由单一调度器协调；加载、运行、队列和卸载有明确边界。队列、IPC、输出缓冲有界，取消不排在生成后面。
 - 每个请求内部只产生一次终态；客户端断开时无需强行发送。输出过部分文本的请求不自动重放。
 - Windows worker 崩溃后管理进程保持可用，受影响请求终结，显式加载恢复；不得释放仍被使用的原生资源。
-- 模型、模板、工具链与 llama.cpp commit 精确锁定；来源/许可/hash、固定输入、参数与设备共同定义可复现基线。登记元数据不等于实际加载时的文件完整性证明，不从文件名或 GGUF 容器格式授予运行准入。
+- 按[ADR0015](docs/decisions/0015-open-model-loading-and-validation-evidence.md)分离开放加载与精确验证：不以型号/名称/hash白名单限制受控候选；validated只保存历史证据，loadable独立表示尝试资格，不是成功/内存保证。hash、结构、metadata、TOCTOU与原始模板检查不可删除。精确模型/模板/引擎/参数/设备仍用于可复现证据，不授予未测模型“已验证”标签。
 
 ## 4. 调用方与兼容边界
 

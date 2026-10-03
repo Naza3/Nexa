@@ -40,8 +40,10 @@ pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
     let mut seen = BTreeSet::new();
     for _ in 0..count {
         let key = input.string(4096)?;
-        if key.is_empty() || !seen.insert(key.clone()) {
-            return Err(invalid_manifest("empty or duplicate GGUF metadata key"));
+        if key.is_empty() || key.contains('\0') || !seen.insert(key.clone()) {
+            return Err(invalid_manifest(
+                "empty, NUL-containing or duplicate GGUF metadata key",
+            ));
         }
         let kind = input.u32()?;
         match key.as_str() {
@@ -52,6 +54,25 @@ pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
                     ));
                 }
                 strings.insert(key, input.string(MAX_STRING_BYTES)?);
+            }
+            "split.count" | "split.no" => {
+                // llama.cpp otherwise opens sibling shards outside this file's
+                // hash and Windows lease. A multi-file closure is not supported.
+                let value = match kind {
+                    2 => u32::from(u16::from_le_bytes(input.bytes()?)),
+                    4 => input.u32()?,
+                    _ => {
+                        return Err(invalid_manifest(
+                            "GGUF split metadata must be unsigned integer",
+                        ));
+                    }
+                };
+                if (key == "split.count" && value > 1) || (key == "split.no" && value != 0) {
+                    return Err(runtime_types::RuntimeError::new(
+                        runtime_types::ErrorCode::UnsupportedModel,
+                        "multi-file GGUF is unsupported; every loaded byte must belong to the protected single file",
+                    ));
+                }
             }
             "general.file_type" | "general.alignment" => {
                 if kind != 4 {
@@ -78,8 +99,10 @@ pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
     let mut extents = Vec::with_capacity(tensors as usize);
     for _ in 0..tensors {
         let name = input.string(4096)?;
-        if name.is_empty() || !names.insert(name) {
-            return Err(invalid_manifest("empty or duplicate GGUF tensor name"));
+        if name.is_empty() || name.contains('\0') || !names.insert(name) {
+            return Err(invalid_manifest(
+                "empty, NUL-containing or duplicate GGUF tensor name",
+            ));
         }
         let dimensions = input.u32()?;
         if !(1..=4).contains(&dimensions) {
@@ -145,7 +168,7 @@ pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
                 && value.len() <= 128
                 && value
                     .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         })
         .ok_or_else(|| invalid_manifest("GGUF architecture missing or invalid"))?;
     let context_length = *numbers
@@ -160,8 +183,15 @@ pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
             .ok_or_else(|| invalid_manifest("GGUF file type missing"))?,
         template: strings
             .remove("tokenizer.chat_template")
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| invalid_manifest("GGUF chat template missing"))?,
+            // The native template API is C-string based. Reject NUL rather
+            // than hashing one template and executing a silently truncated one.
+            .filter(|value| !value.is_empty() && !value.contains('\0'))
+            .ok_or_else(|| {
+                runtime_types::RuntimeError::new(
+                    runtime_types::ErrorCode::UnsupportedChatTemplate,
+                    "GGUF requires a nonempty, NUL-free embedded chat template; no fallback is provided",
+                )
+            })?,
     })
 }
 
@@ -335,6 +365,70 @@ mod tests {
         bytes.resize(bytes.len() + payload, 0);
         bytes
     }
+    #[test]
+    fn embedded_template_nul_cannot_change_native_template_identity() {
+        let mut bytes = header(1, None);
+        tensor(&mut bytes, "weight", &[1], 0, 0);
+        let mut bytes = finish(bytes, 4);
+        let value = bytes
+            .windows(b"template\n".len())
+            .position(|part| part == b"template\n")
+            .unwrap();
+        bytes[value] = 0;
+        assert_eq!(
+            read(Cursor::new(bytes)).unwrap_err().code,
+            runtime_types::ErrorCode::UnsupportedChatTemplate
+        );
+    }
+
+    #[test]
+    fn nul_keys_and_tensor_names_fail_without_banning_ordinary_values() {
+        let mut bytes = header(1, None);
+        let key = bytes
+            .windows(b"general.architecture".len())
+            .position(|part| part == b"general.architecture")
+            .unwrap();
+        bytes[key] = 0;
+        tensor(&mut bytes, "weight", &[1], 0, 0);
+        assert_eq!(
+            read(Cursor::new(finish(bytes, 4))).unwrap_err().code,
+            runtime_types::ErrorCode::InvalidManifest
+        );
+        let mut bytes = header(1, None);
+        tensor(&mut bytes, "wei\0ght", &[1], 0, 0);
+        assert_eq!(
+            read(Cursor::new(finish(bytes, 4))).unwrap_err().code,
+            runtime_types::ErrorCode::InvalidManifest
+        );
+        let mut value = Vec::new();
+        string(&mut value, "ordinary\0value");
+        let mut bytes = header(1, Some(("tokenizer.ordinary_value", 8, value)));
+        tensor(&mut bytes, "weight", &[1], 0, 0);
+        assert!(read(Cursor::new(finish(bytes, 4))).is_ok());
+    }
+
+    #[test]
+    fn split_models_cannot_expand_the_verified_file_closure() {
+        for (key, kind, value) in [
+            ("split.count", 2, 2_u16.to_le_bytes().to_vec()),
+            ("split.count", 4, 2_u32.to_le_bytes().to_vec()),
+            ("split.no", 2, 1_u16.to_le_bytes().to_vec()),
+            ("split.no", 4, 1_u32.to_le_bytes().to_vec()),
+        ] {
+            let mut bytes = header(1, Some((key, kind, value)));
+            tensor(&mut bytes, "weight", &[1], 0, 0);
+            assert_eq!(
+                read(Cursor::new(finish(bytes, 4))).unwrap_err().code,
+                runtime_types::ErrorCode::UnsupportedModel
+            );
+        }
+        for (key, value) in [("split.count", 1_u16), ("split.no", 0_u16)] {
+            let mut bytes = header(1, Some((key, 2, value.to_le_bytes().to_vec())));
+            tensor(&mut bytes, "weight", &[1], 0, 0);
+            assert!(read(Cursor::new(finish(bytes, 4))).is_ok());
+        }
+    }
+
     #[test]
     fn valid_metadata_and_disjoint_tensor_extents() {
         let mut bytes = header(2, None);

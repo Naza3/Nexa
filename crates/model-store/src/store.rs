@@ -217,6 +217,12 @@ impl ModelStore {
         if size_bytes == 0 {
             return Err(invalid_manifest("model source is empty"));
         }
+        if size_bytes > crate::library::MAX_MODEL_BYTES {
+            return Err(RuntimeError::new(
+                ErrorCode::ModelLibraryLimit,
+                "single GGUF exceeds the 16 GiB file budget",
+            ));
+        }
         let required = size_bytes.checked_add(SPACE_RESERVE).ok_or_else(|| {
             RuntimeError::new(
                 ErrorCode::InsufficientSpace,
@@ -382,13 +388,11 @@ impl ModelStore {
             return Ok(());
         };
         control.check()?;
-        if !entry.manifest.validated {
-            // A stale/missing source is actionable even when its registered
-            // metadata was never admitted. This bounded identity observation
-            // performs no hash and must not be mistaken for load verification.
-            if let Some(code) = library.availability(entry) {
-                return Err(library_error(code));
-            }
+        // Source identity errors take precedence over historical evidence.
+        if let Some(code) = library.availability(entry) {
+            return Err(library_error(code));
+        }
+        if !entry.manifest.load_candidate() {
             return Err(library_error(ErrorCode::UnsupportedModel));
         }
         let _gate = self
@@ -460,7 +464,7 @@ impl ModelStore {
             path: self.root_path.join(relative),
             context_limit: manifest.executable_context_limit(),
             default_context: manifest.default_context,
-            validated: manifest.validated,
+            loadable: manifest.load_candidate(),
         })
     }
 

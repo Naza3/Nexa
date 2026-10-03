@@ -102,7 +102,7 @@ fn copies_hashes_registers_resolves_and_removes_only_managed_copy() {
     assert_eq!(store.list().unwrap(), vec![manifest.clone()]);
     assert_eq!(store.get(&id("tiny.test-1")).unwrap(), manifest);
     let resolved = store.resolve(&id("tiny.test-1")).unwrap();
-    assert!(!resolved.validated);
+    assert!(resolved.loadable);
     assert_eq!(fs::read(resolved.path).unwrap(), bytes);
     assert_eq!(store.remove(&id("tiny.test-1")).unwrap(), manifest);
     assert!(store.list().unwrap().is_empty());
@@ -189,13 +189,13 @@ fn verifies_declared_size_expected_hash_and_space_before_registering() {
         store
             .import_reader(
                 Cursor::new(&bytes),
-                u64::MAX,
-                request("no-space"),
+                model_store::library::MAX_MODEL_BYTES + 1,
+                request("oversized-file"),
                 &ImportCancellation::default()
             )
             .unwrap_err()
             .code,
-        ErrorCode::InsufficientSpace
+        ErrorCode::ModelLibraryLimit
     );
     assert!(store.list().unwrap().is_empty());
     assert_clean(&root);
@@ -450,6 +450,7 @@ fn unknown_manifest_fields_survive_but_claims_paths_and_tampering_fail_closed() 
     for (key, value) in [
         ("relative_file", json!("../../user.gguf")),
         ("validated", json!(true)),
+        ("loadable", json!(true)),
         (
             "validated_llama_commit",
             json!("2149c00f4442dc59302e134a02e4c99d5f7ed9fc"),

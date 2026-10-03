@@ -144,12 +144,11 @@ fn compatibility_survives_source_failures_cancellation_and_prepare_retries() {
     let summary = ModelSummary::from(super::import_outcome_tests::model());
     assert_eq!(
         summary.compatibility,
-        runtime_types::ModelCompatibility::TemplateUnvalidated
+        runtime_types::ModelCompatibility::Unvalidated
     );
-    assert_eq!(
-        summary.availability_error.as_deref(),
-        Some("unsupported_model")
-    );
+    assert!(summary.available && summary.loadable);
+    assert!(!summary.validated);
+    assert!(summary.availability_error.is_none());
     let id = summary.id.clone();
     let registry = RwLock::new(RegistrySnapshot {
         models: vec![summary],
@@ -178,7 +177,7 @@ fn compatibility_survives_source_failures_cancellation_and_prepare_retries() {
             assert_eq!(observed.generation, generation);
             assert_eq!(
                 observed.models[0].compatibility,
-                runtime_types::ModelCompatibility::TemplateUnvalidated
+                runtime_types::ModelCompatibility::Unvalidated
             );
             assert_eq!(
                 observed.models[0].availability_error.as_deref(),
@@ -202,12 +201,10 @@ fn compatibility_survives_source_failures_cancellation_and_prepare_retries() {
             .as_deref(),
         Some("unsupported_model")
     );
-    // Even a successful source-only check cannot admit this model.
+    // A successful source check restores the candidate, never historical evidence.
     publish_preparation_result(&registry, &id, &Ok(())).unwrap();
     let observed = registry.read().unwrap();
-    assert!(!observed.models[0].available);
-    assert_eq!(
-        observed.models[0].availability_error.as_deref(),
-        Some("unsupported_model")
-    );
+    assert!(observed.models[0].available);
+    assert!(!observed.models[0].validated);
+    assert!(observed.models[0].availability_error.is_none());
 }

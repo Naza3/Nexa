@@ -60,3 +60,22 @@ foreach(LIBRARY air_llama llama-common llama-common-base cpp-httplib llama ggml 
   string(APPEND AIR_IDENTITY "library.${LIBRARY}=$<TARGET_FILE:${LIBRARY}>\n")
 endforeach()
 file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/air-native-$<CONFIG>.txt" CONTENT "${AIR_IDENTITY}")
+
+# Pure-template tests require no model weights and cannot certify inference.
+add_executable(air-template-test tests/text_template_test.cpp)
+target_include_directories(air-template-test PRIVATE src)
+target_link_libraries(air-template-test PRIVATE air_llama llama-common llama)
+target_compile_definitions(air-template-test PRIVATE AIR_TEMPLATE_FIXTURE="${LLAMA_SOURCE}/models/templates/Qwen-Qwen3-0.6B.jinja")
+# Keep assert-based contract checks active for the Release verification target.
+if(MSVC)
+  target_compile_options(air-template-test PRIVATE /UNDEBUG)
+  target_compile_options(air-stream-test PRIVATE /UNDEBUG)
+else()
+  target_compile_options(air-template-test PRIVATE -UNDEBUG)
+  target_compile_options(air-stream-test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME air-template-test COMMAND air-template-test)
+
+add_test(NAME air-template-privacy-test COMMAND air-template-test --privacy-canary)
+set_tests_properties(air-template-privacy-test PROPERTIES
+  FAIL_REGULAR_EXPRESSION "NEXA_PRIVATE_CANARY_930d46b1")

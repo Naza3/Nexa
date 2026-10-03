@@ -388,8 +388,8 @@ fn accept(frame: Frame, shared: &Shared) -> Result<Action, RuntimeError> {
                         return Err(protocol_error("invalid load state"));
                     }
                     options.validate()?;
-                    if !model.validated || options.context_size > model.context_limit {
-                        return Err(protocol_error("unvalidated model or invalid context"));
+                    if !model.loadable || options.context_size > model.context_limit {
+                        return Err(protocol_error("ineligible model or invalid context"));
                     }
                     (
                         Kind::Load,

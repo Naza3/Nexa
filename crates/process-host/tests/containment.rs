@@ -126,7 +126,7 @@ fn paths_and_arguments_with_spaces_and_unicode_are_preserved() {
                 path: "unused.gguf".into(),
                 context_limit: 4096,
                 default_context: 4096,
-                validated: true,
+                loadable: true,
             })
         },
         host,

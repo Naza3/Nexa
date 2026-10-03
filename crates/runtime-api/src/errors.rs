@@ -98,7 +98,7 @@ impl From<RuntimeError> for ApiError {
             UnsupportedModel => (
                 StatusCode::BAD_REQUEST,
                 "unsupported_model",
-                "This model has no verified configuration in this build.",
+                "This model cannot run through the current engine and text adapter.",
                 Some("model"),
             ),
             UnsupportedChatTemplate => (
@@ -110,7 +110,7 @@ impl From<RuntimeError> for ApiError {
             ContextLengthExceeded => (
                 StatusCode::BAD_REQUEST,
                 "context_length_exceeded",
-                "The requested context or token budget exceeds the verified model configuration.",
+                "The requested context or token budget exceeds the model or runtime context limit.",
                 Some("messages"),
             ),
             ModelNotFound => (

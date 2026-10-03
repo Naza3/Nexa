@@ -129,8 +129,8 @@ fn real_store_runtime_queue_cancel_budget_and_idle_reload() {
     );
     let resolved = store.resolve(&model_id).unwrap();
     assert_ne!(resolved.path, source);
-    assert!(resolved.validated);
-    assert_eq!(resolved.context_limit, 2048);
+    assert!(resolved.loadable);
+    assert_eq!(resolved.context_limit, 40960);
     let mut engine = EngineHost::new().unwrap();
     let reports = engine.take_diagnostics().unwrap();
     let resolver = store.clone();

@@ -1,22 +1,22 @@
 # Nexa Runtime v0.1 开发执行文档
 
-- 版本：2.0（Windows 桌面 CPU 主线）
+- 版本：2.1（Windows 开放模型开发契约）
 - 日期：2026-10-03
 - 项目名：Nexa；命令与原生符号沿用 `ai-runtime` / `ai-runtime-worker` / `air_*`
 - 文档对象：实现项目的开发者、编码 AI、验收人员
 
-> 本文定义当前 Windows runtime 契约与后续验收，不代表所有规划已经实现。实现/真实模型/CI/目标设备结果见当前状态；旧混合平台v1.3保留于历史快照，不再作为当前要求。
+> 本文定义Windows runtime契约与后续验收，不代表所有规划已经实现。ADR0015开放模型字段/行为已在工作区冻结并通过本地回归，尚未新提交Windows验收或交付；35bfd85及已交付389eeef仍保持旧模型门槛。实现/真实模型/CI/目标设备结果见当前状态；旧混合平台v1.3保留于历史快照，不再作为当前要求。
 
 本文负责runtime具体契约；[架构](docs/architecture.md)负责职责，[ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)负责范围，[路线](docs/roadmap.md)负责W00–W05依赖，[当前状态](PROJECT_STATE.md)记录事实。deepseek harness接入新增门槛见[harness契约](docs/windows-harness-contract.md)。
 
 ## 1. 目标与冻结决策
 
-构建面向 Windows 桌面 CPU 的本地 LLM runtime，以固定 llama.cpp 为推理核心，让其他应用通过本机 API 调用。Rust保留模型、调度、取消/超时、生命周期、HTTP/CLI与安全边界；桌面界面管理模型与服务，聊天辅助验证。Windows10 x64 / i5-8400优先，后续以真实设备证据扩大Intel/AMD桌面CPU与Windows11。
+构建面向 Windows 桌面 CPU 的本地 LLM runtime，以固定 llama.cpp 为推理核心，让其他应用通过本机 API 调用。Rust保留模型、调度、取消/超时、生命周期、HTTP/CLI与安全边界；桌面界面管理模型与服务，聊天辅助验证。Windows10 x64 / i5-8400 / 16GB内存优先，后续以真实设备证据扩大Intel/AMD桌面CPU与Windows11。
 
 | 项目 | 当前决定 |
 | --- | --- |
 | 推理引擎 | 固定llama.cpp + 自有C++ shim；不把Rust封装当成新计算内核 |
-| 模型 | GGUF，按架构/量化/模板/精确hash/上下文/能力和目标设备验收 |
+| 模型 | 合规单文件GGUF开放候选尝试，不按型号/hash白名单；精确矩阵仅记录已测证据，结构/完整性/模板/资源仍检查 |
 | 运行形态 | Rust管理进程 + 按需独立CPU worker；父端不链接原生库 |
 | UI | Tauri 2 + React/TypeScript/Vite；管理器增量见W03 |
 | HTTP | Axum + Tokio，默认`127.0.0.1:18080`，回环/Bearer/Host/Origin边界保持 |
@@ -53,7 +53,7 @@ Android/MNN/Flutter、其他操作系统、GPU/NPU、完整聊天产品、账号
 | --- | --- | --- |
 | runtime-types | 请求、事件、错误、配置与协议版本 | UI/HTTP/原生指针 |
 | runtime-core | 单actor、队列、取消、状态、deadline、空闲卸载 | tokenizer、计算内核、业务会话 |
-| model-store | managed/external GGUF、manifest、准入/完整性 | 市场下载、业务数据库 |
+| model-store | managed/external GGUF、manifest、加载资格/完整性 | 市场下载、业务数据库 |
 | process-host / runtime-ipc | 父端执行器、回收、私有协议与信用 | 父进程链接原生库 |
 | engine-host / llama-adapter / shim | 专用线程、模板/tokenizer/采样/推理/释放 | HTTP或UI |
 | runtime-api / runtime-cli | 鉴权、HTTP/SSE、管理、发现/关停 | 直接操作模型指针 |
@@ -83,7 +83,7 @@ worker 崩溃属于模型运行失败，不自动重放已经输出一部分的�
 | `rust-toolchain.toml` | 精确 Rust 工具链版本 |
 | `crates/runtime-types/` | 类型、事件、错误和序列化 |
 | `crates/runtime-core/` | 调度器、生命周期、资源策略 |
-| `crates/model-store/` | GGUF managed/external 存储与准入 |
+| `crates/model-store/` | GGUF managed/external存储、独立loadable与历史validated |
 | `crates/engine-host/` | 已有 PC llama 原生线程执行器 |
 | `crates/process-host/`、`crates/runtime-ipc/` | PC父进程执行器、私有NDJSON与信用校验 |
 | `crates/llama-adapter/` | Rust 安全封装及 native 构建入口 |
@@ -155,23 +155,25 @@ llama.cpp 提供 C API；复杂聊天模板还需要关注同版本的 common/ch
 
 上下文预算规则：`prompt_tokens + max_tokens <= context_size`。prompt_tokens 必须包含模板和特殊 token。第一版不静默截断历史，不自动摘要，也不开启上下文滑动。
 
-### 4.4 模型与模板范围
+### 4.4 开放模型与历史验证（ADR0015，新Windows验收待完成）
 
-最初用 Qwen3 系列小型 GGUF 验证链路，例如 0.6B；业务质量可比较 1.7B 与 4B。量化选择以实际可获取并锁定的文件为准，可对照 Q8_0、Q4_K_M 等配置，不假定每个官方仓库都有相同量化文件。这些是候选验证配置，不是本文件已经验证的产品支持清单。
+用户要求16GB目标机支持很多模型，不将运行范围固化为特定几个型号。候选加载不依赖模型名、文件名、架构名列表或预先批准的hash；锁定llama.cpp实际loader判断架构、张量与执行能力。精确[模型矩阵](docs/model-matrix.md)仍记录已测输入/设备/参数，不能把未列入表等同禁止尝试。
 
-T00/T01 必须在 model-matrix 中记录精确来源、模型修订、量化格式、文件 SHA-256、GGUF 架构、模板校验和、默认上下文、支持平台及许可证信息。支持能力按这一组合认定，不能用“所有 GGUF 都支持”替代。
+`validated`、`validation`和已有capabilities继续表示精确历史证据；伪造证据或不一致manifest必须拒绝。独立`loadable`表示manifest满足受控候选条件，不证明当前文件完整性；实际提交native前仍须store准备成功，`available`结合已观察到的文件/目录失败；二者都不是成功加载、质量或内存保证。登记时的hash/metadata也不能代替实际load前完整性复验。
 
-第一版只发布非思考聊天模式：对模板支持关闭思考的已验收模型，在模型配置中固定关闭。上游当前模板辅助层包含思考开关，但不同版本和模板需要验证。[S4]
+当前开放切片的结构边界为GGUF v2/v3、单文件、已实现tensor布局和有界metadata。常规/K等已实现布局可检查，未知layout不放行；split.count>1或split.no!=0拒绝，防止引擎打开未纳入hash/lease保护的邻接文件。加载后拒绝encoder、diffusion、noncausal或不具备所需decoder的执行方式。文件名、GGUF magic或metadata架构名称不能替代这些检查。
 
-不在用户输入尾部私自拼接控制词；不对输出做通用正则删除 `<think>`。如果关闭思考仍不能稳定得到预期聊天输出，该组合不能进入第一版正式清单。
+### 4.5 原始模板与文本能力边界
 
-缺失/不支持的模板返回 `unsupported_chat_template`；未验收架构返回 `unsupported_model`。GGUF magic 正确不代表模型可以成功加载。
+必须使用GGUF内非空原始Jinja模板及其vocab。直接应用时关闭可用的thinking选项，但不要求每个模板都声明该开关，也不因原模板不包含此开关便按型号拒绝。禁止fallback模板、system/role合并改写、静默丢内容或通用正则剥离思考/控制标签。
 
-### 4.5 桌面实用模型与工具能力扩展（规划）
+当前单轮/多轮与实际每个请求检查文本continuation：带generation prompt的前缀必须与追加assistant探针后的前缀一致；末尾符合原vocab EOG与允许空白规则，vocab自动EOS特例单独检查。system不受支持时明确报错，不静默塞入user。需要额外输出framing、工具/思考解析或遇到非EOG控制token的情况明确失败，不把这些输出拼成正常完成。
 
-当前固定0.6B仅是链路基线，不等于桌面应用或harness的可用质量。W02按CPU内存/质量分档选择候选（含可研究的4B档），逐项检查锁定llama版本的架构、模板、量化与非思考/工具能力；不能只增加线程或放宽准入。
+该窄文本契约不等于支持全部Jinja、全部模型或可靠关闭任意模型的思考模式。缺失/不支持模板返回unsupported_chat_template；实际架构/执行方式不支持返回受控模型错误，普通加载/资源失败如实区分，不伪装成未通过hash许可。
 
-每个模型须有来源/许可/hash、模板、加载参数、精确预算、文本质量/性能与取消释放证据。工具调用另有模型能力标签：工具名/参数合法性、真实多步回合、无工具/非法输出、tools+history模板预算。模板或引擎改动须回归原有文本模型。当前代码尚未因此获得工具生成、结构化约束或思考输出能力。
+开放文本加载不授予工具能力、结构化输出或完整harness兼容性。1.7B/4B等只是CPU内存/质量基准样本，不是产品清单。工具wire/模型能力/实际agent回合见独立[工具契约草案](docs/windows-tools-contract.md)，尚未实现；任何实测标签必须保留精确资产、模板、引擎、参数和设备证据。
+
+原始模板、metadata key与tensor name含NUL时拒绝，避免Rust/native的C-string身份截断；普通tokenizer metadata values含NUL不一概禁止。Engine初始化强制关闭common/Jinja日志并使用受控静态模板错误，最终隐私canary只证明被覆盖的成功/异常路径，不作绝对无泄漏承诺。
 
 ## 5. 模型、配置与资源
 
@@ -195,7 +197,9 @@ Windows使用用户数据目录，支持`--data-dir`显式覆盖；同一实例�
 
 导入顺序：检查空间和来源可读 → 复制到临时文件并计算 SHA-256 → 检查 GGUF / manifest → 在同文件系统原子移动 → 更新索引。失败清理 `.partial`。默认不覆盖同名模型；删除注册项不删除用户原始文件。
 
-现有 Windows GGUF manifest 至少包含：schema_version、id、display_name、relative_file、size_bytes、sha256、source、architecture、quantization、template_sha256、context_limit、default_context、validated_llama_commit、capabilities。未知字段可保留；缺失关键校验字段不标记为已验证。T02目录原子提交、Windows保留文件名限制和验证缓存决策见 [ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)，不改变公共model_id语法。
+现有 Windows GGUF manifest 至少包含：schema_version、id、display_name、relative_file、size_bytes、sha256、source、architecture、quantization、template_sha256、context_limit、default_context、validated_llama_commit、capabilities。未知字段可保留；缺失关键校验字段不标记为已验证；无历史validated不等于不能成为受控加载候选。T02目录原子提交、Windows保留文件名限制和验证缓存决策见 [ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)，不改变公共model_id语法。
+
+managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。metadata context小于默认2048时，当前默认登记仍失败；自动扫描改取min与逐文件诊断属于下一片，用户显式参数不会静默夹紧。
 
 ### 5.2 默认配置
 
@@ -228,7 +232,7 @@ top_p = 0.9
 gpu_layers = 0
 ```
 
-当前API配置默认context4096/batch512、线程为min(4,可用逻辑CPU)，桌面验证档为2048/2线程/128；当前精确准入只验2048，默认值不等于模型已支持。后续统一默认须经W02实测和决策，不静默降级。execution_timeout 包含 prepare/prefill/decode，不包含排队和模型加载；三类计时分别记录。
+当前API默认context4096/batch512、线程min(4,可用逻辑CPU)，桌面验证档2048/2线程/128；历史仅证实各自测过的组合。开放候选上限为模型metadata与131072既有硬限中的较小值，实际loader可进一步拒绝；这不是16GB可运行该窗口的保证。调整默认须实测，不静默降级。execution_timeout 包含 prepare/prefill/decode，不包含排队和模型加载；三类计时分别记录。
 
 `backend`、`context_size` 是 load-time 参数；修改后需要卸载并重新加载。当前构建仅接受backend=cpu和gpu_layers=0；保留字段不等于提供GPU支持。`max_output_tokens` 是请求未提供输出预算时的默认值，不是无条件可用的剩余上下文。
 
@@ -238,9 +242,9 @@ gpu_layers = 0
 
 Windows10/i5-8400为首测目标，其他Intel/AMD桌面CPU按实际硬件扩展；线程、batch、context推荐须测量，不按品牌或核心数直接推导最优值。
 
-内存预算包含权重、KV cache、计算缓冲、运行时与 UI。内存不足时优先提示减少上下文或使用更小模型；不在用户不知道的情况下改变模型、量化或历史内容。
+内存成本包含权重、KV、计算缓冲、API/worker/UI及其他程序。用户16GB总内存不等于可用量，当前Job没有RAM硬限制；进程隔离不是完整OOM或系统响应性保障。资源不足应明确失败/提示减小context或模型，不偷偷换量化、模型或删历史。资源预测与硬限制均不得写成已实现。
 
-每次实际加载（含idle重载和显式恢复Unload后）须重新resolve模型并检查ID、当前验证/指纹与context限制；选中缓存不是永久验证许可。变化时拒绝native Load，保留模型ID和原参数，完整校验仍在actor外进行。
+每次实际加载（含idle重载和显式恢复Unload后）须重新resolve并检查ID、loadable、文件指纹/metadata与context限制，历史validated不能代替当前完整性；选中缓存不是永久授权。变化时拒绝native Load，保留模型ID和原参数，完整校验仍在actor外进行。
 
 空闲计时只在无活动任务、无排队任务时启动。计时器触发与新请求到达由调度器串行决定，禁止卸载正在推理的 context。
 
@@ -312,7 +316,7 @@ shutdown始终等待安全边界并调用close。关闭进行中新发生且未�
 
 - 每帧带 protocol_version、session_id（每次spawn的新UUID）、operation_id、request_id、kind、payload及seq。Hello和命令的seq为null；worker事件seq从1开始，在同session内严格递增，不重置为公共seq
 - 请求帧上限2 MiB，事件帧上限64 KiB，均包含最后LF。完整编码必须在首次写出前检查；读取在累积前检查上限，拒绝残缺EOF、非法UTF-8、未知字段/kind、重复字段、版本或身份不符
-- 父端先发送Hello并指定session；worker读取实际build_info，双方严格核对protocol=1、shim=2、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
+- 父端先发送Hello并指定session；worker读取实际build_info，35bfd85基线双方严格核对protocol=1、shim=2、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
 - 命令为Load、Generate、Unload、Cancel、Credit、Shutdown。普通操作operation_id非零递增，Generate的request_id须与payload相同；Cancel/Credit只作用于绑定的session/operation/request。Shutdown为session控制帧，operation_id=0、request_id=null
 - 事件为原始ExecutorEvent，包括Prepared、TextDelta和清理后的终态；Loaded/Unloaded对应各自操作。Prepared只能一次，TextDelta/Completed不能抢在它前面，usage须匹配Prepared及请求max_tokens；每操作仅一次终态
 - 父端是唯一输出预算账本。每Generate预留16 KiB暂存和最多两个120 KiB信用，合计≤256 KiB。信用ID在session内非零严格递增，每个信用只准一次≤4 KiB UTF-8 delta，其完整编码≤25 KiB（最坏24 KiB转义正文+1 KiB封套）
@@ -322,6 +326,8 @@ shutdown始终等待安全边界并调用close。关闭进行中新发生且未�
 - worker读取控制线程独立于推理和stdout写线程。Cancel立即设置独立标志并唤醒信用等待；stdout阻塞不得堵住读取取消。stdout只用于协议，原生日志写stderr
 - 首次取消开始五秒宽限，重复取消不重置期限。未获安全清理ACK时终止并回收整个worker，确认死亡后才报告Faulted；正常终态在资源清理后发送，槽位一直保留到ACK/已回收故障
 - EOF、破损帧、异常退出、握手或退出超时使受影响请求内部各终结一次；不重放任何部分输出。Faulted后只由显式Load启动新worker；旧worker已回收时显式Load恢复链内部的ExecutorCommand::Unload可直接确认；Faulted下公共unload仍返回RuntimeFaulted。Runtime shutdown还等待Executor::close完成并报告回收错误
+
+W02内部ResolvedModel由validated改为独立loadable，私有IPC现为2，shim行为身份为3，公共协议仍1，C ABI布局保持v2。adapter Engine::new核对实际build_info，旧AIR_NATIVE_DIR archive、旧父/worker混搭和伪造identity均拒绝；worker Hello及包manifest/独立验收器同步。此tuple本地已验证，新提交WindowsCI和交付仍待完成；其他信用、终态及取消门槛不降低。
 
 Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md) 及 [T03验证](docs/verification/2026-10-01-t03-worker.md)，不把Linux开发探针当作Windows目标验收。
 
@@ -345,7 +351,7 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 | `POST /runtime/requests/{id}/cancel` | 标记取消；存在活动请求返回 202，未知 ID 返回 404 |
 | `POST /runtime/shutdown` | 停止接收新请求、取消任务、回收 worker、退出 |
 
-T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。`/v1/models`不返回未验证模型；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
+T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。35bfd85基线`/v1/models`仅列旧准入模型；ADR0015增量改按当前available/loadable筛选，未有历史validated的合法候选也可列出，列表不承诺实际load必成功；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
 
 所有 `/v1/*` 和 `/runtime/*` 使用 `Authorization: Bearer <token>`。只接受本机回环连接；v0.1 不提供 `0.0.0.0` 监听开关。令牌由 init 生成，日志不得输出，读取权限限当前用户。
 
@@ -536,7 +542,7 @@ W00–W05是当前唯一后续路线，最小增量、依赖与验收见[Windows
 | --- | --- |
 | W00 | Windows桌面CPU/API范围与文档收敛，历史设计归档 |
 | W01 | 当前389eeef包目录/自动名/零复制/剪贴板与独立API短验 |
-| W02 | 桌面实用模型准入、工具能力分级、CPU资源/性能与参数推荐 |
+| W02 | 开放模型候选/历史验证分离、16GB基准样本、独立工具能力与CPU资源性能 |
 | W03 | 托盘与管理器体验，复用现有服务/设置能力 |
 | W04 | dsh/pi-ai准确配置、协议差异和真实harness工具回合 |
 | W05 | 无开发工具/离线/长期稳定性、升级回退、Windows11与发行矩阵 |
@@ -725,7 +731,7 @@ PC 包装层对稳定 decode 吞吐的额外损耗以不超过基线约 10% 为�
 
 阶段完成与最终发行分开。W00–W04可以在后期条件未齐时继续，但最终Windows CPU版本须满足：
 
-- API、CLI与桌面管理入口可操作，独立Windows目标机能真实加载准入模型
+- API、CLI与桌面管理入口可操作，独立Windows目标机能真实加载合法候选与回归模型
 - 单模型/队列/超时/空闲卸载/错误/崩溃恢复符合本规格，清理未确认不能冒充成功
 - 固定的dsh/pi-ai接入配置通过对应H矩阵；协议支持与实用模型工具能力分别报告，未支持项明确拒绝
 - 模型/工具链/引擎/模板/参数/设备有可复现矩阵，文本与工具质量及内存/速度/取消有真实记录
@@ -738,7 +744,7 @@ Android、GPU/NPU、其他平台和Telegram业务不构成本版完成条件。�
 
 以下仅为用户授权工程实施时可使用的启动指令。阅读、审查或更新本文件本身不启动功能开发；实际授权和任务起点以当前会话及 PROJECT_STATE.md 为准。
 
-> 按AGENTS.md、PROJECT_STATE.md和Windows W00–W05路线实施本轮已授权任务。先保护现有改动，保持llama.cpp精确锁与原生/服务边界。选最小可验收增量，不重复已有模型目录、API或服务控制。记录真实命令、退出码、source/hash、设备和未验证项。API接入以固定dsh/pi-ai契约为准，工具能力必须经过模型与协议双重验收。不得恢复Android开发、修改其未提交WIP或混入独立项目。文档规划不等于功能开发授权。
+> 按AGENTS.md、PROJECT_STATE.md和Windows W00–W05路线实施本轮已授权任务。先保护现有改动，保持llama.cpp精确锁与原生/服务边界。选最小可验收增量，不重复已有模型目录、API或服务控制。记录真实命令、退出码、source/hash、设备和未验证项。API接入以固定dsh/pi-ai契约为准，开放候选不按型号/hash名单限制，完整性仍严格；工具能力必须经过模型与协议双重验收。不得恢复Android开发、修改其未提交WIP或混入独立项目。文档规划不等于功能开发授权。
 
 ## 16. 官方依据与更新规则
 

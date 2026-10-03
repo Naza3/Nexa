@@ -5,8 +5,8 @@ use runtime_types::{GenerationRequest, LoadOptions, RequestId, ResolvedModel, Ru
 use serde::{Deserialize, Serialize};
 pub use uuid::Uuid as SessionId;
 
-pub const PROTOCOL_VERSION: u32 = 1;
-pub const SHIM_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 2;
+pub const SHIM_VERSION: u32 = 3;
 pub const LLAMA_COMMIT: &str = "2149c00f4442dc59302e134a02e4c99d5f7ed9fc";
 /// Encoded UTF-8 bytes INCLUDING the final LF.
 pub const MAX_REQUEST_FRAME_BYTES: usize = 2 * 1024 * 1024;

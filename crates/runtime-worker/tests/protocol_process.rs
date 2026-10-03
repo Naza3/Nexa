@@ -185,7 +185,7 @@ fn native_load_failure_is_bounded_and_session_remains_usable() {
                 )),
                 context_limit: 2048,
                 default_context: 2048,
-                validated: true,
+                loadable: true,
             },
             options: runtime_types::LoadOptions {
                 context_size: 2048,

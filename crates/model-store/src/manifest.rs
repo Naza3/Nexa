@@ -30,6 +30,9 @@ const RESERVED: &[&str] = &[
     "validated_llama_commit",
     "capabilities",
     "validated",
+    "loadable",
+    "compatibility",
+    "available",
     "validation",
 ];
 
@@ -238,6 +241,7 @@ impl ModelManifest {
                 ModelStorage::External => !crate::library::valid_file_name(&self.relative_file),
             }
             || self.size_bytes == 0
+            || self.size_bytes > crate::library::MAX_MODEL_BYTES
             || !is_hash(&self.sha256)
             || !is_hash(&self.template_sha256)
             || self.display_name.trim().is_empty()
@@ -286,28 +290,20 @@ impl ModelManifest {
     }
 
     pub(crate) fn executable_context_limit(&self) -> u32 {
-        if self.validated {
-            VALIDATED_CONTEXT
-        } else {
-            self.context_limit.min(131_072)
-        }
+        self.context_limit.min(131_072)
     }
 
-    /// Explains registered metadata without touching model bytes or changing the
-    /// execution gate. Callers must still validate the manifest and verify the
-    /// actual source through the existing store/load path.
+    /// Eligible for a controlled native attempt, not proof of engine/template
+    /// support or device resources. Integrity is established separately by the
+    /// store before any ResolvedModel is returned. Evidence never grants access.
+    pub fn load_candidate(&self) -> bool {
+        self.validate().is_ok()
+    }
+
+    /// Historical validation is independent from load eligibility. The native
+    /// worker must still accept the architecture, tensors and actual template.
     pub fn compatibility(&self) -> ModelCompatibility {
-        if self.architecture != "qwen3" {
-            ModelCompatibility::ArchitectureUnsupported
-        } else if self.gguf_file_type != 7 || self.quantization != "Q8_0" {
-            ModelCompatibility::QuantizationUnvalidated
-        } else if self.template_sha256 != TEMPLATE_SHA256 {
-            ModelCompatibility::TemplateUnvalidated
-        } else if self.context_limit != 40_960 || self.default_context != VALIDATED_CONTEXT {
-            ModelCompatibility::ContextUnvalidated
-        } else if self.sha256 != MODEL_SHA256 || self.size_bytes != MODEL_SIZE {
-            ModelCompatibility::ArtifactUnvalidated
-        } else if self.validated && self.capabilities.chat {
+        if self.validated {
             ModelCompatibility::Admitted
         } else {
             ModelCompatibility::Unvalidated
@@ -423,7 +419,7 @@ mod tests {
         // Manifest-only tests do not claim the model bytes have been loaded.
         let manifest = known();
         assert!(manifest.validate().is_ok());
-        assert_eq!(manifest.executable_context_limit(), 2048);
+        assert_eq!(manifest.executable_context_limit(), 40960);
         let mut alternatives = Vec::new();
         let mut m = known();
         m.sha256 = "0".repeat(64);
@@ -457,37 +453,45 @@ mod tests {
         }
     }
     #[test]
-    fn compatibility_explains_exact_matrix_in_stable_priority_without_admitting_candidates() {
-        use ModelCompatibility::*;
+    fn validation_is_evidence_not_a_model_or_context_allowlist() {
         let admitted = known();
-        assert_eq!(admitted.compatibility(), Admitted);
-        let mut candidate = admitted;
-        candidate.validated = false;
-        candidate.validated_llama_commit = None;
-        candidate.validation = None;
-        candidate.capabilities = Capabilities::default();
-        assert_eq!(candidate.compatibility(), Unvalidated);
-        candidate.sha256 = "0".repeat(64);
-        assert_eq!(candidate.compatibility(), ArtifactUnvalidated);
-        candidate.default_context = 4096;
-        assert_eq!(candidate.compatibility(), ContextUnvalidated);
-        candidate.template_sha256 = "1".repeat(64);
-        assert_eq!(candidate.compatibility(), TemplateUnvalidated);
-        candidate.gguf_file_type = 2;
-        candidate.quantization = "Q4_0".into();
-        assert_eq!(candidate.compatibility(), QuantizationUnvalidated);
-        for architecture in ["llama", "qwen35", "qwen3moe"] {
-            candidate.architecture = architecture.into();
-            assert_eq!(candidate.compatibility(), ArchitectureUnsupported);
-            assert!(candidate.validate().is_ok());
-            assert!(!candidate.validated);
-            assert!(!candidate.capabilities.chat);
+        assert_eq!(admitted.compatibility(), ModelCompatibility::Admitted);
+        assert!(admitted.load_candidate());
+        for architecture in [
+            "llama",
+            "qwen3",
+            "qwen35",
+            "qwen3moe",
+            "future_architecture",
+        ] {
+            for file_type in [0, 1, 2, 7, 15, 18, 999] {
+                let mut candidate = known();
+                candidate.validated = false;
+                candidate.validated_llama_commit = None;
+                candidate.validation = None;
+                candidate.capabilities = Capabilities::default();
+                candidate.sha256 = "0".repeat(64);
+                candidate.size_bytes = 1024;
+                candidate.architecture = architecture.into();
+                candidate.gguf_file_type = file_type;
+                candidate.quantization = quantization(file_type);
+                candidate.template_sha256 = "1".repeat(64);
+                candidate.default_context = 4096;
+                assert!(candidate.load_candidate());
+                assert_eq!(candidate.compatibility(), ModelCompatibility::Unvalidated);
+                assert!(!candidate.capabilities.chat);
+                assert_eq!(candidate.executable_context_limit(), 40960);
+                candidate.context_limit = 262144;
+                assert_eq!(candidate.executable_context_limit(), 131072);
+            }
         }
-        let mut different_length = known();
-        different_length.size_bytes -= 1;
-        assert_eq!(different_length.compatibility(), ArtifactUnvalidated);
-        // Labeling never repairs an inconsistent admission claim.
-        assert!(different_length.validate().is_err());
+        let mut oversized = known();
+        oversized.size_bytes = crate::library::MAX_MODEL_BYTES + 1;
+        assert!(!oversized.load_candidate());
+        let mut forged = known();
+        forged.sha256 = "0".repeat(64);
+        assert!(!forged.load_candidate());
+        assert!(forged.validate().is_err());
     }
 
     #[test]

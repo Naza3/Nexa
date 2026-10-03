@@ -1,6 +1,6 @@
 # T06 Windows 最小桌面契约
 
-2026-10-01。实施定界，不是完成报告。以执行规格8.2为基础；T05已有固定Windows Release CI与独立Windows 10手工短验，无开发工具、离线及长期稳定性仍待后期验证。Windows 10优先，Windows 11后续，不更换Tauri 2 + React/TypeScript/Vite，不扩Telegram、模型或runtime架构。
+2026-10-01。实施定界，不是完成报告。以执行规格8.2为基础；T05已有固定Windows Release CI与独立Windows 10手工短验，无开发工具、离线及长期稳定性仍待后期验证。Windows 10优先，Windows 11后续，不更换Tauri 2 + React/TypeScript/Vite，不扩Telegram或runtime职责；2026-10-03模型范围按[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)更新为开放候选，源码/本地回归已完成，Windows与新包窗口验收待完成，不追溯既有包。
 
 ## 1. 三个工位与唯一写入范围
 
@@ -20,7 +20,7 @@
 
 ## 3. 最小产品范围
 
-- 模型：原生选择本地 GGUF、显示文件名/大小和复制目标、输入模型 ID、导入、列表/分页、加载/卸载、状态与错误。API 无字节进度，显示真实“导入中”忙碌指示，不制造百分比。
+- 模型：区分历史validated、可尝试loadable与当前available，未实测合法候选不因型号/hash缺少批准而禁用；旧服务缺loadable要求匹配版本。实际加载/模板/资源失败明确提示，目录仍可能因单个坏文件整批失败。原生选择本地 GGUF、显示文件名/大小和复制目标、输入模型 ID、导入、列表/分页、加载/卸载、状态与错误。API 无字节进度，显示真实“导入中”忙碌指示，不制造百分比。
 - 聊天：当前会话消息、发送、批量流式文本、停止、清空。正文作为纯文本渲染；不执行 HTML、链接、模型指令。没有持久化聊天。
 - 设置：CPU、上下文、线程/批次、默认输出预算、空闲卸载、关闭时同时退出开关、只读本机 API 地址和原生复制令牌按钮。
 - 新 UI 偏好可采用已验预设 `cpu / context2048 / threads2 / batch128 / max_output512`；清楚显示为 UI 的下一次加载/发送参数。不得悄悄覆盖既有 runtime 配置/已加载参数，也不把配置值称为原生实测后端。
@@ -36,7 +36,7 @@
 - `model_import({ selection_id, model_id })` → 安全 ModelSummary。壳将受控路径交 bridge，后者走现有 `/runtime/models/import`；同一选择不能并发提交。失败时不自动重试，特别是 `import_committed_durability_unconfirmed` 必须先刷新模型列表。
 - `models_page({ after: string|null, generation: UUID|null })` → `{ generation, data: ModelSummary[], next_after: string|null }`。第一页两个参数均null；后续携带generation，陈旧页拒绝并从第一页重新取。固定页大小64，前端只保留当前页。ModelSummary增加managed/external来源与安全不可用原因，显示名为主；选中模型显示名来自实际服务，不依赖当前页。
 - 新桌面主流程使用`model_directory_pick()`、`model_directory_apply({selection_id})`、`models_scan()`、`model_library_next({operation_id})`、`model_library_cancel({operation_id})`五个固定命令，完整DTO/预算/取消与停止条件见[外部目录契约](t06-model-directory-contract.md)。原生目录选择允许支持的本地可读目录，不写源目录；JS只有一次性选择ID与只读展示路径，绝不提交自由路径。仅bridge真正接纳apply后消费ID，busy拒绝保留选择。新流程自动命名/生成内部ID、不复制已有GGUF，原model_pick/import及公开复制API只保留兼容。
-- `model_load({ model_id, context_size, threads, batch_size })` → runtime status，固定 `backend=cpu,gpu_layers=0`。已加载参数与 UI 参数不同必须明确展示；不静默换模型。`model_unload()` → runtime status。
+- `model_load({ model_id, context_size, threads, batch_size })` → runtime status，固定 `backend=cpu,gpu_layers=0`。已加载参数与UI参数不同必须明确展示；不静默换模型。16GB总内存不是可用量或模型容量保证，metadata/131072硬限也不是建议值；不宣称已有Job RAM硬限。`model_unload()` → runtime status。
 - `chat_start({ model_id, messages, max_output_tokens })` → `{ request_id }`。messages 只含受控 role/content。bridge 原子占用本 UI 唯一生成槽，先创建并登记 UUID，然后返回；后台发送 HTTP，并在同一请求带 `X-Request-ID`。重复发送返回 `desktop_busy`，不排出第二条本 UI 生成任务。模型加载通过独立 model_load 完成，UI 未就绪时不误称已开始生成。
 - `chat_next({ request_id })` → `{ request_id, events, terminal }`。单一未完成消费者、长轮询至事件或最多 1 秒心跳；顺序与上次连续。event 为 `{ type:"started" }`、`{ type:"delta", text }`、`{ type:"completed", finish_reason, usage }`、`{ type:"cancelled" }` 或 `{ type:"failed", code, message }`。终态后保留一个小型终态记录，重复读取返回同一终态摘要、无重复文本。
 - `chat_cancel({ request_id })` → `{ request_id, status:"stopping" }`。只准取消本 UI 持有的 ID；真正终态由 chat_next 返回。取消不占用生成/导入工作锁。

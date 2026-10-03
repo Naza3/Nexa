@@ -140,7 +140,11 @@ pub struct ModelSummary {
     pub architecture: String,
     pub quantization: String,
     pub validated: bool,
+    #[serde(default)]
+    pub loadable: bool,
     pub available: bool,
+    #[serde(default)]
+    pub context_limit: Option<u32>,
     pub context_size: Option<u32>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -304,7 +308,7 @@ mod compatibility_tests {
             let value = json!({
                 "id":"fixture", "display_name":"中文 模型", "size_bytes":64,
                 "sha256":"0".repeat(64), "architecture":"qwen3", "quantization":"Q8_0",
-                "validated":false, "available":false, "context_size":null,
+                "validated":false, "loadable":true, "available":false, "context_size":null, "context_limit":40960,
                 "storage":"external", "availability_error":"model_file_changed",
                 "compatibility":compatibility
             });

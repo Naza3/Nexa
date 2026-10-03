@@ -4,7 +4,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* ABI v2 (v1 entry points and layouts remain compatible). All strings are pointer + UTF-8 byte length, never NUL-terminated.
+/* ABI v2 layouts are unchanged; build_info behavior identity is shim_version 3.
+ * v1 entry points and layouts remain compatible. All strings are pointer + UTF-8 byte length, never NUL-terminated.
  * Borrowed inputs must remain alive for the call. Output buffers belong to
  * shim; release with air_buffer_free. Error outputs are reset on every fallible
  * call. Engine/model/prepared are thread-affine, cancel alone supports

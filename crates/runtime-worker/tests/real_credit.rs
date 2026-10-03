@@ -118,7 +118,7 @@ fn model() -> ResolvedModel {
         path,
         context_limit: 2048,
         default_context: 2048,
-        validated: true,
+        loadable: true,
     }
 }
 fn request(model: &ModelId, prompt: &str) -> GenerationRequest {

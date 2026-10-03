@@ -76,7 +76,9 @@ export interface ModelSummary {
   architecture: string;
   quantization: string;
   validated: boolean;
+  loadable?: boolean;
   available: boolean;
+  context_limit?: number | null;
   context_size: number | null;
   storage: "managed" | "external";
   availability_error: string | null;

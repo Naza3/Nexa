@@ -396,16 +396,23 @@ pub struct ModelSummary {
     pub architecture: String,
     pub quantization: String,
     pub validated: bool,
+    /// Can attempt a controlled load; successful inference is not promised.
+    pub loadable: bool,
     pub available: bool,
+    pub context_limit: u32,
     pub context_size: Option<u32>,
 }
 impl From<ModelManifest> for ModelSummary {
     fn from(model: ModelManifest) -> Self {
+        let loadable = model.load_candidate();
         Self {
             compatibility: model.compatibility(),
             storage: model.storage,
-            availability_error: (!(model.validated && model.capabilities.chat))
+            availability_error: (!loadable)
                 .then(|| runtime_types::ErrorCode::UnsupportedModel.as_str().into()),
+            loadable,
+            available: loadable,
+            context_limit: model.context_limit.min(131_072),
             id: model.id,
             display_name: model.display_name,
             size_bytes: model.size_bytes,
@@ -413,7 +420,6 @@ impl From<ModelManifest> for ModelSummary {
             architecture: model.architecture,
             quantization: model.quantization,
             validated: model.validated,
-            available: model.validated && model.capabilities.chat,
             context_size: model.validation.map(|e| e.context_size),
         }
     }
@@ -482,6 +488,9 @@ mod tests {
             r#"{"id":"a","file":"https://example.com/model"}"#,
             r#"{"id":"a","file":"relative.gguf"}"#,
             r#"{"id":"a","file":"/tmp/a","validated":true}"#,
+            r#"{"id":"a","file":"/tmp/a","loadable":true}"#,
+            r#"{"id":"a","file":"/tmp/a","path":"/other/file"}"#,
+            r#"{"id":"a","file":"/tmp/a","context_limit":999999}"#,
             r#"{"id":"a","file":"/tmp/a","relative_file":"x"}"#,
         ] {
             assert!(ImportModelRequest::parse(body.as_bytes()).is_err());

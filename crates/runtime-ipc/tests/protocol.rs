@@ -82,9 +82,9 @@ fn malformed_frames_fail_without_unbounded_reads_or_partial_writes() {
     let raw = String::from_utf8(encode_frame(&frame, 4096).unwrap()).unwrap();
     for invalid in [
         raw.replace("\"hello\"", "\"unknown\""),
-        raw.replacen("\"protocol_version\":1", "\"protocol_version\":2", 1),
+        raw.replacen("\"protocol_version\":2", "\"protocol_version\":1", 1),
         raw.replace(LLAMA_COMMIT, "wrong"),
-        raw.replace("\"shim_version\":2", "\"shim_version\":1"),
+        raw.replace("\"shim_version\":3", "\"shim_version\":1"),
     ] {
         assert!(read_frame(&mut Cursor::new(invalid), 4096).is_err());
     }
@@ -328,13 +328,13 @@ fn unknown_fields_and_duplicate_json_keys_are_rejected_at_each_layer() {
         hello.replacen('{', "{\"unknown\":true,", 1),
         hello.replacen("\"payload\":{", "\"payload\":{\"unknown\":true,", 1),
         hello.replacen(
-            "\"protocol_version\":1",
-            "\"protocol_version\":1,\"protocol_version\":1",
+            "\"protocol_version\":2",
+            "\"protocol_version\":2,\"protocol_version\":2",
             1,
         ),
         hello.replacen(
-            "\"shim_version\":2",
-            "\"shim_version\":2,\"shim_version\":2",
+            "\"shim_version\":3",
+            "\"shim_version\":3,\"shim_version\":3",
             1,
         ),
         hello.replacen(
@@ -443,5 +443,33 @@ fn cleanup_unconfirmed_is_parent_only_and_cannot_be_forged_on_worker_wire() {
         raw.replace("\"invalid_argument\"", "\"executor_cleanup_unconfirmed\""),
     ] {
         assert!(read_frame(&mut Cursor::new(forged), MAX_EVENT_FRAME_BYTES).is_err());
+    }
+}
+
+#[test]
+fn load_eligibility_is_required_and_old_validation_claim_is_rejected() {
+    let model = runtime_types::ResolvedModel {
+        id: ModelId::new("candidate").unwrap(),
+        path: "controlled.gguf".into(),
+        context_limit: 4096,
+        default_context: 2048,
+        loadable: true,
+    };
+    let frame = Frame::command(
+        SessionId::new_v4(),
+        1,
+        None,
+        Message::Load {
+            model,
+            options: runtime_types::LoadOptions::default(),
+        },
+    );
+    let encoded = String::from_utf8(encode_frame(&frame, 4096).unwrap()).unwrap();
+    assert!(read_frame(&mut Cursor::new(encoded.as_bytes()), 4096).is_ok());
+    for old in [
+        encoded.replace("\"loadable\":true", "\"validated\":true"),
+        encoded.replace("\"loadable\":true", "\"unexpected\":true"),
+    ] {
+        assert!(read_frame(&mut Cursor::new(old), 4096).is_err());
     }
 }

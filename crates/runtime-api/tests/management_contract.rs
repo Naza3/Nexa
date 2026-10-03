@@ -150,26 +150,37 @@ async fn safe_model_summaries_paginate_without_exposing_manifest_or_sources() {
         assert_eq!(status, StatusCode::OK, "{result}");
         assert_eq!(result["id"], id);
         assert_eq!(result["model"]["validated"], false);
-        assert_eq!(result["model"]["compatibility"], "template_unvalidated");
-        assert_eq!(result["model"]["availability_error"], "unsupported_model");
+        assert_eq!(result["model"]["compatibility"], "unvalidated");
+        assert_eq!(result["model"]["loadable"], true);
+        assert_eq!(result["model"]["available"], true);
+        assert_eq!(result["model"]["context_limit"], 40960);
+        assert!(result["model"]["availability_error"].is_null());
     }
     let (status, page) = harness.call("GET", "/runtime/models?limit=2", "").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(page["data"].as_array().unwrap().len(), 2);
     assert_eq!(page["next_after"], "b");
-    assert_eq!(page["data"][0]["compatibility"], "template_unvalidated");
-    assert_eq!(page["data"][0]["availability_error"], "unsupported_model");
-    // Registration does not permit load or the existing direct-chat auto-load.
-    for (path, request) in [
-        ("/runtime/load", json!({"model":"a","context_size":2048})),
-        (
+    assert_eq!(page["data"][0]["compatibility"], "unvalidated");
+    assert!(page["data"][0]["availability_error"].is_null());
+    assert_eq!(page["data"][0]["loadable"], true);
+    // The controlled candidate reaches the executor without promoting evidence.
+    // This executor ACK is a scheduling test, never native-model verification.
+    let (status, _) = harness
+        .call(
+            "POST",
+            "/runtime/load",
+            &json!({"model":"a","context_size":2048}).to_string(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, error) = harness
+        .call(
+            "POST",
             "/v1/chat/completions",
-            json!({"model":"a","messages":[{"role":"user","content":"test"}]}),
-        ),
-    ] {
-        let (_, error) = harness.call("POST", path, &request.to_string()).await;
-        assert_eq!(error["error"]["code"], "unsupported_model");
-    }
+            &json!({"model":"a","messages":[{"role":"user","content":"test"}]}).to_string(),
+        )
+        .await;
+    assert_eq!(error["error"]["code"], "unsupported_model");
     let encoded = page.to_string();
     for forbidden in [
         "source",
@@ -185,7 +196,7 @@ async fn safe_model_summaries_paginate_without_exposing_manifest_or_sources() {
     assert_eq!(last["data"][0]["id"], "c");
     assert!(last["next_after"].is_null());
     let (_, available) = harness.call("GET", "/v1/models", "").await;
-    assert!(available["data"].as_array().unwrap().is_empty());
+    assert_eq!(available["data"].as_array().unwrap().len(), 3);
     for query in [
         "limit=0",
         "limit=129",

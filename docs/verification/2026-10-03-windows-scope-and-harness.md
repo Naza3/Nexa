@@ -88,3 +88,16 @@ Nexa真实HTTP直连测试单独观察runtime-stop成功；合成executor只发�
 - 当前精确模型准入仍仅Qwen3-0.6B Q8_0/context2048；实用模型与工具能力须W02独立准入
 - 完整harness工具协议、无害真实工具回合、可选思考、全部错误/取消/预算矩阵仍未完成
 - 无开发工具、实际离线、长期稳定性、Windows11及新增桌面CPU支持均不由此次文档验收获得
+
+## 35bfd85 最终提交与Windows CI（2026-10-03 02:27 UTC）
+
+本节补记上述窄文本协议切片的最终提交和远端回归，保留早期本地workspace失败，不将其重写为当时通过。
+
+- 实现提交：[`35bfd85ca38d5e3c781c6b387794b265f29df18c`](https://github.com/Naza3/Nexa/commit/35bfd85ca38d5e3c781c6b387794b265f29df18c)；tree `4476d89c0c64f5008dd06a8b28e29cfb0723f2c7`
+- [Windows CI37087595998](https://github.com/Naza3/Nexa/actions/runs/37087595998)于2026-10-03 02:27 UTC确认success
+- 证据artifact `11261587851`；SHA256 `62713d7f1ee0306cc3c34e33877d8465e0d114472dde85d5895547a1bcffae5f`
+- 主代理已下载并独立核验50项inventory、精确source/tree与逐文件hash；真实native、HTTP/CLI、Release包和desktop bridge回归通过
+- `windows-rust-tests`聚合324 pass/0 fail/7 ignored；官方pi-ai可选集成仍ignored，没有在该Windows CI执行；其Linux显式单项通过证据保留在前节，不能合并称Windows客户端通过
+- `native_window_tested=false`，没有新原生窗口/Windows10手工验收或完整DSH运行结论
+
+这是旧模型门槛下35bfd85窄文本切片的Windows回归，当前[ADR0015开放模型](../decisions/0015-open-model-loading-and-validation-evidence.md)工作区代码不在其source中，不能继承通过。后续W02精确提交/新包另行验收；无须把本次测试增量包冒充新的开放模型版本。最新已实际交付用户的Windows实现仍389eeef。

@@ -315,7 +315,7 @@ impl ApiState {
             let imported = store.import_file(request.file, import, &cancel);
             let observed = (was_missing && imported.is_err()).then(|| store.get(&request.id));
             let executable = observed.as_ref().is_some_and(Result::is_ok)
-                && store.resolve(&request.id).is_ok_and(|model| model.validated);
+                && store.resolve(&request.id).is_ok_and(|model| model.loadable);
             let outcome = import_outcome(&request.id, was_missing, imported, observed, executable);
             if let Some(summary) = &outcome.observed {
                 let mut snapshot = registry.write().map_err(|_| ApiError::internal())?;
@@ -380,13 +380,13 @@ fn publish_preparation_result(
     };
     // Compatibility remains a separate registered-metadata observation. A
     // source failure takes precedence; successful preparation must not clear a
-    // model's admission failure (including in synthetic/test observations).
+    // model's load eligibility failure (including in synthetic/test observations).
     let code = result
         .as_ref()
         .err()
         .map(|error| error.code.as_str().to_owned())
-        .or_else(|| (!model.validated).then(|| ErrorCode::UnsupportedModel.as_str().into()));
-    let available = result.is_ok() && model.validated;
+        .or_else(|| (!model.loadable).then(|| ErrorCode::UnsupportedModel.as_str().into()));
+    let available = result.is_ok() && model.loadable;
     if model.available != available || model.availability_error != code {
         model.available = available;
         model.availability_error = code;

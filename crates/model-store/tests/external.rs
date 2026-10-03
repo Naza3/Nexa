@@ -348,7 +348,7 @@ fn windows_preexisting_writer_prevents_registration_guard() {
 }
 
 #[test]
-fn unadmitted_external_source_failure_precedes_compatibility_without_rehashing() {
+fn unvalidated_external_source_failure_precedes_load_attempt_without_rehashing() {
     let data = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();
     let path = source.path().join("候选 模型.gguf");
@@ -360,15 +360,10 @@ fn unadmitted_external_source_failure_precedes_compatibility_without_rehashing()
     let store = ModelStore::open(data.path()).unwrap();
     assert_eq!(
         manifest.compatibility(),
-        runtime_types::ModelCompatibility::TemplateUnvalidated
+        runtime_types::ModelCompatibility::Unvalidated
     );
-    assert_eq!(
-        store
-            .prepare_external(&manifest.id, &ScanControl::default())
-            .unwrap_err()
-            .code,
-        ErrorCode::UnsupportedModel
-    );
+    assert!(manifest.load_candidate());
+    assert!(!manifest.validated);
     fs::OpenOptions::new()
         .write(true)
         .open(&path)

@@ -38,7 +38,7 @@ fn runtime(host: ProcessHost, model_path: PathBuf) -> Runtime {
                 path: model_path.clone(),
                 context_limit: 2048,
                 default_context: 2048,
-                validated: true,
+                loadable: true,
             })
         },
         host,
@@ -88,7 +88,7 @@ fn main() {
                     path: PathBuf::from("fixture.gguf"),
                     context_limit: 2048,
                     default_context: 2048,
-                    validated: true,
+                    loadable: true,
                 },
                 options: self::config().load_options,
             },

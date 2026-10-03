@@ -41,10 +41,10 @@ ctest --test-dir build/native-release --output-on-failure
 
 ## 所有权与目前限制
 
-- shim build_info版本2，保留air_generate兼容入口并增加air_generate_observed；见 `native/llama-shim/include/air_llama.h`；调用方必须遵守合法句柄和线程归属前置条件
+- 35bfd85基线shim build_info为2；W02开放模型增量行为identity升3，C ABI布局仍v2，保留air_generate/air_generate_observed；公共protocol1、私有IPC2。实际build_info、worker握手与包身份必须匹配，旧archive不兼容；见`native/llama-shim/include/air_llama.h`，合法句柄/线程前置条件保持，新WindowsCI待验
 - 每个进程最多一个引擎、一个模型；prepared 消费一次，生成结束清空请求 KV；取消标志可由另一线程设置
 - 原生回调是同步借用，允许decode步骤间共享256KiB预算内可取消、有时限等待；T02已实现4KiB分片、10秒慢消费者和三类deadline。T03已实现独立worker、单一信用账本与消费lease，固定Windows Job/强杀验收通过；详见ADR0004和T03报告
-- 目前仅接入 Qwen3 架构及能明确关闭思考的模板；验收支持以精确模型矩阵为准
+- 35bfd85及旧交付基线仅接入Qwen3/旧模板范围；[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)开放模型增量源码已冻结、本地回归通过，由锁定loader判断架构，原始模板需符合窄文本continuation契约。工具链/llama锁不变，矩阵保存精确验证证据，不再作为型号/hash许可名单；新行为待独立验收
 - seed `UINT32_MAX` 沿用锁定上游的随机哨兵，其他 seed 在相同环境尽力复现；不承诺跨设备逐字相同
 - 原生GGUF的非ASCII路径由上游`ggml_fopen`转为宽字符；T05 Release CI已用中文/空格源模型及受控导入目录实际加载，T03的worker可执行文件及参数路径验证仍单独留证
 

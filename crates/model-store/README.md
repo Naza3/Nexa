@@ -32,10 +32,12 @@ Unix 同步文件与可 fsync 的目录；Windows 文件在 rename 前同步，�
 - 数据目录必须是应用私有目录。进程锁协调正常客户端；不是隔离同 UID 恶意写入者的安全边界，fingerprint 不是抵御伪造时间戳的认证机制，也不宣称跨本地恶意并发替换不存在 TOCTOU
 - 原始来源只读复制，不移动、不覆盖、不删除；默认错误文本不暴露完整用户路径。T04对源打开采用Unix O_NOFOLLOW|O_NONBLOCK或Windows OPEN_REPARSE_POINT并后验拒绝reparse/非普通文件，避免特殊文件打开竞态阻塞；HTTP仅显式本地普通文件
 - 解析限制：64 MiB header、单字符串 ≤ 1 MiB、metadata/tensors 各 ≤ 100,000、数组 ≤ 1,000,000；拒绝嵌套数组、重复键/张量名、非法 UTF-8、超界/溢出/重叠/截断张量
+- 模板、metadata key和tensor name中的NUL拒绝，避免C-string截断身份；普通tokenizer metadata value允许NUL，不全局禁字符串NUL
 - 当前结构解析支持 F32/F16/BF16、常用 Q4/Q5/Q8 与 K-quants、整数和 F64 tensor 布局；未知 GGML tensor 布局保守拒绝，不随意推断字节长度
-- GGUF 结构通过仅表示可安全登记，不表示可推理。只有固定模型矩阵的 hash、大小、qwen3、Q8_0、模板 hash、40960 原生 context 和 2048 默认 context 全部匹配，才记录当前精确 llama commit 与验收证据
-- 已验证记录明确只对应 Windows Server 2022 x64 CPU CI / 2 threads / context 2048；`ResolvedModel.context_limit` 对该组合限制为 2048。并不据此声明 Android、其他设备或任意线程数已验收
-- 缺少关键字段或矛盾的 validated/capabilities/commit 声明拒绝；普通未验收导入的 `validated=false`，不能通过用户自填字段升级成已验收
+- GGUF 结构通过仅表示可安全登记，不表示可推理。只有原矩阵的hash/大小/qwen3/Q8_0/模板hash、40960 metadata context和2048默认context匹配时记录既有精确llama/实测证据；这仅控制validated声明，不再限制其他合法候选尝试加载
+- 已验证记录明确只对应 Windows Server 2022 x64 CPU CI / 2 threads / context 2048；历史验证不限制候选请求窗口；`ResolvedModel.context_limit`取模型metadata与131072硬限较小者，实际模板/loader/资源仍须检查。大于2048、其他设备或线程数不因此成为已验收
+- 缺少关键字段或矛盾的validated/capabilities/commit声明拒绝；普通未实测导入validated=false，仍可有独立loadable候选资格，不能由用户字段伪造验证。summary.loadable不替代load前文件准备/hash/metadata与external lease
+- managed导入前、manifest/load与external统一单文件≤16GiB；是文件安全预算，不是16GB RAM保证。分片、未知tensor结构与缺模板仍拒绝；默认2048登记不适合短context模型的限制保留，后续再改单文件诊断/自动扫描，不静默夹紧显式参数
 - schema/来源中的扩展 JSON 字段可保留，保留字段不能被扩展覆盖。调用层负责日志/导出时的来源隐私处理
 
 ## 验证入口

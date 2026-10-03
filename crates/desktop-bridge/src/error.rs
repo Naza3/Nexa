@@ -53,6 +53,12 @@ impl BridgeError {
             "settings_durability_unconfirmed" => {
                 "The setting was published but disk durability was not confirmed. Refresh before retrying."
             }
+            "unsupported_model" => {
+                "This model cannot use the current engine/text adapter. Only protected single-file GGUF models are supported; split files are rejected."
+            }
+            "unsupported_chat_template" => {
+                "The embedded template is missing or cannot preserve this plain-text conversation. No replacement template is used."
+            }
             "invalid_manifest" => "The selected GGUF structure or model registration is invalid.",
             "settings_invalid" | "invalid_request" | "invalid_argument" => {
                 "The supplied settings or request are invalid."

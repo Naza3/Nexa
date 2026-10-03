@@ -1,0 +1,282 @@
+{
+  "fixture_version": 1,
+  "origin": "synthetic-design",
+  "execution_status": "not_run",
+  "scope": "Planned bounded tool slice; not a DSH capture or real model result",
+  "model": "synthetic-tools-fixture",
+  "format": "Each data object is a decoded SSE JSON frame to encode as data: <JSON> followed by two LF bytes; done_literal is the literal data payload [DONE].",
+  "usage_notice": "83 prompt / 14 completion below are synthetic parser-test numbers only; never expected counts for a real model.",
+  "successful_tool_stream": [
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant"
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {},
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "id": "call_00000000000040008000000000000001_0",
+                  "type": "function",
+                  "function": {
+                    "name": "lookup_test_color",
+                    "arguments": ""
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "{\"code\":"
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "tool_calls": [
+                {
+                  "index": 0,
+                  "function": {
+                    "arguments": "\"B7\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {},
+            "finish_reason": "tool_calls"
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [],
+        "usage": {
+          "prompt_tokens": 83,
+          "completion_tokens": 14,
+          "total_tokens": 97
+        }
+      }
+    },
+    {
+      "done_literal": "[DONE]"
+    }
+  ],
+  "successful_plain_reply_in_tools_mode": [
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "role": "assistant"
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "B7 是蓝色，"
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "fixture_tag 是 fixture-b7-v1。🙂"
+            },
+            "finish_reason": null
+          }
+        ]
+      }
+    },
+    {
+      "data": {
+        "id": "chatcmpl-synthetic-tools",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "synthetic-tools-fixture",
+        "choices": [
+          {
+            "index": 0,
+            "delta": {},
+            "finish_reason": "stop"
+          }
+        ]
+      }
+    },
+    {
+      "done_literal": "[DONE]"
+    }
+  ],
+  "assertions": {
+    "tool_index": 0,
+    "assembled_arguments": "{\"code\":\"B7\"}",
+    "header_occurrences": 1,
+    "tool_call_id_occurrences_in_payload": 1,
+    "no_executable_result_before_success_finish": true,
+    "usage_only_choices": [],
+    "done_occurrences": 1
+  },
+  "future_runner_fragmentation": [
+    "Feed every encoded UTF-8 byte separately, including within Chinese/emoji and JSON escapes",
+    "Split SSE LF/LF boundaries and arguments string fragments",
+    "Retain EventLease until transport acceptance or drop; count one shared payload credit"
+  ],
+  "negative_stream_recipes": [
+    {
+      "id": "eof_after_arguments",
+      "prefix": "successful_tool_stream through arg2, then EOF",
+      "expected_execution_count": 0
+    },
+    {
+      "id": "error_after_header",
+      "prefix": "successful_tool_stream through header, then error SSE and EOF",
+      "expected_execution_count": 0,
+      "success_finish_forbidden": true,
+      "done_forbidden": true
+    },
+    {
+      "id": "arguments_before_header",
+      "mutation": "Move arg1 before header",
+      "expected": "protocol error; no execution"
+    },
+    {
+      "id": "duplicate_header_or_changed_id",
+      "mutation": "Repeat header with another ID at index0",
+      "expected": "protocol error; no execution"
+    },
+    {
+      "id": "second_index",
+      "scope": "Reserved multi-call transport design; not supported in first slice",
+      "delta": {
+        "tool_calls": [
+          {
+            "index": 1,
+            "id": "call_00000000000040008000000000000001_1",
+            "type": "function",
+            "function": {
+              "name": "lookup_test_color",
+              "arguments": "{\"code\":\"A1\"}"
+            }
+          }
+        ]
+      },
+      "expected": "First slice rejects multiple generated calls before any tool payload; hostile IPC index1 faults, no execution"
+    },
+    {
+      "id": "duplicate_terminal",
+      "mutation": "Repeat finish_reason=tool_calls or emit payload after terminal",
+      "expected": "protocol error; exactly one internal terminal"
+    }
+  ]
+}

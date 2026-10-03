@@ -670,7 +670,7 @@ function ModelsPage({
                 ? "启动运行服务后，读取当前模型列表。"
                 : "在设置中选择已有 GGUF 的目录，停止服务后应用。"}
             </p>
-            <span>模型文件由你提供，不会自动下载</span>
+            <span>仅支持单文件 GGUF，模型文件由你提供，不会自动下载</span>
           </div>
         ) : (
           <div className="model-list">
@@ -708,7 +708,10 @@ function ModelsPage({
                       <summary>模型信息</summary>
                       <p className="hash">API ID：{model.id}</p>
                       <p className="hash">登记时 SHA-256：{model.sha256}</p>
-                      <p>已验证运行上下文：{model.context_size ?? "未准入"}</p>
+                      <p>已验证运行上下文：{model.context_size ?? "未实测"}</p>
+                      <p>当前上下文请求上限（模型与运行时约束）：{model.context_limit ?? "未知"}，不代表设备可承受</p>
+                      <p>文件大小不等于运行内存；模型、上下文和批次越大，占用通常越高。16 GB 内存也不能保证加载成功。</p>
+                      <p>工具调用和思考输出尚未开放；模型可加载不代表具备这些能力。</p>
                       <p>
                         兼容性依据登记元数据，不代表当前文件完整性；加载时仍须核验源文件。
                       </p>
@@ -740,18 +743,20 @@ function ModelsPage({
                       busy ||
                       current ||
                       mustUnload ||
-                      !model.available
+                      !model.available ||
+                      model.loadable !== true
                     }
                     onClick={() => void controller.loadModel(model.id)}
                   >
                     {current
                       ? "已加载"
-                      : !model.available
+                      : !model.available ||
+                      model.loadable !== true
                         ? compatibility.unavailableLabel
                         : runtime?.state === "faulted" &&
                             model.id === runtime.selected_model
                           ? "重新加载"
-                          : "加载模型"}
+                          : model.validated ? "加载模型" : "尝试加载"}
                   </button>
                 </article>
               );
@@ -1106,7 +1111,7 @@ function SettingsPage({
     {
       key: "context_size",
       label: "上下文长度",
-      detail: "输入、模板与输出共用的 token 预算",
+      detail: "输入、模板与输出共用 token 预算；上限不是内存保证，大上下文可能加载失败",
       min: 32,
       max: 131072,
     },

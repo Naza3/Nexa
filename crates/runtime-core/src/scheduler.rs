@@ -433,13 +433,13 @@ impl Actor {
     }
     fn resolve(&self, id: &ModelId, options: LoadOptions) -> Result<ResolvedModel, RuntimeError> {
         let model = self.resolver.resolve(id)?;
-        if model.id != *id || !model.validated {
+        if model.id != *id || !model.loadable {
             return Err(error(ErrorCode::UnsupportedModel));
         }
         if options.context_size > model.context_limit {
             return Err(RuntimeError::new(
                 ErrorCode::ContextLengthExceeded,
-                "load context exceeds the validated model limit",
+                "load context exceeds the model context limit",
             ));
         }
         Ok(model)
@@ -1286,7 +1286,7 @@ mod ledger_tests {
                 path: "fake.gguf".into(),
                 context_limit: 4096,
                 default_context: 4096,
-                validated: true,
+                loadable: true,
             })
         };
         let mut actor = Actor::new(
@@ -1325,7 +1325,7 @@ mod ledger_tests {
                 path: "fake.gguf".into(),
                 context_limit: 4096,
                 default_context: 4096,
-                validated: true,
+                loadable: true,
             })
         };
         let config = RuntimeConfig {

@@ -116,7 +116,7 @@ impl Harness {
                 path: PathBuf::from("controlled.gguf"),
                 context_limit: 4096,
                 default_context: 4096,
-                validated: true,
+                loadable: true,
             })
         };
         let runtime = Runtime::spawn(
@@ -1318,7 +1318,7 @@ fn every_actual_load_rechecks_model_identity_validation_and_context_without_nati
                         },
                         context_limit: if mode == 3 { 1024 } else { 4096 },
                         default_context: 2048,
-                        validated: mode != 1,
+                        loadable: mode != 1,
                     })
                 },
                 Recording(loads.clone()),

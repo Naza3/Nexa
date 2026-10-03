@@ -70,6 +70,8 @@ impl LibraryTask {
                     && matches!(
                         error.code.as_str(),
                         "invalid_manifest"
+                            | "unsupported_model"
+                            | "unsupported_chat_template"
                             | "invalid_argument"
                             | "model_file_changed"
                             | "model_file_unavailable"
@@ -224,7 +226,7 @@ impl DesktopBridge {
                 available_files: library
                     .models
                     .iter()
-                    .filter(|entry| entry.manifest.validated)
+                    .filter(|entry| entry.manifest.load_candidate())
                     .count(),
             })
         })

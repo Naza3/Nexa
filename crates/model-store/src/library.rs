@@ -490,7 +490,10 @@ impl PreparedExternal {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let (hash, metadata) = inspect(&mut source, observed.size, control)?;
-            if hash != entry.manifest.sha256 || identity(&source)? != observed {
+            if hash != entry.manifest.sha256
+                || identity(&source)? != observed
+                || !entry.manifest.matches_metadata(&metadata)
+            {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let mut request = ImportRequest::new(
@@ -500,7 +503,9 @@ impl PreparedExternal {
             );
             request.default_context = entry.manifest.default_context;
             let inspected = ModelManifest::build(request, observed.size, hash, metadata)?;
-            if !inspected.validated || inspected.template_sha256 != entry.manifest.template_sha256 {
+            if !inspected.load_candidate()
+                || inspected.template_sha256 != entry.manifest.template_sha256
+            {
                 return Err(library_error(ErrorCode::UnsupportedModel));
             }
             control.check()?;
@@ -510,7 +515,7 @@ impl PreparedExternal {
                     path,
                     context_limit: entry.manifest.executable_context_limit(),
                     default_context: entry.manifest.default_context,
-                    validated: true,
+                    loadable: true,
                 },
                 source,
                 identity: observed,
@@ -783,7 +788,7 @@ pub(crate) fn prepared_guard_fixture(path: &Path) -> Result<PreparedExternal> {
             path: path.to_owned(),
             context_limit: 32,
             default_context: 32,
-            validated: false,
+            loadable: false,
         },
         source,
         identity: observed,

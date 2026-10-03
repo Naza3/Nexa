@@ -84,7 +84,9 @@ pub struct ResolvedModel {
     pub path: PathBuf,
     pub context_limit: u32,
     pub default_context: u32,
-    pub validated: bool,
+    /// Store-authorized controlled attempt after integrity checks. This does
+    /// not assert historical validation, native compatibility or available RAM.
+    pub loadable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -4,9 +4,9 @@
 
 ## 1. 产品目标与边界
 
-Nexa 是面向 Windows 桌面 CPU 的本地 LLM runtime。其他应用通过本机 API 调用；桌面 UI 管理模型与服务，聊天辅助验证。首要目标 Windows10 x64 / i5-8400，后续按实测覆盖更多 Intel/AMD 桌面 CPU 与 Windows11。
+Nexa 是面向 Windows 桌面 CPU 的本地 LLM runtime。其他应用通过本机 API 调用；桌面 UI 管理模型与服务，聊天辅助验证。首要目标 Windows10 x64 / i5-8400 / 16GB内存，后续按实测覆盖更多 Intel/AMD 桌面 CPU 与 Windows11。
 
-llama.cpp 是推理核心，Rust 负责稳定接入和资源/生命周期管理。封装不会凭空提升模型能力、减少模型权重或让未验证的模型成为支持项。当前单模型、单运行槽、有限队列，明确拒绝不支持能力。
+llama.cpp 是推理核心，Rust 负责稳定接入和资源/生命周期管理。封装不会凭空提升模型能力或减少模型权重；未验证模型可成为受控尝试候选，但不获得已实测标签。当前单模型、单运行槽、有限队列，明确拒绝不支持能力。
 
 API 兼容目标为官方 deepseek-ai/deepseek-harness（dsh）。优先通过其 `@deepseek-ai/dsh-llm-pi-ai` 自定义 `openai-completions` provider 对接；默认 `deepseek-official` Messages adapter 不在首期承诺中。实际协议与验收见 [harness契约](windows-harness-contract.md)。Telegram 等业务只作为可选调用方，不绑定发行。
 
@@ -80,15 +80,27 @@ dsh接入复用既有HTTP路径，先准确配置pi-ai provider，再增加真�
 | 会话、harness工具状态、Telegram等业务数据 | 调用应用 |
 | 性能/验证报告 | 验证体系，默认不记录私有正文、token或完整用户路径 |
 
-external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/精确准入。目录应用/重扫需先显式停止服务，不自动终止其他客户端。详见 [目录契约](t06-model-directory-contract.md)。
+external目录保持非递归只读、零复制登记、稳定ID和有效目录身份校验。登记元数据不是当前完整性证明；每次实际load先经受控准备复验文件/目录/hash/metadata与候选资格，不以精确验证表限制模型名。目录应用/重扫需先显式停止服务，不自动终止其他客户端。详见 [目录契约](t06-model-directory-contract.md)。
 
 ## 7. 桌面CPU与模型扩展
 
-当前只有固定Qwen3-0.6B Q8_0/context2048获得精确准入。后续W02不仅调线程：按目标CPU可用内存和实际质量挑选桌面实用模型候选（如4B档），先审查锁定llama版本的架构、模板、量化支持，再锁资产并验收。
+按[ADR0015](decisions/0015-open-model-loading-and-validation-evidence.md)，W02源码已把历史validated证据与独立loadable候选分开，本地回归通过、新Windows验收待完成，不保留模型名/hash许可名单。原0.6B/context2048只是已测链路基线；1.7B/4B等用于16GB桌面性能/质量抽样，不是产品支持名单。实际架构/张量由锁定llama loader判断，结构/模板边界仍可明确拒绝。
 
-每个模型分别记录文本/工具/可选思考能力、上下文预算、内存和速度。不由GGUF扩展名或上游新版宣传授予本项目固定版本支持。新llama版本须单独升级决策与原有模型回归。
+每个实测模型分别记录文本/工具/可选思考能力、上下文预算、内存和速度；未出现在证据矩阵不自动禁止尝试。不由GGUF扩展名或上游新版宣传授予本项目固定版本支持。新llama版本须单独升级决策与原有模型回归。
 
 现有线程/context/batch/输出与空闲卸载设置继续复用；性能优化围绕正确参数、目标CPU实测、背压与UI刷新，禁止无基线重做调度。测量parent/worker/UI、冷加载、TTFT、prefill、decode、取消与空闲成本；配置值与未知实测值严格区分。
+
+当前切片只接单文件GGUF及已实现tensor结构；原始嵌入Jinja须符合文本continuation和vocab结束规则，禁止fallback与role/system改写。分片、encoder/diffusion/noncausal、未知结构或输出framing明确拒绝。context取metadata与131072硬限，16GB不等于可运行该窗口；Job没有RAM硬限制，进程隔离不构成完整OOM保障。目录整批失败策略仍保留，逐文件诊断另做。开放源码已冻结在工作区、本地回归通过，但仍未由新提交WindowsCI或新包验收；旧交付版本不能追溯宣称完成。
+
+原始模板、metadata key与tensor name含NUL时拒绝，避免Rust/native的C-string身份截断；普通tokenizer metadata values含NUL不一概禁止。Engine初始化强制关闭common/Jinja日志并使用受控静态模板错误，最终隐私canary只证明被覆盖的成功/异常路径，不作绝对无泄漏承诺。
+
+### 模板执行与资源限制
+
+Jinja目前没有循环、操作数或中间分配预算；4MiB限制在render完成后才检查，构造期的模板能力探针同样没有内部执行预算。因此不能把输出大小上限称为模板执行时间或峰值内存上限。
+
+Windows产品worker由父进程独立计时：加载使用load_timeout，prepare属于Generate的execution_timeout，默认各300秒；超时发取消，5秒宽限后可调用TerminateJobObject，再至多等待5秒确认并有界清理。取消标志不能保证中断正在执行的Jinja；未确认回收则fail-closed，不宣称已停止或另起worker。该机制避免父端无界等待，不构成Job RAM硬限制，超时前仍可能OOM或拖慢16GB系统；直接进程内使用adapter没有这层父进程强杀保护。
+
+复杂模板的执行/分配预算属于后续待办，不扩入本切片；当前不作全部模板安全或全进程内存安全承诺。
 
 ## 8. 交付与演进
 

@@ -6,8 +6,8 @@ T02 的单一调度 actor，不链接 llama.cpp，也不依赖 HTTP、Tokio 或 
 
 - 只有 actor 修改 selected_model、状态、活动槽和 FIFO。默认一个活动请求 + 八个等待请求；Android配置一个等待请求
 - 首次有效请求选择模型；其他模型返回 ModelConflict，不自动置换。显式切换只在没有请求时按 Unload ACK → Load 串行执行
-- 每次真正Load（含idle重载和显式恢复Unload后）重新调用ModelResolver，不能把selected里的旧validated/path当永久许可。模型指纹/验证/ID/context变化时不向native投递Load，保留选择和原context参数，外部重新验证后由显式Load恢复
-- ModelResolver 只做有界元数据/路径查找。导入、完整SHA-256校验和缓存刷新在启动前或actor原子RegistryLease预约下的blocking任务执行；未知或超过已验证上下文的模型不能加载
+- 每次真正Load（含idle重载和显式恢复Unload后）重新调用ModelResolver，不能把selected里的旧loadable/path当永久许可。模型指纹/候选资格/ID/context变化时不向native投递Load，保留选择和原context参数，外部重新验证后由显式Load恢复
+- ModelResolver 只做有界元数据/路径查找。导入、完整SHA-256校验和缓存刷新在启动前或actor原子RegistryLease预约下的blocking任务执行；无合法loadable或超过模型metadata与131072硬限的请求不能加载；validated仅保存历史实测证据，不是型号/hash白名单，候选最终仍须原生loader与模板接受
 - Executor::start 必须快速返回，调用方不能在其中同步推理。只有独立 CancellationHandle 可跨线程；所有原生创建和释放归执行器线程
 - queue/load/execution 分开计时，execution 包括 prepare/prefill/decode。取消和超时只设置控制意图；活动生成槽一直保留到 executor 清理后的终态 ACK
 - 公共事件有逐请求递增 seq，且只有一个终态。精确 prepare 通过后发布 Started；消费者断开后仍在内部终结，但不强行交付

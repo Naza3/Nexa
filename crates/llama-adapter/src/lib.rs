@@ -70,6 +70,9 @@ pub struct Engine {
 
 impl Engine {
     pub fn new() -> Result<Self, RuntimeError> {
+        // Every product entry point, including direct EngineHost users, rejects
+        // stale AIR_NATIVE_DIR archives before creating any native resources.
+        verify_build_identity(&build_info()?)?;
         let mut raw = std::ptr::null_mut();
         let mut error = ffi::AirError::default();
         // SAFETY: Outputs are initialized and writable for this synchronous call.
@@ -433,6 +436,21 @@ pub fn build_info() -> Result<String, RuntimeError> {
     buffer.to_string()
 }
 
+const EXPECTED_BUILD_INFO: &str = concat!(
+    "{\"shim_version\":3,\"backend\":\"cpu\",\"llama_commit\":\"",
+    "2149c00f4442dc59302e134a02e4c99d5f7ed9fc\"}"
+);
+fn verify_build_identity(info: &str) -> Result<(), RuntimeError> {
+    // The locked shim owns this exact bounded JSON encoding. Strict equality
+    // also rejects duplicate keys; substring version checks are insufficient.
+    if info != EXPECTED_BUILD_INFO {
+        return Err(protocol(
+            "native behavior identity mismatch; rebuild the pinned shim",
+        ));
+    }
+    Ok(())
+}
+
 fn nonnull<T>(raw: *mut T) -> Result<NonNull<T>, RuntimeError> {
     NonNull::new(raw).ok_or_else(|| protocol("native success returned a null handle"))
 }
@@ -728,7 +746,7 @@ mod tests {
     #[test]
     fn native_build_reports_pinned_abi() {
         let info = build_info().unwrap();
-        assert!(info.contains("\"shim_version\":2"));
+        assert!(info.contains("\"shim_version\":3"));
         assert!(info.contains("\"backend\":\"cpu\""));
         assert!(info.contains("2149c00f4442dc59302e134a02e4c99d5f7ed9fc"));
     }
@@ -750,5 +768,28 @@ mod tests {
             check_status(1, ffi::AirError::default()).unwrap_err().code,
             ErrorCode::NativeProtocol
         );
+    }
+}
+
+#[cfg(test)]
+mod behavior_identity_tests {
+    use super::*;
+    #[test]
+    fn product_entry_identity_rejects_previous_and_forged_shims() {
+        assert!(verify_build_identity(EXPECTED_BUILD_INFO).is_ok());
+        for invalid in [
+            EXPECTED_BUILD_INFO.replace("\"shim_version\":3", "\"shim_version\":2"),
+            EXPECTED_BUILD_INFO.replace(
+                "\"shim_version\":3",
+                "\"shim_version\":2,\"shim_version\":3",
+            ),
+            EXPECTED_BUILD_INFO.replace("cpu", "gpu"),
+            EXPECTED_BUILD_INFO.replace("2149c00", "0000000"),
+        ] {
+            assert_eq!(
+                verify_build_identity(&invalid).unwrap_err().code,
+                ErrorCode::NativeProtocol
+            );
+        }
     }
 }

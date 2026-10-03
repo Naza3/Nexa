@@ -471,7 +471,7 @@ export class DesktopController {
           this.update({
             models: { data: [], next_after: null, generation: null },
             page_after: null,
-            notice: `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个符合本版本精确矩阵准入。请启动运行服务读取实际可用性。`,
+            notice: `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个可尝试加载（不代表已实测）。请启动运行服务读取实际可用性。`,
           });
         } else if (progress.status === "cancelled")
           this.update({ notice: "模型库操作已取消，原目录与索引保持不变。" });
@@ -507,6 +507,9 @@ export class DesktopController {
   }
   loadModel = (modelId: string) =>
     this.action("正在加载模型", async () => {
+      const model = this.state.models.data.find((entry) => entry.id === modelId);
+      if (!model?.available || model.loadable !== true)
+        throw new Error("当前模型不可尝试加载，请刷新匹配版本的模型列表");
       const settings = this.state.snapshot?.settings ?? DEFAULT_SETTINGS;
       this.setRuntime(
         await this.api.loadModel(modelId, {

@@ -1,4 +1,4 @@
-//! Compatibility of registered metadata with this runtime's exact model matrix.
+//! Historical model validation labels, separate from controlled load eligibility.
 //! This observation is neither current file integrity nor permission to execute.
 use serde::{Deserialize, Serialize};
 

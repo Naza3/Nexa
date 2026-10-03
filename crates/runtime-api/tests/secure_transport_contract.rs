@@ -245,7 +245,7 @@ impl Harness {
                     path: "synthetic-not-read".into(),
                     context_limit: 4096,
                     default_context: 2048,
-                    validated: true,
+                    loadable: true,
                 })
             },
             ProtocolExecutor {

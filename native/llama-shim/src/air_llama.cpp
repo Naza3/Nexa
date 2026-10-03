@@ -13,6 +13,9 @@
 #include <vector>
 
 #include "stream_buffer.h"
+#include "text_template.h"
+#include "gguf.h"
+#include "log.h"
 struct air_cancel {
   std::atomic<bool> value{false};
 };
@@ -24,7 +27,7 @@ struct air_model {
   air_engine *engine = nullptr;
   llama_model *model = nullptr;
   llama_context *context = nullptr;
-  common_chat_templates_ptr templates;
+  std::unique_ptr<air_text_template> templates;
   uint32_t batch = 0;
   uint32_t context_limit = 0;
   ~air_model() {
@@ -111,7 +114,12 @@ static bool abort_callback(void *p) {
 static bool progress_callback(float, void *p) {
   return !cancelled(static_cast<const air_cancel *>(p));
 }
-static void quiet_log(ggml_log_level, const char *, void *) {
+static thread_local bool unsupported_architecture = false;
+static void quiet_log(ggml_log_level, const char *message, void *) {
+  // Classify only known static engine errors; never retain native text/paths.
+  if (message && (std::strstr(message, "unknown model architecture:") ||
+                  std::strstr(message, "unsupported model architecture:")))
+    unsupported_architecture = true;
 } // Native messages can contain full local paths.
 
 extern "C" int32_t air_engine_create(air_engine **out, air_error *error) {
@@ -124,7 +132,12 @@ extern "C" int32_t air_engine_create(air_engine **out, air_error *error) {
     bool expected = false;
     if (!engine_active.compare_exchange_strong(expected, true))
       throw failure(1, "engine already exists");
+    // Configure global diagnostics only after acquiring the single-engine
+    // owner and before any native/template activity. Dependency defaults or
+    // earlier direct-library users must not enable prompt/template logging.
     llama_log_set(quiet_log, nullptr);
+    common_log_set_verbosity_thold(-1);
+    jinja::enable_debug(false);
     try {
       llama_backend_init();
     } catch (...) {
@@ -164,28 +177,64 @@ extern "C" int32_t air_model_load(air_engine *e, air_string path,
     mp.n_gpu_layers = 0;
     mp.progress_callback = progress_callback;
     mp.progress_callback_user_data = const_cast<air_cancel *>(cancel);
+    // Defense in depth for direct adapter users too: never let llama open
+    // sibling shards outside the protected single-file closure.
+    gguf_init_params gp{true, nullptr};
+    std::unique_ptr<gguf_context, decltype(&gguf_free)> metadata(
+        gguf_init_from_file(p.c_str(), gp), gguf_free);
+    if (!metadata)
+      throw failure(3, "invalid GGUF model metadata");
+    for (const char *key : {"split.count", "split.no"}) {
+      auto index = gguf_find_key(metadata.get(), key);
+      if (index < 0) continue;
+      auto type = gguf_get_kv_type(metadata.get(), index);
+      uint32_t value;
+      if (type == GGUF_TYPE_UINT16) value = gguf_get_val_u16(metadata.get(), index);
+      else if (type == GGUF_TYPE_UINT32) value = gguf_get_val_u32(metadata.get(), index);
+      else throw failure(3, "invalid GGUF split metadata");
+      if ((std::strcmp(key, "split.count") == 0 && value > 1) ||
+          (std::strcmp(key, "split.no") == 0 && value != 0))
+        throw failure(3, "multi-file GGUF is not supported");
+    }
+    metadata.reset();
+    check_cancel(cancel);
+    unsupported_architecture = false;
     m->model = llama_model_load_from_file(p.c_str(), mp);
     check_cancel(cancel);
-    if (!m->model)
-      throw failure(6, "model load failed");
-    char arch[64]{};
-    if (llama_model_meta_val_str(m->model, "general.architecture", arch,
-                                 sizeof(arch)) < 0 ||
-        std::string(arch) != "qwen3")
-      throw failure(3, "only Qwen3 is currently implemented; acceptance "
-                       "remains model-specific");
+    if (!m->model) {
+      if (unsupported_architecture)
+        throw failure(3, "architecture is unsupported by the locked engine");
+      throw failure(6, "model load failed; verify format and available resources");
+    }
+    if (llama_model_has_encoder(m->model) || !llama_model_has_decoder(m->model) ||
+        llama_model_is_diffusion(m->model))
+      throw failure(3, "model requires an unsupported execution method");
+    if (options.context_size > static_cast<uint32_t>(llama_model_n_ctx_train(m->model)))
+      throw failure(5, "requested context exceeds model training context");
     const char *tmpl = llama_model_chat_template(m->model, nullptr);
     if (!tmpl || !*tmpl)
-      throw failure(4, "missing chat template");
+      throw failure(4, "missing embedded chat template; no fallback is provided");
     try {
-      m->templates = common_chat_templates_init(m->model, "");
-      if (!common_chat_templates_support_enable_thinking(m->templates.get()))
-        throw failure(4, "template cannot disable thinking");
-    } catch (const failure &) {
-      throw;
-    } catch (...) {
-      throw failure(4, "unsupported chat template");
-    }
+      const auto *vocab = llama_model_get_vocab(m->model);
+      const auto bos_id = llama_vocab_bos(vocab);
+      const auto eos_id = llama_vocab_eos(vocab);
+      auto bos = bos_id == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(vocab, bos_id, true);
+      auto eos = eos_id == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(vocab, eos_id, true);
+      m->templates = std::make_unique<air_text_template>(
+          tmpl, bos, eos, llama_vocab_get_add_bos(vocab), llama_vocab_get_add_eos(vocab),
+          [vocab, eos_id](const std::string &suffix) {
+            if (suffix.empty())
+              return llama_vocab_get_add_eos(vocab) && eos_id != LLAMA_TOKEN_NULL && llama_vocab_is_eog(vocab, eos_id);
+            auto tokens = common_tokenize(vocab, suffix, false, true);
+            if (tokens.empty() || !llama_vocab_is_eog(vocab, tokens.front())) return false;
+            std::string trailing;
+            for (size_t i = 1; i < tokens.size(); ++i)
+              trailing += common_token_to_piece(vocab, tokens[i], true);
+            return trailing.find_first_not_of(" \t\r\n") == std::string::npos;
+          });
+    } catch (const failure &) { throw; }
+      catch (...) { throw failure(4, "embedded template is unsupported by the text adapter"); }
+    check_cancel(cancel);
     auto cp = llama_context_default_params();
     cp.n_ctx = options.context_size;
     cp.n_batch = std::min(options.batch_size, options.context_size);
@@ -198,6 +247,8 @@ extern "C" int32_t air_model_load(air_engine *e, air_string path,
     check_cancel(cancel);
     if (!m->context)
       throw failure(6, "context creation failed");
+    if (!llama_get_causal_attn(m->context))
+      throw failure(3, "non-causal models are unsupported by the text decoder");
     llama_set_abort_callback(m->context, nullptr, nullptr);
     m->batch = cp.n_batch;
     // Upstream rounds KV capacity to 256; preserve the caller's logical budget.
@@ -263,8 +314,8 @@ extern "C" int32_t air_prepare(air_model *m, const air_message *messages,
     }
     std::string prompt;
     try {
-      auto applied = common_chat_templates_apply(m->templates.get(), input);
-      prompt = applied.prompt;
+      prompt = m->templates->render(input.messages);
+    } catch (const failure &) { throw;
     } catch (...) {
       throw failure(4, "template application failed");
     }
@@ -381,6 +432,8 @@ extern "C" int32_t air_generate_observed(
         usage->finish_reason = 0;
         break;
       }
+      if (!air_text_output_token_supported(llama_vocab_get_attr(vocab, token)))
+        throw failure(4, "model emitted unsupported output token type");
       char small[256];
       int32_t n =
           llama_token_to_piece(vocab, token, small, sizeof(small), 0, false);
@@ -435,7 +488,7 @@ extern "C" int32_t air_get_build_info(air_buffer *out, air_error *error) {
   return guarded(error, [&] {
     if (!out)
       throw failure(1, "null output");
-    *out = buffer("{\"shim_version\":2,\"backend\":\"cpu\",\"llama_commit\":"
+    *out = buffer("{\"shim_version\":3,\"backend\":\"cpu\",\"llama_commit\":"
                   "\"" AIR_LLAMA_COMMIT "\"}");
   });
 }

@@ -40,7 +40,7 @@ fn resolved() -> ResolvedModel {
         path: PathBuf::from("fixture.gguf"),
         context_limit: 2048,
         default_context: 2048,
-        validated: true,
+        loadable: true,
     }
 }
 struct Setup {

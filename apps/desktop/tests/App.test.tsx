@@ -47,8 +47,8 @@ describe("desktop React interaction", () => {
       })),
     });
     expect(screen.getByText("登记时已识别 GGUF")).toBeInTheDocument();
-    expect(screen.getByText("本版本精确矩阵未准入")).toBeInTheDocument();
-    expect(screen.getByText("引擎架构范围：不支持此架构")).toBeInTheDocument();
+    expect(screen.getByText("未实测")).toBeInTheDocument();
+    expect(screen.getByText("当前引擎报告不支持此架构")).toBeInTheDocument();
     expect(screen.getByText(/源文件已变动/)).toBeInTheDocument();
     expect(screen.queryByText("尚未校验")).not.toBeInTheDocument();
     const load = screen.getByRole("button", { name: "当前不可用" });
@@ -58,6 +58,26 @@ describe("desktop React interaction", () => {
     await user.click(screen.getByText("模型信息"));
     expect(screen.getByText(/不代表当前文件完整性/)).toBeVisible();
     expect(screen.getByText(`登记时 SHA-256：${model.sha256}`)).toBeVisible();
+  });
+
+  it.each([true, false])("keeps candidate and legacy load buttons consistent (loadable=%s)", async (loadable) => {
+    const value = { ...model, validated: false, loadable: loadable ? true : undefined, compatibility: "unvalidated" as const };
+    const base = snapshot();
+    base.runtime = { ...base.runtime!, state: "unloaded", selected_model: null, load_options: null };
+    const { api, user } = await mount({
+      snapshot: vi.fn(async () => base),
+      modelsPage: vi.fn(async () => ({ data: [value], next_after: null, generation: "generation-1" })),
+    });
+    const button = screen.getByRole("button", { name: loadable ? "尝试加载" : "当前不可用" });
+    if (loadable) {
+      expect(button).toBeEnabled();
+      await user.click(button);
+      expect(api.loadModel).toHaveBeenCalledTimes(1);
+    } else {
+      expect(button).toBeDisabled();
+      await user.click(button);
+      expect(api.loadModel).not.toHaveBeenCalled();
+    }
   });
 
   it("shows three pages and unknown backend honestly, including keyboard navigation", async () => {

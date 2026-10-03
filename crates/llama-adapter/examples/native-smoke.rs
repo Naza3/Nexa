@@ -179,7 +179,7 @@ fn observe(iteration: u32, mode: &str, usage: Usage, finish: &str, text: &str, c
 fn run(options: Options) -> Result<()> {
     let info: Value = serde_json::from_str(&llama_adapter::build_info()?)?;
     require(
-        info["shim_version"] == 2 && info["backend"] == "cpu",
+        info["shim_version"] == 3 && info["backend"] == "cpu",
         "unexpected native ABI/backend",
     )?;
     let load = LoadOptions {
