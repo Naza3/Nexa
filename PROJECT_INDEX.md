@@ -54,6 +54,8 @@
 | T06 | [桌面及目录版CI/手验界限](docs/verification/2026-10-01-t06-desktop.md) |
 | 后续修复 | [取消/真实故障优先级](docs/verification/2026-10-02-core-cancellation-faults.md) |
 | 最新389eeef | [模型兼容性与最终CI/交付](docs/verification/2026-10-02-windows-model-compatibility.md) |
+| W00 / W04 | [Windows主线收敛与Harness分层记录](docs/verification/2026-10-03-windows-scope-and-harness.md) |
+| W04可执行窄文本验证 | [官方pi-ai验证与精确客户端锁](examples/harness/README.md)，尚非DSH/真模型/Windows通过 |
 
 历史报告是当时精确源码/设备的证据，不追溯覆盖新功能或新硬件。当前W阶段结果仍以状态与各自新报告为准。
 

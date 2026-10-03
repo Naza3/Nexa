@@ -1,0 +1,8 @@
+{
+  "name": "nexa-harness-client-0.87.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.87.1"
+  }
+}

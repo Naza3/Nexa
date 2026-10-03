@@ -26,6 +26,7 @@ use tokio::{
 #[derive(Clone, Copy, Debug)]
 enum Mode {
     Success,
+    Length,
     BeforeError,
     AfterError,
     LoadWait,
@@ -57,6 +58,7 @@ struct Observed {
     hold_cancel_completion: AtomicBool,
     cancelled: AtomicBool,
     events: Mutex<Option<ExecutionEvents>>,
+    request: Mutex<Option<runtime_types::GenerationRequest>>,
     peak: AtomicUsize,
 }
 struct CancelCompletionGate(Arc<Observed>);
@@ -118,7 +120,8 @@ impl Executor for ProtocolExecutor {
                 ExecutorCommand::Unload => {
                     events.emit(ExecutorEvent::Unloaded);
                 }
-                ExecutorCommand::Generate { .. } => {
+                ExecutorCommand::Generate { request } => {
+                    *observed.request.lock().unwrap() = Some(request);
                     *observed.events.lock().unwrap() = Some(events.clone());
                     let scratch = events.try_reserve_text(16 * 1024).unwrap();
                     if matches!(mode, Mode::PrepareWait) {
@@ -192,7 +195,11 @@ impl Executor for ProtocolExecutor {
                     } else {
                         events.emit(ExecutorEvent::Completed {
                             usage,
-                            finish_reason: FinishReason::Stop,
+                            finish_reason: if matches!(mode, Mode::Length) {
+                                FinishReason::Length
+                            } else {
+                                FinishReason::Stop
+                            },
                         });
                     }
                     drop(scratch);
@@ -227,6 +234,12 @@ impl Harness {
         let runtime = Runtime::spawn(
             config.runtime_config(),
             |id: &ModelId| {
+                if id.as_str() == "missing-model" {
+                    return Err(RuntimeError::new(
+                        ErrorCode::ModelNotFound,
+                        "fixture missing",
+                    ));
+                }
                 Ok(ResolvedModel {
                     id: id.clone(),
                     path: "synthetic-not-read".into(),
@@ -262,23 +275,37 @@ impl Harness {
         self.send_with_policy(streaming, true).await
     }
     async fn send_with_policy(&self, streaming: bool, close: bool) -> TcpStream {
-        let connection = if close { "Connection: close\r\n" } else { "" };
         let body = json!({"model":"fixture","messages":[{"role":"user","content":"protocol test"}],"stream":streaming,"max_tokens":128,"stream_options":if streaming{json!({"include_usage":true})}else{Value::Null}});
         let mut body = body.as_object().unwrap().clone();
         if !streaming {
             body.remove("stream_options");
         }
         let body = serde_json::to_string(&body).unwrap();
+        self.send_body(&body, Some(self.bearer.to_str().unwrap()), close)
+            .await
+    }
+    async fn send_body(&self, body: &str, bearer: Option<&str>, close: bool) -> TcpStream {
+        let connection = if close { "Connection: close\r\n" } else { "" };
+        let authorization =
+            bearer.map_or_else(String::new, |value| format!("Authorization: {value}\r\n"));
         let mut socket = TcpStream::connect(self.address).await.unwrap();
         let request = format!(
-            "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{connection}\r\n{}",
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\n{authorization}Content-Type: application/json\r\nContent-Length: {}\r\n{connection}\r\n{}",
             self.address,
-            self.bearer.to_str().unwrap(),
             body.len(),
             body
         );
         socket.write_all(request.as_bytes()).await.unwrap();
         socket
+    }
+    async fn reply_body(&self, body: &str, bearer: Option<&str>) -> (u16, String, String) {
+        let mut socket = self.send_body(body, bearer, true).await;
+        let mut wire = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), socket.read_to_end(&mut wire))
+            .await
+            .unwrap()
+            .unwrap();
+        decode(&wire)
     }
     async fn reply(&self, streaming: bool) -> (u16, String, String) {
         let mut socket = self.send(streaming).await;
@@ -468,6 +495,210 @@ async fn actual_http_stream_order_and_nonstream_json_are_exact() {
     let value: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(value["choices"][0]["message"]["content"], "你好🙂\n\"\\");
     h.clean().await;
+    h.close().await;
+}
+
+// Fixed dsh/pi-ai text profile. The HTTP executor is synthetic; this does not
+// claim a real model, the DSH adapter, or an agent tool loop was executed.
+const HARNESS_TEXT: &str = include_str!("../../../examples/harness/fixtures/text-request.json");
+
+#[tokio::test]
+#[ignore = "requires the isolated examples/harness/client npm lock and NEXA_PI_AI_ROOT"]
+async fn harness_official_pi_ai_consumes_actual_nexa_http() {
+    let client_root = std::env::var_os("NEXA_PI_AI_ROOT")
+        .expect("set NEXA_PI_AI_ROOT to the isolated client directory");
+    let h = Harness::new(Mode::Success).await;
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/harness/verify-pi-ai.mjs");
+    let endpoint = format!("http://{}/v1", h.address);
+    let token = h
+        .bearer
+        .to_str()
+        .unwrap()
+        .strip_prefix("Bearer ")
+        .unwrap()
+        .to_owned();
+    let output = tokio::task::spawn_blocking(move || {
+        let mut command = std::process::Command::new("node");
+        command.env_clear();
+        for key in ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        command.env("NEXA_TEST_TOKEN", token);
+        command.arg(script).arg(client_root).arg(endpoint).output()
+    })
+    .await
+    .unwrap()
+    .expect("run the pinned official client with existing Node.js");
+    assert!(
+        output.status.success(),
+        "official client failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["mode"], "pi-ai-to-nexa-synthetic-executor");
+    assert_eq!(report["version"], "0.87.1");
+    assert_eq!(report["outcomes"][0]["terminal"], "done");
+    println!("{}", serde_json::to_string_pretty(&report).unwrap());
+    let request = h.observed.request.lock().unwrap().clone().unwrap();
+    let expected: Value = serde_json::from_str(HARNESS_TEXT).unwrap();
+    assert_eq!(
+        serde_json::to_value(request.messages).unwrap(),
+        expected["messages"]
+    );
+    h.clean().await;
+    h.close().await;
+}
+
+#[tokio::test]
+async fn harness_text_wire_preserves_messages_and_stop_length_usage_tails() {
+    for (mode, finish) in [(Mode::Success, "stop"), (Mode::Length, "length")] {
+        let h = Harness::new(mode).await;
+        for include_usage in [true, false] {
+            let mut request: Value = serde_json::from_str(HARNESS_TEXT).unwrap();
+            if !include_usage {
+                request.as_object_mut().unwrap().remove("stream_options");
+            }
+            let (status, headers, body) = h
+                .reply_body(&request.to_string(), Some(h.bearer.to_str().unwrap()))
+                .await;
+            assert_eq!(status, 200);
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("content-type: text/event-stream")
+            );
+            assert!(headers.to_ascii_lowercase().contains("x-request-id:"));
+            let frames: Vec<_> = body.split("\n\n").filter(|part| !part.is_empty()).collect();
+            assert_eq!(frames.len(), if include_usage { 5 } else { 4 });
+            assert_eq!(frames.last(), Some(&"data: [DONE]"));
+            assert_eq!(body.matches("[DONE]").count(), 1);
+            let chunks: Vec<Value> = frames[..frames.len() - 1]
+                .iter()
+                .map(|frame| serde_json::from_str(frame.strip_prefix("data: ").unwrap()).unwrap())
+                .collect();
+            assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
+            assert!(chunks[0]["choices"][0]["finish_reason"].is_null());
+            assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "你好🙂\n\"\\");
+            assert!(chunks[1]["choices"][0]["finish_reason"].is_null());
+            assert_eq!(chunks[2]["choices"][0]["finish_reason"], finish);
+            assert_eq!(chunks[2]["choices"][0]["delta"], json!({}));
+            for chunk in &chunks {
+                assert_eq!(chunk["id"], chunks[0]["id"]);
+                assert_eq!(chunk["created"], chunks[0]["created"]);
+                assert_eq!(chunk["model"], "fixture");
+                assert_eq!(chunk["object"], "chat.completion.chunk");
+            }
+            if include_usage {
+                assert_eq!(chunks[3]["choices"], json!([]));
+                assert_eq!(
+                    chunks[3]["usage"],
+                    json!({"prompt_tokens":3,"completion_tokens":1,"total_tokens":4})
+                );
+            } else {
+                assert!(chunks.iter().all(|chunk| chunk.get("usage").is_none()));
+            }
+            let observed = h.observed.request.lock().unwrap().clone().unwrap();
+            assert_eq!(
+                serde_json::to_value(observed.messages).unwrap(),
+                request["messages"]
+            );
+            assert_eq!(observed.options.max_tokens, 128);
+            assert_eq!(observed.options.temperature, 0.0);
+            h.clean().await;
+        }
+        h.close().await;
+    }
+}
+
+#[tokio::test]
+async fn harness_text_wire_auth_model_and_unsupported_fields_fail_before_inference() {
+    let h = Harness::new(Mode::Success).await;
+    for bearer in [None, Some("Bearer not-a-runtime-token")] {
+        let (status, _, body) = h.reply_body(HARNESS_TEXT, bearer).await;
+        assert_eq!(status, 401);
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"]["code"], "invalid_api_key");
+        assert!(body["error"]["message"].is_string());
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+    let cases = [
+        (
+            "/model",
+            json!("missing-model"),
+            404,
+            "model_not_found",
+            "model",
+        ),
+        (
+            "/store",
+            json!(false),
+            400,
+            "unsupported_parameter",
+            "store",
+        ),
+        ("/tools", json!([]), 400, "unsupported_parameter", "tools"),
+        (
+            "/tools",
+            json!([{"type":"function","function":{"name":"noop","parameters":{"type":"object"}}}]),
+            400,
+            "unsupported_parameter",
+            "tools",
+        ),
+        (
+            "/messages/1/content",
+            json!([{"type":"text","text":"hello"}]),
+            400,
+            "unsupported_parameter",
+            "messages.1.content",
+        ),
+        (
+            "/messages/1/content",
+            Value::Null,
+            400,
+            "unsupported_parameter",
+            "messages.1.content",
+        ),
+        (
+            "/messages/0/role",
+            json!("developer"),
+            400,
+            "unsupported_parameter",
+            "messages.0.role",
+        ),
+        ("/surprise", json!(true), 400, "invalid_request", "surprise"),
+    ];
+    for (pointer, value, expected_status, code, param) in cases {
+        let mut request: Value = serde_json::from_str(HARNESS_TEXT).unwrap();
+        if let Some(target) = request.pointer_mut(pointer) {
+            *target = value;
+        } else {
+            request
+                .as_object_mut()
+                .unwrap()
+                .insert(pointer.trim_start_matches('/').into(), value);
+        }
+        let (status, headers, body) = h
+            .reply_body(&request.to_string(), Some(h.bearer.to_str().unwrap()))
+            .await;
+        assert_eq!(status, expected_status, "{pointer}: {body}");
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("content-type: application/json")
+        );
+        assert!(headers.to_ascii_lowercase().contains("x-request-id:"));
+        assert!(!body.contains("data:"));
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"]["code"], code);
+        assert_eq!(body["error"]["param"], param);
+        assert!(body["error"]["message"].is_string());
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+    assert_eq!(h.observed.phase.load(Ordering::SeqCst), 0);
+    assert!(h.observed.request.lock().unwrap().is_none());
     h.close().await;
 }
 #[tokio::test]

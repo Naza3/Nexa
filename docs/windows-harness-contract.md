@@ -1,6 +1,6 @@
 # Windows API 与 DeepSeek Harness 接入契约（规划）
 
-日期：2026-10-03。用户要求API兼容官方 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（命令dsh）。本文件基于官方固定源码审计定义接入路线，尚未安装客户端、实现工具协议或完成真实联调；不能据此宣布兼容。范围见[ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，排期见[W04](roadmap.md#5-w04-兼容门槛)。
+日期：2026-10-03。用户要求API兼容官方 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（命令dsh）。本文件基于官方固定源码审计定义接入路线；官方pi-ai已安装为隔离测试依赖，窄文本协议切片经局部实测、native-free聚合与独立审查完成，DSH本体未安装执行、工具协议和真实Windows模型联调尚未完成，不能据此宣布完整兼容。局部结果见[分层验证](verification/2026-10-03-windows-scope-and-harness.md)。范围见[ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，排期见[W04](roadmap.md#5-w04-兼容门槛)。
 
 ## 1. 版本与低改造接入路线
 
@@ -13,7 +13,7 @@
 
 ## 2. 客户端配置草案
 
-以下是规划示例，未运行验证。合并到已加载的pi-ai插件配置，不重复注册相同路由。端口/model ID须取实际Nexa实例；API令牌只使用环境变量或获准的凭据引用，不把真实值写进仓库、报告或示例。环境变量名不是已保存凭据的证明。
+以下为DSH插件配置草案，DSH本体尚未执行；对应受控pi-ai请求/流解析已有窄文本验证，可执行输入以[examples配置](../examples/harness/config.text-only.yaml)为准。合并到已加载的pi-ai插件配置，不重复注册相同路由。端口/model ID须取实际Nexa实例；API令牌只使用环境变量或获准的凭据引用，不把真实值写进仓库、报告或示例。环境变量名不是已保存凭据的证明。
 
 ```yaml
 - name: '@deepseek-ai/dsh-llm-pi-ai'
@@ -40,14 +40,14 @@
           - id: <NEXA_MODEL_ID>
             name: Nexa CPU smoke model
             contextWindow: 2048
-            maxTokens: 256
+            maxTokens: 128
             input: [text]
             reasoningEfforts: false
 ```
 
-2048/256仅用于当前模型矩阵的保守文本smoke设计，实际输入+工具+历史+输出仍须精确预算，不是通用容量或性能承诺。新模型按自身准入填写。禁止沿用provider缺省的contextWindow262144/maxTokens32768虚报本地能力。
+2048/128仅用于当前模型矩阵的保守文本smoke设计，实际输入+工具+历史+输出仍须精确预算，不是通用容量或性能承诺。新模型按自身准入填写。禁止沿用provider缺省的contextWindow262144/maxTokens32768虚报本地能力。
 
-Nexa现有源码已支持`stream_options.include_usage`与choices:[] usage-only帧，故草案保留`supportsUsageInStreaming:true`，仍须用实际dsh/pi-ai通过H05；不能把已有实现写成harness已联调通过。`supportsStrictMode:false`不会删除普通tools，正常dsh agent仍发送tools；当前Nexa严格文本接口会拒绝，因此此配置不能让现版本直接获得完整agent能力。纯文本smoke须使用受控无工具LLM调用/测试composition，真实agent等待工具增量。
+Nexa现有源码已支持`stream_options.include_usage`与choices:[] usage-only帧，故草案保留`supportsUsageInStreaming:true`，已由官方pi-ai窄文本验证，但仍须完成实际DSH/真模型的H05适用分支；不能把部分协议测试写成完整harness通过。`supportsStrictMode:false`不会删除普通tools，正常dsh agent仍发送tools；当前Nexa严格文本接口会拒绝，因此此配置不能让现版本直接获得完整agent能力。纯文本smoke须使用受控无工具LLM调用/测试composition，真实agent等待工具增量。
 
 `streamIdleTimeoutMs`默认300000；`timeoutMs`与此参数须按CPU冷载、排队/prefill、现有客户端750秒预算协调实测，不能盲目设统一750000或无界延时。dsh默认normal策略最多5次重试，初次联调设0，避免掩盖首错与重复推理；之后独立测试显式选择的重试策略。
 
@@ -84,7 +84,7 @@ runtime只生成受控协议数据，工具执行、权限、文件/命令行为
 
 ## 5. H01–H12验收矩阵
 
-全部仍待实施/验证；协议fake不能替代模型能力或Windows真机结果。
+H02/H04/H05/H11已有官方pi-ai窄协议子集证据，见[验证页](verification/2026-10-03-windows-scope-and-harness.md)；没有任何H编号整体收口。协议fake不能替代完整DSH、模型能力或Windows真机结果。
 
 | ID | 验收 | 完成证据 |
 | --- | --- | --- |
@@ -101,10 +101,10 @@ runtime只生成受控协议数据，工具执行、权限、文件/命令行为
 | H11 | 错误与重试 | 状态/文本/code分类、401/400/上下文/429/503/timeout/崩溃/半流，先无重试再独立验策略 |
 | H12 | 容量与资源 | prompt+tools+history精确模板预算，队列/背压、大工具结果与冷启动，无静默截断/虚报容量 |
 
-交付分别声明“文本连接已验证”“工具协议测试通过”“指定模型agent闭环已验证”，不得合并为无范围的“兼容DeepSeek”。当前三者均不能由本次只读协议研究授予通过。
+交付分别声明“文本连接已验证”“工具协议测试通过”“指定模型agent闭环已验证”，不得合并为无范围的“兼容DeepSeek”。当前仅能声明“固定官方pi-ai的受控文本协议子集通过”；DSH本体执行、真实模型文本连接、工具协议与agent闭环仍未完成，不能扩大结论。
 
 ## 6. 许可与非目标
 
-[DSH](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/LICENSE)与[pi-ai](https://github.com/earendil-works/pi/blob/f07218c4d4bbc12bef056a7058c3dd49dfe41abe/LICENSE)采用MIT；若分发其代码须保留版权/许可，依赖与模型权重另行核验。本规划未安装、保存凭据、开启服务或改变许可接受状态。
+[DSH](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/LICENSE)与[pi-ai](https://github.com/earendil-works/pi/blob/f07218c4d4bbc12bef056a7058c3dd49dfe41abe/LICENSE)采用MIT；若分发其代码须保留版权/许可，依赖与模型权重另行核验。W04已按独立lock安装测试用pi-ai依赖并启动临时回环合成服务；未安装执行DSH本体、保存生产凭据或初始化生产服务。npm依赖及许可范围见[来源锁](../examples/harness/upstream-lock.json)。
 
 默认Messages adapter的协议网关、其他云provider、完整agent SDK或默认全工具执行均不是本轮新增目标。

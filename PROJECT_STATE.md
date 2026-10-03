@@ -6,7 +6,7 @@
 
 按 [ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)，Nexa 聚焦 Windows 桌面 CPU 本地 LLM runtime，以 llama.cpp/GGUF 为核心，通过 API 供其他应用调用。Windows10 x64 / i5-8400 为首要目标，后续按实测扩大 Intel/AMD 桌面 CPU 与 Windows11；桌面 UI 逐步完善为管理器，聊天为辅助。
 
-用户明确要求API兼容官方DeepSeek Harness（dsh）；只读研究已确认rc2基线与pi-ai自定义openai-completions路线，见[harness契约](docs/windows-harness-contract.md)。工具协议/实用模型/真实agent回合未实现或验证，不能把文本子集宣称为完整兼容。用户2026-10-03已明确“可以，现在逐步推进”，后续Windows路线实施已获授权。本次W00仍纯文档，不运行大型构建；W04最小文本互通可独立推进，不等待W01目标机窗口或W03托盘。既有开发分支/CI授权不扩张为独立项目、新权限、合并或部署。
+用户明确要求API兼容官方DeepSeek Harness（dsh）；只读研究已确认rc2基线与pi-ai自定义openai-completions路线，见[harness契约](docs/windows-harness-contract.md)。官方pi-ai的受控文本协议子集已有实测；DSH本体、工具协议/实用模型/真实agent回合未执行或验证，不能把文本子集宣称为完整兼容。用户2026-10-03已明确“可以，现在逐步推进”，后续Windows路线实施已获授权。本次W00仍纯文档，不运行大型构建；W04最小文本互通可独立推进，不等待W01目标机窗口或W03托盘。既有开发分支/CI授权不扩张为独立项目、新权限、合并或部署。
 
 Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B3b 未提交 WIP 保留。外部 MNN Chat fork 是独立项目，不改。Telegram 摘要为可选参考调用端，不构成 runtime 发布依赖。无开发工具、实际离线和长期稳定性仍列后期验收。
 
@@ -14,7 +14,7 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 
 | 范围 | 状态与证据 |
 | --- | --- |
-| 检查基线 | `codex/nexa-native-baseline`，文档前 HEAD `db39912ec47684ecb0325256516cafa342f16fd2`；最新 Windows 实现 `389eeef327f00a184bb644ceacbfaa310f39f780` |
+| 检查基线 | `codex/nexa-native-baseline`；W00文档提交`82c4db6ecfb285e36a3aef5cfcd80cb1a1c31c91`已推送并核验远端；最新已交付Windows实现仍为`389eeef327f00a184bb644ceacbfaa310f39f780` |
 | 推理核心 | llama.cpp固定`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；C++ shim、模板/token预算/采样、UTF-8/stop、取消/释放已有真实回归 |
 | T00–T04 | 固定 Windows CPU 的原生链、model-store、单actor/队列、独立worker/IPC/Job、HTTP/CLI阶段已完成；详情见[索引](PROJECT_INDEX.md) |
 | T05 | Release便携包/独立工具、PE/依赖/许可/hash及独立Windows10短验已按阶段范围收口；A19/A20后期条件未完成 |
@@ -29,11 +29,11 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 
 | 阶段 | 状态 | 下一步/边界 |
 | --- | --- | --- |
-| W00 主线收敛 | 待验证 | 主线文档/历史快照已整理，待独立一致性审查；无源码改动 |
+| W00 主线收敛 | 已完成 | `82c4db6`独立审查、文档/归档检查与远端身份核验通过；纯文档无源码改动、无CI运行，见[本轮记录](docs/verification/2026-10-03-windows-scope-and-harness.md) |
 | W01 当前版本短验 | 待验证 | 现包Windows10目录、零复制/自动名、兼容说明、剪贴板及独立API客户端短验；等待方便的目标机窗口 |
 | W02 实用模型与CPU性能 | 未开始 | 0.6B仅链路基线；选择实用模型候选并核架构/模板/量化、文本/工具能力和CPU性能，不重复已有参数控件 |
 | W03 桌面管理器 | 未开始 | 托盘/窗口恢复与API诊断体验；当前已有服务启停和关窗保留服务 |
-| W04 API / deepseek harness | 进行中 | 已完成官方dsh rc2/pi-ai契约研究；最小文本互通切片开始独立实施，模型工具能力/真实agent回合仍未验证 |
+| W04 API / deepseek harness | 进行中 | 窄文本协议切片完成：pi-ai7场景、真实HTTP+合成执行器1项、8个native-free包248回归及clippy/独立审查通过；全workspace因llama子模块缺失未通过，DSH/Windows真模型/工具未跑，见[分层记录](docs/verification/2026-10-03-windows-scope-and-harness.md) |
 | W05 后期发行验收 | 未开始 | 无开发工具、实际离线、长期稳定性、升级/回退、Windows11及完整支持矩阵 |
 
 各阶段最小增量、依赖与验收见 [路线](docs/roadmap.md)。目标机验收暂不可执行时，可推进W04已授权的最小文本互通切片、W02验证准备，不降低验收门槛。
@@ -50,9 +50,9 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 
 ## 最小下一步
 
-1. 完成本轮文档一致性和未提交WIP保全检查，由主代理精确提交文档
+1. W00文档已提交/推送并验收；W04窄文本切片与独立审查完成，待精确提交/WindowsCI；未完成的真实模型与DSH层保持进行中
 2. W01用既有389eeef包收口目标机短验，保留所有未执行项
-3. 按W04固定dsh rc2/pi-ai契约先建立实际出站fixture和无工具文本smoke，再实现工具消息/流与W02模型准入；实际联调记录精确lockfile
+3. 保持W04精确客户端lockfile与已验证pi-ai出站fixture；补完整DSH执行/Windows真实模型文本联调后，再推进工具消息/流与W02模型准入。现有fixture不是DSH本体实际出站记录
 4. 在实测或明确协议基础上选下一块最小实现，不重复已完成能力；不恢复 Android 或绑定 Telegram 业务
 
 ## 历史与保留工作

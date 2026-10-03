@@ -1,0 +1,41 @@
+{
+  "dsh": {
+    "repository": "https://github.com/deepseek-ai/deepseek-harness",
+    "tag": "dsh-v0.2.0-rc.2",
+    "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+    "license": "MIT",
+    "execution": "source-reviewed-only"
+  },
+  "piAi": {
+    "repository": "https://github.com/earendil-works/pi",
+    "tag": "v0.87.1",
+    "commit": "f07218c4d4bbc12bef056a7058c3dd49dfe41abe",
+    "package": "@earendil-works/pi-ai",
+    "version": "0.87.1",
+    "license": "MIT",
+    "registry": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.87.1.tgz",
+    "integrity": "sha512-X/3PfQBnnoeVdO9Cv8zHghUMglzlgNZYGNzoPnbRoGnHl3Rw3TlA2UKSUB7BRHUOxMryHXYa8dnjWZlbRheDZA=="
+  },
+  "openaiSdk": {
+    "version": "6.40.0",
+    "license": "Apache-2.0",
+    "integrity": "sha512-MWtTjd/gQt4jpbji61NTgFWJLoY/PdRJ6wG9/ZDRMYNMlBKrCrSlkLI+KgHP1vR1qT6LKSAyAqIxno6lcK9JiA=="
+  },
+  "clientLock": {
+    "path": "client/package-lock.json",
+    "sha256": "169f98129c2922511512ea2e446f178c0bdfa34cbdb5459d39a6c6dddd624330",
+    "packageCount": 85,
+    "licenses": [
+      "0BSD",
+      "Apache-2.0",
+      "BSD-3-Clause",
+      "MIT",
+      "Unlicense"
+    ]
+  },
+  "fixture": {
+    "path": "fixtures/text-request.json",
+    "sha256": "5e467696e1e8ce0dddd93e6a258621e74c9411fa4f3a608ba02c959e99504fdc",
+    "provenance": "Source-derived request, then deep-equal verified against the actual pinned pi-ai serializer and HTTP request body. Not a captured DSH adapter request."
+  }
+}

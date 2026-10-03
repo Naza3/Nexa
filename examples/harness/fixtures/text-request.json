@@ -1,0 +1,13 @@
+{
+  "model": "fixture",
+  "messages": [
+    {"role": "system", "content": "你是简洁的本地助手。"},
+    {"role": "user", "content": "Hello，本地模型。"},
+    {"role": "assistant", "content": "你好。"},
+    {"role": "user", "content": "只回复一句话，包含🙂。"}
+  ],
+  "stream": true,
+  "stream_options": {"include_usage": true},
+  "max_tokens": 128,
+  "temperature": 0
+}
