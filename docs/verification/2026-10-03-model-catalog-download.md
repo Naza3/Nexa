@@ -65,6 +65,12 @@
 
 模型下载、native、全workspace与包步骤均未执行，本次不能证明模型运行成功或失败。重试准备仅将该步骤时限从20改为35分钟，全局90分钟和全部检查保持，独立审查通过；重试提交与结果另记。历史Android研究[run37118858122](https://github.com/Naza3/Nexa/actions/runs/37118858122)由根Cargo.lock变化另行触发，现已成功，仅为native研究回归，没有APK或设备验收，与Windows产品验收无关。最新已发送产品仍为43ad5c2。
 
+## 第二次 Windows CI：前端 preview 测试超时
+
+重试提交为`4fa622cc0b97ebabb0251c774d8506a826577a85`，tree为`2fbb9909d3ff9752b48b8bf7dcd061755cb87102`。[Windows run37120635638 / job111195882779](https://github.com/Naza3/Nexa/actions/runs/37120635638/job/111195882779)在前端`preview.test.tsx`单项达到15秒时限后失败，其余104项通过。817ad7d同一preview测试此前在6878ms通过；目前没有证据证明生产竞态。
+
+本次未到达独立桌面Rust图/Tauri Release步骤，不能据此判断新35分钟预算是否足够；模型下载、native、全workspace与包步骤仍未执行。下一次修正限定于preview测试的虚拟时钟：保留完整流程和全局15秒时限，以50ms步进、每阶段3秒虚拟预算明确等待ready与操作完成，并在finally恢复真实时钟。修正后的单例五次重复分别为1878/1973/1809/2024/1777ms，均通过；typecheck、lint、全105项、build及diff检查全退出0，独立审查通过。精确测试文件SHA256为`767103c32b3129974800d91aa07f40c5da93a847e509d6f31f866f5b313dcd02`；嵌套finally覆盖setup/render和unmount失败，恢复原URL、真实时钟与测试wrapper。生产功能源码未因此修改。原Windows超时未在本机复现，目前只能确认已移除该测试的墙钟等待与隐含就绪依赖，修正后的WindowsCI仍待验。
+
 ## 设置回退与当前限制
 
 新增download_source在严格单文件desktop-settings内原子保存，旧文件缺该字段默认MS。旧43ad5c2读取新版设置会拒绝未知key，回退应恢复升级前备份或仅移除download_source并保留其他值；新版“恢复默认”仍写该key，不解决回退。
