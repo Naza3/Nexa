@@ -60,6 +60,7 @@ describe("model onboarding interface", () => {
   });
   it("explains deferred registration without an automatic stop action", async () => {
     const { api, controller } = await mount(proof, { reconcileModels: vi.fn(async () => ({ status: "pending" as const, operation_id: null })) });
+    await act(async () => controller.reconcileModels());
     await waitFor(() => expect(controller.getSnapshot().reconcile_status).toBe("pending"));
     expect(screen.getByText(/发现待登记文件/)).toBeInTheDocument();
     expect(api.stop).not.toHaveBeenCalled();
@@ -87,7 +88,7 @@ describe("download opt-in and saved outcome display", () => {
     expect(screen.getByText("本机加载通过 · 短文本测试失败")).toBeInTheDocument();
     expect(screen.queryByText("下载已取消")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重新下载" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "扫描目录以登记" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "选择已保存文件以登记" })).not.toBeInTheDocument();
   });
   it("offers cancellation of post-save steps without implying file deletion", () => {
     const controller = new DesktopController(makeApi());
@@ -101,7 +102,7 @@ describe("download opt-in and saved outcome display", () => {
     render(<DownloadProgress state={{ ...controller.getSnapshot(), snapshot: stopped(), download: { ...task, result: { ...task.result!, registered: false, local_validation: null, registration_error: { code: "model_scan_cancelled", message: "目录登记已取消。" } } } }} controller={controller} />);
     expect(screen.getByText("自动登记未完成，已保存文件仍保留")).toBeInTheDocument();
     expect(screen.getByText("诊断码：model_scan_cancelled")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "扫描目录以登记" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "选择已保存文件以登记" })).toBeEnabled();
     expect(screen.queryByText("下载失败")).not.toBeInTheDocument();
   });
 });

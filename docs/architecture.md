@@ -2,6 +2,8 @@
 
 日期：2026-10-03。当前范围见 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，具体协议见 [执行规格](../ai-runtime-v0.1-execution-spec.md)，完成事实见 [当前状态](../PROJECT_STATE.md)。旧跨端方案保留于 [历史索引](archive/windows-focus-2026-10-03/INDEX.md)。
 
+> 2026-10-04 模型管理增量按 [ADR0021](decisions/0021-selected-file-model-registration.md)：原生单/多文件零复制定向登记，默认打开/刷新只读索引，不再自动全量扫描；设置下载目录只保存位置，目录扫描仅用户显式维护。schema2可表示跨目录文件来源，原schema1只读兼容；下文早期自动发现/全扫描述不覆盖此最新要求。
+
 ## 1. 产品目标与边界
 
 Nexa 是面向 Windows 桌面 CPU 的本地 LLM runtime。其他应用通过本机 API 调用；桌面 UI 管理模型与服务，聊天辅助验证。首要目标 Windows10 x64 / i5-8400 / 16GB内存，后续按实测覆盖更多 Intel/AMD 桌面 CPU 与 Windows11。

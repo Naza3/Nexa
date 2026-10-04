@@ -273,12 +273,13 @@ pub enum LibraryOperationPhase {
     Enumerating,
     Verifying,
     Committing,
+    Testing,
     Finished,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibraryOperationResult {
     pub library_generation: Uuid,
-    pub directory_id: Uuid,
+    pub directory_id: Option<Uuid>,
     pub registered_files: usize,
     pub available_files: usize,
     #[serde(default)]
@@ -291,6 +292,13 @@ pub struct LibraryFileError {
     pub message: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AddedFileResult {
+    #[serde(flatten)]
+    pub registration: model_store::library::selected::SelectedResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_validation: Option<LocalValidation>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibraryOperationState {
     pub operation_id: Uuid,
     pub status: LibraryOperationStatus,
@@ -301,6 +309,8 @@ pub struct LibraryOperationState {
     pub failed_file_name: Option<String>,
     #[serde(default)]
     pub file_errors: Vec<LibraryFileError>,
+    #[serde(default)]
+    pub files: Vec<AddedFileResult>,
     pub terminal: bool,
     pub result: Option<LibraryOperationResult>,
     pub error: Option<crate::BridgeError>,

@@ -1,5 +1,6 @@
 import { DesktopError, safeError } from "./adapter";
 import { localValidationLabel, validLocalValidation } from "./localValidation";
+import { validAddOperation, validModelSelection } from "./modelSelection";
 import type {
   CatalogEntry,
   DownloadOperation,
@@ -8,6 +9,7 @@ import type {
   DesktopApi,
   ModelPage,
   DirectorySelection,
+  ModelFileSelection,
   LibraryOperation,
   Preferences,
   RuntimeStatus,
@@ -38,9 +40,10 @@ const encoder = new TextEncoder();
 export const byteLength = (value: string) => encoder.encode(value).byteLength;
 // Native responses are still validated before accepting a committed outcome.
 // New fields are optional only for the old complete/failed desktop protocol.
-function validLibraryOperation(value: LibraryOperation): boolean {
+function validLibraryOperation(value: LibraryOperation, configuring = false): boolean {
   const integer = (n: number, maximum: number) => Number.isSafeInteger(n) && n >= 0 && n <= maximum;
   const failures = value.file_errors ?? [];
+  if (configuring && (value.examined_entries !== 0 || value.candidate_files !== 0 || value.verified_files !== 0 || failures.length || value.status === "partial" || !["checking", "committing", "finished"].includes(value.phase))) return false;
   const published = value.status === "completed" || value.status === "partial";
   if (!["running", "completed", "partial", "cancelled", "failed"].includes(value.status) ||
     !["checking", "enumerating", "verifying", "committing", "finished"].includes(value.phase) ||
@@ -62,8 +65,8 @@ function validLibraryOperation(value: LibraryOperation): boolean {
     const rejected = result?.rejected_files ?? 0;
     if (!result || value.error || !result.directory_id || !result.library_generation ||
       !integer(result.registered_files, 64) || !integer(result.available_files, result.registered_files) ||
-      !integer(rejected, 64) || rejected !== failures.length || result.registered_files !== value.verified_files ||
-      value.candidate_files !== result.registered_files + rejected || value.examined_entries > 1024 ||
+      !integer(rejected, 64) || rejected !== failures.length || (!configuring && result.registered_files !== value.verified_files) ||
+      (!configuring && value.candidate_files !== result.registered_files + rejected) || value.examined_entries > 1024 ||
       (value.status === "partial" && (!result.registered_files || !rejected)) ||
       (value.status === "completed" && rejected !== 0)) return false;
   }
@@ -123,6 +126,10 @@ export interface ViewState {
   page_after: string | null;
   models_loading: boolean;
   directory_selection: DirectorySelection | null;
+  model_selection: ModelFileSelection | null;
+  add_auto_test: boolean;
+  library_kind: "maintenance" | "add" | "configure";
+  library_selection: ModelFileSelection | null;
   library: LibraryOperation | null;
   library_phase: "idle" | "starting" | "running" | "stopping" | "recovery";
   messages: SessionMessage[];
@@ -201,6 +208,7 @@ export class DesktopController {
     page_after: null,
     models_loading: false,
     directory_selection: null,
+    model_selection: null, add_auto_test: false, library_kind: "maintenance", library_selection: null,
     library: null,
     library_phase: "idle",
     messages: [],
@@ -211,7 +219,6 @@ export class DesktopController {
   private poll: ReturnType<typeof setTimeout> | undefined;
   private mounted = false;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
-  private initialReconcile = false;
   private lastReconcile = -Infinity;
   private pollEpoch = 0;
   private modelsPromise: Promise<void> | null = null;
@@ -233,6 +240,7 @@ export class DesktopController {
     lastPull: number;
   } | null = null;
   private downloadTask: { id: string | null; catalog_id: string; source: Settings["download_source"]; directory_id: string; cancel: boolean; cancelSent: boolean; reading: boolean; lastPull: number } | null = null;
+  private selectionEpoch = 0;
   private modelsEpoch = 0;
   private nextMessage = 0;
   private modelsLoaded = false;
@@ -259,14 +267,6 @@ export class DesktopController {
     const tick = async () => {
       if (!this.mounted || epoch !== this.pollEpoch) return;
       await this.refresh();
-      if (this.mounted && epoch === this.pollEpoch && this.state.discovery === "unchecked" && this.state.snapshot) {
-        if (this.state.snapshot.model_directory.configured) this.update({ discovery: "configured" });
-        else if (this.state.snapshot.connection === "stopped") await this.discoverDirectory();
-      }
-      if (this.mounted && epoch === this.pollEpoch && !this.initialReconcile && this.state.snapshot?.model_directory.configured) {
-        this.initialReconcile = true;
-        void this.reconcileModels();
-      }
       if (this.mounted && epoch === this.pollEpoch)
         this.poll = setTimeout(tick, 1000);
     };
@@ -276,6 +276,7 @@ export class DesktopController {
       this.mounted = false;
       clearTimeout(this.poll);
       clearTimeout(this.reconcileTimer);
+      void this.discardModelSelection();
       void this.cancel();
       void this.cancelLibrary();
       void this.cancelDownload();
@@ -421,6 +422,41 @@ export class DesktopController {
     if (!this.state.operation && !this.libraryTask)
       this.update({ directory_selection: null });
   };
+  pickModels = async () => {
+    if (this.closing || this.state.operation || this.libraryTask || this.downloadTask || this.stream) return;
+    const epoch = ++this.selectionEpoch;
+    this.update({ operation: "正在选择 GGUF 文件", model_selection: null, add_auto_test: false, error: null, notice: null });
+    try {
+      const selection = await this.api.pickModels();
+      if (epoch !== this.selectionEpoch || this.closing) {
+        if (selection?.selection_id) await this.api.discardModelSelection(selection.selection_id);
+        return;
+      }
+      if (selection && !validModelSelection(selection)) {
+        if (typeof selection.selection_id === "string" && selection.selection_id.length <= 128)
+          await this.api.discardModelSelection(selection.selection_id);
+        throw new DesktopError("invalid_model_selection", "文件选择结果无效，请重新选择 GGUF 文件。");
+      }
+      this.update({ model_selection: selection, ...(selection ? {} : { notice: "已取消文件选择，现有模型索引未改变。" }) });
+    } catch (error) {
+      if (epoch === this.selectionEpoch) this.report(error);
+    } finally {
+      if (this.state.operation === "正在选择 GGUF 文件") this.update({ operation: null });
+    }
+  };
+  discardModelSelection = async () => {
+    const selection = this.state.model_selection;
+    ++this.selectionEpoch;
+    this.update({ model_selection: null, add_auto_test: false });
+    if (!selection) return;
+    try { await this.api.discardModelSelection(selection.selection_id); }
+    catch (error) { this.report(error); }
+  };
+  setAddAutoTest = (enabled: boolean) => {
+    if (this.state.operation || this.libraryTask) return;
+    this.update({ add_auto_test: enabled && this.state.model_selection?.files.length === 1 });
+  };
+  addModels = () => this.beginLibrary("add");
   discoverDirectory = async () => {
     if (this.state.snapshot?.model_directory.configured) {
       this.update({ discovery: "configured" });
@@ -430,6 +466,7 @@ export class DesktopController {
     this.update({ discovery: "checking" });
     await this.beginLibrary("discover");
   };
+  configureDirectory = () => this.beginLibrary("configure");
   applyDirectory = () => this.beginLibrary("apply");
   scanModels = () => this.beginLibrary("scan");
   reconcileModels = async (observeAgain = true) => {
@@ -445,27 +482,28 @@ export class DesktopController {
     }
   };
   refreshModels = async () => {
-    await this.reconcileModels();
     if (!this.libraryTask) await this.loadPage(null);
   };
-  private async beginLibrary(kind: "apply" | "scan" | "discover" | "reconcile") {
-    if (this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
+  private async beginLibrary(kind: "apply" | "scan" | "discover" | "reconcile" | "add" | "configure") {
+    if (this.closing || this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
     if (kind !== "reconcile" && this.state.snapshot?.connection !== "stopped") {
       this.report(
         new DesktopError(
           "runtime_running",
-          "请先显式停止运行服务，再应用目录或重新扫描。仅卸载模型不够。",
+          kind === "add" ? "请先显式停止运行服务，再添加所选模型。仅卸载模型不够。" : "请先显式停止运行服务，再保存默认目录或手动扫描。仅卸载模型不够。",
         ),
       );
       return;
     }
     const selection = this.state.directory_selection;
-    if (kind === "apply" && !selection) return;
+    const files = kind === "add" ? this.state.model_selection : null;
+    if (kind === "add" && !files) return;
+    if ((kind === "apply" || kind === "configure") && !selection) return;
     if (kind === "scan" && !this.state.snapshot?.model_directory.configured) {
       this.report(
         new DesktopError(
           "model_directory_required",
-          "请先选择并应用模型目录。",
+          "请先设置默认下载目录。",
         ),
       );
       return;
@@ -485,6 +523,8 @@ export class DesktopController {
       library_phase: "starting",
       error: null,
       notice: null,
+      library_kind: kind === "add" ? "add" : kind === "configure" ? "configure" : "maintenance",
+      library_selection: files,
       ...(kind === "reconcile" ? { reconcile_status: "checking" as const } : {}),
     });
     try {
@@ -507,7 +547,11 @@ export class DesktopController {
           return;
         }
         handle = result;
-      } else handle = kind === "discover"
+      } else handle = kind === "configure"
+          ? await this.api.configureDirectory(selection!.selection_id)
+          : kind === "add"
+          ? await this.api.addModels(files!.selection_id, this.state.add_auto_test && files!.files.length === 1)
+          : kind === "discover"
           ? await this.api.discoverDirectory()
           : kind === "apply"
           ? await this.api.applyDirectory(selection!.selection_id)
@@ -524,7 +568,8 @@ export class DesktopController {
           "模型库操作未返回有效标识。",
         );
       task.id = handle.operation_id;
-      if (kind === "apply") this.update({ directory_selection: null });
+      if (kind === "apply" || kind === "configure") this.update({ directory_selection: null });
+      if (kind === "add") this.update({ model_selection: null, add_auto_test: false });
       this.update({ library_phase: task.cancel ? "stopping" : "running" });
       if (task.cancel) void this.sendLibraryCancel();
       void this.consumeLibrary();
@@ -532,6 +577,8 @@ export class DesktopController {
       this.libraryTask = null;
       ++this.snapshotEpoch;
       this.update({ library_phase: "idle", ...(kind === "discover" ? { discovery: "failed" as const } : {}), ...(kind === "reconcile" ? { reconcile_status: "failed" as const } : {}) });
+      if (kind === "add" && ["selection_expired", "model_selection_expired", "model_selection_invalid", "model_selection_consumed"].includes(safeError(error).code))
+        this.update({ model_selection: null, add_auto_test: false });
       this.report(error);
     }
   }
@@ -578,7 +625,9 @@ export class DesktopController {
         if (this.libraryTask !== task) return;
         const terminal = progress.status !== "running";
         if (
-          !validLibraryOperation(progress) || progress.operation_id !== task.id ||
+          !(this.state.library_kind === "add" && this.state.library_selection
+            ? validAddOperation(progress, this.state.library_selection)
+            : validLibraryOperation(progress, this.state.library_kind === "configure")) || progress.operation_id !== task.id ||
           progress.terminal !== terminal ||
           (terminal && progress.phase !== "finished") ||
           ((progress.status === "completed" || progress.status === "partial") &&
@@ -610,19 +659,19 @@ export class DesktopController {
         if (progress.status === "completed" || progress.status === "partial") {
           // Scan diagnostics now supersede the historical saved-but-unregistered download notice.
           // A partial scan does not prove this particular file was accepted.
-          if (this.state.download?.status === "completed" && progress.result?.directory_id === this.state.download.directory_id)
+          if (this.state.library_kind === "maintenance" && this.state.download?.status === "completed" && progress.result?.directory_id === this.state.download.directory_id)
             this.update({ download: null });
           ++this.modelsEpoch;
           this.modelsLoaded = false;
           this.update({
             models: { data: [], next_after: null, generation: null },
             page_after: null,
-            notice: progress.status === "partial" ? null : progress.result!.registered_files === 0
-              ? "模型目录已保存，未发现直接子级 GGUF 文件；当前外部索引为空。"
-              : `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个可尝试加载（不代表已实测）。本机测试结果以模型列表记录为准。`,
+            notice: this.state.library_kind === "configure" ? "默认下载目录已保存，原有模型索引保留；未扫描新目录。" : this.state.library_kind === "add" ? null : progress.status === "partial" ? null : progress.result!.registered_files === 0
+              ? "默认目录扫描已结束，本次没有登记新的候选；已显式添加的模型保留。"
+              : `默认目录扫描完成，本次登记 ${progress.result!.registered_files} 个候选，其中 ${progress.result!.available_files} 个可尝试加载（不代表已实测）。已显式添加的模型保留，本机测试结果以模型列表记录为准。`,
           });
         } else if (progress.status === "cancelled")
-          this.update({ notice: "模型库操作已取消，原目录与索引保持不变。" });
+          this.update({ notice: this.state.library_kind === "add" ? "添加已取消，已登记结果以逐文件记录为准；源文件未改动。" : "模型库操作已取消，原目录与索引保持不变。" });
         else this.report(progress.error);
         this.update({
           library_phase: "idle",
@@ -763,8 +812,8 @@ export class DesktopController {
           this.update({ notice: `${value.result?.registered
             ? "模型文件已保存并自动登记。本机测试结果以模型列表记录为准。"
             : value.result?.registration_error
-              ? "模型文件已保存，但自动登记未完成；请勿重复下载，可检查登记诊断后重试扫描。"
-              : "模型文件已保存，尚未登记。请重新扫描目录。"}${value.result?.cleanup_warning ? "部分下载文件清理未确认，请勿重复下载。" : ""}` });
+              ? "模型文件已保存，但自动登记未完成；请勿重复下载，可检查登记诊断后用“添加模型”选择已保存文件。"
+              : "模型文件已保存，尚未登记。请用“添加模型”选择已保存文件。"}${value.result?.cleanup_warning ? "部分下载文件清理未确认，请勿重复下载。" : ""}` });
           ++this.modelsEpoch;
           this.modelsLoaded = false;
           if (this.modelsPromise) await this.modelsPromise;
@@ -914,9 +963,14 @@ export class DesktopController {
       await this.refresh();
     });
   close = async () => {
-    if (this.closing || (this.state.operation && !this.state.testing_model)) return;
+    if (this.closing || (this.state.operation && !this.state.testing_model && this.state.operation !== "正在选择 GGUF 文件")) return;
     this.closing = true;
-    try { await this.api.close(); }
+    try {
+      const selected = !!this.state.model_selection;
+      const discarded = this.discardModelSelection();
+      if (selected) await discarded;
+      await this.api.close();
+    }
     catch (error) { this.report(error); }
     finally { this.closing = false; }
   };

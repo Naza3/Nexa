@@ -7,6 +7,8 @@
 
 > 本文定义Windows runtime契约与后续验收，不代表所有规划已经实现。ADR0015开放模型字段/行为已由50c9d41 WindowsCI固定GGUF回归并发送，用户目标机待验；ADR0016混合目录与诊断源码已冻结、本机合成回归/独立审查通过，WindowsCI/整包及交付仍待完成。35bfd85/389eeef不能追溯获得新行为。实现/真实模型/CI/目标设备结果见当前状态；旧混合平台v1.3保留于历史快照，不再作为当前要求。
 
+> 2026-10-04 模型登记行为按 [ADR0021](docs/decisions/0021-selected-file-model-registration.md)：添加仅核验选中文件、无复制，默认不自动全库扫描；下载目录配置与明确扫描分离，schema2兼容读取旧登记。实施/验收见当前状态。
+
 本文负责runtime具体契约；[架构](docs/architecture.md)负责职责，[ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)负责范围，[路线](docs/roadmap.md)负责W00–W05依赖，[当前状态](PROJECT_STATE.md)记录事实。deepseek harness接入新增门槛见[harness契约](docs/windows-harness-contract.md)。
 
 ## 1. 目标与冻结决策

@@ -631,3 +631,440 @@ fn metadata_budget_failure_after_content_rejection_aborts_the_whole_scan() {
     assert_eq!(control.progress().verified_files, 1);
     assert!(!data.path().join(LIBRARY_FILE).exists());
 }
+
+#[test]
+fn explicit_files_preserve_sources_and_never_enumerate_or_hash_neighbors() {
+    use model_store::library::selected::{SelectedFile, SelectedStatus, register_selected};
+    use std::sync::Mutex;
+    let data = tempfile::tempdir().unwrap();
+    let default = tempfile::tempdir().unwrap();
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    fs::write(default.path().join("existing.gguf"), gguf()).unwrap();
+    let old = scan(data.path(), default.path(), None);
+    let old_id = old.models[0].manifest.id.clone();
+    let path1 = first.path().join("same.gguf");
+    let path2 = second.path().join("same.gguf");
+    fs::write(&path1, gguf()).unwrap();
+    fs::write(&path2, gguf()).unwrap();
+    fs::write(first.path().join("broken.gguf"), b"not gguf").unwrap();
+    let huge = fs::File::create(first.path().join("unselected-too-large.gguf")).unwrap();
+    huge.set_len(model_store::library::MAX_MODEL_BYTES + 1)
+        .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("missing", first.path().join("unselected-symlink.gguf")).unwrap();
+    // Even corrupting an old registered file cannot cause hashing in an add.
+    fs::write(default.path().join("existing.gguf"), b"old no longer valid").unwrap();
+    let results = Mutex::new(vec![]);
+    let registered = register_selected(
+        data.path(),
+        Some(&old),
+        vec![
+            SelectedFile::open(&path1).unwrap(),
+            SelectedFile::open(&path2).unwrap(),
+        ],
+        &ScanControl::default(),
+        &results,
+    )
+    .unwrap();
+    assert_eq!(registered.library.models.len(), 3);
+    assert_eq!(registered.library.directory, old.directory);
+    assert!(registered.library.entry(&old_id).is_some());
+    assert!(
+        registered
+            .files
+            .iter()
+            .all(|file| file.status == SelectedStatus::Registered)
+    );
+    let ids: Vec<_> = registered
+        .files
+        .iter()
+        .map(|f| f.model_id.clone().unwrap())
+        .collect();
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(fs::read(&path1).unwrap(), gguf());
+    assert!(!data.path().join("models").exists());
+    let again = register_selected(
+        data.path(),
+        Some(&registered.library),
+        vec![
+            SelectedFile::open(&path1).unwrap(),
+            SelectedFile::open(&path1).unwrap(),
+        ],
+        &ScanControl::default(),
+        &Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert_eq!(again.library.models.len(), 3);
+    assert!(
+        again
+            .files
+            .iter()
+            .all(|f| f.status == SelectedStatus::AlreadyRegistered
+                && f.model_id.as_ref() == Some(&ids[0]))
+    );
+}
+
+#[test]
+fn explicit_only_library_and_legacy_schema_are_strict_and_compatible() {
+    use model_store::library::selected::{SelectedFile, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("one.gguf");
+    fs::write(&path, gguf()).unwrap();
+    let selected = register_selected(
+        data.path(),
+        None,
+        vec![SelectedFile::open(&path).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert!(selected.library.info().is_none());
+    assert!(selected.library.directory.is_none());
+    assert!(selected.library.models[0].source.is_some());
+    fs::write(
+        data.path().join(LIBRARY_FILE),
+        selected.library.encode().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        model_store::inventory::read(data.path())
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    let mut legacy = scan(data.path(), source.path(), None);
+    legacy.schema_version = 1;
+    let bytes = legacy.encode().unwrap();
+    fs::write(data.path().join(LIBRARY_FILE), &bytes).unwrap();
+    let read = ModelLibrary::read(data.path()).unwrap().unwrap();
+    assert_eq!(read.schema_version, 1);
+    assert_eq!(fs::read(data.path().join(LIBRARY_FILE)).unwrap(), bytes);
+    let mut malformed = selected.library.clone();
+    malformed.schema_version = 1;
+    assert!(malformed.encode().is_err());
+    malformed = selected.library.clone();
+    malformed.directory = Some(source.path().to_owned());
+    assert!(malformed.encode().is_err());
+    malformed = selected.library.clone();
+    malformed.schema_version = 99;
+    assert!(malformed.encode().is_err());
+    malformed = selected.library.clone();
+    malformed.models[0].manifest.relative_file = path.to_string_lossy().into();
+    assert!(malformed.encode().is_err());
+}
+
+#[test]
+fn explicit_content_rejection_is_partial_but_cancellation_timeout_and_changes_abort() {
+    use model_store::library::selected::{SelectedFile, SelectedStatus, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let good = source.path().join("good.gguf");
+    let bad = source.path().join("bad.gguf");
+    fs::write(&good, gguf()).unwrap();
+    fs::write(&bad, b"invalid").unwrap();
+    let partial = register_selected(
+        data.path(),
+        None,
+        vec![
+            SelectedFile::open(&good).unwrap(),
+            SelectedFile::open(&bad).unwrap(),
+        ],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert_eq!(partial.library.models.len(), 1);
+    assert_eq!(partial.files[1].status, SelectedStatus::Rejected);
+    for control in [ScanControl::with_timeout(Duration::ZERO), {
+        let c = ScanControl::default();
+        c.cancel();
+        c
+    }] {
+        assert!(
+            register_selected(
+                data.path(),
+                None,
+                vec![SelectedFile::open(&good).unwrap()],
+                &control,
+                &std::sync::Mutex::new(vec![])
+            )
+            .is_err()
+        );
+    }
+    assert!(!data.path().join(LIBRARY_FILE).exists());
+    #[cfg(unix)]
+    {
+        let file = SelectedFile::open(&good).unwrap();
+        fs::write(&good, b"changed after selection").unwrap();
+        assert_eq!(
+            register_selected(
+                data.path(),
+                None,
+                vec![file],
+                &ScanControl::default(),
+                &std::sync::Mutex::new(vec![])
+            )
+            .err()
+            .unwrap()
+            .code,
+            ErrorCode::ModelFileChanged
+        );
+    }
+}
+
+#[test]
+fn directory_maintenance_keeps_explicit_links_and_former_directory_registrations() {
+    use model_store::library::selected::{SelectedFile, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let path = first.path().join("one.gguf");
+    fs::write(&path, gguf()).unwrap();
+    fs::write(second.path().join("two.gguf"), gguf()).unwrap();
+    let old = scan(data.path(), first.path(), None);
+    let selected = register_selected(
+        data.path(),
+        Some(&old),
+        vec![SelectedFile::open(&path).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert_eq!(selected.library.models.len(), 1);
+    assert_eq!(
+        selected.library.models[0].manifest.id,
+        old.models[0].manifest.id
+    );
+    let library = selected.library.clone();
+    drop(selected);
+    let maintained = scan(data.path(), first.path(), Some(&library));
+    assert!(maintained.models[0].source.is_some());
+    fs::remove_file(path).unwrap();
+    let absent = scan(data.path(), first.path(), Some(&maintained));
+    assert_eq!(absent.models.len(), 1);
+    let replaced = scan(data.path(), second.path(), Some(&absent));
+    assert_eq!(replaced.models.len(), 2);
+    assert!(replaced.entry(&old.models[0].manifest.id).is_some());
+}
+
+#[test]
+fn selecting_exact_managed_source_is_idempotent_without_hashing_other_models() {
+    use model_store::library::selected::{SelectedFile, SelectedStatus, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("source.gguf");
+    fs::write(&path, gguf()).unwrap();
+    let store = ModelStore::open(data.path()).unwrap();
+    let id = ModelId::new("managed-one").unwrap();
+    let manifest = store
+        .import_file(
+            &path,
+            ImportRequest::new(id.clone(), "Managed one", ModelSource::local("synthetic")),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    drop(store);
+    // An unrelated invalid managed directory must not be read by exact lookup.
+    let unrelated = data.path().join("models/unselected");
+    fs::create_dir(&unrelated).unwrap();
+    fs::write(
+        unrelated.join("manifest.json"),
+        b"invalid unrelated manifest",
+    )
+    .unwrap();
+    let managed = data.path().join("models/managed-one/model.gguf");
+    let registration = register_selected(
+        data.path(),
+        None,
+        vec![SelectedFile::open(&managed).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert!(registration.library.models.is_empty());
+    assert_eq!(
+        registration.files[0].status,
+        SelectedStatus::AlreadyRegistered
+    );
+    assert_eq!(registration.files[0].model_id.as_ref(), Some(&id));
+    drop(registration);
+    let mut changed = manifest;
+    changed.sha256 = "0".repeat(64);
+    fs::write(
+        data.path().join("models/managed-one/manifest.json"),
+        serde_json::to_vec(&changed).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        register_selected(
+            data.path(),
+            None,
+            vec![SelectedFile::open(&managed).unwrap()],
+            &ScanControl::default(),
+            &std::sync::Mutex::new(vec![])
+        )
+        .err()
+        .unwrap()
+        .code,
+        ErrorCode::ModelFileChanged
+    );
+    // A same-named source outside the exact managed location remains external.
+    let outside = source.path().join("model.gguf");
+    fs::write(&outside, gguf()).unwrap();
+    let external = register_selected(
+        data.path(),
+        None,
+        vec![SelectedFile::open(&outside).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert_eq!(external.library.models.len(), 1);
+    assert_ne!(external.files[0].model_id.as_ref(), Some(&id));
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_hard_links_survive_read_upgrade_and_directory_replacement_is_bound() {
+    use model_store::library::selected::{SelectedFile, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let source = parent.path().join("source");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("one.gguf"), gguf()).unwrap();
+    fs::hard_link(source.join("one.gguf"), source.join("alias.gguf")).unwrap();
+    let mut legacy = scan(data.path(), &source, None);
+    legacy.schema_version = 1;
+    let saved = legacy.encode().unwrap();
+    fs::write(data.path().join(LIBRARY_FILE), saved).unwrap();
+    let legacy = ModelLibrary::read(data.path()).unwrap().unwrap();
+    assert_eq!(legacy.models.len(), 2);
+    let selected = register_selected(
+        data.path(),
+        Some(&legacy),
+        vec![SelectedFile::open(&source.join("one.gguf")).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert_eq!(selected.library.models.len(), 2);
+    drop(selected);
+    fs::rename(&source, parent.path().join("old")).unwrap();
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("one.gguf"), gguf()).unwrap();
+    assert_eq!(
+        SelectedFile::open_configured(&legacy, "one.gguf")
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::ModelFileChanged
+    );
+    let selected = register_selected(
+        data.path(),
+        Some(&legacy),
+        vec![SelectedFile::open(&source.join("one.gguf")).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert_eq!(selected.library.models.len(), 3);
+}
+
+#[test]
+fn reselecting_replaced_file_updates_one_source_and_preserves_id() {
+    use model_store::library::selected::{SelectedFile, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("same.gguf");
+    fs::write(&path, gguf()).unwrap();
+    let first = register_selected(
+        data.path(),
+        None,
+        vec![SelectedFile::open(&path).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    let old = first.library.clone();
+    let id = old.models[0].manifest.id.clone();
+    drop(first);
+    for replace_inode in [false, true] {
+        if replace_inode {
+            fs::remove_file(&path).unwrap();
+        }
+        let mut bytes = gguf();
+        let last = bytes.len() - 1;
+        bytes[last] = if replace_inode { 2 } else { 1 };
+        fs::write(&path, bytes).unwrap();
+        let registered = register_selected(
+            data.path(),
+            Some(&old),
+            vec![SelectedFile::open(&path).unwrap()],
+            &ScanControl::default(),
+            &std::sync::Mutex::new(vec![]),
+        )
+        .unwrap();
+        assert_eq!(registered.library.models.len(), 1);
+        assert_eq!(registered.library.models[0].manifest.id, id);
+        assert_ne!(
+            registered.library.models[0].manifest.sha256,
+            old.models[0].manifest.sha256
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_symlink_layout_cannot_adopt_an_external_file() {
+    use model_store::library::selected::{SelectedFile, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let directory = outside.path().join("fake-managed-id");
+    fs::create_dir(&directory).unwrap();
+    let file = directory.join("model.gguf");
+    fs::write(&file, gguf()).unwrap();
+    std::os::unix::fs::symlink(outside.path(), data.path().join("models")).unwrap();
+    let outcome = register_selected(
+        data.path(),
+        None,
+        vec![SelectedFile::open(&file).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    );
+    assert_eq!(
+        outcome.err().unwrap().code,
+        ErrorCode::ModelDirectoryUnsupported
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_hard_link_alias_keeps_id_and_uses_the_correct_selected_basename() {
+    use model_store::library::selected::{SelectedFile, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let a = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let original = a.path().join("original.gguf");
+    let alias = b.path().join("alias.gguf");
+    fs::write(&original, gguf()).unwrap();
+    fs::hard_link(&original, &alias).unwrap();
+    let old = scan(data.path(), a.path(), None);
+    let added = register_selected(
+        data.path(),
+        Some(&old),
+        vec![SelectedFile::open(&alias).unwrap()],
+        &ScanControl::default(),
+        &std::sync::Mutex::new(vec![]),
+    )
+    .unwrap();
+    assert_eq!(added.library.models.len(), 1);
+    assert_eq!(
+        added.library.models[0].manifest.id,
+        old.models[0].manifest.id
+    );
+    assert_eq!(added.library.models[0].manifest.relative_file, "alias.gguf");
+    assert_eq!(added.library.availability(&added.library.models[0]), None);
+}

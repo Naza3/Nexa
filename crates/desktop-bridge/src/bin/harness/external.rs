@@ -174,7 +174,7 @@ pub(super) async fn run(
             .effective
             .as_ref()
             .is_some_and(|value| {
-                value.directory_id == rescanned.directory_id
+                Some(value.directory_id) == rescanned.directory_id
                     && value.library_generation == rescanned.library_generation
             }),
     )?;

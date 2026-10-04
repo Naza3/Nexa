@@ -247,7 +247,7 @@ impl DesktopBridge {
             .map_err(store_error)?
             .ok_or_else(|| BridgeError::new("model_directory_required"))?;
         if let Some(validate) = &self.directory_validator {
-            validate(&library.directory)?;
+            validate(library.configured_directory().map_err(store_error)?)?;
         }
         let sidecar = self.verified_download_sidecar()?;
         let id = Uuid::new_v4();
@@ -259,8 +259,14 @@ impl DesktopBridge {
                 catalog_id,
                 source,
                 file_name: entry.file_name.clone(),
-                directory_id: library.directory_id,
-                target_display_path: library.directory.to_string_lossy().into_owned(),
+                directory_id: library
+                    .directory_id
+                    .ok_or_else(|| BridgeError::new("model_directory_required"))?,
+                target_display_path: library
+                    .configured_directory()
+                    .map_err(store_error)?
+                    .to_string_lossy()
+                    .into_owned(),
                 downloaded_bytes: 0,
                 attempt: 1,
                 total_bytes: entry.size_bytes,
@@ -342,25 +348,39 @@ impl DesktopBridge {
                 .map_err(store_error)?
                 .ok_or_else(|| BridgeError::new("model_directory_required"))?;
             let state = task.state.lock().unwrap().clone();
-            if previous.directory_id != state.directory_id {
+            if previous.directory_id != Some(state.directory_id) {
                 return Err(BridgeError::new("model_library_changed"));
             }
-            let scanned = model_store::library::rescan_directory(&root, &previous, &control)
-                .map_err(store_error)?;
-            let library = scanned
-                .library()
-                .ok_or_else(|| BridgeError::new("model_scan_no_usable_files"))?;
-            let target = library
-                .models
-                .iter()
-                .find(|entry| {
-                    entry.manifest.relative_file == state.file_name && entry.manifest.sha256 == sha
+            let selected = model_store::library::selected::SelectedFile::open_configured(
+                &previous,
+                &state.file_name,
+            )
+            .map_err(store_error)?;
+            let results = Mutex::new(Vec::new());
+            let scanned = model_store::library::selected::register_selected(
+                &root,
+                Some(&previous),
+                vec![selected],
+                &control,
+                &results,
+            )
+            .map_err(store_error)?;
+            let target = scanned
+                .files
+                .first()
+                .and_then(|file| file.model_id.clone())
+                .filter(|id| {
+                    scanned
+                        .library
+                        .entry(id)
+                        .is_some_and(|entry| entry.manifest.sha256 == sha)
                 })
-                .map(|entry| entry.manifest.id.clone());
-            let bytes = library.encode().map_err(store_error)?;
+                .ok_or_else(|| BridgeError::new("model_scan_target_rejected"))?;
+            let bytes = scanned.library.encode().map_err(store_error)?;
+            scanned.check().map_err(store_error)?;
             control.begin_commit().map_err(store_error)?;
             settings::atomic_replace(&root.join(model_store::library::LIBRARY_FILE), &bytes)?;
-            target.ok_or_else(|| BridgeError::new("model_scan_target_rejected"))
+            Ok(target)
         })
         .await
         .map_err(|_| BridgeError::new("model_library_write_failed"))?
@@ -780,10 +800,14 @@ mod tests {
             .unwrap();
             let task = task_for(&catalog().unwrap().entries.remove(0));
             let filename = task.state.lock().unwrap().file_name.clone();
-            task.state.lock().unwrap().directory_id = library.directory_id;
+            task.state.lock().unwrap().directory_id = library.directory_id.unwrap();
             let bytes = tiny_gguf();
             let target = source.path().join(&filename);
             fs::write(&target, &bytes).unwrap();
+            fs::write(source.path().join("unselected-broken.gguf"), b"invalid").unwrap();
+            let huge = fs::File::create(source.path().join("unselected-too-large.gguf")).unwrap();
+            huge.set_len(model_store::library::MAX_MODEL_BYTES + 1)
+                .unwrap();
             assert!(task.control.begin_publish());
             if cancelled {
                 task.cancel();

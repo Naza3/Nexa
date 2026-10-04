@@ -11,6 +11,7 @@ mod sse;
 pub use dto::*;
 pub use error::{BridgeError, Result};
 use hyper::Method;
+pub use model_store::library::selected::{SelectedFile, validate_selection};
 use runtime_api::{
     Config,
     token::{init_private_token, write_private_new},
@@ -41,12 +42,6 @@ pub struct StartupDiagnostics {
     pub process_exit_code: Option<i32>,
 }
 
-type CandidateObservation = (
-    Vec<(String, model_store::library::FileIdentity)>,
-    std::time::Instant,
-    bool,
-);
-
 pub struct DesktopBridge {
     startup_diagnostics: Mutex<StartupDiagnostics>,
     root: PathBuf,
@@ -67,7 +62,6 @@ pub struct DesktopBridge {
     download_poll: AsyncMutex<()>,
     validation_build: Mutex<Option<(Vec<model_store::library::FileIdentity>, String)>>,
     list_generation: Mutex<Option<(uuid::Uuid, uuid::Uuid)>>,
-    candidate_observation: Mutex<Option<CandidateObservation>>,
 }
 impl DesktopBridge {
     /// Paths come from the native shell's verified package layout, never invoke.
@@ -103,7 +97,6 @@ impl DesktopBridge {
             download_poll: AsyncMutex::new(()),
             validation_build: Mutex::new(None),
             list_generation: Mutex::new(None),
-            candidate_observation: Mutex::new(None),
         })
     }
     pub fn startup_diagnostics(&self) -> StartupDiagnostics {

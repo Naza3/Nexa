@@ -64,11 +64,11 @@ describe("download ownership and directory discovery", () => {
     await controller.discoverDirectory(); expect(api.discoverDirectory).not.toHaveBeenCalled();
     expect(controller.getSnapshot().snapshot?.model_directory.configured?.directory_id).toBe("directory-1");
   });
-  it("discovers an absent configuration once and gives an explicit no-folder state", async () => {
+  it("does not discover or scan an absent configuration during startup", async () => {
     const value = stopped(); value.model_directory = { configured: null, effective: null, state: "default" };
     const { api, controller } = await create({ snapshot: vi.fn(async () => value) });
     const unmount = controller.mount(); await vi.advanceTimersByTimeAsync(2001);
-    expect(api.discoverDirectory).toHaveBeenCalledTimes(1); expect(controller.getSnapshot().discovery).toBe("none"); unmount();
+    expect(api.discoverDirectory).not.toHaveBeenCalled(); expect(api.reconcileModels).not.toHaveBeenCalled(); expect(api.scanModels).not.toHaveBeenCalled(); expect(controller.getSnapshot().discovery).toBe("unchecked"); unmount();
   });
   it("rejects identity changes and regressing byte counters", async () => {
     for (const patch of [{ source: "huggingface" as const }, { downloaded_bytes: 1 }]) {

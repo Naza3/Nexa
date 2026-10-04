@@ -139,48 +139,11 @@ impl DesktopBridge {
             result=self.json(Method::POST,"/runtime/model-test",Some(&body))=>result,
         }
     }
-    /// Two stable, spaced observations; a refresh does no model hashing unless
-    /// previously unseen completed files really need the existing transaction.
+    /// Compatibility endpoint: ordinary refresh is strictly read-only and never
+    /// discovers, hashes, or registers unselected files.
     pub fn models_reconcile(self: &Arc<Self>) -> Result<ModelsReconcile> {
         self.open()?;
-        if self.library_active().is_some() {
-            return Ok(reconcile("unchanged", None));
-        }
-        let Some(library) = model_store::library::ModelLibrary::read(&self.root)
-            .map_err(|e| BridgeError::new(e.code.as_str()))?
-        else {
-            return Ok(reconcile("unchanged", None));
-        };
-        let observation = model_store::library::observe_candidates(&library)
-            .map_err(|e| BridgeError::new(e.code.as_str()))?;
-        if observation.is_empty() {
-            return Ok(reconcile("unchanged", None));
-        }
-        if matches!(
-            runtime_cli::instance::InstanceLock::observe(&self.root)
-                .map_err(|_| BridgeError::new("instance_unavailable"))?,
-            runtime_cli::instance::InstanceObservation::Running
-        ) {
-            return Ok(reconcile("pending", None));
-        }
-        let mut previous = self.candidate_observation.lock().unwrap();
-        let now = std::time::Instant::now();
-        match previous.as_ref() {
-            Some((old, _, true)) if old == &observation => return Ok(reconcile("unchanged", None)),
-            Some((old, since, false))
-                if old == &observation && since.elapsed() >= Duration::from_secs(2) => {}
-            Some((old, _, _)) if old == &observation => return Ok(reconcile("observing", None)),
-            _ => {
-                *previous = Some((observation, now, false));
-                return Ok(reconcile("observing", None));
-            }
-        }
-        // Failed scans are not repeated automatically until directory metadata
-        // changes. Explicit scan remains the retry control.
-        let handle = self.models_scan()?;
-        *previous = Some((observation, now, true));
-        drop(previous);
-        Ok(reconcile("started", Some(handle.operation_id)))
+        Ok(reconcile("unchanged", None))
     }
 }
 pub(crate) fn check_load_observation(value: &Value) -> Result<()> {
@@ -317,7 +280,7 @@ mod tests {
         assert_eq!(observed[0].0, "good.gguf");
     }
     #[tokio::test]
-    async fn reconcile_is_stable_bounded_and_failed_admission_can_retry() {
+    async fn reconcile_is_read_only_even_with_unregistered_files() {
         let root = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
         let scan = model_store::library::scan_directory(
@@ -327,31 +290,18 @@ mod tests {
             &model_store::library::ScanControl::default(),
         )
         .unwrap();
-        let library = scan.library().unwrap().clone();
-        drop(scan);
-        fs::write(
-            root.path().join(model_store::library::LIBRARY_FILE),
-            library.encode().unwrap(),
-        )
-        .unwrap();
-        fs::write(source.path().join("new.gguf"), b"not-a-valid-model").unwrap();
+        let bytes = scan.library().unwrap().encode().unwrap();
+        fs::write(root.path().join(model_store::library::LIBRARY_FILE), &bytes).unwrap();
+        fs::write(source.path().join("new.gguf"), b"invalid").unwrap();
         let b = Arc::new(bridge(root.path()));
-        assert_eq!(b.models_reconcile().unwrap().status, "observing");
-        assert_eq!(b.models_reconcile().unwrap().status, "observing");
-        b.candidate_observation.lock().unwrap().as_mut().unwrap().1 =
-            std::time::Instant::now() - Duration::from_secs(3);
-        let work = b.work.lock().await;
-        assert_eq!(b.models_reconcile().unwrap_err().code, "desktop_busy");
-        drop(work);
-        let started = b.models_reconcile().unwrap();
-        assert_eq!(started.status, "started");
-        loop {
-            let state = b.library_next(started.operation_id.unwrap()).await.unwrap();
-            if state.terminal {
-                break;
-            }
+        for _ in 0..3 {
+            assert_eq!(b.models_reconcile().unwrap().status, "unchanged");
         }
-        assert_eq!(b.models_reconcile().unwrap().status, "unchanged");
+        assert!(b.library_active().is_none());
+        assert_eq!(
+            fs::read(root.path().join(model_store::library::LIBRARY_FILE)).unwrap(),
+            bytes
+        );
         assert!(!root.path().join("config.toml").exists());
     }
     #[tokio::test]

@@ -15,6 +15,7 @@
 | [发现/双源下载ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md) | 默认EXE/models发现、MS/HF固定目录、保存与扫描分离；33f0e17已发送，通用引擎另评估 |
 | [aria2下载引擎ADR0018](docs/decisions/0018-generic-download-engine-candidate.md) | 已采纳受控aria2；工作树监督/发布/组件集成与下载socket/SChannel边界，最终Windows及新包待验 |
 | [模型使用流程ADR0019](docs/decisions/0019-model-onboarding-and-local-validation.md) | 自动登记、服务关闭时浏览、本机加载/短生成证据与不抢占的自动动作；实施/验收状态见当前状态 |
+| [选中文件添加ADR0021](docs/decisions/0021-selected-file-model-registration.md) | 原生单/多文件零复制定向登记，schema2跨目录来源、默认不自动全扫；实施中 |
 | [工具契约草案](docs/windows-tools-contract.md) | 生产tools尚未实现；T0已有无模型parser观察并定位严格完整性/schema/普通文本缺口 |
 | [构建锁](docs/build-lock.md) / [模型矩阵](docs/model-matrix.md) | 固定工具链/llama与精确模型验证证据，非运行许可名单 |
 | [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |

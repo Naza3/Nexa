@@ -1,5 +1,15 @@
 # Nexa 当前状态
 
+## 2026-10-04 选中文件添加模型（提交前验证快照）
+
+用户明确选择单/多文件添加、取消默认自动全库扫描，并要求依次完成 LAN、添加模型、基础测试记录/按钮反馈、高级文件校验超时及不自动卸载。LAN源码已在独立 `codex/nexa-lan-api` 提交 `c216722fd6913208b0529cf3db247729ab7f4019`，源测试421/0/7、前端247、Python153+2skip通过，WindowsLAN尚未验；本分支不夹带该源码。
+
+当前 `codex/nexa-add-model` 从最新 main `6167d07cb523cc838e6a6fb082e660d56e9d7f79` 新建。按[ADR0021](docs/decisions/0021-selected-file-model-registration.md)实现schema2跨目录显式文件来源、原生单/多文件选择、仅选中payload校验、默认只读浏览、下载定向登记和手动全量维护；源码实现冻结；全workspace/all-targets 40组423通过/0失败/7既有忽略，完整clippy/fmt、前端230项/typecheck/lint/build、Python155项（153通过/2平台跳过）通过；独立两crate169、壳31与UI118均为各自回归子集不累加。最终Windows壳及两crate交叉检查通过，原生选择器/写删锁与真实GGUF未在目标Windows执行。详见[本轮验证](docs/verification/2026-10-04-selected-model-registration.md)，联合包待其余切片完成后构建。
+
+已知独立后续修复：Windows `ModelStore::open` 的 canonical VerbatimDisk 数据目录被旧外部目录语法拒绝，使基础测试scope/记录失败后被界面隐藏为未测；按钮也只依赖历史validated。这里只读确认，尚未修改或Windows实机复现。MiniCPM具体模型仍缺用户来源/错误码，不将文件名当作不支持结论。
+
+各片完成后统一回归、构建新Windows测试包；不在GitHub Actions编译Rust，不修改用户防火墙。最新已交付仍1845f93包（源码已由9f836d5并入main），Windows新流程待用户反馈；下文历史快照不覆盖本节最新顺序。
+
 ## 2026-10-04 模型自动登记与本机基础测试（提交前验证快照）
 
 本节为最新状态，覆盖下文历史“当前/待交付”安排。用户确认已交付 `688fe5c` 完整交叉测试包可以下载模型；未给出具体模型/源/hash，不能扩展为全部下载源或 Windows 完整验收通过。此前包为 18,674,810 字节，SHA256 `f7edd5c8ab204d0a326905aca5d98d0cb97eef5706350d94a6e65f6ffea1bd6e`。

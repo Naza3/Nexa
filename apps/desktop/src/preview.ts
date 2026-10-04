@@ -88,6 +88,7 @@ export function createPreviewApi(): DesktopApi {
   let libraryId = 0;
   let libraryPolls = 0;
   let libraryCancelled = false;
+  let configureOnly = false;
   let libraryTerminal: LibraryOperation | null = null;
   let pendingDirectory: DirectoryIdentity | null = null;
   const pick = {
@@ -99,6 +100,7 @@ export function createPreviewApi(): DesktopApi {
       throw new DesktopError("runtime_running", "请先显式停止运行服务。");
     if (!apply && !snapshot.model_directory.configured)
       throw new DesktopError("model_directory_required", "请先选择目录。");
+    configureOnly = false;
     libraryId++;
     libraryPolls = 0;
     libraryCancelled = false;
@@ -136,6 +138,10 @@ export function createPreviewApi(): DesktopApi {
       return clone();
     },
     pickDirectory: async () => pick,
+    pickModels: async () => { throw new DesktopError("preview_only", "请在原生桌面中选择 GGUF 文件，浏览器预览不读取真实文件。"); },
+    discardModelSelection: async () => ({ discarded: true }),
+    addModels: async () => { throw new DesktopError("preview_only", "开发预览不登记真实模型。"); },
+    configureDirectory: async () => { const handle = startLibrary(true); configureOnly = true; return handle; },
     applyDirectory: async () => startLibrary(true),
     scanModels: async () => startLibrary(false),
     reconcileModels: async () => ({ status: "unchanged", operation_id: null }),
@@ -143,6 +149,15 @@ export function createPreviewApi(): DesktopApi {
     libraryNext: async (operation_id) => {
       await wait(70);
       if (libraryTerminal) return libraryTerminal;
+      if (configureOnly) {
+        const identity = pendingDirectory!;
+        if (!libraryCancelled) {
+          snapshot.model_directory = { configured: identity, effective: null, state: "stopped" };
+          catalogGeneration = identity.library_generation;
+        }
+        libraryTerminal = { operation_id, examined_entries: 0, candidate_files: 0, verified_files: 0, failed_file_name: null, error: null, terminal: true, phase: "finished", status: libraryCancelled ? "cancelled" : "completed", result: libraryCancelled ? null : { library_generation: identity.library_generation, directory_id: identity.directory_id, registered_files: models.length, available_files: models.length, rejected_files: 0 } };
+        return libraryTerminal;
+      }
       libraryPolls++;
       const base = {
         operation_id,

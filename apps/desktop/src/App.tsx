@@ -10,6 +10,7 @@ import {
 import type { ViewState } from "./controller";
 import type { Preferences, RuntimeStatus, Settings } from "./types";
 import { ModelDownloads, DownloadProgress } from "./ModelDownloads";
+import { ModelSelectionPanel, AddModelProgress } from "./ModelAdd";
 import { modelCompatibility } from "./modelCompatibility";
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
@@ -106,6 +107,8 @@ function statusLabel(state: ViewState) {
   if (state.download_phase === "recovery") return "下载状态待确认";
   if (state.download_phase === "stopping") return "正在取消下载";
   if (state.download_phase !== "idle") return "正在下载模型";
+  if (state.library_kind === "add" && state.library_phase !== "idle") return state.library_phase === "recovery" ? "添加结果待确认" : state.library_phase === "stopping" ? "正在取消添加" : state.library?.phase === "testing" ? "模型已登记 · 正在测试" : "正在添加所选模型";
+  if (state.library_kind === "configure" && state.library_phase === "running") return "正在保存默认下载目录";
   if (state.library_phase === "starting") return "正在提交模型库操作";
   if (state.library_phase === "running") return "正在核验模型目录";
   if (state.library_phase === "stopping") return "正在取消模型库操作";
@@ -290,13 +293,13 @@ function DirectoryStateNotice({ state }: { state: ViewState }) {
   const directory = state.snapshot?.model_directory;
   if (!directory) return null;
   const explanations = {
-    default: "未设置外部目录，原有管理模型保持可用。",
-    ready: "当前运行服务已采用所选模型目录。",
+    default: "未设置默认下载目录，已登记模型仍可使用。",
+    ready: "当前服务已采用已保存的默认目录配置；各模型仍按登记来源读取。",
     stopped: "已保存目录，可直接浏览已登记的模型；浏览不会启动运行服务。",
     stale:
       "已保存目录与运行实例不一致。请显式停止服务，再启动匹配配置；不会自动切换模型。",
     missing:
-      "已保存的模型目录已失踪。请检查路径或在停止服务后重新选择；原有管理模型保留。",
+      "已保存的默认目录已失踪。请检查路径或在停止服务后重新选择；其他来源模型以各自可用状态为准。",
     unavailable:
       "无法读取已保存的模型目录。请检查本地目录权限；目录仅需可读，无需可写。",
     unsupported: "当前运行服务不支持所选目录，请先停止，再启动匹配版本。",
@@ -307,13 +310,9 @@ function DirectoryStateNotice({ state }: { state: ViewState }) {
       role="status"
     >
       <p>{explanations[directory.state]}</p>
-      {!directory.configured && state.discovery === "unchecked" && ["connected", "connecting"].includes(state.snapshot?.connection ?? "") && <p>服务仍在运行；显式停止后会自动发现程序旁的 models 目录。</p>}
-      {!directory.configured && state.discovery === "checking" && <p>正在自动发现并核验程序旁的 models 目录；完成前不会把它当作已登记目录。</p>}
-      {!directory.configured && state.discovery === "none" && <p>未发现程序旁的 models 目录，可在设置中选择已有模型目录。</p>}
-      {!directory.configured && state.discovery === "failed" && <p className="warning-text">自动发现或登记未完成，原模型库保留。请检查错误并重新发现，或显式选择目录。</p>}
       {directory.effective && (
         <p>
-          当前服务使用：
+          当前服务默认目录：
           <span className="directory-path">
             {directory.effective.display_path}
           </span>
@@ -329,12 +328,13 @@ function LibraryProgress({
   state: ViewState;
   controller: DesktopController;
 }) {
-  if (state.library_phase === "idle") return null;
+  if (state.library_kind === "add" || state.library_phase === "idle") return null;
   const phases = {
     checking: "检查停止状态与目录",
     enumerating: "枚举目录条目",
     verifying: "核验 GGUF 文件",
     committing: "保存模型库索引",
+    testing: "正在进行基础测试",
     finished: "操作已结束",
   };
   const progress = state.library;
@@ -348,12 +348,14 @@ function LibraryProgress({
               ? "模型库操作终态尚未确认"
               : state.library_phase === "stopping"
                 ? "正在取消，等待实际操作结束"
+                : state.library_kind === "configure"
+                ? "正在保存默认下载目录"
                 : progress
                   ? phases[progress.phase]
                   : "正在提交模型库操作"}
           </strong>
         </div>
-        {progress && (
+        {progress && state.library_kind !== "configure" && (
           <p>
             已检查 {progress.examined_entries} 个目录条目 · 发现{" "}
             {progress.candidate_files} 个 GGUF · 已核验{" "}
@@ -363,7 +365,7 @@ function LibraryProgress({
         <p>
           {state.library_phase === "recovery"
             ? "不会自动重做扫描或宣称保存成功，请重新确认终态。"
-            : "模型文件只读核验，不复制；取消需等待实际终态，停止确认不代表已经结束。"}
+            : state.library_kind === "configure" ? "仅保存默认下载目录，不扫描文件；已有模型索引保持不变。" : "模型文件只读核验，不复制；取消需等待实际终态，停止确认不代表已经结束。"}
         </p>
       </div>
       {state.library_phase === "recovery" ? (
@@ -385,7 +387,7 @@ function LibraryProgress({
 }
 function LibraryDiagnostics({ state }: { state: ViewState }) {
   const operation = state.library;
-  if (!operation?.terminal || !(operation.file_errors?.length)) return null;
+  if (state.library_kind === "add" || !operation?.terminal || !(operation.file_errors?.length)) return null;
   const partial = operation.status === "partial";
   const uncertain = operation.error?.code === "settings_durability_unconfirmed";
   return <section className="notice-band warning library-diagnostics" aria-label="模型目录核验结果" role="status">
@@ -427,9 +429,9 @@ function DirectorySettings({
     >
       <div className="card-heading">
         <div>
-          <h2 id="directory-title">模型目录</h2>
+          <h2 id="directory-title">下载目录与手动维护</h2>
           <p>
-            直接使用已有 GGUF 文件，不复制到 AppData；原有管理模型仍然保留。
+            下载文件保存在此目录。添加已有模型请使用模型页“添加模型”，无需更改此目录。
           </p>
         </div>
         <span className="subtle-pill">只读文件</span>
@@ -447,7 +449,6 @@ function DirectorySettings({
       </div>
       <DirectoryStateNotice state={state} />
       <div className="directory-actions">
-        {!directory.configured && state.discovery !== "checking" && <button disabled={busy || !stopped} onClick={() => void controller.discoverDirectory()}>重新发现程序旁 models</button>}
         <button disabled={busy} onClick={() => void controller.pickDirectory()}>
           <Icon name="file" size={16} />
           选择模型目录
@@ -457,7 +458,7 @@ function DirectorySettings({
           onClick={() => setConfirm("scan")}
         >
           <Icon name="refresh" size={15} />
-          重新扫描目录
+          手动扫描默认目录
         </button>
       </div>
       {state.directory_selection && (
@@ -466,14 +467,14 @@ function DirectorySettings({
           <p className="directory-path">
             {state.directory_selection.display_path}
           </p>
-          <p>名称自动取 GGUF 文件名，保留中文与空格，不需要填写模型 ID。</p>
+          <p>仅保存默认下载与维护位置；保留已有模型索引，不扫描此目录中的文件。</p>
           <div className="directory-actions">
             <button
               className="primary"
               disabled={busy || !stopped}
               onClick={() => setConfirm("apply")}
             >
-              使用此目录
+              设置默认下载目录
             </button>
             <button
               className="text-button"
@@ -488,7 +489,7 @@ function DirectorySettings({
       {!stopped && (
         <div className="directory-stop">
           <p>
-            应用目录或重新扫描前，须先显式停止运行服务；仅卸载模型不够。不会自动停止其他客户端。
+            保存默认下载目录或手动扫描前，须先显式停止运行服务；仅卸载模型不够。不会自动停止其他客户端。
           </p>
           <button
             className="danger-outline"
@@ -501,7 +502,7 @@ function DirectorySettings({
       )}
       <div className="directory-guidance">
         <p>
-          未配置目录时会自动发现程序旁的 models 目录；已选目录始终优先。也可选择其他支持的本地目录；读取已有模型时目录仅需可读，下载目标须可写。只扫描直接子级，不递归，也不移动、重命名或删除源文件。
+          默认启动、进入模型页和刷新仅读取已登记列表，不自动扫描。手动扫描只处理默认目录直接子级中未作为显式文件来源登记的 GGUF，不递归、不扫描其他来源；单独添加的模型通过重新添加或加载复核。下载目标须可写，不会移动、重命名或删除源文件。
         </p>
         <p>
           单次最多 1024 个条目、64 个 GGUF；单文件 16 GiB、候选合计 32
@@ -517,14 +518,14 @@ function DirectorySettings({
             confirm === "stop"
               ? "停止所有客户端的运行任务？"
               : confirm === "apply"
-                ? "使用选定的模型目录？"
-                : "重新核验当前目录？"
+                ? "设置默认下载目录？"
+                : "手动扫描默认目录？"
           }
           confirm={
             confirm === "stop"
               ? "停止运行服务"
               : confirm === "apply"
-                ? "应用并核验目录"
+                ? "保存默认下载目录"
                 : "开始核验"
           }
           danger={confirm === "stop"}
@@ -535,21 +536,20 @@ function DirectorySettings({
             void (action === "stop"
               ? controller.stop()
               : action === "apply"
-                ? controller.applyDirectory()
+                ? controller.configureDirectory()
                 : controller.scanModels());
           }}
         >
           {confirm === "stop" ? (
             <p>
               将停止运行服务及所有客户端任务，确认实例与 worker
-              清理后才可应用目录。原文件不会移动或删除。
+              清理后才可保存默认目录或手动扫描。原文件不会移动或删除。
             </p>
           ) : (
             <p>
               {confirm === "apply"
-                ? "只读核验待应用目录内的直接子级 GGUF；成功后一次保存新目录与索引。"
-                : "只读重新核验已保存目录；重命名或内容变化会产生新的内部 ID。"}
-              单文件内容不支持时，将一次保存其他合法文件，并列出未登记文件；全部文件拒绝、安全检查失败或提交前取消会保留原目录与索引。没有 GGUF 时会保存空外部索引。若提交后的持久化确认失败，将重新读取实际配置，不假定已回滚。不会自动启动运行服务，也不会复制或删除模型文件。
+                ? "仅保存默认下载目录，已有模型索引保留。不枚举或校验目录里的模型，不会自动启动运行服务；不会复制或删除模型文件。添加已有文件请回到模型页选择“添加模型”。"
+                : "手动扫描默认目录直接子级中未作为显式文件来源登记的 GGUF，不递归、不扫描其他来源。显式添加的模型保留，通过重新添加或加载复核；本次扫描不重新校验这些文件。不支持的候选逐个报告，其余合法候选一次保存。提交前取消或全部拒绝保留旧索引。若持久化确认失败，请核对实际配置，不假定已回滚。不会自动启动运行服务，也不会复制或删除模型文件。"}
             </p>
           )}
         </Modal>
@@ -573,8 +573,6 @@ function ModelsPage({
   const settings = state.snapshot?.settings ?? DEFAULT_SETTINGS;
   const connected = state.snapshot?.connection === "connected";
   const browsable = connected || state.snapshot?.connection === "stopped";
-  const directoryId = state.snapshot?.model_directory.configured?.directory_id;
-  useEffect(() => { if (directoryId) void controller.reconcileModels(); }, [controller, directoryId]);
   const busy =
     !!state.operation ||
     state.library_phase !== "idle" ||
@@ -598,12 +596,11 @@ function ModelsPage({
         <div>
           <span className="eyebrow">本机模型库</span>
           <h1>模型</h1>
-          <p>直接读取本地 GGUF，模型文件留在你选择的目录。</p>
+          <p>选择一个或多个本地 GGUF，零复制添加到模型库。</p>
         </div>
-        <span className="subtle-pill">
-          <Icon name="shield" size={15} />
-          本地运行
-        </span>
+        <button className="primary" disabled={!browsable || !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle"} onClick={() => void controller.pickModels()}>
+          <Icon name="plus" size={18} />添加模型
+        </button>
       </div>
       <div className="model-view-switch" role="group" aria-label="模型视图"><button aria-pressed={view === "local"} onClick={() => setView("local")}>本地模型</button><button aria-pressed={view === "download"} onClick={() => setView("download")}>下载模型</button></div>
       {view === "download" ? <ModelDownloads state={state} controller={controller} goSettings={goSettings} /> : <>
@@ -655,12 +652,12 @@ function ModelsPage({
           <Icon name="file" size={26} />
         </div>
         <div className="import-copy">
-          <h2>模型目录</h2>
+          <h2>下载目录与维护</h2>
           <p className="directory-path">
             {state.snapshot?.model_directory.configured?.display_path ??
-              "尚未选择外部目录，现有管理模型仍可使用"}
+              "尚未设置下载目录，不影响添加已有模型"}
           </p>
-          <p>直接读取本层 GGUF，不复制、不递归扫描，也不移动原有模型。</p>
+          <p>刷新仅读取已登记列表。扫描默认目录须在设置中手动执行。</p>
         </div>
         <button onClick={goSettings}>
           前往目录设置
@@ -704,11 +701,9 @@ function ModelsPage({
             <Icon name="models" size={32} />
             <h3>你的模型库还是空的</h3>
             <p>
-              {state.snapshot?.connection === "stopped"
-                ? "本地索引中没有模型。可选择已有 GGUF 的目录，或下载模型后自动登记。"
-                : "在设置中选择已有 GGUF 的目录，停止服务后应用。"}
+              点击右上方“添加模型”选择已有 GGUF，或前往“下载模型”。不会自动扫描模型目录。
             </p>
-            <span>支持单文件 GGUF；可选择本地目录，或切换到“下载模型”选取文件</span>
+            <span>可一次选择多个完整 GGUF 文件；分片模型暂不支持</span>
           </div>
         ) : (
           <div className="model-list">
@@ -731,7 +726,7 @@ function ModelsPage({
                     </div>
                     <p className="model-source">
                       {model.storage === "external"
-                        ? "外部目录 · 直接读取"
+                        ? "本地文件 · 直接读取"
                         : "原有管理模型"}
                     </p>
                     <div className="model-meta">
@@ -1439,6 +1434,7 @@ export default function App({
   );
   const [page, setPage] = useState<"models" | "chat" | "settings">("models");
   const [draft, setDraft] = useState("");
+  const [confirmAddStop, setConfirmAddStop] = useState(false);
   useEffect(() => controller.mount(), [controller]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -1508,7 +1504,7 @@ export default function App({
               title="按已保存策略关闭应用"
               aria-label="关闭应用"
               className="icon-button"
-              disabled={!!state.operation && !state.testing_model}
+              disabled={!!state.operation && !state.testing_model && state.operation !== "正在选择 GGUF 文件"}
               onClick={() => void controller.close()}
             >
               <Icon name="power" size={16} />
@@ -1587,9 +1583,9 @@ export default function App({
             state.library.error?.code === "settings_durability_unconfirmed" && (
               <div className="notice-band warning" role="alert">
                 <div>
-                  <strong>模型目录持久化尚未确认</strong>
+                  <strong>{state.library_kind === "add" ? "新增索引持久化尚未确认" : "模型目录持久化尚未确认"}</strong>
                   <p>
-                    目录索引可能已经替换，不能保证旧目录仍在，也不代表已回滚。请核对设置中的已保存目录；若状态读取失败，请先重新检查。不会自动重新应用目录。
+                    {state.library_kind === "add" ? "新增登记可能已经发布，请刷新核对实际模型列表；这不代表已回滚。不会自动重新添加。" : "目录索引可能已经替换，不能保证旧目录仍在，也不代表已回滚。请核对设置中的已保存目录；若状态读取失败，请先重新检查。不会自动重新应用目录。"}
                   </p>
                 </div>
                 <button
@@ -1601,6 +1597,8 @@ export default function App({
               </div>
             )}
           <DownloadProgress state={state} controller={controller} />
+          <ModelSelectionPanel state={state} controller={controller} onStop={() => setConfirmAddStop(true)} />
+          <AddModelProgress state={state} controller={controller} />
           <LibraryProgress state={state} controller={controller} />
           <LibraryDiagnostics state={state} />
           {state.notice && (
@@ -1632,6 +1630,7 @@ export default function App({
               controller={controller}
             />
           )}
+          {confirmAddStop && <Modal title="停止所有客户端的运行任务？" confirm="停止运行服务" danger onCancel={() => setConfirmAddStop(false)} onConfirm={() => { setConfirmAddStop(false); void controller.stop(); }}><p>将终止所有客户端任务并卸载当前模型。确认停止后，所选文件保留，请再次点击添加；不会自动开始登记。</p></Modal>}
         </main>
       </div>
     </div>

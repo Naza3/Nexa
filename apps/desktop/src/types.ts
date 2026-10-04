@@ -119,9 +119,22 @@ export interface DirectorySelection {
   selection_id: string;
   display_path: string;
 }
+export interface ModelFileSelection {
+  selection_id: string;
+  files: { selection_index: number; file_name: string; size_bytes: number }[];
+  expires_in_seconds: number;
+}
+export interface ModelFileResult {
+  selection_index: number;
+  file_name: string;
+  status: "registered" | "already_registered" | "rejected" | "not_committed" | "not_processed";
+  model_id?: string | null;
+  error_code?: string | null;
+  local_validation?: LocalValidation | null;
+}
 export interface LibraryResult {
   library_generation: string;
-  directory_id: string;
+  directory_id: string | null;
   registered_files: number;
   available_files: number;
   rejected_files?: number;
@@ -134,7 +147,7 @@ export interface LibraryFileError {
 export interface LibraryOperation {
   operation_id: string;
   status: "running" | "completed" | "partial" | "cancelled" | "failed";
-  phase: "checking" | "enumerating" | "verifying" | "committing" | "finished";
+  phase: "checking" | "enumerating" | "verifying" | "committing" | "testing" | "finished";
   examined_entries: number;
   candidate_files: number;
   verified_files: number;
@@ -143,6 +156,8 @@ export interface LibraryOperation {
   error: SafeError | null;
   failed_file_name: string | null;
   file_errors?: LibraryFileError[];
+  /** Present for an explicit selected-file addition; older directory operations omit it. */
+  files?: ModelFileResult[];
 }
 export interface ModelPage {
   /** Older bridges omit the inventory origin. Never infer live residency from it. */
@@ -221,6 +236,10 @@ export interface DesktopApi {
   snapshot(): Promise<Snapshot>;
   start(initialize_if_missing: boolean): Promise<Snapshot>;
   pickDirectory(): Promise<DirectorySelection | null>;
+  pickModels(): Promise<ModelFileSelection | null>;
+  discardModelSelection(selection_id: string): Promise<{ discarded: boolean }>;
+  addModels(selection_id: string, auto_test?: boolean): Promise<{ operation_id: string }>;
+  configureDirectory(selection_id: string): Promise<{ operation_id: string }>;
   applyDirectory(selection_id: string): Promise<{ operation_id: string }>;
   scanModels(): Promise<{ operation_id: string }>;
   reconcileModels(): Promise<ReconcileResult>;

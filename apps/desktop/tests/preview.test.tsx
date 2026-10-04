@@ -23,7 +23,7 @@ function readyButton(name: string) {
   });
 }
 
-it("walks labelled mock initialization, explicit stop, directory apply, restart, load and chat", async () => {
+it("walks labelled mock initialization, explicit stop, configure-only directory then explicit scan, restart, load and chat", async () => {
   const previousAsyncWrapper = getConfig().asyncWrapper;
   const previousUrl = window.location.href;
   let unmount: (() => void) | undefined;
@@ -43,9 +43,8 @@ it("walks labelled mock initialization, explicit stop, directory apply, restart,
     const controller = new DesktopController(createPreviewApi());
     ({ unmount } = render(<App controller={controller} preview />));
     expect(screen.getByText(/全部运行数据与回复为模拟/)).toBeInTheDocument();
-    // Auto-discovery may briefly disable this button after the initial snapshot.
-    // Appearance alone does not establish that a click can be accepted.
-    await untilPreview("初始化前的发现操作已结束", () => {
+    // Passive startup reads status only; no discovery or scan is started.
+    await untilPreview("初始化状态读取已结束", () => {
       expect(controller.getSnapshot().booting).toBe(false);
       expect(controller.getSnapshot().operation).toBeNull();
       expect(controller.getSnapshot().library_phase).toBe("idle");
@@ -59,13 +58,20 @@ it("walks labelled mock initialization, explicit stop, directory apply, restart,
     await user.click(await readyButton("设置"));
     await user.click(await readyButton("选择模型目录"));
     expect(screen.queryByRole("textbox", { name: /模型 ID/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "使用此目录" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "设置默认下载目录" })).toBeDisabled();
     await user.click(await readyButton("先停止运行服务"));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "停止运行服务" }));
-    await user.click(await readyButton("使用此目录"));
-    await user.click(await readyButton("应用并核验目录"));
+    await user.click(await readyButton("设置默认下载目录"));
+    await user.click(await readyButton("保存默认下载目录"));
+    await untilPreview("仅保存下载目录", () => {
+      expect(screen.getByText(/默认下载目录已保存，原有模型索引保留；未扫描新目录/)).toBeInTheDocument();
+      expect(controller.getSnapshot().models.data).toHaveLength(0);
+      expect(controller.getSnapshot().operation).toBeNull();
+    });
+    await user.click(await readyButton("手动扫描默认目录"));
+    await user.click(await readyButton("开始核验"));
     await untilPreview("目录核验完成", () => {
-      expect(screen.getByText(/模型目录已保存，登记 1 个文件/)).toBeInTheDocument();
+      expect(screen.getByText(/默认目录扫描完成，本次登记 1 个候选/)).toBeInTheDocument();
       expect(controller.getSnapshot().library_phase).toBe("idle");
       expect(controller.getSnapshot().operation).toBeNull();
     });

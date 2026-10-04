@@ -24,9 +24,13 @@ impl DownloadFile {
             if !valid_file_name(file_name) || !file_name.ends_with(".gguf") {
                 return Err(library_error(ErrorCode::InvalidArgument));
             }
-            validate_directory_syntax(&library.directory)?;
-            let directory = DirectoryGuard::open(&library.directory)?;
-            if !same_object(&directory.identity, &library.directory_identity) {
+            validate_directory_syntax(library.configured_directory()?)?;
+            let directory = DirectoryGuard::open(library.configured_directory()?)?;
+            if !library
+                .directory_identity
+                .as_ref()
+                .is_some_and(|saved| same_object(&directory.identity, saved))
+            {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let destination = directory.path.join(file_name);
@@ -224,8 +228,12 @@ impl SidecarDownloadFile {
             if !valid_file_name(file_name) || !file_name.ends_with(".gguf") {
                 return Err(library_error(ErrorCode::InvalidArgument));
             }
-            let directory = DirectoryGuard::open(&library.directory)?;
-            if !same_object(&directory.identity, &library.directory_identity) {
+            let directory = DirectoryGuard::open(library.configured_directory()?)?;
+            if !library
+                .directory_identity
+                .as_ref()
+                .is_some_and(|saved| same_object(&directory.identity, saved))
+            {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let destination = directory.path.join(file_name);
@@ -624,30 +632,47 @@ mod tests {
         let (_root, library) = fixture();
         let id = Uuid::new_v4();
         let mut file = DownloadFile::create(&library, "protected.gguf", id).unwrap();
-        let part = library.directory.join(format!(".nexa-download-{id}.part"));
+        let part = library
+            .directory
+            .as_ref()
+            .unwrap()
+            .join(format!(".nexa-download-{id}.part"));
         file.write(b"GGUFprotected").unwrap();
         assert!(fs::write(&part, b"tampered").is_err());
         assert!(fs::remove_file(&part).is_err());
-        assert!(fs::rename(&part, library.directory.join("replacement.part")).is_err());
         assert!(
             fs::rename(
-                &library.directory,
-                library.directory.with_file_name("moved")
+                &part,
+                library.directory.as_ref().unwrap().join("replacement.part")
+            )
+            .is_err()
+        );
+        assert!(
+            fs::rename(
+                library.directory.as_ref().unwrap(),
+                library.directory.as_ref().unwrap().with_file_name("moved")
             )
             .is_err()
         );
         file.reset_to_empty().unwrap();
         assert!(fs::write(&part, b"tampered after reset").is_err());
         assert!(fs::remove_file(&part).is_err());
-        assert!(fs::rename(&part, library.directory.join("replacement.part")).is_err());
+        assert!(
+            fs::rename(
+                &part,
+                library.directory.as_ref().unwrap().join("replacement.part")
+            )
+            .is_err()
+        );
         file.write(b"GGUFprotected").unwrap();
         assert!(file.publish().unwrap());
         assert_eq!(
-            fs::read(library.directory.join("protected.gguf")).unwrap(),
+            fs::read(library.directory.as_ref().unwrap().join("protected.gguf")).unwrap(),
             b"GGUFprotected"
         );
         assert!(!part.exists());
-        let open_target = File::open(library.directory.join("protected.gguf")).unwrap();
+        let open_target =
+            File::open(library.directory.as_ref().unwrap().join("protected.gguf")).unwrap();
         assert!(DownloadFile::create(&library, "protected.gguf", Uuid::new_v4()).is_err());
         drop(open_target);
     }
@@ -657,15 +682,24 @@ mod tests {
         let id = Uuid::new_v4();
         let mut file = DownloadFile::create(&library, "test.gguf", id).unwrap();
         file.write(b"GGUFtest").unwrap();
-        assert!(!library.directory.join("test.gguf").exists());
+        assert!(
+            !library
+                .directory
+                .as_ref()
+                .unwrap()
+                .join("test.gguf")
+                .exists()
+        );
         file.publish().unwrap();
         assert_eq!(
-            fs::read(library.directory.join("test.gguf")).unwrap(),
+            fs::read(library.directory.as_ref().unwrap().join("test.gguf")).unwrap(),
             b"GGUFtest"
         );
         assert!(
             !library
                 .directory
+                .as_ref()
+                .unwrap()
                 .join(format!(".nexa-download-{id}.part"))
                 .exists()
         );
@@ -675,10 +709,19 @@ mod tests {
         assert!(
             !library
                 .directory
+                .as_ref()
+                .unwrap()
                 .join(format!(".nexa-download-{cancelled}.part"))
                 .exists()
         );
-        assert!(!library.directory.join("other.gguf").exists());
+        assert!(
+            !library
+                .directory
+                .as_ref()
+                .unwrap()
+                .join("other.gguf")
+                .exists()
+        );
     }
     #[test]
     fn restart_truncates_and_rewinds_the_same_protected_file() {
@@ -694,12 +737,14 @@ mod tests {
         file.write(b"GGUFnew").unwrap();
         file.publish().unwrap();
         assert_eq!(
-            fs::read(library.directory.join("reset.gguf")).unwrap(),
+            fs::read(library.directory.as_ref().unwrap().join("reset.gguf")).unwrap(),
             b"GGUFnew"
         );
         assert!(
             !library
                 .directory
+                .as_ref()
+                .unwrap()
                 .join(format!(".nexa-download-{id}.part"))
                 .exists()
         );
@@ -709,10 +754,14 @@ mod tests {
         let (_root, library) = fixture();
         let mut file = DownloadFile::create(&library, "test.gguf", Uuid::new_v4()).unwrap();
         file.write(b"new").unwrap();
-        fs::write(library.directory.join("test.gguf"), b"existing").unwrap();
+        fs::write(
+            library.directory.as_ref().unwrap().join("test.gguf"),
+            b"existing",
+        )
+        .unwrap();
         assert!(file.publish().is_err());
         assert_eq!(
-            fs::read(library.directory.join("test.gguf")).unwrap(),
+            fs::read(library.directory.as_ref().unwrap().join("test.gguf")).unwrap(),
             b"existing"
         );
     }
@@ -720,7 +769,7 @@ mod tests {
     fn changed_directory_and_traversal_are_rejected() {
         let (_root, mut library) = fixture();
         assert!(DownloadFile::create(&library, "../bad.gguf", Uuid::new_v4()).is_err());
-        library.directory_identity.file ^= 1;
+        library.directory_identity.as_mut().unwrap().file ^= 1;
         assert!(DownloadFile::create(&library, "test.gguf", Uuid::new_v4()).is_err());
     }
     fn sidecar_fixture() -> (
@@ -801,10 +850,21 @@ mod tests {
             if matches!(mode, "short" | "hash" | "cancel") {
                 assert!(verified.is_err(), "{mode}");
                 assert!(!paths.directory.exists());
-                assert!(!library.directory.join("sidecar.gguf").exists());
+                assert!(
+                    !library
+                        .directory
+                        .as_ref()
+                        .unwrap()
+                        .join("sidecar.gguf")
+                        .exists()
+                );
             } else {
                 if mode == "existing" {
-                    fs::write(library.directory.join("sidecar.gguf"), b"existing").unwrap();
+                    fs::write(
+                        library.directory.as_ref().unwrap().join("sidecar.gguf"),
+                        b"existing",
+                    )
+                    .unwrap();
                 }
                 let published = verified.unwrap().publish();
                 assert_eq!(published.is_ok(), mode == "success");
@@ -814,7 +874,7 @@ mod tests {
                     b"existing"
                 };
                 assert_eq!(
-                    fs::read(library.directory.join("sidecar.gguf")).unwrap(),
+                    fs::read(library.directory.as_ref().unwrap().join("sidecar.gguf")).unwrap(),
                     expected
                 );
                 assert!(!paths.directory.exists());
@@ -836,7 +896,7 @@ mod tests {
             .unwrap();
         assert!(!verified.publish().unwrap());
         assert_eq!(
-            fs::read(library.directory.join("sidecar.gguf")).unwrap(),
+            fs::read(library.directory.as_ref().unwrap().join("sidecar.gguf")).unwrap(),
             bytes
         );
         assert_eq!(fs::read(&unknown).unwrap(), b"unrelated");
@@ -846,12 +906,16 @@ mod tests {
     fn sidecar_never_adopts_existing_task_directory_or_changed_library() {
         let (_root, mut library) = fixture();
         let id = Uuid::new_v4();
-        let task = library.directory.join(format!(".nexa-download-{id}"));
+        let task = library
+            .directory
+            .as_ref()
+            .unwrap()
+            .join(format!(".nexa-download-{id}"));
         fs::create_dir(&task).unwrap();
         fs::write(task.join("preserve"), b"existing").unwrap();
         assert!(SidecarDownloadFile::create(&library, "sidecar.gguf", id).is_err());
         assert_eq!(fs::read(task.join("preserve")).unwrap(), b"existing");
-        library.directory_identity.file ^= 1;
+        library.directory_identity.as_mut().unwrap().file ^= 1;
         assert!(SidecarDownloadFile::create(&library, "sidecar.gguf", Uuid::new_v4()).is_err());
     }
     #[cfg(unix)]
@@ -859,7 +923,7 @@ mod tests {
     fn sidecar_cleanup_does_not_follow_control_symlinks_or_replaced_part() {
         use std::os::unix::fs::symlink;
         let (_root, library, mut transaction, paths) = sidecar_fixture();
-        let outside = library.directory.join("outside");
+        let outside = library.directory.as_ref().unwrap().join("outside");
         fs::write(&outside, b"preserve").unwrap();
         symlink(&outside, paths.directory.join("payload.part.aria2")).unwrap();
         transaction.confirm_writer_stopped();
@@ -886,11 +950,21 @@ mod tests {
         fs::write(&paths.payload, bytes).unwrap();
         assert!(fs::remove_file(&paths.payload).is_err());
         assert!(fs::rename(&paths.payload, paths.directory.join("swapped")).is_err());
-        assert!(fs::rename(&paths.directory, library.directory.join("moved")).is_err());
         assert!(
             fs::rename(
-                &library.directory,
-                library.directory.with_file_name("moved-root")
+                &paths.directory,
+                library.directory.as_ref().unwrap().join("moved")
+            )
+            .is_err()
+        );
+        assert!(
+            fs::rename(
+                library.directory.as_ref().unwrap(),
+                library
+                    .directory
+                    .as_ref()
+                    .unwrap()
+                    .with_file_name("moved-root")
             )
             .is_err()
         );
@@ -915,7 +989,7 @@ mod tests {
         assert!(fs::remove_file(&paths.payload).is_err());
         assert!(verified.publish().unwrap());
         assert_eq!(
-            fs::read(library.directory.join("sidecar.gguf")).unwrap(),
+            fs::read(library.directory.as_ref().unwrap().join("sidecar.gguf")).unwrap(),
             bytes
         );
         assert!(!paths.directory.exists());
@@ -931,7 +1005,14 @@ mod tests {
             .unwrap();
         drop(verified);
         assert!(!paths.directory.exists());
-        assert!(!library.directory.join("sidecar.gguf").exists());
+        assert!(
+            !library
+                .directory
+                .as_ref()
+                .unwrap()
+                .join("sidecar.gguf")
+                .exists()
+        );
     }
     #[test]
     fn sidecar_initialization_rolls_back_only_owned_pinned_objects() {
@@ -950,6 +1031,8 @@ mod tests {
             assert!(
                 !library
                     .directory
+                    .as_ref()
+                    .unwrap()
                     .join(format!(".nexa-download-{id}"))
                     .exists()
             );
@@ -964,7 +1047,11 @@ mod tests {
                 Ok(())
             });
         assert!(result.is_err());
-        let path = library.directory.join(format!(".nexa-download-{id}"));
+        let path = library
+            .directory
+            .as_ref()
+            .unwrap()
+            .join(format!(".nexa-download-{id}"));
         assert_eq!(
             fs::read(path.join("payload.part")).unwrap(),
             b"unowned collision"
@@ -983,6 +1070,8 @@ mod tests {
         assert!(
             library
                 .directory
+                .as_ref()
+                .unwrap()
                 .join(format!(".nexa-download-{id}"))
                 .exists()
         );

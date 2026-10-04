@@ -2,6 +2,8 @@
 //! the owning application; this module never writes into a selected directory.
 #[path = "library_download.rs"]
 pub mod download;
+#[path = "library_selected.rs"]
+pub mod selected;
 
 use crate::{ImportRequest, ModelManifest, ModelSource, ModelStorage, Result, gguf};
 use runtime_types::{ErrorCode, ModelId, ResolvedModel, RuntimeError};
@@ -134,6 +136,12 @@ impl ScanControl {
         progress.current_file_name = None;
         Ok(())
     }
+    pub fn selected_count(&self, count: usize) {
+        self.progress.lock().unwrap().candidate_files = count;
+    }
+    pub fn phase(&self, phase: &'static str) {
+        self.progress.lock().unwrap().phase = phase;
+    }
     pub fn progress(&self) -> ScanProgress {
         self.progress.lock().unwrap().clone()
     }
@@ -168,18 +176,26 @@ pub struct FileIdentity {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ExternalSource {
+    pub directory: PathBuf,
+    pub directory_identity: FileIdentity,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExternalRegistration {
     pub manifest: ModelManifest,
     pub identity: FileIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ExternalSource>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelLibrary {
     pub schema_version: u32,
-    pub directory_id: Uuid,
+    pub directory_id: Option<Uuid>,
     pub library_generation: Uuid,
-    pub directory: PathBuf,
-    pub directory_identity: FileIdentity,
+    pub directory: Option<PathBuf>,
+    pub directory_identity: Option<FileIdentity>,
     pub models: Vec<ExternalRegistration>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -189,11 +205,31 @@ pub struct LibraryDirectoryInfo {
     pub library_generation: Uuid,
 }
 impl ModelLibrary {
-    pub fn info(&self) -> LibraryDirectoryInfo {
-        LibraryDirectoryInfo {
-            directory_id: self.directory_id,
-            display_path: self.directory.to_string_lossy().into_owned(),
+    pub fn info(&self) -> Option<LibraryDirectoryInfo> {
+        Some(LibraryDirectoryInfo {
+            directory_id: self.directory_id?,
+            display_path: self.directory.as_ref()?.to_string_lossy().into_owned(),
             library_generation: self.library_generation,
+        })
+    }
+    pub fn configured_directory(&self) -> Result<&Path> {
+        self.directory
+            .as_deref()
+            .ok_or_else(|| library_error(ErrorCode::ModelDirectoryUnavailable))
+    }
+    pub fn source<'a>(
+        &'a self,
+        entry: &'a ExternalRegistration,
+    ) -> Result<(&'a Path, &'a FileIdentity)> {
+        if let Some(source) = &entry.source {
+            Ok((&source.directory, &source.directory_identity))
+        } else {
+            Ok((
+                self.configured_directory()?,
+                self.directory_identity
+                    .as_ref()
+                    .ok_or_else(|| library_error(ErrorCode::ModelLibraryChanged))?,
+            ))
         }
     }
     pub fn read(root: &Path) -> Result<Option<Self>> {
@@ -229,9 +265,12 @@ impl ModelLibrary {
         Ok(bytes)
     }
     pub fn validate(&self) -> Result<()> {
-        validate_directory_syntax(&self.directory)?;
-        if self.schema_version != 1
-            || self.directory_id.is_nil()
+        match (&self.directory, &self.directory_identity, self.directory_id) {
+            (Some(path), Some(_), Some(id)) if !id.is_nil() => validate_directory_syntax(path)?,
+            (None, None, None) if self.schema_version == 2 => (),
+            _ => return Err(library_error(ErrorCode::ModelLibraryChanged)),
+        }
+        if !matches!(self.schema_version, 1 | 2)
             || self.library_generation.is_nil()
             || self.models.len() > MAX_EXTERNAL_MODELS
         {
@@ -239,19 +278,23 @@ impl ModelLibrary {
         }
         let mut ids = BTreeSet::new();
         let mut names = BTreeSet::new();
-        let mut total = 0_u64;
         for entry in &self.models {
             entry.manifest.validate()?;
             let m = &entry.manifest;
-            total = total
-                .checked_add(m.size_bytes)
-                .ok_or_else(|| library_error(ErrorCode::ModelLibraryLimit))?;
+            let (directory, directory_identity) = self.source(entry)?;
+            validate_directory_syntax(directory)?;
             if m.storage != ModelStorage::External
                 || m.size_bytes > MAX_MODEL_BYTES
-                || total > MAX_SCAN_BYTES
                 || m.size_bytes != entry.identity.size
                 || !ids.insert(m.id.clone())
-                || !names.insert(file_key(&m.relative_file))
+                || (self.schema_version == 1 && entry.source.is_some())
+                || !names.insert((
+                    directory_identity.volume,
+                    directory_identity.file,
+                    file_key(&m.relative_file),
+                ))
+                || directory_identity.modified_nanos >= 1_000_000_000
+                || entry.identity.modified_nanos >= 1_000_000_000
             {
                 return Err(library_error(ErrorCode::ModelLibraryChanged));
             }
@@ -259,10 +302,10 @@ impl ModelLibrary {
         Ok(())
     }
     pub fn directory_presence(&self) -> Result<bool> {
-        if !directory_drive_present(&self.directory)? {
+        if !directory_drive_present(self.configured_directory()?)? {
             return Ok(false);
         }
-        match fs::symlink_metadata(&self.directory) {
+        match fs::symlink_metadata(self.configured_directory()?) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(_) => return Err(library_error(ErrorCode::ModelDirectoryUnavailable)),
             Ok(_) => (),
@@ -271,8 +314,12 @@ impl ModelLibrary {
         Ok(true)
     }
     pub fn check_directory_identity(&self) -> Result<()> {
-        let directory = DirectoryGuard::open(&self.directory)?;
-        if !same_object(&directory.identity, &self.directory_identity) {
+        let directory = DirectoryGuard::open(self.configured_directory()?)?;
+        if !self
+            .directory_identity
+            .as_ref()
+            .is_some_and(|saved| same_object(&directory.identity, saved))
+        {
             return Err(library_error(ErrorCode::ModelFileChanged));
         }
         Ok(())
@@ -284,12 +331,13 @@ impl ModelLibrary {
     /// full hashing from an acquired source guard, regardless of this result.
     pub fn availability(&self, entry: &ExternalRegistration) -> Option<ErrorCode> {
         let check = || -> Result<()> {
-            let directory = DirectoryGuard::open(&self.directory)?;
-            if !same_object(&directory.identity, &self.directory_identity) {
+            let (path, saved) = self.source(entry)?;
+            let directory = DirectoryGuard::open(path)?;
+            if !same_object(&directory.identity, saved) {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let source =
-                open_read_file(&self.directory.join(&entry.manifest.relative_file), false)?;
+                open_read_file(&directory.path.join(&entry.manifest.relative_file), false)?;
             if identity(&source)? != entry.identity {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
@@ -304,7 +352,7 @@ impl ModelLibrary {
 pub fn observe_candidates(library: &ModelLibrary) -> Result<Vec<(String, FileIdentity)>> {
     library.check_directory_identity()?;
     let mut result = Vec::new();
-    for (count, entry) in fs::read_dir(&library.directory)
+    for (count, entry) in fs::read_dir(library.configured_directory()?)
         .map_err(file_error)?
         .enumerate()
     {
@@ -320,7 +368,13 @@ pub fn observe_candidates(library: &ModelLibrary) -> Result<Vec<(String, FileIde
         }
         if ["aria2", "part", "crdownload", "download"]
             .iter()
-            .any(|suffix| library.directory.join(format!("{name}.{suffix}")).exists())
+            .any(|suffix| {
+                library
+                    .configured_directory()
+                    .unwrap()
+                    .join(format!("{name}.{suffix}"))
+                    .exists()
+            })
         {
             continue;
         }
@@ -375,9 +429,9 @@ pub fn rescan_directory(
 ) -> Result<ScannedLibrary> {
     scan_directory_inner(
         root,
-        &previous.directory,
+        previous.configured_directory()?,
         Some(previous),
-        Some(&previous.directory_identity),
+        previous.directory_identity.as_ref(),
         control,
     )
 }
@@ -416,6 +470,16 @@ fn scan_directory_inner(
             .map_err(|_| library_error(ErrorCode::ModelDirectoryUnsupported))?;
         control.progress.lock().unwrap().current_file_name =
             (name.len() <= 1024).then(|| name.clone());
+        if previous.is_some_and(|old| {
+            old.models.iter().any(|entry| {
+                entry.source.as_ref().is_some_and(|source| {
+                    same_object(&source.directory_identity, &directory.identity)
+                        && file_key(&entry.manifest.relative_file) == file_key(&name)
+                })
+            })
+        }) {
+            continue;
+        }
         let metadata = fs::symlink_metadata(item.path()).map_err(file_error)?;
         if indirect(&metadata) {
             return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
@@ -447,10 +511,17 @@ fn scan_directory_inner(
     }
     candidates.sort_by_key(|name| file_key(name));
     let prior = previous.filter(|old| {
-        same_object(&old.directory_identity, &directory.identity)
-            && path_key(&old.directory) == path_key(&directory.path)
+        old.directory_identity
+            .as_ref()
+            .is_some_and(|saved| same_object(saved, &directory.identity))
+            && old
+                .directory
+                .as_ref()
+                .is_some_and(|path| path_key(path) == path_key(&directory.path))
     });
-    let directory_id = prior.map_or_else(Uuid::new_v4, |old| old.directory_id);
+    let directory_id = prior
+        .and_then(|old| old.directory_id)
+        .unwrap_or_else(Uuid::new_v4);
     let mut models = Vec::new();
     let mut sources = Vec::new();
     let mut verified_total = 0_u64;
@@ -481,9 +552,12 @@ fn scan_directory_inner(
                 continue;
             }
         };
-        let existing = prior.and_then(|old| {
+        let existing = previous.and_then(|old| {
             old.models.iter().find(|m| {
-                file_key(&m.manifest.relative_file) == file_key(&name) && m.manifest.sha256 == hash
+                old.source(m).is_ok_and(|(_, saved)| {
+                    same_object(saved, &directory.identity)
+                        && file_key(&m.manifest.relative_file) == file_key(&name)
+                }) && m.manifest.sha256 == hash
             })
         });
         let id = match existing {
@@ -519,19 +593,45 @@ fn scan_directory_inner(
         models.push(ExternalRegistration {
             manifest,
             identity: before,
+            source: existing.and_then(|entry| entry.source.clone()),
         });
         sources.push(source);
         control.progress.lock().unwrap().verified_files += 1;
     }
+    let rejected_all = models.is_empty() && !control.progress().file_errors.is_empty();
+    // Directory maintenance only owns implicit entries in the configured directory.
+    // Freeze an old configured directory before changing it, and preserve all links.
+    if let Some(previous) = previous {
+        for old in &previous.models {
+            if prior.is_some() && old.source.is_none() {
+                continue;
+            }
+            if models
+                .iter()
+                .any(|entry| entry.manifest.id == old.manifest.id)
+            {
+                continue;
+            }
+            let mut old = old.clone();
+            if old.source.is_none() {
+                let (path, saved) = previous.source(&old)?;
+                old.source = Some(ExternalSource {
+                    directory: path.to_owned(),
+                    directory_identity: saved.clone(),
+                });
+            }
+            models.push(old);
+        }
+    }
     let library = ModelLibrary {
-        schema_version: 1,
-        directory_id,
+        schema_version: 2,
+        directory_id: Some(directory_id),
         library_generation: Uuid::new_v4(),
-        directory: directory.path.clone(),
-        directory_identity: directory.identity.clone(),
+        directory: Some(directory.path.clone()),
+        directory_identity: Some(directory.identity.clone()),
         models,
     };
-    let library = if library.models.is_empty() && !control.progress().file_errors.is_empty() {
+    let library = if rejected_all {
         None
     } else {
         library.encode()?;
@@ -708,8 +808,9 @@ impl PreparedExternal {
         #[cfg(windows)]
         {
             control.check()?;
-            let directory = Arc::new(DirectoryGuard::open(&library.directory)?);
-            if !same_object(&directory.identity, &library.directory_identity) {
+            let (path, saved) = library.source(entry)?;
+            let directory = Arc::new(DirectoryGuard::open(path)?);
+            if !same_object(&directory.identity, saved) {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let path = directory.path.join(&entry.manifest.relative_file);
@@ -1089,7 +1190,7 @@ mod saved_directory_tests {
         drop(scan);
         // No probe or filesystem access to this old letter is authorized by
         // deserialization. Current access is checked separately on use.
-        library.directory = PathBuf::from(r"Z:\external-model-fixture");
+        library.directory = Some(PathBuf::from(r"Z:\external-model-fixture"));
         fs::write(root.path().join(LIBRARY_FILE), library.encode().unwrap()).unwrap();
         let previous = ModelLibrary::read(root.path()).unwrap().unwrap();
         let replacement = scan_directory(
@@ -1099,7 +1200,10 @@ mod saved_directory_tests {
             &ScanControl::default(),
         )
         .unwrap();
-        assert_eq!(replacement.library().unwrap().directory, source.path());
+        assert_eq!(
+            replacement.library().unwrap().directory.as_deref(),
+            Some(source.path())
+        );
         assert_ne!(
             replacement.library().unwrap().directory_id,
             previous.directory_id

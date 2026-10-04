@@ -382,7 +382,7 @@ async fn replaced_saved_directory_requires_explicit_apply_and_bounds_still_roll_
 }
 
 #[tokio::test]
-async fn startup_discovery_registers_existing_models_and_preserves_configured_directory() {
+async fn startup_discovery_never_registers_or_initializes_and_configuration_is_explicit() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("private");
     let models = temp.path().join("models");
@@ -400,22 +400,21 @@ async fn startup_discovery_registers_existing_models_and_preserves_configured_di
         .unwrap()
         .with_default_model_directory(models.clone()),
     );
-    let handle = bridge.directory_discover().unwrap().unwrap();
+    assert!(bridge.directory_discover().unwrap().is_none());
+    assert!(!root.exists());
+    let handle = bridge.directory_configure(models.clone()).unwrap();
     assert_eq!(
         terminal(&bridge, handle.operation_id).await.status,
         LibraryOperationStatus::Completed
     );
     let library = ModelLibrary::read(&root).unwrap().unwrap();
-    assert_eq!(library.models.len(), 1);
-    // Windows may preserve the selected DOS/8.3 spelling in the library while
-    // canonicalization returns a verbatim long path. Compare both normalized
-    // filesystem paths rather than treating display spelling as identity.
+    assert!(library.models.is_empty());
     assert_eq!(
-        fs::canonicalize(&library.directory).unwrap(),
+        fs::canonicalize(library.directory.as_ref().unwrap()).unwrap(),
         fs::canonicalize(&models).unwrap()
     );
-    assert!(bridge.directory_discover().unwrap().is_none());
     let saved = fs::read(root.join(LIBRARY_FILE)).unwrap();
+    assert!(bridge.directory_discover().unwrap().is_none());
     fs::rename(&models, temp.path().join("missing-models")).unwrap();
     assert!(bridge.directory_discover().unwrap().is_none());
     assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), saved);
@@ -443,9 +442,7 @@ async fn startup_discovery_does_not_create_absent_folder_or_replace_running_inst
     fs::create_dir(&models).unwrap();
     runtime_api::token::create_private_dir(&root).unwrap();
     let _lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
-    let handle = bridge.directory_discover().unwrap().unwrap();
-    let result = terminal(&bridge, handle.operation_id).await;
-    assert_eq!(result.error.unwrap().code, "runtime_running");
+    assert!(bridge.directory_discover().unwrap().is_none());
     assert!(!root.join(LIBRARY_FILE).exists());
 }
 
@@ -490,4 +487,275 @@ async fn download_reads_and_validates_target_while_instance_is_exclusively_owned
     );
     assert!(InstanceLock::try_acquire(&root).unwrap().is_some());
     assert_eq!(fs::read_dir(models).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn selected_batch_partial_keeps_facts_without_config_or_default_directory() {
+    use model_store::library::selected::SelectedStatus;
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    let good = source.path().join("good.gguf");
+    tiny_model(&good);
+    let bad = source.path().join("bad.gguf");
+    fs::write(&bad, b"invalid").unwrap();
+    let huge = fs::File::create(source.path().join("unselected.gguf")).unwrap();
+    huge.set_len(model_store::library::MAX_MODEL_BYTES + 1)
+        .unwrap();
+    let mut selection = Some(vec![
+        desktop_bridge::SelectedFile::open(&good).unwrap(),
+        desktop_bridge::SelectedFile::open(&bad).unwrap(),
+    ]);
+    let operation = bridge.models_add(&mut selection, false).unwrap();
+    assert!(selection.is_none());
+    let result = terminal(&bridge, operation.operation_id).await;
+    assert_eq!(result.status, LibraryOperationStatus::Partial);
+    assert_eq!(result.candidate_files, 2);
+    assert_eq!(result.verified_files, 1);
+    assert_eq!(
+        result.files[0].registration.status,
+        SelectedStatus::Registered
+    );
+    assert_eq!(
+        result.files[1].registration.status,
+        SelectedStatus::Rejected
+    );
+    assert_eq!(result.result.unwrap().registered_files, 1);
+    let library = ModelLibrary::read(&root).unwrap().unwrap();
+    assert!(library.directory.is_none());
+    assert_eq!(library.models.len(), 1);
+    assert!(!root.join("config.toml").exists());
+    assert!(!root.join("models").exists());
+    assert!(result.files[0].local_validation.is_none());
+    let page = bridge.models_page(None, None).await.unwrap();
+    assert_eq!(page.data.len(), 1);
+    assert!(
+        !serde_json::to_string(&result.files)
+            .unwrap()
+            .contains(&source.path().to_string_lossy().to_string())
+    );
+    let saved = fs::read(root.join(LIBRARY_FILE)).unwrap();
+    let mut invalid = Some(vec![desktop_bridge::SelectedFile::open(&bad).unwrap()]);
+    let failed = terminal(
+        &bridge,
+        bridge.models_add(&mut invalid, false).unwrap().operation_id,
+    )
+    .await;
+    assert_eq!(failed.status, LibraryOperationStatus::Failed);
+    assert_eq!(
+        failed.files[0].registration.status,
+        SelectedStatus::Rejected
+    );
+    assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), saved);
+}
+
+#[tokio::test]
+async fn selected_admission_running_and_stale_instance_preserve_selection_and_old_index() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    let file = source.path().join("model.gguf");
+    tiny_model(&file);
+    let mut selection = Some(vec![desktop_bridge::SelectedFile::open(&file).unwrap()]);
+    let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    assert_eq!(
+        bridge.models_add(&mut selection, false).unwrap_err().code,
+        "runtime_running"
+    );
+    assert!(selection.is_some());
+    assert!(!root.join(LIBRARY_FILE).exists());
+    drop(lock);
+    fs::write(
+        root.join("runtime/instance.json"),
+        b"unproved stale discovery",
+    )
+    .unwrap();
+    assert_eq!(
+        bridge.models_add(&mut selection, false).unwrap_err().code,
+        "runtime_stop_unconfirmed"
+    );
+    assert!(selection.is_some());
+    assert_eq!(
+        fs::read(root.join("runtime/instance.json")).unwrap(),
+        b"unproved stale discovery"
+    );
+}
+
+#[tokio::test]
+async fn cancel_before_verification_and_late_cancel_never_misreport_publication() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    let file = source.path().join("model.gguf");
+    tiny_model(&file);
+    let mut selection = Some(vec![desktop_bridge::SelectedFile::open(&file).unwrap()]);
+    let id = bridge
+        .models_add(&mut selection, false)
+        .unwrap()
+        .operation_id;
+    bridge.library_cancel(id).await.unwrap();
+    let result = terminal(&bridge, id).await;
+    assert_eq!(result.status, LibraryOperationStatus::Cancelled);
+    assert!(!root.join(LIBRARY_FILE).exists());
+    assert_eq!(result.files.len(), 1);
+    let mut selection = Some(vec![desktop_bridge::SelectedFile::open(&file).unwrap()]);
+    let id = bridge
+        .models_add(&mut selection, false)
+        .unwrap()
+        .operation_id;
+    let result = terminal(&bridge, id).await;
+    assert_eq!(result.status, LibraryOperationStatus::Completed);
+    let before = fs::read(root.join(LIBRARY_FILE)).unwrap();
+    bridge.library_cancel(id).await.unwrap();
+    assert_eq!(
+        terminal(&bridge, id).await.status,
+        LibraryOperationStatus::Completed
+    );
+    assert_eq!(fs::read(root.join(LIBRARY_FILE)).unwrap(), before);
+}
+
+#[tokio::test]
+async fn configure_only_has_no_payload_or_inventory_validator_and_preserves_models() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = Arc::new(
+        DesktopBridge::new(
+            root.clone(),
+            temp.path().join(if cfg!(windows) {
+                "ai-runtime.exe"
+            } else {
+                "ai-runtime"
+            }),
+        )
+        .unwrap()
+        .with_directory_validator(|_| panic!("configure must not invoke scanning preflight")),
+    );
+    let file = source.path().join("model.gguf");
+    tiny_model(&file);
+    let mut selection = Some(vec![desktop_bridge::SelectedFile::open(&file).unwrap()]);
+    terminal(
+        &bridge,
+        bridge
+            .models_add(&mut selection, false)
+            .unwrap()
+            .operation_id,
+    )
+    .await;
+    let model_id = ModelLibrary::read(&root).unwrap().unwrap().models[0]
+        .manifest
+        .id
+        .clone();
+    fs::write(other.path().join("bad.gguf"), b"invalid").unwrap();
+    let huge = fs::File::create(other.path().join("huge.gguf")).unwrap();
+    huge.set_len(model_store::library::MAX_MODEL_BYTES + 1)
+        .unwrap();
+    for _ in 0..2 {
+        let id = bridge
+            .directory_configure(other.path().to_owned())
+            .unwrap()
+            .operation_id;
+        let state = terminal(&bridge, id).await;
+        assert_eq!(state.status, LibraryOperationStatus::Completed);
+        assert_eq!(state.examined_entries, 0);
+        assert_eq!(state.verified_files, 0);
+    }
+    let library = ModelLibrary::read(&root).unwrap().unwrap();
+    assert_eq!(library.models.len(), 1);
+    assert!(library.entry(&model_id).is_some());
+    assert_eq!(library.directory.as_deref(), Some(other.path()));
+}
+
+#[tokio::test]
+async fn optional_single_test_releases_work_lock_and_failed_test_keeps_registration() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    let file = source.path().join("model.gguf");
+    tiny_model(&file);
+    let mut selection = Some(vec![desktop_bridge::SelectedFile::open(&file).unwrap()]);
+    let state = terminal(
+        &bridge,
+        bridge
+            .models_add(&mut selection, true)
+            .unwrap()
+            .operation_id,
+    )
+    .await;
+    assert_eq!(state.status, LibraryOperationStatus::Completed);
+    let observation = state.files[0].local_validation.as_ref().unwrap();
+    assert_ne!(observation.error_code.as_deref(), Some("desktop_busy"));
+    assert!(!observation.generation_pass);
+    assert_eq!(ModelLibrary::read(&root).unwrap().unwrap().models.len(), 1);
+}
+
+#[tokio::test]
+async fn batch_auto_test_is_deferred_even_if_only_one_candidate_is_valid() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    let file = source.path().join("model.gguf");
+    let bad = source.path().join("bad.gguf");
+    tiny_model(&file);
+    fs::write(&bad, b"invalid").unwrap();
+    let mut selection = Some(vec![
+        desktop_bridge::SelectedFile::open(&file).unwrap(),
+        desktop_bridge::SelectedFile::open(&bad).unwrap(),
+    ]);
+    let state = terminal(
+        &bridge,
+        bridge
+            .models_add(&mut selection, true)
+            .unwrap()
+            .operation_id,
+    )
+    .await;
+    assert_eq!(state.status, LibraryOperationStatus::Partial);
+    let observation = state.files[0].local_validation.as_ref().unwrap();
+    assert_eq!(
+        observation.state,
+        model_store::local_validation::ValidationState::Deferred
+    );
+    assert!(!root.join("config.toml").exists());
+    let saved = ModelLibrary::read(&root).unwrap().unwrap();
+    assert_eq!(saved.models.len(), 1);
+}
+
+#[tokio::test]
+async fn manual_scan_of_empty_default_preserves_explicit_links_and_reports_only_scanned_count() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let default = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let bridge = bridge(&root);
+    let file = source.path().join("model.gguf");
+    tiny_model(&file);
+    let mut selection = Some(vec![desktop_bridge::SelectedFile::open(&file).unwrap()]);
+    terminal(
+        &bridge,
+        bridge
+            .models_add(&mut selection, false)
+            .unwrap()
+            .operation_id,
+    )
+    .await;
+    terminal(
+        &bridge,
+        bridge
+            .directory_configure(default.path().to_owned())
+            .unwrap()
+            .operation_id,
+    )
+    .await;
+    let scanned = terminal(&bridge, bridge.models_scan().unwrap().operation_id).await;
+    assert_eq!(scanned.status, LibraryOperationStatus::Completed);
+    assert_eq!(scanned.verified_files, 0);
+    assert_eq!(scanned.result.unwrap().registered_files, 0);
+    assert_eq!(ModelLibrary::read(&root).unwrap().unwrap().models.len(), 1);
 }

@@ -204,7 +204,7 @@ describe("native model-directory operation ownership", () => {
     terminal.resolve(progress("completed"));
     await vi.advanceTimersByTimeAsync(0);
     expect(controller.getSnapshot().library?.status).toBe("completed");
-    expect(controller.getSnapshot().notice).toContain("已保存");
+    expect(controller.getSnapshot().notice).toContain("本次登记");
     expect(controller.getSnapshot().notice).not.toContain("已取消");
   });
   it("reports bound failure without applying partial registration or losing the old configured path", async () => {
@@ -233,7 +233,7 @@ describe("native model-directory operation ownership", () => {
     await controller.applyDirectory();
     await vi.advanceTimersByTimeAsync(0);
     expect(controller.getSnapshot().library?.status).toBe("completed");
-    expect(controller.getSnapshot().notice).toContain("已保存");
+    expect(controller.getSnapshot().notice).toContain("本次登记");
     expect(controller.getSnapshot().error?.code).toBe("connection_failed");
   });
   it("does not replay apply after transport loss; recovery only cancels and reads the known operation", async () => {
@@ -514,4 +514,24 @@ it("keeps a partial commit even when its independent refresh fails", async () =>
   expect(controller.getSnapshot().library?.status).toBe("partial");
   expect(controller.getSnapshot().library?.file_errors).toHaveLength(1);
   expect(controller.getSnapshot().library_phase).toBe("idle");
+});
+
+
+it("configures a download location with retained inventory counts but no scanning", async () => {
+  const { api, controller } = await create({ libraryNext: vi.fn(async () => ({ ...progress("completed"), examined_entries: 0, candidate_files: 0, verified_files: 0 })) });
+  await controller.pickDirectory(); await controller.configureDirectory(); await vi.advanceTimersByTimeAsync(1);
+  expect(api.configureDirectory).toHaveBeenCalledExactlyOnceWith(selection.selection_id);
+  expect(api.applyDirectory).not.toHaveBeenCalled(); expect(api.scanModels).not.toHaveBeenCalled();
+  expect(controller.getSnapshot().library_phase).toBe("idle");
+  expect(controller.getSnapshot().error).toBeNull();
+  expect(controller.getSnapshot().notice).toBe("默认下载目录已保存，原有模型索引保留；未扫描新目录。");
+  expect(controller.getSnapshot().models.data).toEqual([model]);
+});
+
+it("keeps previously added models after a default-directory scan with no new candidates", async () => {
+  const { api, controller } = await create({ libraryNext: vi.fn(async () => ({ ...progress("completed"), examined_entries: 0, candidate_files: 0, verified_files: 0, result: { directory_id: "new-directory", library_generation: "new-generation", registered_files: 0, available_files: 0, rejected_files: 0 } })) });
+  await controller.scanModels(); await vi.advanceTimersByTimeAsync(1);
+  expect(controller.getSnapshot().library_phase).toBe("idle"); expect(controller.getSnapshot().models.data).toEqual([model]);
+  expect(controller.getSnapshot().notice).toContain("已显式添加的模型保留");
+  expect(controller.getSnapshot().notice).not.toContain("索引为空"); expect(api.scanModels).toHaveBeenCalledTimes(1);
 });

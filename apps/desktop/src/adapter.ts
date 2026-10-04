@@ -51,6 +51,10 @@ export const nativeApi: DesktopApi = {
   start: (initialize_if_missing) =>
     call("runtime_start", { initialize_if_missing }),
   pickDirectory: () => call("model_directory_pick"),
+  pickModels: () => call("models_pick"),
+  discardModelSelection: (selection_id) => call("models_selection_discard", { selection_id }),
+  addModels: (selection_id, auto_test) => call("models_add", { selection_id, ...(auto_test === undefined ? {} : { auto_test }) }),
+  configureDirectory: (selection_id) => call("model_directory_configure", { selection_id }),
   applyDirectory: (selection_id) =>
     call("model_directory_apply", { selection_id }),
   scanModels: () => call("models_scan"),

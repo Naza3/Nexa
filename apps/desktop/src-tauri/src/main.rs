@@ -7,6 +7,8 @@ mod directory_selection;
 #[cfg(windows)]
 mod download_component;
 #[cfg(any(windows, test))]
+mod file_selection;
+#[cfg(any(windows, test))]
 mod layout;
 #[cfg(any(windows, test))]
 mod local_path;

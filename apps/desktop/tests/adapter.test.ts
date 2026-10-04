@@ -47,10 +47,18 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("desktop_snapshot", undefined);
     await nativeApi.pickDirectory();
     expect(invoke).toHaveBeenLastCalledWith("model_directory_pick", undefined);
+    await nativeApi.configureDirectory("selection-only");
+    expect(invoke).toHaveBeenLastCalledWith("model_directory_configure", { request: { selection_id: "selection-only" } });
     await nativeApi.applyDirectory("selection-only");
     expect(invoke).toHaveBeenLastCalledWith("model_directory_apply", {
       request: { selection_id: "selection-only" },
     });
+    await nativeApi.pickModels();
+    expect(invoke).toHaveBeenLastCalledWith("models_pick", undefined);
+    await nativeApi.addModels("opaque-selection", false);
+    expect(invoke).toHaveBeenLastCalledWith("models_add", { request: { selection_id: "opaque-selection", auto_test: false } });
+    await nativeApi.discardModelSelection("opaque-selection");
+    expect(invoke).toHaveBeenLastCalledWith("models_selection_discard", { request: { selection_id: "opaque-selection" } });
     await nativeApi.scanModels();
     expect(invoke).toHaveBeenLastCalledWith("models_scan", undefined);
     await nativeApi.reconcileModels();
