@@ -232,6 +232,44 @@ class PackageTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unsupported Visual Studio CMake generator"):
                     pack.native_build_settings(dict(selected, installationVersion=version), Path(selected["installationPath"]), env)
 
+    def test_cmake_minimum_accepts_42_and_newer_versions_with_selected_generator(self):
+        env = {"PATH": "selected toolchain"}
+        for generator in pack.VS_GENERATORS.values():
+            for version in ("4.2.0", "4.4.3", "4.4.4", "4.4.30", "4.10.0", "5.0.0", "4.4.4-vendor1"):
+                output = f"cmake version {version}\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake)."
+                capabilities = {"generators": [{"name": "Ninja"}, {"name": generator}]}
+                with self.subTest(generator=generator, version=version), mock.patch.object(pack, "command", side_effect=[output, json.dumps(capabilities)]) as run:
+                    # The existing manifest field keeps the complete actual output.
+                    self.assertEqual(pack.checked_cmake(env, generator), output)
+                    self.assertEqual(run.call_args_list, [mock.call(["cmake", "--version"], env), mock.call(["cmake", "-E", "capabilities"], env)])
+
+    def test_cmake_below_minimum_is_rejected_before_capability_or_build_commands(self):
+        for generator in pack.VS_GENERATORS.values():
+            for version in ("3.24.0", "3.99.99", "4.0.9", "4.1.99"):
+                with self.subTest(generator=generator, version=version), mock.patch.object(pack, "command", return_value=f"cmake version {version}") as run, self.assertRaisesRegex(ValueError, "CMake 4.2 or newer"):
+                    pack.checked_cmake({}, generator)
+                run.assert_called_once_with(["cmake", "--version"], {})
+
+    def test_cmake_malformed_version_is_rejected(self):
+        for output in ("", "4.4.4", "cmake version 4.4", "cmake version 4.4.4.1", "cmake version 4.4.4oops", "cmake version ４.４.４", "cmake version 4.4.4 extra", "warning\ncmake version 4.4.4"):
+            with self.subTest(output=output), mock.patch.object(pack, "command", return_value=output) as run, self.assertRaisesRegex(ValueError, "cannot parse CMake version"):
+                pack.checked_cmake({}, pack.VS_GENERATORS[18])
+            run.assert_called_once_with(["cmake", "--version"], {})
+
+    def test_cmake_newer_version_still_requires_exact_selected_generator(self):
+        for generators in ([], [{"name": "Visual Studio 17 2022"}], [{"name": "Visual Studio 18 2026 Preview"}]):
+            with self.subTest(generators=generators), mock.patch.object(pack, "command", side_effect=["cmake version 4.4.4", json.dumps({"generators": generators})]), self.assertRaisesRegex(ValueError, "required generator: Visual Studio 18 2026"):
+                pack.checked_cmake({}, pack.VS_GENERATORS[18])
+
+    def test_cmake_malformed_capabilities_is_rejected(self):
+        for capabilities in ("not JSON", "null", "[]", "{}", '{"generators": {}}', '{"generators": [null]}', '{"generators": [{}]}', '{"generators": [{"name": 18}]}'):
+            with self.subTest(capabilities=capabilities), mock.patch.object(pack, "command", side_effect=["cmake version 4.4.4", capabilities]), self.assertRaisesRegex(ValueError, "CMake capabilities"):
+                pack.checked_cmake({}, pack.VS_GENERATORS[18])
+
+    def test_cmake_command_failure_is_not_hidden(self):
+        with mock.patch.object(pack, "command", side_effect=["cmake version 4.4.4", ValueError("command failed (1): cmake")]), self.assertRaisesRegex(ValueError, "command failed"):
+            pack.checked_cmake({}, pack.VS_GENERATORS[18])
+
     def test_build_wires_selected_vs2026_to_cmake_and_isolates_native_and_cargo_caches(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(pack, "ROOT", Path(folder)):
             root = Path(folder)
@@ -246,7 +284,9 @@ class PackageTests(unittest.TestCase):
                 if args[:2] == ["rustc", "-vV"]:
                     return "release: 1.98.1\nhost: x86_64-pc-windows-msvc"
                 if args[:2] == ["cmake", "--version"]:
-                    return "cmake version 4.4.3"
+                    return "cmake version 4.4.4"
+                if args == ["cmake", "-E", "capabilities"]:
+                    return json.dumps({"generators": [{"name": pack.VS_GENERATORS[18]}]})
                 if args[:4] == ["git", "-C", "vendor/llama.cpp", "rev-parse"]:
                     return pack.LLAMA_COMMIT
                 if args[:2] == ["git", "rev-parse"]:

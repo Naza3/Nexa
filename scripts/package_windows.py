@@ -27,6 +27,7 @@ API_SET = re.compile(r"^(?:api|ext)-ms-win-[a-z0-9-]+\.dll$")
 DEBUG_CRT = re.compile(r"^(?:ucrtbased|(?:vcruntime|msvcp|msvcr|concrt|vcomp)\d+(?:_\d+)?d)\.dll$")
 ROOT_FILES = {"ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", "manifest.json", "SHA256SUMS", "THIRD_PARTY_NOTICES.md"}
 VS_GENERATORS = {17: "Visual Studio 17 2022", 18: "Visual Studio 18 2026"}
+CMAKE_MINIMUM = (4, 2, 0)
 VS_INSTALL_HELP = ("If Visual Studio is already installed, open Visual Studio Installer > Modify and add "
                    "Desktop development with C++, MSVC x64/x86 tools and a Windows 10/11 SDK. "
                    "Otherwise install Visual Studio 2022 Build Tools from "
@@ -408,6 +409,29 @@ def selected_visual_studio():
     fail("; ".join(errors) + ". " + VS_INSTALL_HELP)
 
 
+def checked_cmake(env, generator):
+    """Require local build capabilities; keep the actual version for the manifest."""
+    cmake = command(["cmake", "--version"], env)
+    first_line = cmake.splitlines()[0] if cmake else ""
+    version = re.fullmatch(r"cmake version ([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[0-9A-Za-z][0-9A-Za-z.+-]*)?", first_line)
+    if version is None:
+        fail("cannot parse CMake version; expected 'cmake version <major>.<minor>.<patch>'")
+    # CMake 4.2 introduces the VS2026 generator. Use one minimum for both
+    # supported VS releases, without restricting newer minor or patch versions.
+    if tuple(map(int, version.groups())) < CMAKE_MINIMUM:
+        fail("CMake 4.2 or newer is required for local Windows builds")
+    try:
+        capabilities = json.loads(command(["cmake", "-E", "capabilities"], env))
+    except json.JSONDecodeError:
+        fail("CMake capabilities did not return valid JSON")
+    generators = capabilities.get("generators") if isinstance(capabilities, dict) else None
+    if not isinstance(generators, list) or any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in generators):
+        fail("CMake capabilities did not return a valid generator list")
+    if not any(item["name"] == generator for item in generators):
+        fail(f"installed CMake does not provide the required generator: {generator}")
+    return cmake
+
+
 def native_build_settings(selected, vs, env):
     version_parts = visual_studio_version(selected)
     generator = VS_GENERATORS.get(version_parts[0] if version_parts else None)
@@ -566,12 +590,10 @@ def build():
     rust = command(["rustc", "-vV"], env)
     if "release: 1.98.1\n" not in rust + "\n" or "host: x86_64-pc-windows-msvc" not in rust:
         fail("pinned Rust 1.98.1 native x86_64 MSVC toolchain is required")
-    cmake = command(["cmake", "--version"], env)
-    if not cmake.startswith("cmake version 4.4.3"):
-        fail("CMake 4.4.3 is required by the development build lock")
+    native, configure_native = native_build_settings(selected, vs, env)
+    cmake = checked_cmake(env, configure_native[configure_native.index("-G") + 1])
     build_root = ROOT / "build/windows-x64-cpu"
     build_root.mkdir(parents=True, exist_ok=True)
-    native, configure_native = native_build_settings(selected, vs, env)
     # cc-rs build outputs can otherwise remain cached after switching VS/MSVC.
     cargo_target = build_root / ("cargo-" + native.name.removeprefix("native-"))
     env["CARGO_TARGET_DIR"] = str(cargo_target)

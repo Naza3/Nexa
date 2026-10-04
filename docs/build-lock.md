@@ -1,5 +1,9 @@
 # 开发与平台构建锁
 
+## CMake 当前最低要求（2026-10-04）
+
+本地 Windows 打包统一要求 **CMake >= 4.2.0**，覆盖本文较早的 4.4.3 精确限制。数值比较主/次/补丁号，允许 4.4.4 与后续版本；另用 `cmake -E capabilities` 确认安装提供所选 Visual Studio 生成器。VS2026 生成器由 CMake 4.2 引入；shim 自身声明最低 3.24，但按用户明确决定采用统一 4.2 下限。实际版本原文仍保存在构建 manifest，较新版本放行不构成已验证声明。参见[官方 VS2026 生成器说明](https://cmake.org/cmake/help/latest/generator/Visual%20Studio%2018%202026.html)与[验证记录](verification/2026-10-04-windows-vs-selection.md#cmake-最低版本后续修复)。本次只修改 CMake 检查，Rust/Node/npm 与推理源码要求未改。
+
 ## 2026-10-04 当前覆盖：复用既有 Visual Studio，本地 Windows 手动构建
 
 本节覆盖下文历史记录中仅限 VS2022、固定旧缓存路径及后续 GitHub Actions Rust 构建的安排；历史提交、测试与产物证据仍只属于其原版本。本轮修正在 `0d5b1dd5e77807239d8af99d39755ee381b2fae9` 基线上准备，尚无新的已验证 Windows App。详见[本轮验证记录](verification/2026-10-04-windows-vs-selection.md)。
