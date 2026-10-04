@@ -1,5 +1,18 @@
 # Nexa 当前状态
 
+## 2026-10-04 云端 Windows 交叉构建（提交前验证快照）
+
+用户因本地构建反复失败，已要求改由云端构建，并明确同意本次 Microsoft Build Tools/SDK 适用条款。当前使用 Linux 云端的独立 Windows x64 MSVC-ABI 测试路径，不使用 GitHub Actions、不购买云资源；用户后续负责运行验收，无需继续自行编译。原生 Windows 两个打包器保持原样，见[交叉测试构建说明](docs/windows-cross-test-build.md)。
+
+- 基线 `ecfa2c21aee52b65957dde9de534ca75704ca7f9`，真实锁定 llama.cpp Git checkout 为 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；主仓库使用核对原始 Git object SHA 的显式 shallow sparse checkout，未物化 Android/历史文件不冒称完整 checkout
+- 新增显式 `linux-clang-cl-msvc` profile，核对 Clang/MSVC frontend/ABI、Linux host、Windows x64 target、Release /MD、实际编译探针及与 i5-8400 对应的固定 AVX2 等 CPU 基线；不修改 vendor、不伪装 MSVC 编译器身份
+- 实际探索构建已完成 Windows AMD64 的 desktop、API CLI、worker、验收器以及锁定推理静态库；前端149项、typecheck/lint/production build通过，新增身份/打包器测试及独立审查通过。探索性构建不充作最终 commit 的交付证明
+- 新独立 cross-test 打包器保留产品既有三层来源身份、PE普通/延迟导入闭包、原许可与同源aria2；真实Linux签名校验与Windows系统验签/运行分开记录。工具链目录声明hash/大小异常保留在完整来源报告，不能写成所有上游目录链已通过
+- 最终提交后必须重新捕获源身份、执行最终构建并重建相同提交的aria2，再核验完整ZIP与生产身份消费者。当前仍待最终包；Windows窗口、真实模型、下载和目标Win10运行均未执行，不能宣称已验收或公开Release
+- 本轮不迁移pnpm、不修改Rust选择方式；后续构建工具最低版本和前端迁移继续单独处理
+
+下文为此前本地构建阶段快照；本节覆盖其“必须用户本地编译”的安排。
+
 ## 2026-10-04 CMake 最低版本修复（提交前验证快照）
 
 用户已明确本次先修复 CMake 并提交：本地 Windows 打包最低版本统一为 **CMake 4.2.0**，不再要求精确 4.4.3，4.4.4 及后续版本通过数值门槛；同时检查安装的 CMake 提供所选 VS 生成器。实际版本继续记录到 manifest，不把放行等同完整构建通过。本次不改变 Rust 工具链选择或前端包管理器，Rust 与 pnpm 后续单独处理。脚本检查和边界见[本轮验证](docs/verification/2026-10-04-windows-vs-selection.md#cmake-最低版本后续修复)。

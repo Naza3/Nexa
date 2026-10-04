@@ -10,6 +10,7 @@ mod native_identity;
 fn main() {
     for variable in [
         "AIR_NATIVE_DIR",
+        "AIR_NATIVE_PROFILE",
         "CMAKE",
         "CMAKE_GENERATOR",
         "CMAKE_BUILD_PARALLEL_LEVEL",
@@ -36,6 +37,12 @@ fn main() {
             .any(|f| f == "crt-static"),
         "crt-static is unsupported; Nexa Windows builds require the default dynamic MSVC CRT (/MD)"
     );
+    let profile = native_identity::selected_profile(
+        &env::var("HOST").unwrap(),
+        &env::var("TARGET").unwrap(),
+        &env::var("AIR_NATIVE_PROFILE").unwrap_or_default(),
+    )
+    .expect("unsupported native build profile");
     let native = if let Some(path) = env::var_os("AIR_NATIVE_DIR") {
         let native =
             std::path::absolute(PathBuf::from(path)).expect("AIR_NATIVE_DIR must be a usable path");
@@ -86,6 +93,7 @@ fn main() {
         &target_os,
         &env::var("CARGO_CFG_TARGET_ARCH").unwrap(),
         &env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default(),
+        profile,
     )
     .expect("native build identity mismatch");
     let libraries = native_identity::libraries(&native, &identity, target_env == "msvc")

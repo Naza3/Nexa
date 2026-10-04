@@ -6,7 +6,47 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
-add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+# The Linux cross route is opt-in and records Clang honestly. Native Windows
+# builds keep their existing MSVC path; this profile is a test-build capability.
+set(AIR_NATIVE_PROFILE "" CACHE STRING "Explicit non-native build profile")
+if(AIR_NATIVE_PROFILE)
+  if(NOT AIR_NATIVE_PROFILE STREQUAL "linux-clang-cl-msvc")
+    message(FATAL_ERROR "Unknown Nexa native build profile")
+  endif()
+  if(NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" OR
+     NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" OR NOT CMAKE_CROSSCOMPILING OR
+     NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64)$" OR
+     NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT CMAKE_BUILD_TYPE STREQUAL "Release" OR
+     NOT CMAKE_MSVC_RUNTIME_LIBRARY STREQUAL "MultiThreadedDLL")
+    message(FATAL_ERROR "Linux cross profile requires Windows x64 Release /MD")
+  endif()
+  foreach(LANGUAGE C CXX)
+    if(NOT CMAKE_${LANGUAGE}_COMPILER_ID STREQUAL "Clang" OR
+       NOT CMAKE_${LANGUAGE}_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC" OR
+       NOT CMAKE_${LANGUAGE}_SIMULATE_ID STREQUAL "MSVC" OR
+       NOT CMAKE_${LANGUAGE}_COMPILER_TARGET STREQUAL "x86_64-pc-windows-msvc")
+      message(FATAL_ERROR "Linux cross profile requires an explicit Clang MSVC-ABI target and frontend")
+    endif()
+  endforeach()
+  # Compile a target-specific probe rather than treating a user-supplied profile
+  # string as proof. No Windows executable is run on the Linux build host.
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_TRY_COMPILE_CONFIGURATION Release)
+  unset(AIR_CROSS_ABI_VERIFIED CACHE)
+  check_cxx_source_compiles("
+#if !defined(__clang__) || !defined(_MSC_VER) || !defined(_WIN64) || !defined(_M_X64) || !defined(_MT) || !defined(_DLL) || defined(_DEBUG)
+#error Expected Clang Windows x64 MSVC ABI and Release dynamic CRT
+#endif
+static_assert(sizeof(void*) == 8, \"x64 required\");
+int main() { return 0; }
+" AIR_CROSS_ABI_VERIFIED)
+  if(NOT AIR_CROSS_ABI_VERIFIED)
+    message(FATAL_ERROR "Clang target/runtime compile probe failed")
+  endif()
+endif()
+if(MSVC)
+  add_compile_options(/utf-8)
+endif()
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
@@ -27,6 +67,32 @@ if(NOT LLAMA_COMMIT STREQUAL "2149c00f4442dc59302e134a02e4c99d5f7ed9fc")
   message(FATAL_ERROR "llama.cpp commit differs from Nexa lock")
 endif()
 add_subdirectory("${LLAMA_SOURCE}" llama)
+if(AIR_NATIVE_PROFILE STREQUAL "linux-clang-cl-msvc")
+  foreach(OPTION GGML_SSE42 GGML_AVX GGML_AVX2 GGML_FMA GGML_F16C GGML_BMI2)
+    if(NOT "${${OPTION}}" STREQUAL "ON")
+      message(FATAL_ERROR "Cross test builds must retain the fixed AVX2 CPU baseline: ${OPTION}=ON")
+    endif()
+  endforeach()
+  if(NOT GGML_AVX512 STREQUAL "OFF")
+    message(FATAL_ERROR "Cross test builds require GGML_AVX512=OFF")
+  endif()
+  # Verify the actual locked target settings too: CMake options alone are not
+  # proof that the MSVC-frontend branch applied the requested CPU baseline.
+  get_target_property(AIR_GGML_CPU_OPTIONS ggml-cpu COMPILE_OPTIONS)
+  get_target_property(AIR_GGML_CPU_DEFINITIONS ggml-cpu COMPILE_DEFINITIONS)
+  if(NOT "/arch:AVX2" IN_LIST AIR_GGML_CPU_OPTIONS)
+    message(FATAL_ERROR "ggml-cpu did not apply the requested /arch:AVX2")
+  endif()
+  set(AIR_GGML_CPU_BASELINE_OPTIONS "/arch:AVX2")
+  set(AIR_GGML_CPU_BASELINE_DEFINITIONS "")
+  foreach(DEFINITION GGML_AVX2 GGML_FMA GGML_F16C __BMI2__ GGML_BMI2)
+    if(NOT DEFINITION IN_LIST AIR_GGML_CPU_DEFINITIONS)
+      message(FATAL_ERROR "ggml-cpu did not apply the requested definition: ${DEFINITION}")
+    endif()
+    list(APPEND AIR_GGML_CPU_BASELINE_DEFINITIONS "${DEFINITION}")
+  endforeach()
+  set(AIR_CROSS_CPU_BASELINE_VERIFIED 1)
+endif()
 add_library(air_llama STATIC src/air_llama.cpp)
 target_include_directories(air_llama PUBLIC include)
 target_link_libraries(air_llama PUBLIC llama-common llama)
@@ -47,6 +113,8 @@ else()
   set(AIR_CRT "platform")
 endif()
 set(AIR_IDENTITY "schema=1\nsystem=${CMAKE_SYSTEM_NAME}\nprocessor=${CMAKE_SYSTEM_PROCESSOR}\npointer_bytes=${CMAKE_SIZEOF_VOID_P}\nconfiguration=$<CONFIG>\ncrt=${AIR_CRT}\nllama_commit=${LLAMA_COMMIT}\ncompiler_id=${CMAKE_CXX_COMPILER_ID}\ncompiler_version=${CMAKE_CXX_COMPILER_VERSION}\ncompiler=${CMAKE_CXX_COMPILER}\ngenerator=${CMAKE_GENERATOR}\ngenerator_platform=${CMAKE_GENERATOR_PLATFORM}\nwindows_sdk_version=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}\nmsvc_toolset_version=${CMAKE_VS_PLATFORM_TOOLSET_VERSION}\nsource=${CMAKE_CURRENT_SOURCE_DIR}\nbuild=${CMAKE_BINARY_DIR}\n")
+string(APPEND AIR_IDENTITY "profile=${AIR_NATIVE_PROFILE}\nhost_system=${CMAKE_HOST_SYSTEM_NAME}\ncross_compiling=${CMAKE_CROSSCOMPILING}\ncompiler_frontend=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}\ncompiler_simulate_id=${CMAKE_CXX_SIMULATE_ID}\ncompiler_target=${CMAKE_CXX_COMPILER_TARGET}\nc_compiler_id=${CMAKE_C_COMPILER_ID}\nc_compiler_frontend=${CMAKE_C_COMPILER_FRONTEND_VARIANT}\nc_compiler_simulate_id=${CMAKE_C_SIMULATE_ID}\nc_compiler_target=${CMAKE_C_COMPILER_TARGET}\nmsvc_runtime_library=${CMAKE_MSVC_RUNTIME_LIBRARY}\ncross_abi_verified=${AIR_CROSS_ABI_VERIFIED}\n")
+string(APPEND AIR_IDENTITY "cross_cpu_baseline_verified=${AIR_CROSS_CPU_BASELINE_VERIFIED}\nggml_cpu_baseline_options=${AIR_GGML_CPU_BASELINE_OPTIONS}\nggml_cpu_baseline_definitions=${AIR_GGML_CPU_BASELINE_DEFINITIONS}\n")
 foreach(OPTION GGML_NATIVE GGML_BACKEND_DL GGML_OPENMP GGML_CUDA GGML_VULKAN GGML_METAL GGML_AVX GGML_AVX2 GGML_AVX512 GGML_F16C GGML_FMA GGML_BMI2 GGML_SSE42 LLAMA_OPENSSL BUILD_SHARED_LIBS)
   string(APPEND AIR_IDENTITY "${OPTION}=${${OPTION}}\n")
 endforeach()
