@@ -42,6 +42,8 @@ pub const STAGES: &[&str] = &[
     "list_models",
     "reject_running_idle_change",
     "load_model",
+    "verify_local_validation",
+    "verify_offline_inventory",
     "first_chat_start",
     "first_chat_consume",
     "cancel_chat_start",

@@ -69,6 +69,8 @@ export type ModelCompatibility =
   | "unvalidated"
   | "unknown";
 export interface ModelSummary {
+  /** Local proof is separate from the historical validated matrix. */
+  local_validation?: LocalValidation | null;
   /** Absent on older services; never infer detailed support from the filename. */
   compatibility?: ModelCompatibility;
   id: string;
@@ -84,6 +86,17 @@ export interface ModelSummary {
   context_size: number | null;
   storage: "managed" | "external";
   availability_error: string | null;
+}
+export interface LocalValidation {
+  state: "untested" | "loaded" | "passed" | "failed" | "stale" | "deferred";
+  load_success: boolean;
+  generation_pass: boolean;
+  checked_at_unix_ms: number | null;
+  error_code: string | null;
+}
+export interface ReconcileResult {
+  status: "unchanged" | "observing" | "pending" | "started";
+  operation_id: string | null;
 }
 export interface DirectoryIdentity {
   directory_id: string;
@@ -132,6 +145,8 @@ export interface LibraryOperation {
   file_errors?: LibraryFileError[];
 }
 export interface ModelPage {
+  /** Older bridges omit the inventory origin. Never infer live residency from it. */
+  source?: "local" | "runtime";
   data: ModelSummary[];
   next_after: string | null;
   generation: string;
@@ -191,16 +206,16 @@ export interface DownloadOperation {
   attempt?: number;
   downloaded_bytes: number;
   total_bytes: number | null;
-  phase: "connecting" | "downloading" | "verifying" | "committing" | "finished";
+  phase: "connecting" | "downloading" | "verifying" | "committing" | "registering" | "testing" | "finished";
   status: "running" | "completed" | "cancelled" | "failed";
   terminal: boolean;
-  result: { saved: true; registered: false; file_name: string; cleanup_warning: string | null } | null;
+  result: { saved: true; registered: boolean; file_name: string; cleanup_warning: string | null; registration_error?: SafeError | null; local_validation?: LocalValidation | null } | null;
   error: SafeError | null;
 }
 export interface DesktopApi {
   catalog(): Promise<{ entries: CatalogEntry[] }>;
   discoverDirectory(): Promise<{ operation_id: string } | null>;
-  downloadStart(catalog_id: string): Promise<{ operation_id: string }>;
+  downloadStart(catalog_id: string, auto_test?: boolean): Promise<{ operation_id: string }>;
   downloadNext(operation_id: string): Promise<DownloadOperation>;
   downloadCancel(operation_id: string): Promise<{ stopping: boolean }>;
   snapshot(): Promise<Snapshot>;
@@ -208,6 +223,7 @@ export interface DesktopApi {
   pickDirectory(): Promise<DirectorySelection | null>;
   applyDirectory(selection_id: string): Promise<{ operation_id: string }>;
   scanModels(): Promise<{ operation_id: string }>;
+  reconcileModels(): Promise<ReconcileResult>;
   libraryNext(operation_id: string): Promise<LibraryOperation>;
   libraryCancel(
     operation_id: string,
@@ -217,6 +233,7 @@ export interface DesktopApi {
     generation: string | null,
   ): Promise<ModelPage>;
   loadModel(model_id: string, options: LoadOptions): Promise<RuntimeStatus>;
+  testModel(model_id: string, options: LoadOptions): Promise<LocalValidation>;
   unloadModel(): Promise<RuntimeStatus>;
   chatStart(request: ChatRequest): Promise<{ request_id: string }>;
   chatNext(request_id: string): Promise<ChatBatch>;

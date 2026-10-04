@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DesktopController, ViewState } from "./controller";
 import type { DownloadSource } from "./types";
+import { localValidationLabel, localValidationReason } from "./localValidation";
 
 const sourceName = (source: DownloadSource) => source === "modelscope" ? "ModelScope" : "Hugging Face";
 const fallbackDownloadMessage = "下载未完成，请提供诊断码和当前进度以便排查。";
@@ -28,12 +29,13 @@ function size(bytes: number) {
 export function DownloadProgress({ state, controller }: { state: ViewState; controller: DesktopController }) {
   const task = state.download;
   const active = state.download_phase !== "idle";
+  const saved = task?.phase === "registering" || task?.phase === "testing";
   if (!task && !active) return null;
   const phase = {
-    connecting: "连接下载源", downloading: "下载文件", verifying: "校验文件", committing: "保存文件", finished: "已结束",
+    connecting: "连接下载源", downloading: "下载文件", verifying: "校验文件", committing: "保存文件", registering: "文件已保存 · 正在登记", testing: "文件已登记 · 正在加载与基础测试", finished: "已结束",
   } as const;
-  const status = active ? state.download_phase === "recovery" ? "下载状态待确认" : state.download_phase === "stopping" ? "正在取消下载" : task ? phase[task.phase] : "正在提交下载" :
-    task?.status === "completed" ? "文件已保存，尚未登记" : task?.status === "cancelled" ? "下载已取消" : "下载失败";
+  const status = active ? state.download_phase === "recovery" ? "下载状态待确认" : state.download_phase === "stopping" ? saved ? "正在取消后续步骤，已保存文件保留" : "正在取消下载" : task ? phase[task.phase] : "正在提交下载" :
+    task?.status === "completed" ? task.result?.registered ? "文件已保存并登记" : "文件已保存，尚未登记" : task?.status === "cancelled" ? "下载已取消" : "下载失败";
   return <section className="library-progress download-progress" aria-label="模型下载进度">
     <div role="status"><strong>{status}</strong>
       {task && <>
@@ -43,19 +45,24 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
         <p>已接收 {size(task.downloaded_bytes)}{task.total_bytes !== null ? ` / ${size(task.total_bytes)}` : " · 总大小未知"}</p>
         {task.total_bytes !== null && task.total_bytes > 0 && <progress aria-label="模型文件已接收字节" max={task.total_bytes} value={task.downloaded_bytes} />}
         {task.phase === "verifying" && <p>网络接收已结束，正在核验真实文件；尚未保存完成。</p>}
+        {task.phase === "registering" && <p>下载文件已保存，正在更新模型索引；登记失败不会把已保存文件显示为下载失败。</p>}
+        {task.phase === "testing" && <p>正在执行已开启的自动加载与短文本测试。加载最多 300 秒，短测最多 30 秒；若服务忙碌或已加载其他模型，将暂缓，不会切换模型或中断其他客户端。</p>}
         {task.error !== null && <DownloadError error={task.error} />}
+        {task.result?.registration_error && <div className="registration-error"><strong>自动登记未完成，已保存文件仍保留</strong><DownloadError error={task.result.registration_error} /></div>}
+        {task.result?.local_validation && <div className="download-validation"><strong>{localValidationLabel(task.result.local_validation)}</strong><p>{localValidationReason(task.result.local_validation) ?? "仅证明此文件与当前引擎、设备、加载参数的加载及短文本生成；不证明回答质量、长上下文或工具调用能力。"}</p>{task.result.local_validation.error_code && <p>本机测试诊断码：{task.result.local_validation.error_code}</p>}</div>}
         {task.status === "completed" && state.snapshot?.model_directory.configured?.directory_id !== task.directory_id && <p>当前目录已变化。请回到上方保存目标后扫描登记。</p>}
         {task.result?.cleanup_warning && <p className="warning-text">文件已保存，部分下载文件清理未确认，请勿重复下载。{task.result.cleanup_warning}</p>}
       </>}
     </div>
     {state.download_phase === "recovery" ? <button onClick={() => void controller.recoverDownload()}>重新确认下载状态</button> : active ?
-      <button disabled={state.download_phase === "stopping"} onClick={() => void controller.cancelDownload()}>{state.download_phase === "stopping" ? "正在取消…" : "取消下载"}</button> :
-      task?.status === "completed" ? <button disabled={state.snapshot?.connection !== "stopped" || state.snapshot.model_directory.configured?.directory_id !== task.directory_id || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.scanModels()}>扫描目录以登记</button> :
-        task && <button disabled={state.snapshot?.connection !== "stopped" || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.startDownload(task.catalog_id)}>重新下载</button>}
+      <button disabled={state.download_phase === "stopping"} onClick={() => void controller.cancelDownload()}>{state.download_phase === "stopping" ? "正在取消…" : saved ? "取消后续步骤" : "取消下载"}</button> :
+      task?.status === "completed" ? !task.result?.registered && <button disabled={state.snapshot?.connection !== "stopped" || state.snapshot.model_directory.configured?.directory_id !== task.directory_id || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.scanModels()}>扫描目录以登记</button> :
+        task && <button disabled={state.snapshot?.connection !== "stopped" || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.startDownload(task.catalog_id, state.download_auto_test)}>重新下载</button>}
   </section>;
 }
 export function ModelDownloads({ state, controller, goSettings }: { state: ViewState; controller: DesktopController; goSettings: () => void }) {
   const [filter, setFilter] = useState("");
+  const [autoTest, setAutoTest] = useState(true);
   useEffect(() => { void controller.loadCatalog(); }, [controller]);
   const source = state.snapshot?.settings.download_source ?? "modelscope";
   const directory = state.snapshot?.model_directory.configured;
@@ -68,6 +75,8 @@ export function ModelDownloads({ state, controller, goSettings }: { state: ViewS
     <div className="directory-summary"><div><strong>已保存下载源：{sourceName(source)}</strong><p className="directory-path">下载到：{directory?.display_path ?? "尚未选择模型目录"}</p><p>在设置中更改来源并保存后生效；不会自动切换到其他下载源。</p></div><button onClick={goSettings}>目录与下载源设置</button></div>
     {!directory && <p role="status">{state.discovery === "checking" ? "正在自动发现程序旁的 models 目录…" : state.discovery === "none" ? "未发现程序旁的 models 目录，请先选择并应用模型目录。" : "请先完成模型目录登记；已保存目录始终优先。"}</p>}
     {!stopped && <p className="warning-text">下载和登记前须显式停止运行服务；不会自动停止其他客户端。</p>}
+    <label className="auto-test-option"><input type="checkbox" checked={autoTest} disabled={busy} onChange={(event) => setAutoTest(event.target.checked)} />下载后加载并进行基础测试（空闲时）</label>
+    <p className="small-note">文件完成校验后会自动登记。启用此选项会启动本机服务，只尝试本次下载的模型；若已有模型或任务则暂缓。取消勾选后仅保存和登记。</p>
     <p className="warning-text">未在你的目标机实测。文件大小不等于运行内存；16GB 总内存需与系统、模型和上下文共享，大模型或长上下文可能加载失败。这里不保证推理速度或可用内存。</p>
     <label className="catalog-filter">筛选下载目录<input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="模型名、架构或量化" /></label>
     {state.catalog_loading && <p role="status">正在读取下载目录…</p>}
@@ -80,7 +89,7 @@ export function ModelDownloads({ state, controller, goSettings }: { state: ViewS
           <details><summary>来源与文件身份</summary><p>SHA-256：{entry.sha256}</p>{entry.sources.map((item) => <p key={item.source}>{sourceName(item.source)}：{item.repository}<br />版本：{item.revision}<br />地址：{item.url}</p>)}</details>
           {!chosen && <p className="warning-text">{sourceName(source)} 暂无此文件；可前往设置选择可用来源，不会自动回退。</p>}
         </div>
-        <button className="primary" disabled={busy || !stopped || !directory || !chosen} aria-label={`下载 ${entry.display_name}`} onClick={() => void controller.startDownload(entry.catalog_id)}>下载</button>
+        <button className="primary" disabled={busy || !stopped || !directory || !chosen} aria-label={`下载 ${entry.display_name}`} onClick={() => void controller.startDownload(entry.catalog_id, autoTest)}>下载</button>
       </article>;
     })}</div>
   </section>;

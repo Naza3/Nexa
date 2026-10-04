@@ -1441,3 +1441,10 @@ h3 {
 .catalog-filename { font-size: 12px; }
 .download-progress progress { display: block; width: min(100%, 460px); margin: 8px 0; }
 .download-progress > div { min-width: 0; flex: 1; }
+
+.auto-test-option { display: flex; align-items: center; gap: 0.65rem; margin-top: 1rem; font-weight: 600; }
+.auto-test-option input { width: 1rem; height: 1rem; accent-color: var(--accent, #3463d8); }
+.model-row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; max-width: 12rem; }
+.local-test-progress { padding: 1rem; border: 1px solid var(--border, #d8e0ea); border-radius: 12px; line-height: 1.65; }
+.registration-error, .download-validation { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--border, #d8e0ea); }
+@media (max-width: 600px) { .model-row-actions { align-items: stretch; max-width: none; } }

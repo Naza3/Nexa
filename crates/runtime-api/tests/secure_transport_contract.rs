@@ -1153,3 +1153,64 @@ async fn huge_declared_body_silent_peer_does_not_hold_shutdown_beyond_linger_bou
     assert!(started.elapsed() < Duration::from_secs(2));
     drop(socket);
 }
+
+#[tokio::test]
+async fn private_model_probe_fin_and_rst_cancel_real_waiting_json_routes() {
+    for route in [
+        "/runtime/model-test",
+        "/runtime/load-and-test",
+        "/runtime/load-if-unloaded",
+    ] {
+        for rst in [false, true] {
+            let h = Harness::new(Mode::StartedWait).await;
+            let options = h.state.config.load_options();
+            if route == "/runtime/model-test" {
+                h.state
+                    .load(ModelId::new("fixture").unwrap(), options, false)
+                    .await
+                    .unwrap();
+            }
+            let body=json!({"model":"fixture","context_size":options.context_size,"threads":options.threads,"batch_size":options.batch_size}).to_string();
+            let mut socket = TcpStream::connect(h.address).await.unwrap();
+            let request = format!(
+                "POST {route} HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                h.address,
+                h.bearer.to_str().unwrap(),
+                body.len()
+            );
+            socket.write_all(request.as_bytes()).await.unwrap();
+            h.phase(4).await;
+            let owned = h.observed.request.lock().unwrap().as_ref().unwrap().clone();
+            assert_eq!(owned.options.max_tokens, 24);
+            assert_eq!(owned.messages.len(), 1);
+            if rst {
+                socket2::SockRef::from(&socket)
+                    .set_linger(Some(Duration::ZERO))
+                    .unwrap();
+                drop(socket);
+            } else {
+                socket.shutdown().await.unwrap();
+                drop(socket);
+            }
+            h.disconnected(DisconnectCase {
+                rst,
+                mode: Mode::StartedWait,
+                stream: false,
+                phase: 4,
+            })
+            .await;
+            // The fake resolver has no verified artifact/build scope, so no
+            // observation from this synthetic executor may become a receipt.
+            assert!(
+                !h._root
+                    .path()
+                    .join("models/local-model-validation.json")
+                    .exists()
+            );
+            let (status, _, _) = h.reply(false).await;
+            assert_eq!(status, 200);
+            h.clean().await;
+            h.close().await;
+        }
+    }
+}

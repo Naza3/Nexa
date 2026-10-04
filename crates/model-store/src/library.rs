@@ -299,6 +299,51 @@ impl ModelLibrary {
     }
 }
 
+/// New regular GGUF files only. Partial/control neighbors and symlinks never
+/// qualify; observations are metadata-only and bounded by the scan budget.
+pub fn observe_candidates(library: &ModelLibrary) -> Result<Vec<(String, FileIdentity)>> {
+    library.check_directory_identity()?;
+    let mut result = Vec::new();
+    for (count, entry) in fs::read_dir(&library.directory)
+        .map_err(file_error)?
+        .enumerate()
+    {
+        if count >= MAX_DIRECTORY_ENTRIES {
+            return Err(library_error(ErrorCode::ModelLibraryLimit));
+        }
+        let entry = entry.map_err(file_error)?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !name.to_ascii_lowercase().ends_with(".gguf") || !valid_file_name(&name) {
+            continue;
+        }
+        if ["aria2", "part", "crdownload", "download"]
+            .iter()
+            .any(|suffix| library.directory.join(format!("{name}.{suffix}")).exists())
+        {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path()).map_err(file_error)?;
+        if !metadata.is_file() || indirect(&metadata) || metadata.len() == 0 {
+            continue;
+        }
+        if metadata.len() > MAX_MODEL_BYTES || result.len() >= MAX_EXTERNAL_MODELS {
+            return Err(library_error(ErrorCode::ModelLibraryLimit));
+        }
+        let file = open_read_file(&entry.path(), false)?;
+        let observed = identity(&file)?;
+        if library.models.iter().any(|entry| {
+            file_key(&entry.manifest.relative_file) == file_key(&name) && entry.identity == observed
+        }) {
+            continue;
+        }
+        result.push((name, observed));
+    }
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(result)
+}
+
 pub struct ScannedLibrary {
     // None means every candidate was rejected. There is deliberately no empty
     // replacement library to accidentally publish in that case.
@@ -386,6 +431,12 @@ fn scan_directory_inner(
         }
         if !valid_file_name(&name) {
             return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
+        }
+        if ["aria2", "part", "crdownload", "download"]
+            .iter()
+            .any(|suffix| directory.path.join(format!("{name}.{suffix}")).exists())
+        {
+            continue;
         }
         total = add_scan_bytes(total, metadata.len())?;
         candidates.push(name);
@@ -827,6 +878,10 @@ fn indirect(metadata: &fs::Metadata) -> bool {
 pub fn validate_directory_candidate(path: &Path) -> Result<()> {
     DirectoryGuard::open(path).map(|_| ())
 }
+pub(crate) fn directory_object_identity(path: &Path) -> Result<(u64, u64)> {
+    let guard = DirectoryGuard::open(path)?;
+    Ok((guard.identity.volume, guard.identity.file))
+}
 struct DirectoryGuard {
     path: PathBuf,
     identity: FileIdentity,
@@ -887,7 +942,7 @@ impl DirectoryGuard {
 fn same_object(a: &FileIdentity, b: &FileIdentity) -> bool {
     a.volume == b.volume && a.file == b.file
 }
-fn identity(file: &File) -> Result<FileIdentity> {
+pub(crate) fn identity(file: &File) -> Result<FileIdentity> {
     let metadata = file.metadata().map_err(file_error)?;
     let modified = metadata
         .modified()
@@ -924,7 +979,7 @@ fn identity(file: &File) -> Result<FileIdentity> {
         modified_nanos: modified.subsec_nanos(),
     })
 }
-fn open_read_file(path: &Path, protect: bool) -> Result<File> {
+pub(crate) fn open_read_file(path: &Path, protect: bool) -> Result<File> {
     let metadata = fs::symlink_metadata(path).map_err(file_error)?;
     if !metadata.is_file() || indirect(&metadata) {
         return Err(library_error(ErrorCode::ModelFileUnavailable));

@@ -1,5 +1,17 @@
 # 开发与平台构建锁
 
+## 独立 Linux → Windows 测试路径（2026-10-04）
+
+按用户云端构建请求，新增[显式交叉测试流程](windows-cross-test-build.md)，原生 Windows/VS 打包链不变。实际探索工具组合为 Rust/Cargo1.98.1、Clang/LLD23.1.2、CMake4.2.3、Ninja1.13、cargo-xwin0.23.1 与指定 Microsoft SDK/CRT。Clang保持真实compiler_id，目标是x86_64-pc-windows-msvc，C/C++为Release /MD；不把MinGW库混进MSVC worker。CPU基线显式固定SSE4.2/AVX/AVX2/FMA/F16C/BMI2启用、AVX512关闭，并核验实际ggml-cpu flags/定义。
+
+工具实际版本/二进制hash、官方payload来源、SDK、CRT原VSIX成员、原许可和签名证据写入每次跨构建来源记录。已观察到Microsoft channel→vsman目录hash/size不符及3个payload声明大小不符，失败事实不抹除；40个payload SHA均与实际官方目录匹配，所需Redist原包与DLL另有字节/签名证明。Linux osslsigncode真实验证不等价于Windows Get-AuthenticodeSignature。仅供此次私有测试，不能据此声称已确认许可资格或获得公开再分发权。
+
+最终构建采用冻结源码的真实commit/tree/sparse状态与源收据；最终aria2仍要求真实同提交构建。源收据后的源码变更必须重捕获并重构建，不改写旧清单。完整打包、跨构建、原生Windows执行和目标机验收分别记录。
+
+## CMake 当前最低要求（2026-10-04）
+
+本地 Windows 打包统一要求 **CMake >= 4.2.0**，覆盖本文较早的 4.4.3 精确限制。数值比较主/次/补丁号，允许 4.4.4 与后续版本；另用 `cmake -E capabilities` 确认安装提供所选 Visual Studio 生成器。VS2026 生成器由 CMake 4.2 引入；shim 自身声明最低 3.24，但按用户明确决定采用统一 4.2 下限。实际版本原文仍保存在构建 manifest，较新版本放行不构成已验证声明。参见[官方 VS2026 生成器说明](https://cmake.org/cmake/help/latest/generator/Visual%20Studio%2018%202026.html)与[验证记录](verification/2026-10-04-windows-vs-selection.md#cmake-最低版本后续修复)。本次只修改 CMake 检查，Rust/Node/npm 与推理源码要求未改。
+
 ## 2026-10-04 当前覆盖：复用既有 Visual Studio，本地 Windows 手动构建
 
 本节覆盖下文历史记录中仅限 VS2022、固定旧缓存路径及后续 GitHub Actions Rust 构建的安排；历史提交、测试与产物证据仍只属于其原版本。本轮修正在 `0d5b1dd5e77807239d8af99d39755ee381b2fae9` 基线上准备，尚无新的已验证 Windows App。详见[本轮验证记录](verification/2026-10-04-windows-vs-selection.md)。

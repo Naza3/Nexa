@@ -58,11 +58,64 @@ impl Discovery {
     }
 }
 
+pub enum InstanceObservation {
+    Stopped(Option<InstanceLock>),
+    Running,
+}
+
 pub struct InstanceLock {
     _file: File,
     root: PathBuf,
 }
 impl InstanceLock {
+    /// Read-only observation: never creates/chmods state and never treats a
+    /// failed HTTP proof as a stopped service. Keep the returned guard alive
+    /// while reading an offline inventory. No lock file means no service has
+    /// acquired ownership yet; callers must recheck before mutating anything.
+    pub fn observe(data_dir: &Path) -> io::Result<InstanceObservation> {
+        let root = data_dir.join("runtime");
+        if data_dir.try_exists()? {
+            model_store::library::validate_directory_candidate(data_dir)
+                .map_err(|_| invalid("unsafe data directory"))?;
+        }
+        if root.try_exists()? {
+            model_store::library::validate_directory_candidate(&root)
+                .map_err(|_| invalid("unsafe runtime directory"))?;
+        }
+        let path = root.join("instance.lock");
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if root.join(DISCOVERY_FILE).try_exists()? {
+                    return Err(invalid("discovery without lock"));
+                }
+                return Ok(InstanceObservation::Stopped(None));
+            }
+            Err(error) => return Err(error),
+            Ok(_) => ensure_regular(&path)?,
+        }
+        // Exclusive locking needs a write-capable handle on Windows, but this
+        // operation never writes, creates, truncates, or changes permissions.
+        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                if root.join(DISCOVERY_FILE).try_exists()? {
+                    return Err(invalid("cleanup unconfirmed"));
+                }
+                Ok(InstanceObservation::Stopped(Some(Self {
+                    _file: file,
+                    root,
+                })))
+            }
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+            {
+                Ok(InstanceObservation::Running)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Lock order: instance first, then model-store. A live service is never
     /// considered stale because of a failed network probe or an old PID.
     pub fn try_acquire(data_dir: &Path) -> io::Result<Option<Self>> {
@@ -156,7 +209,15 @@ pub async fn wait_stopped(data_dir: &Path, instance: Uuid, deadline: Duration) -
     }
 }
 fn ensure_regular(path: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(path)?.file_type().is_file() {
+    let metadata = fs::symlink_metadata(path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(invalid("runtime state must not be a reparse point"));
+        }
+    }
+    if metadata.file_type().is_file() {
         Ok(())
     } else {
         Err(invalid("runtime state must be a regular file"))

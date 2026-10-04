@@ -43,3 +43,12 @@
 - Rust `1.98.1`、CMake `4.4.3`、固定 llama.cpp 与现有前端锁未变。用户已装 stable MSVC 别名，但本地 `rustc -vV` 的实际 release/host 未验证。后续 pnpm 迁移已明确暂缓，不在此次解阻中改包管理器
 - 后续 Rust 构建由用户在本地 Windows 手动执行，不再用 GitHub Actions；用户目前不能连接电脑。本次未执行真实 VsDevCmd/MSVC/CMake、CRT 装载/Authenticode、runtime/桌面 Release 打包、真实模型、下载/取消或目标 Win10 运行，Linux 单测不补足这些证据
 - 脚本/文档完成审查后，待新提交及真实同源 aria2 准备好，再给用户匹配输入，完成本地完整包和启动→下载/取消→独立 size/SHA→显式扫描/加载验证；新结果必须记录实际源码、VS/MSVC/SDK 与产物身份
+
+
+## CMake 最低版本后续修复
+
+2026-10-04，基于 `241146e57686161c3bda059d8f2f36bd3754eac1` 的提交前验证快照。用户安装 CMake 4.4.4，明确要求统一最低 4.2，并先单独提交 CMake 修复；Rust 选择问题不混入本次变更。
+
+`scripts/package_windows.py` 将 `cmake version 4.4.3` 精确前缀门槛替换为数值 `>= (4, 2, 0)`，并通过 `cmake -E capabilities` 核对所选 VS 生成器存在。保留 manifest 的原始 `toolchain.cmake` 字段及源身份、CRT、原生工具链和运行时逻辑。最低版本来自用户选择和 VS2026 所需能力；不声明所有未来版本已经验收。
+
+实际检查：`python3 -B -m unittest discover -s scripts -p test_windows_package.py -v`，41 项，39 通过、2 个原有 Windows 专用测试跳过；Python 编译检查退出 0。覆盖 4.2.0、4.4.3、4.4.4、较新 minor/major、过旧版本、格式错误、无效 capabilities 与生成器缺失。真实 Windows 构建、VS/CMake 执行和完整产品验证尚未运行；不将 Linux mock 当成 Windows 验收，也未运行 Rust 或 GitHub Actions。

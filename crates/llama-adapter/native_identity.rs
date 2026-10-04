@@ -25,11 +25,28 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, String>, String> {
     }
     Ok(fields)
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildProfile {
+    Native,
+    LinuxClangClMsvc,
+}
+pub fn selected_profile(host: &str, target: &str, requested: &str) -> Result<BuildProfile, String> {
+    match requested {
+        "" if host == target => Ok(BuildProfile::Native),
+        "linux-clang-cl-msvc"
+            if host == "x86_64-unknown-linux-gnu" && target == "x86_64-pc-windows-msvc" =>
+        {
+            Ok(BuildProfile::LinuxClangClMsvc)
+        }
+        _ => Err("unsupported host/target/native profile; cross builds require the explicit linux-clang-cl-msvc profile".into()),
+    }
+}
 pub fn validate(
     fields: &BTreeMap<String, String>,
     os: &str,
     arch: &str,
     features: &str,
+    profile: BuildProfile,
 ) -> Result<(), String> {
     let get = |key: &str| fields.get(key).map(String::as_str).unwrap_or("");
     if features.split(',').any(|f| f == "crt-static") {
@@ -57,8 +74,45 @@ pub fn validate(
     {
         return Err("native architecture mismatch; only x86_64 is currently supported".into());
     }
-    if os == "windows" && (get("crt") != "MD" || get("compiler_id") != "MSVC") {
-        return Err("Windows native build must be Release MSVC /MD".into());
+    if os == "windows" {
+        if get("crt") != "MD" {
+            return Err("Windows native build must be Release /MD".into());
+        }
+        match profile {
+            BuildProfile::Native if get("compiler_id") == "MSVC" && get("profile").is_empty() => {}
+            BuildProfile::LinuxClangClMsvc => {
+                for (key, expected) in [
+                    ("profile", "linux-clang-cl-msvc"),
+                    ("host_system", "Linux"),
+                    ("cross_compiling", "TRUE"),
+                    ("compiler_id", "Clang"),
+                    ("compiler_frontend", "MSVC"),
+                    ("compiler_simulate_id", "MSVC"),
+                    ("compiler_target", "x86_64-pc-windows-msvc"),
+                    ("c_compiler_id", "Clang"),
+                    ("c_compiler_frontend", "MSVC"),
+                    ("c_compiler_simulate_id", "MSVC"),
+                    ("c_compiler_target", "x86_64-pc-windows-msvc"),
+                    ("msvc_runtime_library", "MultiThreadedDLL"),
+                    ("cross_abi_verified", "1"),
+                    ("cross_cpu_baseline_verified", "1"),
+                    ("GGML_SSE42", "ON"),
+                    ("GGML_AVX", "ON"),
+                    ("GGML_AVX2", "ON"),
+                    ("GGML_FMA", "ON"),
+                    ("GGML_F16C", "ON"),
+                    ("GGML_BMI2", "ON"),
+                    ("GGML_AVX512", "OFF"),
+                ] {
+                    if get(key) != expected {
+                        return Err(format!("cross native identity mismatch: {key}"));
+                    }
+                }
+            }
+            _ => return Err("Windows native build must use MSVC or the explicit verified Linux Clang MSVC-ABI profile".into()),
+        }
+    } else if profile != BuildProfile::Native || !get("profile").is_empty() {
+        return Err("cross profile is only supported for Windows x64".into());
     }
     for option in [
         "GGML_NATIVE",
@@ -136,7 +190,7 @@ mod tests {
     }
     #[test]
     fn rejects_platform_configuration_crt_and_cpu_mismatches() {
-        assert!(validate(&valid(), "windows", "x86_64", "sse2").is_ok());
+        assert!(validate(&valid(), "windows", "x86_64", "sse2", BuildProfile::Native).is_ok());
         for (key, value) in [
             ("system", "Linux"),
             ("configuration", "Debug"),
@@ -148,9 +202,181 @@ mod tests {
         ] {
             let mut fields = valid();
             fields.insert(key.into(), value.into());
-            assert!(validate(&fields, "windows", "x86_64", "").is_err());
+            assert!(validate(&fields, "windows", "x86_64", "", BuildProfile::Native).is_err());
         }
-        assert!(validate(&valid(), "windows", "x86_64", "sse2,crt-static").is_err());
+        assert!(
+            validate(
+                &valid(),
+                "windows",
+                "x86_64",
+                "sse2,crt-static",
+                BuildProfile::Native
+            )
+            .is_err()
+        );
+    }
+    fn cross() -> BTreeMap<String, String> {
+        let mut fields = valid();
+        for (key, value) in [
+            ("profile", "linux-clang-cl-msvc"),
+            ("host_system", "Linux"),
+            ("cross_compiling", "TRUE"),
+            ("compiler_id", "Clang"),
+            ("compiler_frontend", "MSVC"),
+            ("compiler_simulate_id", "MSVC"),
+            ("compiler_target", "x86_64-pc-windows-msvc"),
+            ("c_compiler_id", "Clang"),
+            ("c_compiler_frontend", "MSVC"),
+            ("c_compiler_simulate_id", "MSVC"),
+            ("c_compiler_target", "x86_64-pc-windows-msvc"),
+            ("msvc_runtime_library", "MultiThreadedDLL"),
+            ("cross_abi_verified", "1"),
+            ("cross_cpu_baseline_verified", "1"),
+            ("GGML_SSE42", "ON"),
+            ("GGML_AVX", "ON"),
+            ("GGML_AVX2", "ON"),
+            ("GGML_FMA", "ON"),
+            ("GGML_F16C", "ON"),
+            ("GGML_BMI2", "ON"),
+            ("GGML_AVX512", "OFF"),
+        ] {
+            fields.insert(key.into(), value.into());
+        }
+        fields
+    }
+    #[test]
+    fn cross_profile_requires_matching_rust_host_and_target() {
+        assert_eq!(
+            selected_profile(
+                "x86_64-unknown-linux-gnu",
+                "x86_64-pc-windows-msvc",
+                "linux-clang-cl-msvc"
+            )
+            .unwrap(),
+            BuildProfile::LinuxClangClMsvc
+        );
+        assert_eq!(
+            selected_profile("x86_64-pc-windows-msvc", "x86_64-pc-windows-msvc", "").unwrap(),
+            BuildProfile::Native
+        );
+        for (host, target, profile) in [
+            ("x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", ""),
+            (
+                "x86_64-unknown-linux-gnu",
+                "x86_64-pc-windows-gnu",
+                "linux-clang-cl-msvc",
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                "aarch64-pc-windows-msvc",
+                "linux-clang-cl-msvc",
+            ),
+            (
+                "x86_64-pc-windows-msvc",
+                "x86_64-pc-windows-msvc",
+                "linux-clang-cl-msvc",
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                "x86_64-pc-windows-msvc",
+                "unknown",
+            ),
+        ] {
+            assert!(selected_profile(host, target, profile).is_err());
+        }
+    }
+    #[test]
+    fn cross_clang_requires_each_abi_runtime_and_profile_field() {
+        let fields = cross();
+        assert!(
+            validate(
+                &fields,
+                "windows",
+                "x86_64",
+                "",
+                BuildProfile::LinuxClangClMsvc
+            )
+            .is_ok()
+        );
+        assert!(validate(&fields, "windows", "x86_64", "", BuildProfile::Native).is_err());
+        assert!(
+            validate(
+                &valid(),
+                "windows",
+                "x86_64",
+                "",
+                BuildProfile::LinuxClangClMsvc
+            )
+            .is_err()
+        );
+        for key in [
+            "profile",
+            "host_system",
+            "cross_compiling",
+            "compiler_id",
+            "compiler_frontend",
+            "compiler_simulate_id",
+            "compiler_target",
+            "c_compiler_id",
+            "c_compiler_frontend",
+            "c_compiler_simulate_id",
+            "c_compiler_target",
+            "msvc_runtime_library",
+            "cross_abi_verified",
+            "cross_cpu_baseline_verified",
+            "GGML_SSE42",
+            "GGML_AVX",
+            "GGML_AVX2",
+            "GGML_FMA",
+            "GGML_F16C",
+            "GGML_BMI2",
+            "GGML_AVX512",
+            "crt",
+            "GGML_NATIVE",
+            "GGML_OPENMP",
+            "GGML_CUDA",
+            "GGML_VULKAN",
+            "GGML_METAL",
+            "GGML_BACKEND_DL",
+            "LLAMA_OPENSSL",
+            "BUILD_SHARED_LIBS",
+        ] {
+            let mut bad = fields.clone();
+            bad.insert(key.into(), "wrong".into());
+            assert!(
+                validate(
+                    &bad,
+                    "windows",
+                    "x86_64",
+                    "",
+                    BuildProfile::LinuxClangClMsvc
+                )
+                .is_err(),
+                "accepted wrong {key}"
+            );
+            bad.remove(key);
+            assert!(
+                validate(
+                    &bad,
+                    "windows",
+                    "x86_64",
+                    "",
+                    BuildProfile::LinuxClangClMsvc
+                )
+                .is_err(),
+                "accepted missing {key}"
+            );
+        }
+        assert!(
+            validate(
+                &fields,
+                "windows",
+                "x86_64",
+                "crt-static",
+                BuildProfile::LinuxClangClMsvc
+            )
+            .is_err()
+        );
     }
     #[test]
     fn rejects_duplicate_fields() {

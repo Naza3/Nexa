@@ -1,4 +1,5 @@
 import type { ModelSummary } from "./types";
+import { localValidationLabel, localValidationReason } from "./localValidation";
 
 const sourceErrors: Record<string, string> = {
   model_file_changed: "源文件已变动，请停止服务后重新扫描；仍须通过加载时核验",
@@ -25,11 +26,13 @@ export function modelCompatibility(model: ModelSummary) {
         ? "当前服务未提供兼容性详情；不能据此判断本版本支持范围"
         : !candidate
           ? "当前服务未提供独立加载资格，请重启匹配版本后检查"
+          : model.local_validation
+            ? localValidationReason(model.local_validation)
           : !verified
             ? "未实测，可尝试加载。引擎、原始模板与设备资源仍须在加载时通过检查，失败不会改用其他模板"
             : null);
   return {
-    admission: verified ? "有精确模型验证记录" : detailed ? "未实测" : "未提供兼容性详情",
+    admission: model.local_validation ? localValidationLabel(model.local_validation) : verified ? "有精确模型验证记录" : detailed ? "未实测" : "未提供兼容性详情",
     architecture: status === "architecture_unsupported"
       ? "当前引擎报告不支持此架构"
       : "引擎兼容性以实际加载为准；验证记录不限制候选模型",

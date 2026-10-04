@@ -44,7 +44,7 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
 export const nativeApi: DesktopApi = {
   catalog: () => call("model_catalog"),
   discoverDirectory: () => call("model_directory_discover"),
-  downloadStart: (catalog_id) => call("model_download_start", { catalog_id }),
+  downloadStart: (catalog_id, auto_test) => call("model_download_start", { catalog_id, ...(auto_test === undefined ? {} : { auto_test }) }),
   downloadNext: (operation_id) => call("model_download_next", { operation_id }),
   downloadCancel: (operation_id) => call("model_download_cancel", { operation_id }),
   snapshot: () => call("desktop_snapshot"),
@@ -54,12 +54,15 @@ export const nativeApi: DesktopApi = {
   applyDirectory: (selection_id) =>
     call("model_directory_apply", { selection_id }),
   scanModels: () => call("models_scan"),
+  reconcileModels: () => call("models_reconcile"),
   libraryNext: (operation_id) => call("model_library_next", { operation_id }),
   libraryCancel: (operation_id) =>
     call("model_library_cancel", { operation_id }),
   modelsPage: (after, generation) => call("models_page", { after, generation }),
   loadModel: (model_id, options) =>
     call("model_load", { model_id, ...options }),
+  testModel: (model_id, options) =>
+    call("model_test", { model_id, ...options }),
   unloadModel: () => call("model_unload"),
   chatStart: (request) => call("chat_start", request),
   chatNext: (request_id) => call("chat_next", { request_id }),

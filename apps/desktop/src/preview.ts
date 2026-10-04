@@ -138,6 +138,8 @@ export function createPreviewApi(): DesktopApi {
     pickDirectory: async () => pick,
     applyDirectory: async () => startLibrary(true),
     scanModels: async () => startLibrary(false),
+    reconcileModels: async () => ({ status: "unchanged", operation_id: null }),
+    testModel: async () => { throw new DesktopError("preview_only", "开发预览不能产生本机模型测试证据。"); },
     libraryNext: async (operation_id) => {
       await wait(70);
       if (libraryTerminal) return libraryTerminal;
@@ -216,6 +218,7 @@ export function createPreviewApi(): DesktopApi {
       return { operation_id, status: "stopping" };
     },
     modelsPage: async () => ({
+      source: snapshot.connection === "connected" ? "runtime" : "local",
       data: structuredClone(models),
       next_after: null,
       generation: catalogGeneration,

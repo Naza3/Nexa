@@ -1,8 +1,9 @@
 //! Loopback HTTP management, strict text-only API, and bounded transport.
 //! This crate and the CLI never link the native inference libraries.
-pub mod config;
+mod config;
 pub mod dto;
 pub mod errors;
+pub mod probe;
 pub mod service;
 pub mod state;
 pub use config::Config;

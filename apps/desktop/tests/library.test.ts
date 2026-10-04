@@ -467,7 +467,9 @@ it("accepts partial publication after late cancellation without claiming complet
   await controller.cancelLibrary(); terminal.resolve(partialProgress()); await vi.advanceTimersByTimeAsync(0);
   expect(controller.getSnapshot().library?.status).toBe("partial");
   expect(controller.getSnapshot().library?.file_errors).toHaveLength(1);
-  expect(controller.getSnapshot().models.generation).toBeNull();
+  expect(controller.getSnapshot().models.generation).toBe("generation-1");
+  expect(api.modelsPage).toHaveBeenCalledTimes(2);
+  expect(api.start).not.toHaveBeenCalled();
   expect(controller.getSnapshot().notice).toBeNull();
   expect(controller.getSnapshot().error).toBeNull();
   expect(api.snapshot).toHaveBeenCalledTimes(2);

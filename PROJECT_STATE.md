@@ -1,5 +1,35 @@
 # Nexa 当前状态
 
+## 2026-10-04 模型自动登记与本机基础测试（提交前验证快照）
+
+本节为最新状态，覆盖下文历史“当前/待交付”安排。用户确认已交付 `688fe5c` 完整交叉测试包可以下载模型；未给出具体模型/源/hash，不能扩展为全部下载源或 Windows 完整验收通过。此前包为 18,674,810 字节，SHA256 `f7edd5c8ab204d0a326905aca5d98d0cb97eef5706350d94a6e65f6ffea1bd6e`。
+
+- 本次按 [ADR0019](docs/decisions/0019-model-onboarding-and-local-validation.md)接通下载后自动登记、可选空闲自动加载/基础短测、本机验证记录与停止服务时的只读模型列表
+- 启动/进入模型页/刷新有界发现外部新增完整 GGUF；服务运行中只显示待登记，不暗中停服或替换已加载模型。被动浏览不启动服务；下载页显式选项默认开启，旧调用未传选项默认关闭
+- 本机“加载成功/基础生成通过”与历史验证矩阵分开；绑定真实模型/模板/引擎/参数和平台，条件变化则失效。落盘失败、空输出、断流、取消或延期不能用旧 Passed 冒充本次通过
+- 最终源代码回归：Rust 全 workspace/all-targets 40 组 407 通过/0 失败/7 既有忽略，完整 clippy/fmt 通过；前端193项/typecheck/lint/production build通过；Python155项中153通过/2平台跳过；独立源码与断连/竞态复核无剩余阻断
+- Linux 真实 Qwen3-0.6B Q8_0 已完成加载、短生成、记录持久化、停服后离线读取与生命周期清理；报告 success/local_text_validation/offline_inventory 均 true。该证据不冒称 Windows 外部文件保护或窗口通过，见[本轮验证](docs/verification/2026-10-04-model-onboarding.md)
+- 下一步：形成源码提交并捕获干净源身份，执行新 Windows 交叉构建、真实同源 aria2 重建与完整 ZIP 核验后提供测试包。当前新包尚未完成；不运行 GitHub Actions、不购买资源、不改 vendor/推理 ABI、不恢复 Android/Harness
+
+## 2026-10-04 云端 Windows 交叉构建（提交前验证快照）
+
+用户因本地构建反复失败，已要求改由云端构建，并明确同意本次 Microsoft Build Tools/SDK 适用条款。当前使用 Linux 云端的独立 Windows x64 MSVC-ABI 测试路径，不使用 GitHub Actions、不购买云资源；用户后续负责运行验收，无需继续自行编译。原生 Windows 两个打包器保持原样，见[交叉测试构建说明](docs/windows-cross-test-build.md)。
+
+- 基线 `ecfa2c21aee52b65957dde9de534ca75704ca7f9`，真实锁定 llama.cpp Git checkout 为 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；主仓库使用核对原始 Git object SHA 的显式 shallow sparse checkout，未物化 Android/历史文件不冒称完整 checkout
+- 新增显式 `linux-clang-cl-msvc` profile，核对 Clang/MSVC frontend/ABI、Linux host、Windows x64 target、Release /MD、实际编译探针及与 i5-8400 对应的固定 AVX2 等 CPU 基线；不修改 vendor、不伪装 MSVC 编译器身份
+- 实际探索构建已完成 Windows AMD64 的 desktop、API CLI、worker、验收器以及锁定推理静态库；前端149项、typecheck/lint/production build通过，新增身份/打包器测试及独立审查通过。探索性构建不充作最终 commit 的交付证明
+- 新独立 cross-test 打包器保留产品既有三层来源身份、PE普通/延迟导入闭包、原许可与同源aria2；真实Linux签名校验与Windows系统验签/运行分开记录。工具链目录声明hash/大小异常保留在完整来源报告，不能写成所有上游目录链已通过
+- 最终提交后必须重新捕获源身份、执行最终构建并重建相同提交的aria2，再核验完整ZIP与生产身份消费者。当前仍待最终包；Windows窗口、真实模型、下载和目标Win10运行均未执行，不能宣称已验收或公开Release
+- 本轮不迁移pnpm、不修改Rust选择方式；后续构建工具最低版本和前端迁移继续单独处理
+
+下文为此前本地构建阶段快照；本节覆盖其“必须用户本地编译”的安排。
+
+## 2026-10-04 CMake 最低版本修复（提交前验证快照）
+
+用户已明确本次先修复 CMake 并提交：本地 Windows 打包最低版本统一为 **CMake 4.2.0**，不再要求精确 4.4.3，4.4.4 及后续版本通过数值门槛；同时检查安装的 CMake 提供所选 VS 生成器。实际版本继续记录到 manifest，不把放行等同完整构建通过。本次不改变 Rust 工具链选择或前端包管理器，Rust 与 pnpm 后续单独处理。脚本检查和边界见[本轮验证](docs/verification/2026-10-04-windows-vs-selection.md#cmake-最低版本后续修复)。
+
+本节覆盖下文“CMake 4.4.3 锁不变”的旧要求。此前 VS 修复已提交 `241146e57686161c3bda059d8f2f36bd3754eac1`，对应 aria2 构建输入已另行提供；新提交仍需匹配其来源身份的组件，不能混用旧包。用户 Windows 实际构建和新下载引擎运行仍待验证，不运行 GitHub Actions Rust 构建。
+
 ## 2026-10-04 当前覆盖与最小下一步
 
 本节是本轮最新状态，覆盖下文截至 2026-10-03 的历史“当前”安排、旧 CI 授权和最小下一步；保留原有历史验证事实，不重写旧提交或把旧证据转授新版本。

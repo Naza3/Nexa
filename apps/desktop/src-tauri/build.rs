@@ -14,6 +14,8 @@ fn main() {
                 "model_download_next",
                 "model_download_cancel",
                 "models_scan",
+                "models_reconcile",
+                "model_test",
                 "model_library_next",
                 "model_library_cancel",
                 "models_page",

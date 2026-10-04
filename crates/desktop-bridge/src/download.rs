@@ -1,5 +1,6 @@
 //! A bounded, explicit, single catalog download. No executable content, URL input,
-//! implicit source failover, automatic loading, or registration is supported.
+//! implicit source failover. Publication is followed by guarded registration;
+//! optional text onboarding never evicts an existing actor selection.
 use crate::*;
 use download_engine::{
     DownloadControl, DownloadProgress, DownloadSpec, SidecarConfig, StagingPaths, TransferOptions,
@@ -25,6 +26,8 @@ pub(crate) struct DownloadSlot {
 struct DownloadTask {
     state: Mutex<DownloadOperationState>,
     control: DownloadControl,
+    onboarding_cancelled: AtomicBool,
+    scan_control: Mutex<Option<Arc<model_store::library::ScanControl>>>,
     changed: Notify,
     retained: Mutex<Option<Box<dyn Send>>>,
 }
@@ -56,6 +59,22 @@ impl DownloadSlot {
 impl DownloadTask {
     fn cancel(&self) {
         self.control.cancel();
+        self.onboarding_cancelled.store(true, Ordering::Release);
+        if let Some(control) = self.scan_control.lock().unwrap().as_ref() {
+            control.cancel();
+        }
+        self.changed.notify_waiters();
+    }
+    async fn wait_onboarding_cancelled(&self) {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.onboarding_cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            changed.await;
+        }
     }
     fn progress(&self, progress: DownloadProgress) {
         let mut state = self.state.lock().unwrap();
@@ -90,6 +109,16 @@ impl DownloadTask {
             Some(BridgeError::new("model_download_cleanup_unconfirmed"));
         self.changed.notify_waiters();
     }
+    fn finish_saved(&self, outcome: DownloadResult) {
+        debug_assert!(outcome.saved);
+        let mut state = self.state.lock().unwrap();
+        state.result = Some(outcome);
+        state.status = DownloadStatus::Completed;
+        state.phase = DownloadPhase::Finished;
+        state.terminal = true;
+        drop(state);
+        self.changed.notify_waiters();
+    }
     fn finish(&self, result: Result<bool>) {
         let mut state = self.state.lock().unwrap();
         state.terminal = true;
@@ -100,6 +129,8 @@ impl DownloadTask {
                 state.result = Some(DownloadResult {
                     saved: true,
                     registered: false,
+                    registration_error: None,
+                    local_validation: None,
                     file_name: state.file_name.clone(),
                     cleanup_warning: (!cleaned).then(|| "partial_cleanup_unconfirmed".into()),
                 });
@@ -164,7 +195,25 @@ impl DesktopBridge {
             .as_ref()
             .is_some_and(|t| !t.state.lock().unwrap().terminal)
     }
+    pub(crate) fn download_holds_instance(&self) -> bool {
+        self.downloads
+            .lock()
+            .unwrap()
+            .current
+            .as_ref()
+            .is_some_and(|task| {
+                let state = task.state.lock().unwrap();
+                !state.terminal && state.phase != DownloadPhase::Testing
+            })
+    }
     pub fn download_start(self: &Arc<Self>, catalog_id: String) -> Result<DownloadOperationHandle> {
+        self.download_start_with_options(catalog_id, false)
+    }
+    pub fn download_start_with_options(
+        self: &Arc<Self>,
+        catalog_id: String,
+        auto_test: bool,
+    ) -> Result<DownloadOperationHandle> {
         self.open()?;
         // Admission is short and fail-fast; no shared async mutex is held across HTTP.
         let _work = self
@@ -222,10 +271,13 @@ impl DesktopBridge {
                 error: None,
             }),
             control: DownloadControl::new(),
+            onboarding_cancelled: AtomicBool::new(false),
+            scan_control: Mutex::new(None),
             changed: Notify::new(),
             retained: Mutex::new(None),
         });
         self.register_download_task(task.clone())?;
+        let bridge = self.clone();
         tokio::spawn(async move {
             let result = run_download(
                 task.clone(),
@@ -240,10 +292,119 @@ impl DesktopBridge {
             .await;
             // Writer and all protected handles have exited before publishing terminal.
             if let Some(result) = result {
-                task.finish(result);
+                match result {
+                    Err(error) => task.finish(Err(error)),
+                    Ok(cleaned) => {
+                        task.phase(DownloadPhase::Registering);
+                        let registration = bridge.register_download(&task, &entry.sha256).await;
+                        let mut outcome = DownloadResult {
+                            saved: true,
+                            registered: registration.is_ok(),
+                            file_name: entry.file_name,
+                            cleanup_warning: (!cleaned)
+                                .then(|| "partial_cleanup_unconfirmed".into()),
+                            registration_error: registration.as_ref().err().cloned(),
+                            local_validation: None,
+                        };
+                        if auto_test && let Ok(id) = registration {
+                            task.phase(DownloadPhase::Testing);
+                            outcome.local_validation = Some(bridge.test_download(&task, id).await);
+                        }
+                        task.finish_saved(outcome);
+                    }
+                }
             }
         });
         Ok(DownloadOperationHandle { operation_id: id })
+    }
+    async fn register_download(
+        &self,
+        task: &Arc<DownloadTask>,
+        sha: &str,
+    ) -> Result<runtime_types::ModelId> {
+        let root = self.root.clone();
+        let sha = sha.to_owned();
+        let task = task.clone();
+        tokio::task::spawn_blocking(move || {
+            let control = Arc::new(model_store::library::ScanControl::default());
+            *task.scan_control.lock().unwrap() = Some(control.clone());
+            if task.onboarding_cancelled.load(Ordering::Acquire) {
+                control.cancel();
+            }
+            control.check().map_err(store_error)?;
+            let lock = InstanceLock::try_acquire(&root)
+                .map_err(|_| BridgeError::new("instance_unavailable"))?
+                .ok_or_else(|| BridgeError::new("runtime_running"))?;
+            if lock.has_discovery() {
+                return Err(BridgeError::new("runtime_stop_unconfirmed"));
+            }
+            let previous = ModelLibrary::read(&root)
+                .map_err(store_error)?
+                .ok_or_else(|| BridgeError::new("model_directory_required"))?;
+            let state = task.state.lock().unwrap().clone();
+            if previous.directory_id != state.directory_id {
+                return Err(BridgeError::new("model_library_changed"));
+            }
+            let scanned = model_store::library::rescan_directory(&root, &previous, &control)
+                .map_err(store_error)?;
+            let library = scanned
+                .library()
+                .ok_or_else(|| BridgeError::new("model_scan_no_usable_files"))?;
+            let target = library
+                .models
+                .iter()
+                .find(|entry| {
+                    entry.manifest.relative_file == state.file_name && entry.manifest.sha256 == sha
+                })
+                .map(|entry| entry.manifest.id.clone());
+            let bytes = library.encode().map_err(store_error)?;
+            control.begin_commit().map_err(store_error)?;
+            settings::atomic_replace(&root.join(model_store::library::LIBRARY_FILE), &bytes)?;
+            target.ok_or_else(|| BridgeError::new("model_scan_target_rejected"))
+        })
+        .await
+        .map_err(|_| BridgeError::new("model_library_write_failed"))?
+    }
+    async fn test_download(
+        &self,
+        task: &Arc<DownloadTask>,
+        id: runtime_types::ModelId,
+    ) -> LocalValidation {
+        use model_store::local_validation::ValidationState;
+        #[derive(serde::Deserialize)]
+        struct TestedLoad {
+            local_validation: LocalValidation,
+        }
+        let result:Result<LocalValidation>=async {
+            if task.onboarding_cancelled.load(Ordering::Acquire){return Err(BridgeError::new("request_cancelled"));}
+            self.start_inner(true,Some(&task.onboarding_cancelled)).await?;
+            let preferences=settings::preferences(&self.root)?;
+            let body=crate::onboarding::load_body(LoadModelRequest{model_id:id.to_string(),context_size:preferences.context_size,threads:preferences.threads,batch_size:preferences.batch_size})?;
+            let loading=self.json::<TestedLoad>(Method::POST,"/runtime/load-if-unloaded",Some(&body));
+            tokio::select! {
+                biased;
+                _=self.closing_requested()=>{self.load_disconnected.store(true,Ordering::Release);Err(BridgeError::new("request_cancelled"))},
+                _=task.wait_onboarding_cancelled()=>{self.load_disconnected.store(true,Ordering::Release);Err(BridgeError::new("request_cancelled"))},
+                status=loading=>Ok(status?.local_validation),
+            }
+        }.await;
+        let loaded = self
+            .local_observation(&id)
+            .is_ok_and(|o| o.state != ValidationState::Stale && o.load_success);
+        match result {
+            Ok(observation) => observation,
+            Err(error) => LocalValidation {
+                state: if matches!(error.code.as_str(), "runtime_busy" | "model_conflict") {
+                    ValidationState::Deferred
+                } else {
+                    ValidationState::Failed
+                },
+                checked_at_unix_ms: Some(model_store::local_validation::now_ms()),
+                error_code: Some(error.code),
+                load_success: loaded,
+                generation_pass: false,
+            },
+        }
     }
     fn register_download_task(&self, task: Arc<DownloadTask>) -> Result<()> {
         let mut slot = self.downloads.lock().unwrap();
@@ -545,9 +706,131 @@ mod tests {
                 error: None,
             }),
             control: DownloadControl::new(),
+            onboarding_cancelled: AtomicBool::new(false),
+            scan_control: Mutex::new(None),
             changed: Notify::new(),
             retained: Mutex::new(None),
         })
+    }
+    fn tiny_gguf() -> Vec<u8> {
+        fn string(bytes: &mut Vec<u8>, value: &str) {
+            bytes.extend((value.len() as u64).to_le_bytes());
+            bytes.extend(value.as_bytes());
+        }
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3u32.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(4u64.to_le_bytes());
+        for (key, value) in [
+            ("general.architecture", "qwen3"),
+            ("tokenizer.chat_template", "synthetic template"),
+        ] {
+            string(&mut bytes, key);
+            bytes.extend(8u32.to_le_bytes());
+            string(&mut bytes, value);
+        }
+        for (key, value) in [("general.file_type", 7u32), ("qwen3.context_length", 40960)] {
+            string(&mut bytes, key);
+            bytes.extend(4u32.to_le_bytes());
+            bytes.extend(value.to_le_bytes());
+        }
+        string(&mut bytes, "synthetic.weight");
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(32u64.to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(0u64.to_le_bytes());
+        bytes.resize(bytes.len().next_multiple_of(32) + 128, 0);
+        bytes
+    }
+    #[tokio::test]
+    async fn published_download_registers_only_its_bound_sha_and_failures_keep_file() {
+        use sha2::{Digest, Sha256};
+        for (bad_sha, cancelled, late_cancel) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let source = tempfile::tempdir().unwrap();
+            let data = root.path().join("private");
+            runtime_api::token::create_private_dir(&data).unwrap();
+            let scan = model_store::library::scan_directory(
+                &data,
+                source.path(),
+                None,
+                &model_store::library::ScanControl::default(),
+            )
+            .unwrap();
+            let library = scan.library().unwrap().clone();
+            drop(scan);
+            fs::write(
+                data.join(model_store::library::LIBRARY_FILE),
+                library.encode().unwrap(),
+            )
+            .unwrap();
+            let bridge = DesktopBridge::new(
+                data.clone(),
+                root.path().join(if cfg!(windows) {
+                    "ai-runtime.exe"
+                } else {
+                    "ai-runtime"
+                }),
+            )
+            .unwrap();
+            let task = task_for(&catalog().unwrap().entries.remove(0));
+            let filename = task.state.lock().unwrap().file_name.clone();
+            task.state.lock().unwrap().directory_id = library.directory_id;
+            let bytes = tiny_gguf();
+            let target = source.path().join(&filename);
+            fs::write(&target, &bytes).unwrap();
+            assert!(task.control.begin_publish());
+            if cancelled {
+                task.cancel();
+            }
+            let sha = if bad_sha {
+                "0".repeat(64)
+            } else {
+                format!("{:x}", Sha256::digest(&bytes))
+            };
+            let result = bridge.register_download(&task, &sha).await;
+            assert_eq!(fs::read(&target).unwrap(), bytes);
+            if bad_sha || cancelled {
+                assert!(result.is_err());
+            } else {
+                assert!(result.is_ok(), "registration failed: {:?}", result);
+                let registered = ModelLibrary::read(&data).unwrap().unwrap();
+                assert_eq!(registered.models.len(), 1);
+                assert_eq!(&registered.models[0].manifest.id, result.as_ref().unwrap());
+                assert!(!registered.models[0].manifest.validated);
+            }
+            let local_validation = if late_cancel {
+                task.cancel();
+                let observation = bridge
+                    .test_download(&task, result.as_ref().unwrap().clone())
+                    .await;
+                assert_eq!(observation.error_code.as_deref(), Some("request_cancelled"));
+                assert!(!data.join("config.toml").exists());
+                Some(observation)
+            } else {
+                None
+            };
+            task.finish_saved(DownloadResult {
+                saved: true,
+                registered: result.is_ok(),
+                registration_error: result.err(),
+                local_validation,
+                file_name: filename,
+                cleanup_warning: None,
+            });
+            let state = task.state.lock().unwrap();
+            assert_eq!(state.status, DownloadStatus::Completed);
+            assert!(state.result.as_ref().unwrap().saved);
+            assert_eq!(
+                state.result.as_ref().unwrap().registered,
+                !bad_sha && !cancelled
+            );
+        }
     }
     #[tokio::test]
     async fn active_task_keeps_snapshot_responsive_and_close_waits_for_terminal() {
@@ -576,6 +859,9 @@ mod tests {
             "model_download_active"
         );
         assert!(bridge.work.try_lock().is_ok());
+        let page = bridge.models_page(None, None).await.unwrap();
+        assert_eq!(page.source, ModelsSource::Local);
+        assert!(page.data.is_empty());
         let task_copy = task.clone();
         let complete = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;

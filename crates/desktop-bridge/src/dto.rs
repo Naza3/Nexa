@@ -134,6 +134,8 @@ pub struct MemoryStatus {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_validation: Option<model_store::local_validation::LocalValidation>,
     #[serde(default)]
     pub compatibility: runtime_types::ModelCompatibility,
     #[serde(default)]
@@ -154,8 +156,17 @@ pub struct ModelSummary {
     pub context_limit: Option<u32>,
     pub context_size: Option<u32>,
 }
+#[derive(Default, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelsSource {
+    Local,
+    #[default]
+    Runtime,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelsPage {
+    #[serde(default)]
+    pub source: ModelsSource,
     pub generation: Uuid,
     pub data: Vec<ModelSummary>,
     pub next_after: Option<String>,
@@ -444,6 +455,8 @@ pub enum DownloadPhase {
     Downloading,
     Verifying,
     Committing,
+    Registering,
+    Testing,
     Finished,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -456,6 +469,10 @@ pub enum DownloadStatus {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadResult {
+    #[serde(default)]
+    pub registration_error: Option<crate::BridgeError>,
+    #[serde(default)]
+    pub local_validation: Option<model_store::local_validation::LocalValidation>,
     pub saved: bool,
     pub registered: bool,
     pub file_name: String,
@@ -487,3 +504,10 @@ pub struct DownloadStopping {
 fn download_initial_attempt() -> u8 {
     1
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelsReconcile {
+    pub status: String,
+    pub operation_id: Option<Uuid>,
+}
+pub use model_store::local_validation::LocalValidation;

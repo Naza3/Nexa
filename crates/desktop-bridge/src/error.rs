@@ -7,6 +7,9 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "validation_record_unavailable" => {
+                "模型已加载，但本机测试记录无法写入。旧记录不代表本次测试结果，请检查数据目录后重试测试。"
+            }
             "model_download_engine_unavailable" => {
                 "已验证的下载组件尚未就绪。请使用包含受控下载组件的完整安装包，或手动下载后扫描模型目录。"
             }

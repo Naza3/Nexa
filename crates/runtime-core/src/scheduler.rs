@@ -48,10 +48,13 @@ impl Drop for RegistryLease {
 enum Command {
     Submit(GenerationRequest, Reply<EventReceiver>),
     Load(ModelId, LoadOptions, Reply<()>),
+    LoadIfUnloaded(ModelId, LoadOptions, Reply<()>),
+    SubmitIfIdle(GenerationRequest, LoadOptions, Reply<EventReceiver>),
     Unload(Reply<()>),
     Cancel(RequestId, Reply<()>),
     Status(Reply<RuntimeStatus>),
     ReserveRegistry(Reply<RegistryLease>),
+    ReserveRegistryIfUnloaded(Reply<RegistryLease>),
     Shutdown(Option<Reply<()>>),
 }
 impl Runtime {
@@ -118,6 +121,24 @@ impl RuntimeHandle {
         options.validate()?;
         self.ask(|reply| Command::Load(model, options, reply))
     }
+    /// Automatic onboarding must never evict a selection or wait behind work.
+    pub fn load_if_unloaded(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+    ) -> Result<(), RuntimeError> {
+        options.validate()?;
+        self.ask(|reply| Command::LoadIfUnloaded(model, options, reply))
+    }
+    /// Atomically admit a private probe only for this already loaded scope.
+    pub fn submit_if_idle(
+        &self,
+        request: GenerationRequest,
+        options: LoadOptions,
+    ) -> Result<EventReceiver, RuntimeError> {
+        request.validate()?;
+        self.ask(|reply| Command::SubmitIfIdle(request, options, reply))
+    }
     pub fn unload(&self) -> Result<(), RuntimeError> {
         self.ask(Command::Unload)
     }
@@ -130,6 +151,9 @@ impl RuntimeHandle {
     /// Reserve an idle registry transaction without running I/O in the actor.
     pub fn reserve_registry(&self) -> Result<RegistryLease, RuntimeError> {
         self.ask(Command::ReserveRegistry)
+    }
+    pub fn reserve_registry_if_unloaded(&self) -> Result<RegistryLease, RuntimeError> {
+        self.ask(Command::ReserveRegistryIfUnloaded)
     }
     /// Request the same cleanup and error-reporting semantics as [`Runtime::shutdown`].
     pub fn shutdown(&self) -> Result<(), RuntimeError> {
@@ -374,6 +398,16 @@ impl Actor {
     }
     fn command(&mut self, command: Command) {
         match command {
+            Command::ReserveRegistryIfUnloaded(reply) => {
+                if self.state != ModelState::Unloaded
+                    || self.selected.is_some()
+                    || self.busy_error().is_some()
+                {
+                    let _ = reply.send(Err(error(ErrorCode::RuntimeBusy)));
+                } else {
+                    self.command(Command::ReserveRegistry(reply));
+                }
+            }
             Command::ReserveRegistry(reply) => {
                 let result = if let Some(err) = self.busy_error() {
                     Err(err)
@@ -395,6 +429,31 @@ impl Actor {
                 let _ = reply.send(result);
             }
             Command::Load(id, options, reply) => self.explicit_load(id, options, reply),
+            Command::LoadIfUnloaded(id, options, reply) => {
+                if self.state != ModelState::Unloaded
+                    || self.selected.is_some()
+                    || self.busy_error().is_some()
+                {
+                    let _ = reply.send(Err(error(ErrorCode::RuntimeBusy)));
+                } else {
+                    self.explicit_load(id, options, reply);
+                }
+            }
+            Command::SubmitIfIdle(request, options, reply) => {
+                let result = if self.state != ModelState::Ready
+                    || self.busy_error().is_some()
+                    || self.options != Some(options)
+                    || self
+                        .selected
+                        .as_ref()
+                        .is_none_or(|model| model.id != request.model)
+                {
+                    Err(error(ErrorCode::RuntimeBusy))
+                } else {
+                    self.submit(request)
+                };
+                let _ = reply.send(result);
+            }
             Command::Unload(reply) => {
                 if let Some(err) = self.busy_error() {
                     let _ = reply.send(Err(err));

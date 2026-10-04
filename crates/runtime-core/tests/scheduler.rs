@@ -1436,3 +1436,103 @@ fn idle_unload_cannot_cross_registry_reservation() {
     }
     h.finish();
 }
+
+#[test]
+fn onboarding_admission_never_switches_loads_or_queues_competing_work() {
+    let h = Harness::new(config(), true);
+    let options = config().load_options;
+    h.handle.load_if_unloaded(request().model, options).unwrap();
+    let before = h.handle.status().unwrap();
+    assert_eq!(before.state, ModelState::Ready);
+    for model in ["qa-small", "another-model"] {
+        assert_eq!(
+            h.handle
+                .load_if_unloaded(ModelId::new(model).unwrap(), options)
+                .unwrap_err()
+                .code,
+            ErrorCode::RuntimeBusy
+        );
+    }
+    let mut wrong = request();
+    wrong.model = ModelId::new("another-model").unwrap();
+    assert_eq!(
+        h.handle.submit_if_idle(wrong, options).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    let different = LoadOptions {
+        threads: options.threads + 1,
+        ..options
+    };
+    assert_eq!(
+        h.handle
+            .submit_if_idle(request(), different)
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    let first = h.handle.submit(request()).unwrap();
+    let pending = h.pending();
+    pending.prepared();
+    let queued = h.handle.submit(request()).unwrap();
+    assert_eq!(
+        h.handle
+            .submit_if_idle(request(), options)
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    let status = h.handle.status().unwrap();
+    assert_eq!(status.queued_jobs, 1);
+    assert_eq!(status.selected_model, before.selected_model);
+    pending.complete();
+    assert!(matches!(
+        terminal(&first),
+        RequestEventKind::Completed { .. }
+    ));
+    let pending = h.pending();
+    pending.prepared();
+    pending.complete();
+    assert!(matches!(
+        terminal(&queued),
+        RequestEventKind::Completed { .. }
+    ));
+    let probe = h.handle.submit_if_idle(request(), options).unwrap();
+    let pending = h.pending();
+    pending.prepared();
+    pending.complete();
+    assert!(matches!(
+        terminal(&probe),
+        RequestEventKind::Completed { .. }
+    ));
+    h.finish();
+}
+#[test]
+fn onboarding_competing_loads_have_one_atomic_winner() {
+    let h = Harness::new(config(), true);
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let joins: Vec<_> = ["qa-small", "another-model"]
+        .into_iter()
+        .map(|id| {
+            let handle = h.handle.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                (
+                    id,
+                    handle.load_if_unloaded(ModelId::new(id).unwrap(), config().load_options),
+                )
+            })
+        })
+        .collect();
+    barrier.wait();
+    let outcomes: Vec<_> = joins.into_iter().map(|j| j.join().unwrap()).collect();
+    assert_eq!(outcomes.iter().filter(|(_, r)| r.is_ok()).count(), 1);
+    let winner = outcomes.iter().find(|(_, r)| r.is_ok()).unwrap().0;
+    assert_eq!(
+        h.handle.status().unwrap().selected_model.unwrap().as_str(),
+        winner
+    );
+    h.finish();
+}

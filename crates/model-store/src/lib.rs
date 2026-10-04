@@ -6,7 +6,9 @@
 //! The data directory must be private to the application. The process lock
 //! coordinates cooperative clients, not hostile writers with the same OS account.
 mod gguf;
+pub mod inventory;
 pub mod library;
+pub mod local_validation;
 mod manifest;
 mod store;
 
