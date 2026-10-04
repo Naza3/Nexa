@@ -23,6 +23,7 @@
 - API兼容官方dsh为明确目标；以[harness契约](docs/windows-harness-contract.md)锁定的pi-ai自定义provider路线实施，实际联调另锁依赖。现有文本子集不等于工具闭环兼容，不静默吞掉不支持字段
 - 保持单模型、单运行任务、有限 FIFO。GPU/NPU、其他系统、完整聊天产品、模型市场、账户/云同步、公开远程服务不在当前主线
 - Android/MNN/Flutter 设计移至[历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md)。原源码、隔离 CI、证据和 `apps/android-verifier/` 未提交 B3b WIP 保留，不删除、覆盖或混入 Windows 变更；独立 MNN Chat fork 不动
+- 用户已授权的可选局域网文本推理按 [ADR0020](docs/decisions/0020-opt-in-lan-inference-api.md) 实施：默认关闭，独立凭据和受限监听；本机管理继续回环，不开放公网、不自动改防火墙
 - Telegram 摘要是可选参考调用端，来源/账号、快照、分块、产物和持久化归调用层，不绑 runtime 发布
 
 产品名 Nexa；`ai-runtime`、`ai-runtime-worker`、`air_*` ABI 和 crate 名沿用。统一更名须单独记录迁移。
@@ -51,7 +52,7 @@
 
 本项目允许按任务委派子代理。沿用现有角色分工：主代理与 architect/max 负责架构和审查；coding/medium 实现；debug/max 排错；search/low 定位；test/low 验证；worker/low 处理简单任务，模型保持 `gpt-6-astra`。宿主实际可用能力与用户限制优先，不自动更换模型或提升权限。
 
-新功能从当时最新 `main` 创建独立分支；不沿用上一功能分支，不自动合并到 `main`。
+默认由开发方长期维护一个开发分支，后续功能在同一分支顺序推进；除非确有隔离需要，不为每个新功能另开分支。新规则覆盖此前“每个新功能从main新建分支”的安排。交付前同步最新 `main`，由开发方处理冲突并重跑联合回归，不让用户逐个选择冲突内容；不强推或自动合并到 `main`。
 
 最多三个子代理；文件单一写入者，共享接口先确定。子代理不再派生、不提交。主代理负责整合与验收，不重复派发同一范围。任务及回报格式见 [代理工作流](docs/agent-workflow.md)。简单操作直接处理。
 

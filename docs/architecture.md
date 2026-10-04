@@ -2,6 +2,8 @@
 
 日期：2026-10-03。当前范围见 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，具体协议见 [执行规格](../ai-runtime-v0.1-execution-spec.md)，完成事实见 [当前状态](../PROJECT_STATE.md)。旧跨端方案保留于 [历史索引](archive/windows-focus-2026-10-03/INDEX.md)。
 
+> 2026-10-04 增量：[ADR0020](decisions/0020-opt-in-lan-inference-api.md)定义用户显式启用的独立局域网推理监听，仅对已加载模型开放 models/chat；原回环管理与服务端证明不变。实施/目标机验证状态见 PROJECT_STATE。本文早期“本机API”不禁止该受限显式增量，公网服务仍非目标。
+
 > 2026-10-04 模型管理增量按 [ADR0021](decisions/0021-selected-file-model-registration.md)：原生单/多文件零复制定向登记，默认打开/刷新只读索引，不再自动全量扫描；设置下载目录只保存位置，目录扫描仅用户显式维护。schema2可表示跨目录文件来源，原schema1只读兼容；下文早期自动发现/全扫描述不覆盖此最新要求。
 
 ## 1. 产品目标与边界

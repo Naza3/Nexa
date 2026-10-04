@@ -1,6 +1,7 @@
 import { DesktopError, safeError } from "./adapter";
 import { localValidationLabel, validLocalValidation } from "./localValidation";
 import { validAddOperation, validModelSelection } from "./modelSelection";
+import { lanBaseUrl, validateLanSettings } from "./lanApi";
 import type {
   CatalogEntry,
   DownloadOperation,
@@ -11,6 +12,7 @@ import type {
   DirectorySelection,
   ModelFileSelection,
   LibraryOperation,
+  LanApiSettings,
   Preferences,
   RuntimeStatus,
   SafeError,
@@ -944,6 +946,55 @@ export class DesktopController {
       },
       true,
     );
+  saveLanSettings = (lan_api: LanApiSettings) =>
+    this.action("正在保存局域网 API 设置", async () => {
+      const snapshot = this.state.snapshot;
+      if (!snapshot?.lan_api) throw new DesktopError("lan_settings_unavailable", "当前桌面版本未提供局域网 API 设置。");
+      if (!snapshot.initialized) throw new DesktopError("not_initialized", "请先显式初始化运行服务，再停止服务后配置局域网 API。");
+      if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先显式停止运行服务，再保存局域网 API 设置；不会自动中断客户端。");
+      const validation = validateLanSettings(lan_api);
+      if (validation) throw new DesktopError("lan_settings_invalid", validation);
+      let saved: Snapshot;
+      try { saved = await this.api.saveLanSettings(lan_api); }
+      catch (error) {
+        const code = safeError(error).code;
+        if (code === "runtime_running") throw new DesktopError(code, "运行服务已启动。请先显式停止服务，再保存局域网 API 设置。");
+        if (code === "not_initialized") throw new DesktopError(code, "请先显式初始化运行服务，再停止服务后配置局域网 API。");
+        if (code === "settings_durability_unconfirmed") throw new DesktopError(code, "局域网设置可能已保存，但磁盘持久化尚未确认。请刷新并核对已保存配置后再重试，当前不代表已回滚。");
+        throw error;
+      }
+      this.update({
+        snapshot: saved,
+        notice: lan_api.enabled
+          ? "局域网 API 设置已保存，下次显式启动运行服务时生效。保存不会启动服务或生成密钥。"
+          : "局域网 API 已配置为关闭。下次启动仅提供本机 API。",
+      });
+    });
+  copyLanToken = () =>
+    this.action("正在复制局域网 API 密钥", async () => {
+      if (!this.state.snapshot?.initialized || !this.state.snapshot.lan_api?.enabled)
+        throw new DesktopError("lan_token_unavailable", "须先初始化并保存启用局域网 API，再显式启动一次服务以生成独立密钥。");
+      try {
+        const result = await this.api.copyLanToken();
+        if (result?.copied !== true) throw new Error("copy_not_confirmed");
+      } catch (error) {
+        // Even a malformed native failure must not copy credential-like text into ViewState.
+        const code = safeError(error).code;
+        if (code === "clipboard_unavailable") throw new DesktopError(code, "无法写入系统剪贴板，局域网密钥未复制。请检查剪贴板后重试。");
+        if (code === "preview_only") throw new DesktopError(code, "开发预览不生成或复制真实局域网密钥，请在原生桌面应用中操作。");
+        throw new DesktopError("lan_token_unavailable", "未能复制局域网 API 密钥。请确认已保存启用并显式启动过服务；密钥缺失或失效时请检查服务状态后重试。");
+      }
+      this.update({ notice: "局域网 API 独立密钥已复制到系统剪贴板。仅交给白名单内可信客户端，使用后请及时清除剪贴板。" });
+    }, true);
+  copyLanBaseUrl = () =>
+    this.action("正在复制局域网 Base URL", async () => {
+      const settings = this.state.snapshot?.lan_api;
+      const url = settings && lanBaseUrl(settings);
+      if (!url) throw new DesktopError("lan_settings_invalid", "请先保存有效的局域网 API 配置。");
+      try { await navigator.clipboard.writeText(url); }
+      catch { throw new DesktopError("clipboard_unavailable", "无法写入剪贴板，请手动复制页面显示的客户端 Base URL。"); }
+      this.update({ notice: "局域网客户端 Base URL 已复制。服务实际监听后，白名单内客户端才可连接。" });
+    }, true);
   stop = () =>
     this.action("正在停止运行服务", async () => {
       await this.api.stop();

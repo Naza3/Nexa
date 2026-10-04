@@ -143,6 +143,11 @@ struct SettingsRequest {
 struct IdleRequest {
     idle_unload_seconds: u64,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LanRequest {
+    lan_api: runtime_api::LanApiConfig,
+}
 #[derive(Serialize)]
 struct Copied {
     copied: bool,
@@ -552,6 +557,28 @@ async fn runtime_idle_save(
     state.bridge.save_idle(request.idle_unload_seconds).await
 }
 #[tauri::command]
+async fn runtime_lan_save(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: LanRequest,
+) -> Result<DesktopSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.save_lan(request.lan_api).await
+}
+#[tauri::command]
+async fn lan_token_copy(window: WebviewWindow, state: State<'_, Arc<Shell>>) -> Result<Copied> {
+    guard(&window, &state)?;
+    let token = state.bridge.lan_token_for_copy().await?;
+    let header = token.bearer_header_value();
+    let value = header
+        .to_str()
+        .ok()
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or_else(|| error("token_unavailable"))?;
+    clipboard_win::set_clipboard_string(value).map_err(|_| error("clipboard_unavailable"))?;
+    Ok(Copied { copied: true })
+}
+#[tauri::command]
 async fn token_copy(window: WebviewWindow, state: State<'_, Arc<Shell>>) -> Result<Copied> {
     guard(&window, &state)?;
     // The secret and Authorization value never cross IPC, appear in errors, or
@@ -760,6 +787,8 @@ pub fn run() {
             chat_cancel,
             settings_save,
             runtime_idle_save,
+            runtime_lan_save,
+            lan_token_copy,
             token_copy,
             runtime_stop,
             desktop_close

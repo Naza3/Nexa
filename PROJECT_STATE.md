@@ -1,5 +1,23 @@
 # Nexa 当前状态
 
+## 2026-10-04 本批关联功能整合（合并提交前验证快照）
+
+用户指出平行功能分支容易冲突并已关闭PR #6，要求由开发方处理；随后明确要求长期维护一个开发分支，除非确需隔离不为每个功能开分支，覆盖此前逐功能从main开分支规则。已确认main `26206ef882e0d47d506767dd683aa32e20da111d`包含LAN c216722；添加模型 `206d965cb9a40c61b94b8fe8cb9c3ea3821eb7a2`来自更早main，导致公共文件冲突。当前将最新main合入现有 `codex/nexa-add-model`，保留两套功能并统一回归，不强推、不改main、不要求用户手工选边。
+
+剩余Windows测试记录/模型按钮反馈、文件校验超时及不自动卸载，继续在本批同一开发分支按序完成，不再另拆给用户合并。已新建但无功能提交的 `codex/nexa-model-test-fix` 不再作为本批交付入口，未删除。合并冲突已解决：保留LAN与Add两边功能，新增7项交叉UI回归；联合全workspace40组437通过/0失败/7既有忽略，完整clippy/fmt、前端291项/typecheck/lint/build、Python153+2skip通过。独立bridge/store171、壳31与临时交叉验证通过；实际Windows窗口/两机LAN仍未验。详见[整合验证](docs/verification/2026-10-04-model-management-integration.md)。剩余修复完成后提供一个新的PR与一个联合Windows测试包；此前单片测试不转授合并结果。下文为各片历史快照，不覆盖本节最新工作流。
+
+## 2026-10-04 可选局域网 API（提交前验证快照）
+
+用户已手动合并模型使用流程到 main。已实际读取最新 main `6167d07cb523cc838e6a6fb082e660d56e9d7f79`（merge PR #4，tree `311936f4989a276c934d38d9da46a80fcc34bff7`），本次新分支 `codex/nexa-lan-api` 从该提交创建；后续每个新功能从当时最新 main 建独立分支。
+
+- 新增方向见[ADR0020](docs/decisions/0020-opt-in-lan-inference-api.md)：默认关闭、独立LAN凭据/监听、具体私有IPv4与有限客户端CIDR名单，仅允许已本机加载模型的 models/chat。回环管理/proof不放宽，不自动修改防火墙、不提供公网/TLS服务
+- Rust双监听/认证/调度与桌面设置实现并冻结。父全workspace/all-targets 40组421通过/0失败/7既有忽略，完整clippy/fmt、前端247项/typecheck/lint/build、Python155项（153通过/2平台skip）通过；独立审查22项为其中子集不累加，无剩余阻断。真实TCP只在loopback、私网peer为模拟，Windows网卡/两机LAN/原生剪贴板未验。详见[本轮记录](docs/verification/2026-10-04-lan-api.md)，联合功能包随后构建
+- 用户另已授权“添加模型”按钮：选择单/多个GGUF仅校验并零复制登记所选文件，可选加载测试；属于后续独立main分支，不混入当前LAN提交。既有自动发现轻量跳过未变文件，但真正扫描仍全目录hash，此事实已向用户说明
+- 用户另报告基础测试后仍全部无记录、按钮持续“尝试加载”：代码审查已定位Windows canonical VerbatimDisk数据目录被外部目录校验拒绝，scope错误又被吞成无记录；按钮还只依赖旧historical validated。独立修复排在模型添加之后，不混入LAN提交；另外已批准高级文件校验超时与“不自动卸载”设置，按顺序独立分支实现、最终统一回归
+- MiniCPM5-2B-abliterated问题仅完成只读定位：同名公开候选头为llama架构/minicpm5分词器，固定vendor已有对应基础支持；用户具体来源/报错尚缺，不认定为架构不支持或模板已通过。本轮不改模型兼容/推理引擎
+
+最近已交付完整Windows包为本地clean `1845f936`，18,937,607字节，SHA256 `4191ec7248a1413fed52d6ae03c43f31fd515a73271d47807ac42688f2428b40`；实际Windows新版运行待用户反馈。其52文件源码分批上传为远程 `9f836d5`，tree与本地包源完全相同，已由用户合并到上述main；分批上传成功，旧工具取消根因未确认。原包身份不改写为新remote提交，也无需重下载。未运行GitHub Actions Rust。
+
 ## 2026-10-04 选中文件添加模型（提交前验证快照）
 
 用户明确选择单/多文件添加、取消默认自动全库扫描，并要求依次完成 LAN、添加模型、基础测试记录/按钮反馈、高级文件校验超时及不自动卸载。LAN源码已在独立 `codex/nexa-lan-api` 提交 `c216722fd6913208b0529cf3db247729ab7f4019`，源测试421/0/7、前端247、Python153+2skip通过，WindowsLAN尚未验；本分支不夹带该源码。

@@ -119,6 +119,12 @@ impl From<RuntimeError> for ApiError {
                 "The registered model was not found.",
                 Some("model"),
             ),
+            ModelNotLoaded => (
+                StatusCode::CONFLICT,
+                "model_not_loaded",
+                "Load the model locally before using the LAN inference API.",
+                Some("model"),
+            ),
             RequestNotFound => (
                 StatusCode::NOT_FOUND,
                 "request_not_found",

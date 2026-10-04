@@ -18,7 +18,7 @@ ai-runtime [--data-dir PATH] stop
 ai-runtime version --json
 ```
 
-无 start/delete/verify。init 幂等且不轮换现有凭据；serve不创建缺失token、不注册后台服务。当前已验证矩阵的真实smoke显式context2048/threads2/batch128/cpu，配置默认context4096不静默降级。
+无 start/delete/verify。init 幂等且不轮换现有凭据；serve不创建缺失本机管理token、不注册后台服务；仅已显式启用LAN时生成独立LAN凭据。当前已验证矩阵的真实smoke显式context2048/threads2/batch128/cpu，配置默认context4096不静默降级。
 
 服务不在运行时，init/import/list使用同一实例锁；open/import/hash在blocking边界执行。运行中import/list及管理命令走经过同连接HMAC服务端proof验证的HTTP接口，Bearer只在验证后发送。列表自动遍历有界分页；实例UUID、PID/进程创建身份与发现文件只是定位信息，不能代替proof。
 
@@ -28,3 +28,5 @@ stop仅在HTTP确认实际core/worker清理且原实例锁/记录释放后成功
 
 
 T06外部模型目录由同一data root下的model-library.json描述，serve启动只读索引和有界元数据，离线list合并旧managed与external。旧import仍是用户明确请求的受管理复制导入，外部注册不会令它变成隐式移动。API shutdown、Ctrl+C和serve结束都要确认runtime/worker清理后才释放外部源guard；未确认时不宣称停止，沿用失败标记与非零退出。产品每进程只执行一次serve，未知外部cleanup后不在同进程重建catalog。
+
+可选LAN见[ADR0020](../../docs/decisions/0020-opt-in-lan-inference-api.md)：serve取得实例锁后重读配置、预绑定所有监听；LAN绑定失败释放本机监听且不发布新发现或启动worker。发现/proof/全部CLI管理仍只走本机；stop关闭两监听及共享推理。用户须在可信私网使用明文HTTP，Nexa不配置防火墙/NAT。

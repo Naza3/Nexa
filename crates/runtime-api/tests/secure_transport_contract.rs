@@ -215,12 +215,16 @@ struct Harness {
     _root: tempfile::TempDir,
     state: ApiState,
     address: SocketAddr,
+    authority: SocketAddr,
     bearer: HeaderValue,
     observed: Arc<Observed>,
     server: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 impl Harness {
     async fn new(mode: Mode) -> Self {
+        Self::with_lan(mode, false).await
+    }
+    async fn with_lan(mode: Mode, lan: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let store = ApiState::open_store(root.path().join("models"))
             .await
@@ -259,13 +263,38 @@ impl Harness {
         let bearer = token.bearer_header_value();
         let security =
             Arc::new(SecurityContext::new(token, uuid::Uuid::new_v4(), address, vec![]).unwrap());
-        let app = router(state.clone(), security);
+        let (app, authority) = if lan {
+            // Test-only transport adapter: the real TCP connection stays on
+            // loopback, while the independent LAN middleware sees private socket
+            // fixtures. Production transport has no peer override or unsafe flag.
+            let config = runtime_api::LanApiConfig {
+                enabled: true,
+                listen: Some("192.168.10.2:18081".parse().unwrap()),
+                allowed_cidrs: vec!["192.168.10.3/32".into()],
+            };
+            let authority = config.listen.unwrap();
+            let lan_token = runtime_api::token::SecretToken::generate().unwrap();
+            // Use the same fixture authorization string for LAN harness callers.
+            let key = lan_token.bearer_header_value();
+            let context =
+                Arc::new(runtime_api::lan::LanSecurityContext::new(lan_token, &config).unwrap());
+            let app = runtime_api::routes::lan_router(state.clone(), context)
+                .layer(axum::middleware::from_fn(move |mut request: axum::extract::Request, next: axum::middleware::Next| async move {
+                    request.extensions_mut().insert(runtime_api::security::PeerEndpoints { client: "192.168.10.3:25000".parse().unwrap(), server: authority });
+                    next.run(request).await
+                }));
+            (Some((app, key)), authority)
+        } else {
+            (None, address)
+        };
+        let (app, bearer) = app.unwrap_or_else(|| (router(state.clone(), security), bearer));
         let shutdown = state.shutdown.clone();
         let server = tokio::spawn(transport::serve(listener, app, shutdown));
         Self {
             _root: root,
             state,
             address,
+            authority,
             bearer,
             observed,
             server,
@@ -291,7 +320,7 @@ impl Harness {
         let mut socket = TcpStream::connect(self.address).await.unwrap();
         let request = format!(
             "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\n{authorization}Content-Type: application/json\r\nContent-Length: {}\r\n{connection}\r\n{}",
-            self.address,
+            self.authority,
             body.len(),
             body
         );
@@ -1213,4 +1242,265 @@ async fn private_model_probe_fin_and_rst_cancel_real_waiting_json_routes() {
             h.close().await;
         }
     }
+}
+
+async fn lan_raw(
+    h: &Harness,
+    method: &str,
+    path: &str,
+    authorization: Option<&str>,
+    extra: &str,
+) -> (u16, String, String) {
+    let auth = authorization
+        .map(|v| format!("Authorization: {v}\r\n"))
+        .unwrap_or_default();
+    let mut socket = TcpStream::connect(h.address).await.unwrap();
+    socket
+        .write_all(
+            format!(
+                "{method} {path} HTTP/1.1\r\nHost: {}\r\n{auth}{extra}Connection: close\r\n\r\n",
+                h.authority
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut wire = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), socket.read_to_end(&mut wire))
+        .await
+        .unwrap()
+        .unwrap();
+    decode(&wire)
+}
+#[tokio::test]
+async fn lan_inference_requires_local_load_and_preserves_sse_and_nonstream_contracts() {
+    let h = Harness::with_lan(Mode::Success, true).await;
+    let key = h.bearer.to_str().unwrap();
+    let (code, _, body) = lan_raw(&h, "GET", "/v1/models", Some(key), "").await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["data"],
+        json!([])
+    );
+    let (code, _, body) = h.reply(false).await;
+    assert_eq!(code, 409);
+    assert!(body.contains("model_not_loaded"));
+    assert_eq!(h.observed.phase.load(Ordering::SeqCst), 0);
+    h.state
+        .control(|runtime| {
+            runtime.load(
+                ModelId::new("fixture").unwrap(),
+                runtime_types::LoadOptions {
+                    context_size: 2048,
+                    ..Default::default()
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let (code, _, body) = lan_raw(&h, "GET", "/v1/models", Some(key), "").await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["data"][0]["id"],
+        "fixture"
+    );
+    for streaming in [false, true] {
+        let (code, headers, body) = h.reply(streaming).await;
+        assert_eq!(code, 200, "{body}");
+        assert!(!headers.contains("x-nexa-server-proof"));
+        if streaming {
+            assert!(body.contains("data: [DONE]"));
+            assert!(body.contains("chat.completion.chunk"));
+        } else {
+            assert_eq!(
+                serde_json::from_str::<Value>(&body).unwrap()["object"],
+                "chat.completion"
+            );
+        }
+    }
+    h.state.control(|runtime| runtime.unload()).await.unwrap();
+    let (code, _, body) = h.reply(false).await;
+    assert_eq!(code, 409);
+    assert!(body.contains("model_not_loaded"));
+    h.close().await;
+}
+#[tokio::test]
+async fn lan_router_has_no_management_proof_or_ambient_authentication() {
+    let h = Harness::with_lan(Mode::Success, true).await;
+    let key = h.bearer.to_str().unwrap();
+    for path in [
+        "/healthz",
+        "/runtime/status",
+        "/runtime/models",
+        "/runtime/models/import",
+        "/runtime/load",
+        "/runtime/unload",
+        "/runtime/shutdown",
+        "/runtime/requests/00000000-0000-0000-0000-000000000000/cancel",
+        "/runtime/load-and-test",
+        "/runtime/model-test",
+    ] {
+        for method in ["GET", "POST"] {
+            let (code, headers, _) = lan_raw(&h, method, path, Some(key), "").await;
+            assert_eq!(code, 404, "{method} {path}");
+            assert!(!headers.contains("x-nexa-server-proof"));
+        }
+    }
+    for auth in [None, Some("Bearer wrong")] {
+        assert_eq!(lan_raw(&h, "GET", "/v1/models", auth, "").await.0, 401);
+    }
+    let local = SecretToken::generate().unwrap();
+    assert_eq!(
+        lan_raw(
+            &h,
+            "GET",
+            "/v1/models",
+            Some(local.bearer_header_value().to_str().unwrap()),
+            ""
+        )
+        .await
+        .0,
+        401
+    );
+    assert_eq!(
+        lan_raw(
+            &h,
+            "GET",
+            "/v1/models?api_key=ignored",
+            None,
+            &format!("Cookie: {key}\r\n")
+        )
+        .await
+        .0,
+        401
+    );
+    for header in [
+        "Origin: http://192.168.10.2:18081\r\n",
+        "Forwarded: for=192.168.10.3\r\n",
+        "X-Forwarded-For: 192.168.10.3\r\n",
+        "X-Nexa-Server-Challenge: 0000000000000000000000000000000000000000000000000000000000000000\r\n",
+        "X-Request-ID: 00000000-0000-0000-0000-000000000000\r\n",
+    ] {
+        let (code, headers, _) = lan_raw(&h, "GET", "/v1/models", Some(key), header).await;
+        assert_eq!(code, 403);
+        assert!(!headers.contains("x-nexa-server-proof"));
+    }
+    assert_eq!(h.observed.phase.load(Ordering::SeqCst), 0);
+    h.close().await;
+}
+#[tokio::test]
+async fn lan_real_fin_rst_cancel_preparing_sse_and_nonstream_and_release_budget() {
+    for rst in [false, true] {
+        for (mode, stream, phase) in [
+            (Mode::PrepareWait, true, 2),
+            (Mode::StartedWait, true, 4),
+            (Mode::StartedWait, false, 4),
+        ] {
+            let h = Harness::with_lan(mode, true).await;
+            h.state
+                .control(|runtime| {
+                    runtime.load(
+                        ModelId::new("fixture").unwrap(),
+                        runtime_types::LoadOptions {
+                            context_size: 2048,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .await
+                .unwrap();
+            let mut socket = h.send_with_policy(stream, false).await;
+            h.phase(phase).await;
+            if stream && phase == 4 {
+                let mut bytes = [0; 1024];
+                assert!(socket.read(&mut bytes).await.unwrap() > 0);
+            }
+            if rst {
+                socket2::SockRef::from(&socket)
+                    .set_linger(Some(Duration::ZERO))
+                    .unwrap();
+            } else {
+                socket.shutdown().await.unwrap();
+            }
+            drop(socket);
+            h.disconnected(DisconnectCase {
+                rst,
+                mode,
+                stream,
+                phase,
+            })
+            .await;
+            assert_eq!(h.reply(false).await.0, 200);
+            h.clean().await;
+            h.close().await;
+        }
+    }
+}
+#[tokio::test]
+async fn lan_shutdown_cancels_active_and_queued_requests_and_closes_socket() {
+    let h = Harness::with_lan(Mode::StartedWait, true).await;
+    h.state
+        .control(|runtime| {
+            runtime.load(
+                ModelId::new("fixture").unwrap(),
+                runtime_types::LoadOptions {
+                    context_size: 2048,
+                    ..Default::default()
+                },
+            )
+        })
+        .await
+        .unwrap();
+    let mut active = h.send_with_policy(true, false).await;
+    h.phase(4).await;
+    let mut queued = h.send_with_policy(false, false).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if h.state.control(|r| r.status()).await.unwrap().queued_jobs == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    h.state.shutdown.begin();
+    h.state.shutdown.wait().await.unwrap();
+    for socket in [&mut active, &mut queued] {
+        let mut bytes = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(3), socket.read_to_end(&mut bytes))
+            .await
+            .unwrap();
+    }
+    assert!(h.observed.cancelled.load(Ordering::SeqCst));
+    h.close().await;
+}
+#[tokio::test]
+async fn lan_body_limit_and_total_read_deadline_apply_before_inference() {
+    let h = Harness::with_lan(Mode::Success, true).await;
+    assert_eq!(
+        lan_raw(
+            &h,
+            "GET",
+            "/v1/models",
+            Some(h.bearer.to_str().unwrap()),
+            "Content-Length: 1048577\r\n"
+        )
+        .await
+        .0,
+        413
+    );
+    let mut socket = TcpStream::connect(h.address).await.unwrap();
+    socket.write_all(format!("POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{{",h.authority,h.bearer.to_str().unwrap()).as_bytes()).await.unwrap();
+    let mut wire = Vec::new();
+    tokio::time::timeout(
+        runtime_api::lan::BODY_READ_TIMEOUT + Duration::from_secs(2),
+        socket.read_to_end(&mut wire),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(decode(&wire).0, 408);
+    assert_eq!(h.observed.phase.load(Ordering::SeqCst), 0);
+    h.close().await;
 }

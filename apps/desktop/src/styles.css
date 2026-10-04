@@ -1167,6 +1167,45 @@ h3 {
   font-size: 11px;
   color: #6b7586;
 }
+.lan-risk,
+.lan-status,
+.lan-fields,
+.lan-client-url {
+  margin-top: 18px;
+}
+.lan-settings > .small-note,
+.lan-client-url .small-note {
+  margin-top: 10px;
+}
+.lan-fields > .setting-field {
+  display: block;
+  margin-top: 20px;
+}
+.lan-fields input,
+.lan-fields textarea {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: Consolas, monospace;
+}
+.lan-fields textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+.lan-status {
+  background: #f5f6fa;
+  border-radius: 5px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.lan-client-url {
+  margin-bottom: 20px;
+}
+.lan-settings .token-row,
+.lan-settings .api-row {
+  flex-wrap: wrap;
+}
 .service-card {
   display: flex;
   align-items: center;

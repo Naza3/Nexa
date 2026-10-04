@@ -41,6 +41,11 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("runtime_idle_save", {
       request: { idle_unload_seconds: 300 },
     });
+    const lan_api = { enabled: true, listen: "192.168.1.20:18081", allowed_cidrs: ["192.168.1.30/32"] };
+    await nativeApi.saveLanSettings(lan_api);
+    expect(invoke).toHaveBeenLastCalledWith("runtime_lan_save", { request: { lan_api } });
+    await nativeApi.copyLanToken();
+    expect(invoke).toHaveBeenLastCalledWith("lan_token_copy", undefined);
     await nativeApi.copyToken();
     expect(invoke).toHaveBeenLastCalledWith("token_copy", undefined);
     await nativeApi.snapshot();

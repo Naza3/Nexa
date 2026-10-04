@@ -1,4 +1,5 @@
-//! Private credentials. No automatic initialization on server startup.
+//! Private credentials. Management initialization is explicit; optional LAN
+//! credentials are initialized only by an explicitly enabled service startup.
 use axum::http::HeaderValue;
 use std::{
     fmt,
@@ -78,10 +79,20 @@ pub fn write_private_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     platform::write_private_new(path, bytes)
 }
 pub fn init_private_token(root: &Path) -> io::Result<SecretToken> {
+    init_named_token(root, "api-token")
+}
+/// Only call on explicitly enabled LAN service startup, never on read/browse/init.
+pub fn init_private_lan_token(root: &Path) -> io::Result<SecretToken> {
+    init_named_token(root, "lan-api-token")
+}
+pub fn load_private_lan_token(root: &Path) -> io::Result<SecretToken> {
+    load_named_token(root, "lan-api-token")
+}
+fn init_named_token(root: &Path, name: &str) -> io::Result<SecretToken> {
     create_private_dir(root)?;
     create_private_dir(&root.join("secrets"))?;
-    let path = root.join("secrets/api-token");
-    match load_private_token(root) {
+    let path = root.join("secrets").join(name);
+    match load_named_token(root, name) {
         Ok(value) => return Ok(value),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
@@ -89,13 +100,16 @@ pub fn init_private_token(root: &Path) -> io::Result<SecretToken> {
     let token = SecretToken::generate()?;
     match write_private_new(&path, token.key_bytes()) {
         Ok(()) => Ok(token),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => load_private_token(root),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => load_named_token(root, name),
         Err(error) => Err(error),
     }
 }
 pub fn load_private_token(root: &Path) -> io::Result<SecretToken> {
+    load_named_token(root, "api-token")
+}
+fn load_named_token(root: &Path, name: &str) -> io::Result<SecretToken> {
     platform::validate_private_dir(root)?;
-    let mut file = platform::open_private_file(&root.join("secrets/api-token"))?;
+    let mut file = platform::open_private_file(&root.join("secrets").join(name))?;
     let mut bytes = Vec::with_capacity(65);
     file.by_ref().take(65).read_to_end(&mut bytes)?;
     SecretToken::from_bytes(&bytes)
@@ -192,5 +206,46 @@ mod tests {
         std::fs::remove_file(root.join("secrets/api-token")).unwrap();
         std::fs::rename(inherited, root.join("secrets/api-token")).unwrap();
         assert!(load_private_token(&root).is_err());
+    }
+}
+
+#[cfg(test)]
+mod lan_tests {
+    use super::*;
+    #[test]
+    fn lan_credentials_are_independent_explicit_private_and_no_clobber() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        let local = init_private_token(&root).unwrap();
+        assert!(!root.join("secrets/lan-api-token").exists());
+        assert_eq!(
+            load_private_lan_token(&root).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        let lan = init_private_lan_token(&root).unwrap();
+        assert_ne!(lan.bearer_header_value(), local.bearer_header_value());
+        assert_eq!(
+            init_private_lan_token(&root).unwrap().bearer_header_value(),
+            lan.bearer_header_value()
+        );
+        assert_eq!(
+            load_private_token(&root).unwrap().bearer_header_value(),
+            local.bearer_header_value()
+        );
+        assert!(!lan.matches_authorization(local.bearer_header_value().as_bytes()));
+        assert!(!local.matches_authorization(lan.bearer_header_value().as_bytes()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = root.join("secrets/lan-api-token");
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(init_private_lan_token(&root).is_err());
+            assert!(load_private_lan_token(&root).is_err());
+            assert!(load_private_token(&root).is_ok());
+        }
     }
 }

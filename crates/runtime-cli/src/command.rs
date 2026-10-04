@@ -8,8 +8,9 @@ use process_host::{ProcessHost, ProcessHostConfig};
 use runtime_api::{
     ApiState, Config,
     dto::ModelSummary,
+    lan::LanSecurityContext,
     security::SecurityContext,
-    token::{init_private_token, load_private_token, write_private_new},
+    token::{init_private_lan_token, init_private_token, load_private_token, write_private_new},
 };
 use runtime_core::Runtime;
 use runtime_types::ModelId;
@@ -375,10 +376,42 @@ pub async fn execute(options: Options) -> Result<()> {
     };
     print(value)
 }
+/// The callback is the OS binder in production; unit tests inject a failed
+/// second bind without exposing any non-loopback socket or weakening validation.
+async fn bind_api_listeners<F, Fut>(
+    config: &Config,
+    mut bind: F,
+) -> Result<(tokio::net::TcpListener, Option<tokio::net::TcpListener>)>
+where
+    F: FnMut(std::net::SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = io::Result<tokio::net::TcpListener>>,
+{
+    config.validate()?;
+    let local = bind(config.api.listen)
+        .await
+        .map_err(|_| "cannot bind configured loopback endpoint")?;
+    let lan = if config.lan_api.enabled {
+        let address = config
+            .lan_api
+            .listen
+            .ok_or("missing LAN listener address")?;
+        Some(
+            bind(address)
+                .await
+                .map_err(|_| "cannot bind configured LAN endpoint; no service was started")?,
+        )
+    } else {
+        None
+    };
+    Ok((local, lan))
+}
 async fn serve(root: &Path) -> Result<()> {
-    let config = require_initialized(root)?;
+    let _ = require_initialized(root)?;
     let lock =
         InstanceLock::try_acquire(root)?.ok_or("another instance owns this data directory")?;
+    // A settings writer may have changed LAN enablement before lock acquisition.
+    // Only this lock-protected snapshot may authorize any network binding.
+    let config = require_initialized(root)?;
     let token = load_private_token(root)?;
     let executable = std::env::current_exe()?.canonicalize()?;
     let worker = executable
@@ -396,10 +429,22 @@ async fn serve(root: &Path) -> Result<()> {
     {
         return Err("packaged worker must be a regular file beside ai-runtime".into());
     }
-    let listener = tokio::net::TcpListener::bind(config.api.listen)
-        .await
-        .map_err(|_| "cannot bind configured loopback endpoint")?;
+    let (listener, lan_listener) = bind_api_listeners(&config, |address| async move {
+        tokio::net::TcpListener::bind(address).await
+    })
+    .await?;
     let listen = listener.local_addr()?;
+    // All sockets are bound before creating credentials or a runtime/worker.
+    let lan = if let Some(listener) = lan_listener {
+        let lan_token = init_private_lan_token(root)?;
+        if lan_token.matches_authorization(token.bearer_header_value().as_bytes()) {
+            return Err("LAN and management credentials must be independent".into());
+        }
+        let security = Arc::new(LanSecurityContext::new(lan_token, &config.lan_api)?);
+        Some((listener, security, config.lan_api.clone()))
+    } else {
+        None
+    };
     let instance_id = Uuid::new_v4();
     let security = Arc::new(
         SecurityContext::new(
@@ -430,6 +475,7 @@ async fn serve(root: &Path) -> Result<()> {
         cleanup?;
         return Err(error.into());
     }
+    state.mark_lan_listening(lan.is_some());
     let publication =
         Discovery::current(instance_id, listen).and_then(|discovery| lock.publish(&discovery));
     if let Err(error) = publication {
@@ -439,10 +485,18 @@ async fn serve(root: &Path) -> Result<()> {
     }
     let app = runtime_api::router(state.clone(), security);
     let result = {
-        let serving = runtime_api::transport::serve(listener, app, shutdown.clone());
+        let lan = lan.map(|(listener, security, config)| {
+            (
+                listener,
+                runtime_api::routes::lan_router(state.clone(), security),
+                config,
+            )
+        });
+        let serving = runtime_api::transport::serve_with_lan(listener, app, lan, shutdown.clone());
         tokio::pin!(serving);
         tokio::select! {result=&mut serving=>result,signal=&mut interrupt.0=>{shutdown.begin();let result=serving.await;match signal { Ok(signal)=>signal.and(result),Err(_)=>Err(io::Error::other("interrupt handler failed")) }}}
     };
+    state.mark_lan_listening(false);
     shutdown.begin();
     let cleanup = state.wait_shutdown().await;
     // Even startup/transport failure follows the same reaping path. A failed
@@ -494,5 +548,50 @@ mod tests {
             .is_ok()
         );
         assert!(parse_args(&["--data-dir", "temporary", "init"]).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod lan_start_tests {
+    use super::*;
+    #[tokio::test]
+    async fn second_bind_failure_drops_first_and_disabled_lan_never_calls_second_binder() {
+        let mut config = Config::default();
+        config.api.listen = "127.0.0.1:0".parse().unwrap();
+        config.lan_api = runtime_api::LanApiConfig {
+            enabled: true,
+            listen: Some("192.168.10.2:18081".parse().unwrap()),
+            allowed_cidrs: vec!["192.168.10.3/32".into()],
+        };
+        let bound = Arc::new(std::sync::Mutex::new(None));
+        let observed = bound.clone();
+        let result = bind_api_listeners(&config, move |address| {
+            let observed = observed.clone();
+            async move {
+                if !address.ip().is_loopback() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AddrNotAvailable,
+                        "fixture LAN bind failed",
+                    ));
+                }
+                let listener = tokio::net::TcpListener::bind(address).await?;
+                *observed.lock().unwrap() = Some(listener.local_addr()?);
+                Ok(listener)
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        let address = bound.lock().unwrap().unwrap();
+        let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
+        drop(rebound);
+        config.lan_api.enabled = false;
+        let (local, lan) = bind_api_listeners(&config, |address| async move {
+            assert!(address.ip().is_loopback());
+            tokio::net::TcpListener::bind(address).await
+        })
+        .await
+        .unwrap();
+        assert!(lan.is_none());
+        drop(local);
     }
 }

@@ -84,6 +84,8 @@ pub struct DesktopSnapshot {
     pub api_address: Option<String>,
     pub runtime: Option<RuntimeStatus>,
     pub settings: DesktopSettings,
+    #[serde(default)]
+    pub lan_api: runtime_api::LanApiConfig,
     pub model_directory: ModelDirectorySnapshot,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -98,6 +100,8 @@ pub enum RuntimeState {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeStatus {
+    #[serde(default)]
+    pub lan_api: Option<LanApiStatus>,
     pub state: RuntimeState,
     pub selected_model: Option<ModelId>,
     #[serde(default)]
@@ -118,6 +122,12 @@ pub struct RuntimeStatus {
     pub threads_exceed_available_parallelism: Option<bool>,
     pub worker: WorkerStatus,
     pub memory: MemoryStatus,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LanApiStatus {
+    pub enabled: bool,
+    pub listen: Option<String>,
+    pub running: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerStatus {
