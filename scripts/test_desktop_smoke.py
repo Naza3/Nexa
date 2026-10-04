@@ -12,6 +12,16 @@ import run_desktop_smoke as smoke
 
 
 class DesktopSmokeFailureTests(unittest.TestCase):
+    def test_onboarding_requires_new_exact_pass_observations(self):
+        report = {"success": True, "local_text_validation": True, "offline_inventory": True}
+        self.assertEqual(smoke.onboarding_report(report), report)
+        for field in report:
+            for value in (False, None, 1, "true"):
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    smoke.onboarding_report(report | {field: value})
+            with self.assertRaises(ValueError):
+                smoke.onboarding_report({key: value for key, value in report.items() if key != field})
+
     def test_external_acceptance_requires_exact_booleans_and_all_windows_checks(self):
         report = {name: True for name in smoke.EXTERNAL_LIBRARY_KEYS}
         self.assertEqual(smoke.external_library_report(report, require_windows=True), report)

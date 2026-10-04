@@ -18,6 +18,8 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("model_directory_discover", undefined);
     await nativeApi.downloadStart("fixed-candidate");
     expect(invoke).toHaveBeenLastCalledWith("model_download_start", { request: { catalog_id: "fixed-candidate" } });
+    await nativeApi.downloadStart("fixed-candidate", true);
+    expect(invoke).toHaveBeenLastCalledWith("model_download_start", { request: { catalog_id: "fixed-candidate", auto_test: true } });
     await nativeApi.downloadNext("download-id");
     expect(invoke).toHaveBeenLastCalledWith("model_download_next", { request: { operation_id: "download-id" } });
     await nativeApi.downloadCancel("download-id");
@@ -51,6 +53,10 @@ describe("native-only adapter", () => {
     });
     await nativeApi.scanModels();
     expect(invoke).toHaveBeenLastCalledWith("models_scan", undefined);
+    await nativeApi.reconcileModels();
+    expect(invoke).toHaveBeenLastCalledWith("models_reconcile", undefined);
+    await nativeApi.testModel("registered-model", { context_size: 2048, threads: 2, batch_size: 128 });
+    expect(invoke).toHaveBeenLastCalledWith("model_test", { request: { model_id: "registered-model", context_size: 2048, threads: 2, batch_size: 128 } });
     await nativeApi.libraryNext("operation-only");
     expect(invoke).toHaveBeenLastCalledWith("model_library_next", {
       request: { operation_id: "operation-only" },

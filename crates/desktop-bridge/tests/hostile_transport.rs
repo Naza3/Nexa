@@ -178,9 +178,12 @@ impl Fixture {
                     ));
                     a.fetch_add(1, Ordering::SeqCst);
                     if request.starts_with("GET /runtime/status ")
-                        || request.starts_with("POST /runtime/load ")
+                        || (request.starts_with("POST /runtime/load ")
+                            || request.starts_with("POST /runtime/load-and-test "))
                     {
-                        if request.starts_with("POST /runtime/load ") {
+                        if request.starts_with("POST /runtime/load ")
+                            || request.starts_with("POST /runtime/load-and-test ")
+                        {
                             if matches!(mode, Mode::PendingPreparation) {
                                 let mut byte = [0];
                                 let _ = socket.read(&mut byte).await;
@@ -196,9 +199,11 @@ impl Fixture {
                             } else {
                                 "unloaded"
                             };
-                        let busy = matches!(mode, Mode::PendingPreparation)
-                            && dc.load(Ordering::SeqCst) == 0;
-                        let body=json!({"state":state,"selected_model":null,"load_options":null,"active_request":null,"queued_jobs":0,"stopping":false,"registry_busy":busy,"configured_backend":"cpu","backend":null,"backend_observation":"unavailable","last_error":null,"threads_source":null,"available_parallelism":2,"threads_exceed_available_parallelism":null,"worker":{"pid":null,"sessions_started":0,"sessions_reaped":0},"memory":{"api_private_bytes":null,"worker_private_bytes":null,"gpu_bytes":null,"observation":"unavailable"}}).to_string();
+                        let busy = matches!(
+                            mode,
+                            Mode::PendingPreparation | Mode::PendingChatPreparation
+                        ) && dc.load(Ordering::SeqCst) == 0;
+                        let body=json!({"local_validation":{"state":"deferred","load_success":true,"generation_pass":false,"checked_at_unix_ms":1,"error_code":"runtime_busy"},"state":state,"selected_model":null,"load_options":null,"active_request":null,"queued_jobs":0,"stopping":false,"registry_busy":busy,"configured_backend":"cpu","backend":null,"backend_observation":"unavailable","last_error":null,"threads_source":null,"available_parallelism":2,"threads_exceed_available_parallelism":null,"worker":{"pid":null,"sessions_started":0,"sessions_reaped":0},"memory":{"api_private_bytes":null,"worker_private_bytes":null,"gpu_bytes":null,"observation":"unavailable"}}).to_string();
                         let _ = socket
                             .write_all(
                                 format!(

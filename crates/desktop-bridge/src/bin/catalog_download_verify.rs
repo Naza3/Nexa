@@ -106,7 +106,7 @@ async fn verify(directory: PathBuf, component: PathBuf) -> Result<serde_json::Va
         if terminal.status != DownloadStatus::Completed {
             return Err(terminal.error.map(|e| bridge_failure("download_poll", e)).unwrap_or_else(|| failure("download_poll", "verification_failed")));
         }
-        if terminal.source != DownloadSource::Modelscope || terminal.downloaded_bytes != item.size_bytes || !terminal.result.as_ref().is_some_and(|r| r.saved && !r.registered && r.cleanup_warning.is_none()) {
+        if terminal.source != DownloadSource::Modelscope || terminal.downloaded_bytes != item.size_bytes || !terminal.result.as_ref().is_some_and(|r| r.saved && r.registered && r.registration_error.is_none() && r.cleanup_warning.is_none()) {
             return Err(failure("download_poll", "verification_failed"));
         }
         let library = model_store::library::ModelLibrary::read(&private).map_err(|_| failure("verify_file", "verification_failed"))?.ok_or_else(|| failure("verify_file", "verification_failed"))?;
@@ -127,7 +127,7 @@ async fn verify(directory: PathBuf, component: PathBuf) -> Result<serde_json::Va
             Ok::<_, ProbeFailure>((size, format!("{:x}", hasher.finalize())))
         }).await.map_err(|_| failure("verify_file", "verification_failed"))??;
         if size != item.size_bytes || sha256 != item.sha256 { return Err(failure("verify_file", "model_download_identity_mismatch")); }
-        Ok(json!({"schema_version":1,"success":true,"source":"modelscope","catalog_id":CATALOG_ID,"source_revision":source.revision,"size_bytes":size,"sha256":sha256,"downloaded_bytes":terminal.downloaded_bytes,"published":true,"registered":false,"elapsed_ms":started.elapsed().as_millis() as u64}))
+        Ok(json!({"schema_version":1,"success":true,"source":"modelscope","catalog_id":CATALOG_ID,"source_revision":source.revision,"size_bytes":size,"sha256":sha256,"downloaded_bytes":terminal.downloaded_bytes,"published":true,"registered":true,"elapsed_ms":started.elapsed().as_millis() as u64}))
     }.await;
     // Cancellation/cleanup must complete before deleting this probe's metadata.
     bridge

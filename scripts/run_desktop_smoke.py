@@ -23,7 +23,7 @@ FAILURE_STAGES = frozenset({
     "arguments", "create_private_directory", "initialize_token", "write_config",
     "construct_bridge", "launch_initial_child", "start_after_child_exit", "read_initial_instance",
     "attach_existing", "close_attached_window", "import_model", "list_models",
-    "reject_running_idle_change", "load_model", "first_chat_start", "first_chat_consume",
+    "reject_running_idle_change", "load_model", "verify_local_validation", "verify_offline_inventory", "first_chat_start", "first_chat_consume",
     "cancel_chat_start", "cancel_chat_consume", "wait_ready", "repeat_chat_start",
     "repeat_chat_consume", "close_window", "verify_default_close", "launch_keep_child",
     "verify_process_exit", "unload_model", "reload_model", "launch_stop_child",
@@ -188,6 +188,15 @@ def startup_diagnostic(raw):
                                or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(?: (?:beta|dev|canary))?", version) is None):
         raise ValueError("desktop diagnostic WebView version rejected")
     return report
+
+
+def onboarding_report(value):
+    """A prior bridge smoke cannot stand in for the new onboarding assertions."""
+    if (type(value) is not dict or value.get("success") is not True
+            or value.get("local_text_validation") is not True
+            or value.get("offline_inventory") is not True):
+        raise ValueError("desktop onboarding assertions missing or not passed")
+    return value
 
 
 def external_library_report(value, *, require_windows=False):
@@ -443,6 +452,7 @@ def run(archive, model, harness, evidence):
             # missing pass declaration is never silently promoted to a pass here.
             if bridge.get("success") is not True:
                 raise ValueError("desktop real bridge did not report pass")
+            onboarding_report(bridge)
             # An old managed-only harness or unsupported-platform observation
             # cannot stand in for the real Windows external-source assertions.
             external_library_report(bridge.get("external_library"))

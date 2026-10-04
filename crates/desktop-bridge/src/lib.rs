@@ -5,6 +5,7 @@ mod download;
 pub mod dto;
 mod error;
 mod library;
+mod onboarding;
 mod settings;
 mod sse;
 pub use dto::*;
@@ -40,6 +41,12 @@ pub struct StartupDiagnostics {
     pub process_exit_code: Option<i32>,
 }
 
+type CandidateObservation = (
+    Vec<(String, model_store::library::FileIdentity)>,
+    std::time::Instant,
+    bool,
+);
+
 pub struct DesktopBridge {
     startup_diagnostics: Mutex<StartupDiagnostics>,
     root: PathBuf,
@@ -58,6 +65,9 @@ pub struct DesktopBridge {
     default_model_directory: Option<PathBuf>,
     downloads: Mutex<download::DownloadSlot>,
     download_poll: AsyncMutex<()>,
+    validation_build: Mutex<Option<(Vec<model_store::library::FileIdentity>, String)>>,
+    list_generation: Mutex<Option<(uuid::Uuid, uuid::Uuid)>>,
+    candidate_observation: Mutex<Option<CandidateObservation>>,
 }
 impl DesktopBridge {
     /// Paths come from the native shell's verified package layout, never invoke.
@@ -91,6 +101,9 @@ impl DesktopBridge {
             default_model_directory: None,
             downloads: Mutex::new(download::DownloadSlot::default()),
             download_poll: AsyncMutex::new(()),
+            validation_build: Mutex::new(None),
+            list_generation: Mutex::new(None),
+            candidate_observation: Mutex::new(None),
         })
     }
     pub fn startup_diagnostics(&self) -> StartupDiagnostics {
@@ -151,7 +164,7 @@ impl DesktopBridge {
             settings: preferences.with_idle(config.runtime.idle_unload_seconds),
             model_directory: library::directory_snapshot(&self.root, None)?,
         };
-        if self.library.lock().unwrap().owns_instance() || self.download_active() {
+        if self.library.lock().unwrap().owns_instance() || self.download_holds_instance() {
             return Ok(snapshot);
         }
         if let Some(lock) = InstanceLock::try_acquire(&self.root)
@@ -188,12 +201,26 @@ impl DesktopBridge {
         Ok(status)
     }
     pub async fn start(&self, initialize_if_missing: bool) -> Result<DesktopSnapshot> {
-        self.open()?;
+        self.start_inner(initialize_if_missing, None).await
+    }
+    async fn start_inner(
+        &self,
+        initialize_if_missing: bool,
+        onboarding: Option<&AtomicBool>,
+    ) -> Result<DesktopSnapshot> {
+        if onboarding.is_none() {
+            self.open()?;
+        } else if self.closing.load(Ordering::Acquire) {
+            return Err(BridgeError::new("desktop_closing"));
+        }
         let _work = self
             .work
             .try_lock()
             .map_err(|_| BridgeError::new("desktop_busy"))?;
-        self.open()?;
+        if onboarding.is_none() {
+            self.open()?;
+        }
+        self.check_start_cancelled(onboarding)?;
         *self.startup_diagnostics.lock().unwrap() = StartupDiagnostics::default();
         if settings::require_initialized(&self.root).is_err() {
             if !initialize_if_missing {
@@ -247,12 +274,16 @@ impl DesktopBridge {
             use std::os::windows::process::CommandExt;
             command.creation_flags(runtime_creation_flags());
         }
+        self.check_start_cancelled(onboarding)?;
         let mut child = command.spawn().map_err(|error| {
             self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
             BridgeError::spawn(&error)
         })?;
         let started = tokio::time::Instant::now();
         let result = loop {
+            if let Err(error) = self.check_start_cancelled(onboarding) {
+                break Err(error);
+            }
             if let Ok(snapshot) = self.snapshot_inner().await
                 && matches!(snapshot.connection, ConnectionState::Connected)
             {
@@ -281,6 +312,15 @@ impl DesktopBridge {
         });
         result
     }
+    fn check_start_cancelled(&self, onboarding: Option<&AtomicBool>) -> Result<()> {
+        if self.closing.load(Ordering::Acquire)
+            || onboarding.is_some_and(|cancel| cancel.load(Ordering::Acquire))
+        {
+            Err(BridgeError::new("request_cancelled"))
+        } else {
+            Ok(())
+        }
+    }
     fn check_executable(&self) -> Result<()> {
         for p in [
             &self.executable,
@@ -301,7 +341,45 @@ impl DesktopBridge {
         after: Option<String>,
         generation: Option<uuid::Uuid>,
     ) -> Result<ModelsPage> {
-        self.open()?;
+        if self.closing.load(Ordering::Acquire) {
+            return Err(BridgeError::new("desktop_closing"));
+        }
+        // These are this bridge's offline owners, not a proved API service.
+        let local_owner =
+            self.library.lock().unwrap().owns_instance() || self.download_holds_instance();
+        if after.is_some() && generation.is_none() {
+            return Err(BridgeError::new("model_list_changed"));
+        }
+        if let Some(after) = &after {
+            runtime_types::ModelId::new(after).map_err(|_| BridgeError::new("invalid_request"))?;
+        }
+        if self.root.exists() {
+            model_store::library::validate_directory_candidate(&self.root)
+                .map_err(|_| BridgeError::new("data_directory_unavailable"))?;
+        }
+        if local_owner {
+            return self.local_models_page(after.as_deref(), generation);
+        }
+        match InstanceLock::observe(&self.root)
+            .map_err(|_| BridgeError::new("instance_unavailable"))?
+        {
+            runtime_cli::instance::InstanceObservation::Stopped(_guard) => {
+                return self.local_models_page(after.as_deref(), generation);
+            }
+            runtime_cli::instance::InstanceObservation::Running => (),
+        }
+        let upstream_generation = if let Some(generation) = generation {
+            Some(
+                self.list_generation
+                    .lock()
+                    .unwrap()
+                    .filter(|(public, _)| *public == generation)
+                    .ok_or_else(|| BridgeError::new("model_list_changed"))?
+                    .1,
+            )
+        } else {
+            None
+        };
         let mut path = match after.as_deref() {
             Some(id) => format!(
                 "/runtime/models?limit=64&after={}",
@@ -312,17 +390,17 @@ impl DesktopBridge {
         if after.is_some() && generation.is_none() {
             return Err(BridgeError::new("model_list_changed"));
         }
-        if let Some(generation) = generation {
+        if let Some(generation) = upstream_generation {
             path.push_str(&format!("&generation={generation}"));
         }
         let value: Value = self.json(Method::GET, &path, None).await?;
         if value.get("generation").is_none() {
             return Err(BridgeError::new("model_library_unsupported"));
         }
-        let page: ModelsPage =
+        let mut page: ModelsPage =
             serde_json::from_value(value).map_err(|_| BridgeError::new("response_invalid"))?;
         if page.generation.is_nil()
-            || generation.is_some_and(|expected| expected != page.generation)
+            || upstream_generation.is_some_and(|expected| expected != page.generation)
         {
             return Err(BridgeError::new("model_list_changed"));
         }
@@ -339,6 +417,12 @@ impl DesktopBridge {
         {
             return Err(BridgeError::new("response_invalid"));
         }
+        let upstream = page.generation;
+        self.runtime_observations(&mut page)?;
+        if generation.is_some_and(|expected| expected != page.generation) {
+            return Err(BridgeError::new("model_list_changed"));
+        }
+        *self.list_generation.lock().unwrap() = Some((page.generation, upstream));
         Ok(page)
     }
     pub async fn import_model(&self, path: PathBuf, model_id: String) -> Result<ModelSummary> {
@@ -401,7 +485,11 @@ impl DesktopBridge {
                 self.load_disconnected.store(true, Ordering::Release);
                 Err(BridgeError::new("model_load_interrupted"))
             }
-            result = self.json(Method::POST,"/runtime/load",Some(&body)) => result,
+            result = self.json::<Value>(Method::POST,"/runtime/load-and-test",Some(&body)) => {
+                let value=result?;
+                onboarding::check_load_observation(&value)?;
+                serde_json::from_value(value).map_err(|_|BridgeError::new("response_invalid"))
+            },
         }
     }
     pub async fn unload_model(&self) -> Result<RuntimeStatus> {
@@ -532,7 +620,9 @@ impl DesktopBridge {
                             && !(load_disconnected
                                 && matches!(
                                     status.state,
-                                    RuntimeState::Loading | RuntimeState::Unloading
+                                    RuntimeState::Loading
+                                        | RuntimeState::Unloading
+                                        | RuntimeState::Generating
                                 ))
                         {
                             return Ok::<_, BridgeError>(());

@@ -255,7 +255,7 @@ function RuntimeBanner({
           <p>
             {snapshot.connection === "error"
               ? "先重新检查连接。无法验证的现有实例不会被替换，请检查后重试。"
-              : "启动本机服务后，即可管理模型和进行聊天。"}
+              : "可直接浏览已登记的本地模型。点击加载会启动本机服务，并进行基础测试。"}
           </p>
         </div>
         <button
@@ -292,7 +292,7 @@ function DirectoryStateNotice({ state }: { state: ViewState }) {
   const explanations = {
     default: "未设置外部目录，原有管理模型保持可用。",
     ready: "当前运行服务已采用所选模型目录。",
-    stopped: "已保存目录，启动运行服务后读取模型。",
+    stopped: "已保存目录，可直接浏览已登记的模型；浏览不会启动运行服务。",
     stale:
       "已保存目录与运行实例不一致。请显式停止服务，再启动匹配配置；不会自动切换模型。",
     missing:
@@ -391,7 +391,7 @@ function LibraryDiagnostics({ state }: { state: ViewState }) {
   return <section className="notice-band warning library-diagnostics" aria-label="模型目录核验结果" role="status">
     <div>
       <strong>{partial ? `目录已部分登记：${operation.result!.registered_files} 个已登记，${operation.file_errors.length} 个未登记` : "本次核验发现未通过的文件"}</strong>
-      <p>{partial ? "合法文件已一次保存；下列文件未登记。可尝试加载不代表已实测，请启动服务读取实际可用性。" : uncertain ? "索引可能已保存，持久化尚未确认；请先核对实际配置，不能假定已回滚。" : "本次未发布新索引，原目录与索引保留。下列原因仅表示本次已检查的文件。"}</p>
+      <p>{partial ? "合法文件已一次保存；下列文件未登记。可在本地列表查看；可尝试加载不代表已实测。" : uncertain ? "索引可能已保存，持久化尚未确认；请先核对实际配置，不能假定已回滚。" : "本次未发布新索引，原目录与索引保留。下列原因仅表示本次已检查的文件。"}</p>
       <ul>{operation.file_errors.map((failure) => <li key={failure.file_name}>
         <strong>{failure.file_name}</strong>：{failure.code === "invalid_manifest" ? "GGUF 结构或必需元数据无效，或超出当前结构支持范围" : failure.code === "unsupported_model" ? "当前仅支持受保护的单文件文本 GGUF，分片不受支持" : "缺少有效的原始嵌入聊天模板，不使用替代模板"}
         <span className="subtle">（{failure.code}）</span>
@@ -569,9 +569,12 @@ function ModelsPage({
   goSettings: () => void;
 }) {
   const [view, setView] = useState<"local" | "download">("local");
-  const runtime = state.snapshot?.runtime;
+  const runtime = state.snapshot?.connection === "connected" ? state.snapshot.runtime : null;
   const settings = state.snapshot?.settings ?? DEFAULT_SETTINGS;
   const connected = state.snapshot?.connection === "connected";
+  const browsable = connected || state.snapshot?.connection === "stopped";
+  const directoryId = state.snapshot?.model_directory.configured?.directory_id;
+  useEffect(() => { if (directoryId) void controller.reconcileModels(); }, [controller, directoryId]);
   const busy =
     !!state.operation ||
     state.library_phase !== "idle" ||
@@ -640,7 +643,7 @@ function ModelsPage({
             </button>
           )}
           {runtime?.state === "ready" && (
-            <button className="primary" onClick={goChat}>
+            <button className="primary" disabled={busy} onClick={goChat}>
               开始聊天
               <Icon name="chevron" size={16} />
             </button>
@@ -668,9 +671,14 @@ function ModelsPage({
       {state.snapshot?.connection !== "connected" &&
         state.models.data.length > 0 && (
           <p className="stale-models-note" role="status">
-            以下为上次读取的列表，当前不可加载。启动服务后会刷新。
+            {state.models.source === "local"
+              ? "本地已登记模型列表。测试标签是此前的本机记录，不表示模型当前驻留内存。"
+              : "以下为上次读取的列表；刷新可重新读取本地索引，加载时仍须核验文件。"}
           </p>
         )}
+      {state.reconcile_status === "observing" && <p role="status" className="small-note">检测到目录变化，等待文件稳定后登记。未完成下载的文件不会作为测试通过；稍后可刷新。</p>}
+      {state.reconcile_status === "pending" && <p role="status" className="warning-text">发现待登记文件。运行服务使用固定索引，请在方便时显式停止服务后刷新；不会自动中断当前模型或其他客户端。</p>}
+      {state.testing_model && <p role="status" className="local-test-progress">正在加载或进行本机短文本测试。加载最多 300 秒；短文本测试最多 30 秒，取消清理可能稍后完成。测试不会写入聊天；可按已保存策略关闭应用。</p>}
       <section className="library" aria-labelledby="library-title">
         <div className="section-heading">
           <h2 id="library-title">
@@ -678,8 +686,8 @@ function ModelsPage({
           </h2>
           <button
             className="text-button"
-            disabled={!connected || state.models_loading || busy}
-            onClick={() => void controller.loadPage(state.page_after)}
+            disabled={!browsable || state.models_loading || busy}
+            onClick={() => void controller.refreshModels()}
           >
             <Icon name="refresh" size={15} />
             刷新
@@ -697,7 +705,7 @@ function ModelsPage({
             <h3>你的模型库还是空的</h3>
             <p>
               {state.snapshot?.connection === "stopped"
-                ? "启动运行服务后，读取当前模型列表。"
+                ? "本地索引中没有模型。可选择已有 GGUF 的目录，或下载模型后自动登记。"
                 : "在设置中选择已有 GGUF 的目录，停止服务后应用。"}
             </p>
             <span>支持单文件 GGUF；可选择本地目录，或切换到“下载模型”选取文件</span>
@@ -731,14 +739,20 @@ function ModelsPage({
                       <span>{model.architecture || "架构未知"}</span>
                       <span>{formatSize(model.size_bytes)}</span>
                       <span>登记时已识别 GGUF</span>
-                      <span>{compatibility.admission}</span>
+                      <span>{state.testing_model === model.id ? "正在进行本机基础测试" : compatibility.admission}</span>
                     </div>
                     <p className="small-note">{compatibility.architecture}</p>
                     <details>
                       <summary>模型信息</summary>
                       <p className="hash">API ID：{model.id}</p>
                       <p className="hash">登记时 SHA-256：{model.sha256}</p>
-                      <p>已验证运行上下文：{model.context_size ?? "未实测"}</p>
+                      <p>历史矩阵验证记录：{model.validated ? "有精确模型验证记录" : "未实测"} · 历史验证上下文：{model.context_size ?? "未实测"}</p>
+                      {model.local_validation && <>
+                        <p>本机加载证明：{model.local_validation.load_success ? "曾通过" : "未取得"} · 本机短文本证明：{model.local_validation.generation_pass ? "曾通过" : "未取得"}{model.local_validation.state === "stale" ? "（记录已过期，当前组合待重测）" : ""}</p>
+                        {model.local_validation.checked_at_unix_ms !== null && <p>本机检查时间：{new Date(model.local_validation.checked_at_unix_ms).toLocaleString()}</p>}
+                        {model.local_validation.error_code && <p>本机测试诊断码：{model.local_validation.error_code}</p>}
+                      </>}
+                      <p>本机基础测试仅覆盖对应文件、引擎、设备和加载参数的加载与短文本生成；不证明回答质量、长上下文、工具调用或全部功能可用。</p>
                       <p>当前上下文请求上限（模型与运行时约束）：{model.context_limit ?? "未知"}，不代表设备可承受</p>
                       <p>文件大小不等于运行内存；模型、上下文和批次越大，占用通常越高。16 GB 内存也不能保证加载成功。</p>
                       <p>工具调用和思考输出尚未开放；模型可加载不代表具备这些能力。</p>
@@ -766,10 +780,10 @@ function ModelsPage({
                       <p className="small-note">加载前请先卸载当前模型</p>
                     )}
                   </div>
-                  <button
+                  <div className="model-row-actions"><button
                     className={current ? "loaded-button" : ""}
                     disabled={
-                      !connected ||
+                      !browsable ||
                       busy ||
                       current ||
                       mustUnload ||
@@ -788,6 +802,9 @@ function ModelsPage({
                           ? "重新加载"
                           : model.validated ? "加载模型" : "尝试加载"}
                   </button>
+                  {current && <button disabled={busy} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>基础测试</button>}
+                  {!connected && model.available && model.loadable === true && <span className="small-note">加载将启动服务并短测</span>}
+                  </div>
                 </article>
               );
             })}
@@ -799,7 +816,7 @@ function ModelsPage({
             <button
               className="text-button"
               disabled={
-                !state.page_after || state.models_loading || !connected || busy
+                !state.page_after || state.models_loading || !browsable || busy
               }
               onClick={() => void controller.loadPage(null)}
             >
@@ -809,7 +826,7 @@ function ModelsPage({
               disabled={
                 !state.models.next_after ||
                 state.models_loading ||
-                !connected ||
+                !browsable ||
                 busy
               }
               onClick={() => void controller.loadPage(state.models.next_after)}
@@ -862,6 +879,7 @@ function ChatPage({
     !active &&
     !state.operation &&
     state.library_phase === "idle" &&
+    state.download_phase === "idle" &&
     !["stale", "unsupported"].includes(
       state.snapshot?.model_directory.state ?? "",
     ) &&
@@ -1490,7 +1508,7 @@ export default function App({
               title="按已保存策略关闭应用"
               aria-label="关闭应用"
               className="icon-button"
-              disabled={!!state.operation}
+              disabled={!!state.operation && !state.testing_model}
               onClick={() => void controller.close()}
             >
               <Icon name="power" size={16} />

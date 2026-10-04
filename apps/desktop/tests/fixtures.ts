@@ -70,6 +70,8 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
     pickDirectory: vi.fn(async () => null),
     applyDirectory: vi.fn(async () => ({ operation_id: "library-1" })),
     scanModels: vi.fn(async () => ({ operation_id: "library-1" })),
+    reconcileModels: vi.fn(async () => ({ status: "unchanged" as const, operation_id: null })),
+    testModel: vi.fn(async () => ({ state: "untested" as const, load_success: false, generation_pass: false, checked_at_unix_ms: null, error_code: null })),
     libraryNext: vi.fn(
       async (): Promise<LibraryOperation> => ({
         operation_id: "library-1",

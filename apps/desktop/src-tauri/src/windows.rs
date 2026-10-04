@@ -95,6 +95,8 @@ struct DirectoryRequest {
 #[serde(deny_unknown_fields)]
 struct DownloadRequest {
     catalog_id: String,
+    #[serde(default)]
+    auto_test: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -273,7 +275,9 @@ async fn model_download_start(
     request: DownloadRequest,
 ) -> Result<DownloadOperationHandle> {
     guard(&window, &state)?;
-    state.bridge.download_start(request.catalog_id)
+    state
+        .bridge
+        .download_start_with_options(request.catalog_id, request.auto_test)
 }
 #[tauri::command]
 async fn model_download_next(
@@ -300,6 +304,23 @@ async fn models_scan(
 ) -> Result<LibraryOperationHandle> {
     guard(&window, &state)?;
     state.bridge.models_scan()
+}
+#[tauri::command]
+async fn models_reconcile(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<ModelsReconcile> {
+    guard(&window, &state)?;
+    state.bridge.models_reconcile()
+}
+#[tauri::command]
+async fn model_test(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: LoadModelRequest,
+) -> Result<LocalValidation> {
+    guard(&window, &state)?;
+    state.bridge.model_test(request).await
 }
 #[tauri::command]
 async fn model_library_next(
@@ -561,6 +582,8 @@ pub fn run() {
             model_download_next,
             model_download_cancel,
             models_scan,
+            models_reconcile,
+            model_test,
             model_library_next,
             model_library_cancel,
             models_page,

@@ -88,7 +88,7 @@ def catalog_download_report(value):
     if (type(value["size_bytes"]) is not int or not 4 <= value["size_bytes"] <= 16 * 1024**3
             or type(value["downloaded_bytes"]) is not int or value["downloaded_bytes"] != value["size_bytes"]
             or type(value["elapsed_ms"]) is not int or not 0 <= value["elapsed_ms"] <= 2 * 60 * 60 * 1000
-            or value["published"] is not True or value["registered"] is not False):
+            or value["published"] is not True or value["registered"] is not True):
         raise ValueError("invalid catalog download completion")
 
 

@@ -638,3 +638,64 @@ fn dos_device_and_network_source_names_are_rejected_before_open_or_read() {
     assert!(store.list().unwrap().is_empty());
     assert_clean(&root);
 }
+
+#[test]
+fn offline_inventory_neither_locks_recovers_nor_hashes_model_payloads() {
+    let (root, store) = store();
+    let bytes = fixture(128);
+    import(&store, &bytes, "offline").unwrap();
+    // Holding the store lock does not stop the read-only view. An import debris
+    // file must remain untouched, and invalid payload bytes are not inspected.
+    let leftover = root.path().join("imports/import-debris.partial");
+    fs::write(&leftover, b"keep").unwrap();
+    let path = root.path().join("models/offline/model.gguf");
+    fs::write(&path, vec![b'x'; bytes.len()]).unwrap();
+    let inventory = model_store::inventory::read(root.path()).unwrap();
+    assert_eq!(inventory.entries.len(), 1);
+    assert!(inventory.entries[0].availability_error.is_none());
+    assert_eq!(fs::read(&leftover).unwrap(), b"keep");
+    assert!(!inventory.entries[0].manifest.validated);
+    assert!(store.resolve(&id("offline")).is_err());
+    let absent = root.path().join("does-not-exist");
+    assert!(
+        model_store::inventory::read(&absent)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert!(!absent.exists());
+}
+#[test]
+fn offline_inventory_generation_tracks_metadata_and_refuses_symlinks() {
+    let (root, store) = store();
+    let bytes = fixture(128);
+    import(&store, &bytes, "offline").unwrap();
+    let before = model_store::inventory::read(root.path())
+        .unwrap()
+        .generation;
+    let path = root.path().join("models/offline/model.gguf");
+    fs::write(&path, b"short").unwrap();
+    let after = model_store::inventory::read(root.path()).unwrap();
+    assert_ne!(before, after.generation);
+    assert_eq!(
+        after.entries[0].availability_error,
+        Some(ErrorCode::ModelFileChanged)
+    );
+    #[cfg(unix)]
+    {
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", &path).unwrap();
+        assert!(
+            model_store::inventory::read(root.path()).unwrap().entries[0]
+                .availability_error
+                .is_some()
+        );
+        fs::remove_file(root.path().join("models/offline/manifest.json")).unwrap();
+        std::os::unix::fs::symlink(
+            "/dev/zero",
+            root.path().join("models/offline/manifest.json"),
+        )
+        .unwrap();
+        assert!(model_store::inventory::read(root.path()).is_err());
+    }
+}

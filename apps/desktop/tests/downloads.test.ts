@@ -195,3 +195,58 @@ describe("download ownership and directory discovery", () => {
   });
 
 });
+
+describe("download registration and optional basic test", () => {
+  const localProof = { state: "passed" as const, load_success: true, generation_pass: true, checked_at_unix_ms: 1791080000000, error_code: null };
+  it("sends the explicit automatic-test choice and accepts registered completion", async () => {
+    const result = { saved: true as const, registered: true, file_name: "test.gguf", cleanup_warning: null, registration_error: null, local_validation: localProof };
+    const { api, controller } = await create({ downloadNext: vi.fn(async () => progress({ downloaded_bytes: 1024, status: "completed", phase: "finished", terminal: true, result })) });
+    await controller.startDownload(entry.catalog_id, true); await vi.advanceTimersByTimeAsync(1);
+    expect(api.downloadStart).toHaveBeenCalledExactlyOnceWith("test-model", true);
+    expect(controller.getSnapshot().download?.result).toEqual(result);
+    expect(controller.getSnapshot().notice).toContain("自动登记");
+    expect(api.modelsPage).toHaveBeenCalledTimes(2);
+    expect(api.chatStart).not.toHaveBeenCalled();
+    expect(api.start).not.toHaveBeenCalled();
+  });
+  it("shows post-save registration failure separately from successful file saving", async () => {
+    const registration_error = { code: "runtime_running", message: "运行服务已启动，登记已暂缓" };
+    const { controller } = await create({ downloadNext: vi.fn(async () => progress({ downloaded_bytes: 1024, status: "completed", phase: "finished", terminal: true, result: { saved: true, registered: false, file_name: "test.gguf", cleanup_warning: null, registration_error } })) });
+    await controller.startDownload(entry.catalog_id, false); await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().download?.status).toBe("completed");
+    expect(controller.getSnapshot().error).toBeNull();
+    expect(controller.getSnapshot().notice).toContain("自动登记未完成");
+    expect(controller.getSnapshot().download?.result?.registration_error).toEqual(registration_error);
+  });
+  it.each(["failed", "deferred"] as const)("does not confuse %s local testing with a failed download", async (state) => {
+    const result = { saved: true as const, registered: true, file_name: "test.gguf", cleanup_warning: null, registration_error: null, local_validation: { ...localProof, state, generation_pass: false, error_code: state === "failed" ? "deadline_exceeded" : "runtime_busy" } };
+    const { controller } = await create({ downloadNext: vi.fn(async () => progress({ downloaded_bytes: 1024, status: "completed", phase: "finished", terminal: true, result })) });
+    await controller.startDownload(entry.catalog_id, true); await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().download_phase).toBe("idle");
+    expect(controller.getSnapshot().download?.result?.local_validation?.generation_pass).toBe(false);
+    expect(controller.getSnapshot().download?.status).toBe("completed");
+    expect(controller.getSnapshot().error).toBeNull();
+  });
+  it("cancels subsequent testing without claiming the saved file was cancelled", async () => {
+    const result = { saved: true as const, registered: true, file_name: "test.gguf", cleanup_warning: null, local_validation: { ...localProof, state: "failed" as const, generation_pass: false, error_code: "request_cancelled" } };
+    const { api, controller } = await create({ downloadNext: vi.fn().mockResolvedValueOnce(progress({ phase: "testing", downloaded_bytes: 1024 })).mockResolvedValueOnce(progress({ downloaded_bytes: 1024, status: "completed", phase: "finished", terminal: true, result })) });
+    await controller.startDownload(entry.catalog_id, true); await vi.advanceTimersByTimeAsync(1);
+    await controller.cancelDownload();
+    expect(api.downloadCancel).toHaveBeenCalledExactlyOnceWith("download-1");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(controller.getSnapshot().download?.status).toBe("completed");
+    expect(controller.getSnapshot().download?.result?.local_validation?.error_code).toBe("request_cancelled");
+    expect(controller.getSnapshot().notice).not.toContain("下载已取消");
+  });
+  it("does not grant proof to an unregistered file or contradictory success", async () => {
+    for (const result of [
+      { saved: true as const, registered: false, file_name: "test.gguf", cleanup_warning: null, local_validation: localProof },
+      { saved: true as const, registered: true, file_name: "test.gguf", cleanup_warning: null, registration_error: { code: "model_scan_failed", message: "登记失败" } },
+    ]) {
+      const { controller } = await create({ downloadNext: vi.fn(async () => progress({ downloaded_bytes: 1024, status: "completed", phase: "finished", terminal: true, result })) });
+      await controller.startDownload(entry.catalog_id, true); await vi.advanceTimersByTimeAsync(1);
+      expect(controller.getSnapshot().download_phase).toBe("recovery");
+      expect(controller.getSnapshot().download).toBeNull();
+    }
+  });
+});

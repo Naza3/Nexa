@@ -61,6 +61,9 @@ pub struct ModelStore {
     external_prepared: Mutex<BTreeMap<ModelId, PreparedExternal>>,
 }
 impl ModelStore {
+    pub fn data_directory(&self) -> &Path {
+        &self.root_path
+    }
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self> {
         if EXTERNAL_CLEANUP_UNCONFIRMED.load(Ordering::Acquire) {
             return Err(library_error(ErrorCode::ExecutorCleanupUnconfirmed));

@@ -215,7 +215,7 @@ class EvidenceStagingTests(unittest.TestCase):
                   "catalog_id": "qwen3-0.6b-q8-0", "source_revision": "a" * 40,
                   "size_bytes": 639446688, "sha256": "b" * 64,
                   "downloaded_bytes": 639446688, "published": True,
-                  "registered": False, "elapsed_ms": 1234}
+                  "registered": True, "elapsed_ms": 1234}
         catalog_download_report(report)
         self.put("windows-catalog-download.json", json.dumps(report))
         result = self.run_stage()
@@ -225,7 +225,7 @@ class EvidenceStagingTests(unittest.TestCase):
                         {"source": "huggingface"}, {"catalog_id": "other"},
                         {"schema_version": True}, {"size_bytes": True},
                         {"downloaded_bytes": 1}, {"published": False},
-                        {"registered": True}, {"sha256": "invalid"},
+                        {"registered": False}, {"sha256": "invalid"},
                         {"elapsed_ms": -1}, {"source_revision": {}}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 catalog_download_report(report | changes)

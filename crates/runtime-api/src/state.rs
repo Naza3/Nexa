@@ -13,6 +13,9 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+pub(crate) type ProbeBuild =
+    Arc<std::sync::OnceLock<Option<(Vec<model_store::library::FileIdentity>, String)>>>;
+
 struct RegistrySnapshot {
     models: Vec<ModelSummary>,
     generation: uuid::Uuid,
@@ -24,7 +27,8 @@ pub struct ApiState {
     pub config: Arc<Config>,
     pub shutdown: ServiceShutdown,
     pub diagnostics: Option<ProcessDiagnostics>,
-    store: Arc<ModelStore>,
+    pub(crate) store: Arc<ModelStore>,
+    pub(crate) probe_build: ProbeBuild,
     registry: Arc<RwLock<RegistrySnapshot>>,
     thread_selection: Arc<RwLock<Option<(LoadOptions, &'static str)>>>,
     requests: Arc<Semaphore>,
@@ -47,6 +51,7 @@ impl ApiState {
             shutdown: ServiceShutdown::new(runtime, import_cancel.clone()),
             diagnostics,
             store,
+            probe_build: Arc::new(std::sync::OnceLock::new()),
             registry: Arc::new(RwLock::new(RegistrySnapshot {
                 models: Vec::new(),
                 generation: uuid::Uuid::new_v4(),
@@ -68,6 +73,18 @@ impl ApiState {
             })?
     }
     pub async fn initialize_registry(&self) -> Result<(), ApiError> {
+        let build = self.probe_build.clone();
+        tokio::task::spawn_blocking(move || {
+            build.get_or_init(|| {
+                let path = std::env::current_exe().ok()?;
+                let before = model_store::local_validation::engine_file_stamps(&path).ok()?;
+                let hash = model_store::local_validation::engine_build(&path).ok()?;
+                let after = model_store::local_validation::engine_file_stamps(&path).ok()?;
+                (before == after).then_some((before, hash))
+            });
+        })
+        .await
+        .map_err(|_| ApiError::internal())?;
         let store = self.store.clone();
         let models = self
             .storage(move || {
@@ -132,7 +149,7 @@ impl ApiState {
         self.store.release_external_after_shutdown();
         Ok(())
     }
-    async fn prepare_external(&self, id: ModelId) -> Result<(), ApiError> {
+    pub(crate) async fn prepare_external(&self, id: ModelId) -> Result<(), ApiError> {
         match self.store.needs_external_preparation(&id) {
             Ok(false) => return Ok(()),
             Ok(true) => (),
@@ -148,7 +165,36 @@ impl ApiState {
         })
         .await
     }
+    pub(crate) async fn prepare_external_for_onboarding(
+        &self,
+        id: ModelId,
+    ) -> Result<(), ApiError> {
+        if !self.store.needs_external_preparation(&id)? {
+            return Ok(());
+        }
+        let store = self.store.clone();
+        let requested = id.clone();
+        self.prepare_guarded_with_condition(
+            id,
+            move |control| store.prepare_external(&requested, &control),
+            true,
+        )
+        .await
+    }
     async fn prepare_guarded<F>(&self, id: ModelId, action: F) -> Result<(), ApiError>
+    where
+        F: FnOnce(Arc<model_store::library::ScanControl>) -> Result<(), RuntimeError>
+            + Send
+            + 'static,
+    {
+        self.prepare_guarded_with_condition(id, action, false).await
+    }
+    async fn prepare_guarded_with_condition<F>(
+        &self,
+        id: ModelId,
+        action: F,
+        only_if_unloaded: bool,
+    ) -> Result<(), ApiError>
     where
         F: FnOnce(Arc<model_store::library::ScanControl>) -> Result<(), RuntimeError>
             + Send
@@ -159,7 +205,15 @@ impl ApiState {
             .clone()
             .try_acquire_owned()
             .map_err(|_| ApiError::busy())?;
-        let lease = self.control(|runtime| runtime.reserve_registry()).await?;
+        let lease = self
+            .control(move |runtime| {
+                if only_if_unloaded {
+                    runtime.reserve_registry_if_unloaded()
+                } else {
+                    runtime.reserve_registry()
+                }
+            })
+            .await?;
         let control = Arc::new(model_store::library::ScanControl::default());
         let shutdown = self.shutdown.clone();
         let shutdown_control = control.clone();

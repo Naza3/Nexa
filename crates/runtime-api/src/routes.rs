@@ -32,6 +32,9 @@ pub fn router(state: ApiState, security: Arc<SecurityContext>) -> Router {
         .route("/runtime/models", get(models))
         .route("/runtime/models/import", post(import))
         .route("/runtime/load", post(load))
+        .route("/runtime/load-and-test", post(load_and_test))
+        .route("/runtime/load-if-unloaded", post(load_if_unloaded))
+        .route("/runtime/model-test", post(model_test))
         .route("/runtime/unload", post(unload))
         .route("/runtime/requests/{id}/cancel", post(cancel))
         .route("/runtime/shutdown", post(shutdown))
@@ -232,6 +235,52 @@ async fn load(State(state): State<ApiState>, request: Request) -> Result<Json<Va
         .await?;
     let status = state.control(|runtime| runtime.status()).await?;
     Ok(Json(status_json(&state, status)))
+}
+async fn load_and_test(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    desktop_load(state, request, false).await
+}
+async fn load_if_unloaded(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    desktop_load(state, request, true).await
+}
+async fn desktop_load(
+    state: ApiState,
+    request: Request,
+    only_if_unloaded: bool,
+) -> Result<Json<Value>, ApiError> {
+    let bytes = json_body(request, state.config.api.max_body_bytes).await?;
+    let load = LoadRequest::parse(&bytes)?;
+    let options = load.options(&state.config)?;
+    let observation = state
+        .desktop_load(
+            load.model,
+            options,
+            load.threads.is_some(),
+            only_if_unloaded,
+        )
+        .await?;
+    let status = state.control(|runtime| runtime.status()).await?;
+    let mut value = status_json(&state, status);
+    value["local_validation"] =
+        serde_json::to_value(observation).map_err(|_| ApiError::internal())?;
+    Ok(Json(value))
+}
+async fn model_test(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let bytes = json_body(request, state.config.api.max_body_bytes).await?;
+    let load = LoadRequest::parse(&bytes)?;
+    let options = load.options(&state.config)?;
+    Ok(Json(
+        serde_json::to_value(state.model_probe(load.model, options).await?)
+            .map_err(|_| ApiError::internal())?,
+    ))
 }
 async fn unload(State(state): State<ApiState>, request: Request) -> Result<Json<Value>, ApiError> {
     state.ensure_running()?;
