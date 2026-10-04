@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-04 公开仓库恢复GitHub Actions（进行中）
+
+用户明确将仓库改为public并恢复后续GitHub Actions构建；GitHub API已确认visibility=public。此要求覆盖下文旧“不运行Actions Rust”的约束，但不授权收费runner或付费资源。继续维护codex/nexa-add-model，PR #7已经建立且在2f7478f时与main26206ef无冲突。
+
+本批功能源码464项Rust、414前端、Python153+2skip和Linux真实模型已验证，2f7478f四Windows交叉EXE与同源aria2也已完成；其完整ZIP未产生，因为微软CRT在线CRL访问被云端策略阻断，正式提权又在命令前沙箱挂载失败，用户再授权重试仍同样失败。未跳过校验，旧交叉组件保留但不能称为可交付包。现在按用户新要求适配原生Windows Actions，进行同源组件重建、完整验证和打包，不继续重试原云端受阻网络。恢复改动已完成严格Python170项（168通过、2平台skip）、YAML/py_compile/diff静态检查，见[恢复记录](docs/verification/2026-10-04-public-actions-restoration.md)。尚未触发本轮CI，实际运行/产物结果以精确head SHA后续记录，不能把静态通过称为Windows通过。
+
 ## 2026-10-04 校验超时与空闲策略（源码联合回归完成）
 
 Windows本机记录/反馈修复已在同一长期分支推送 `abcb1a0a9b448915cf311e4cf33c427cf6af017b`，449项Rust加4项doc、343前端、Python153+2skip和Windows交叉检查通过。按[ADR0023](docs/decisions/0023-model-verification-and-idle-policy.md)的两设置已实现并冻结，仍在同一开发分支。父全workspace/all-targets464通过/0失败/7忽略、clippy/fmt、前端414项/typecheck/lint/build、Python153+2skip，以及Windows六crate/壳all-targets交叉check均通过；独立审查无剩余阻断。见[联合回归](docs/verification/2026-10-04-runtime-policy-and-final-regression.md)。新版Linux release与真实固定Qwen0.6B harness通过，含重复短测、停止后离线证明与取消；Windows external链路仍未运行。随后clean提交、重新捕获来源并构建一个Windows包及一个新PR；main仍为26206ef且未由开发方更改，目标Windows待用户实机验收。

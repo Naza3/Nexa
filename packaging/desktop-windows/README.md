@@ -36,7 +36,7 @@ Windows Server 2022 CI、bridge 真实模型测试和实际用户 Windows 10 UI 
 - “复制 API 令牌”会把凭据写入系统剪贴板，可能进入系统剪贴板历史；仅供可信本机客户端使用。WebView 不接收或读取令牌
 - 会话仅在当前 UI 内存保留；文本作为纯文本展示，生成失败或取消后的部分回复标记为不完整
 
-`manifest.json` / `SHA256SUMS` 声明完整文件、原 runtime 身份与依赖闭包；哈希表示包一致性，不等于数字签名。`runtime/README.md` 保留既有 CLI 说明。请使用可信的本次交付完整包并核对ZIP SHA-256；本次不使用GitHub Actions编译Rust。
+`manifest.json` / `SHA256SUMS` 声明完整文件、原 runtime 身份与依赖闭包；哈希表示包一致性，不等于数字签名。`runtime/README.md` 保留既有 CLI 说明。请使用可信的同提交Actions产物或本次交付完整包并核对ZIP SHA-256；具体构建方式与验证结果以该包清单及配套报告为准。
 
 ## Windows 10 手工 UI 验收（尚需实际操作）
 

@@ -65,6 +65,40 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(set(crt), {"vcruntime140.dll"})
                 self.assertIn("Microsoft.VC145.CRT" if major == 18 else "Microsoft.VC143.CRT", str(crt["vcruntime140.dll"]))
 
+    def test_explicit_cmake_selection_survives_every_vs_environment_reentry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            selected, developer_env = self.vs_fixture(root)
+            selected_bin, bundled_bin = root / "Python Scripts", root / "VS bundled CMake"
+            for directory in (selected_bin, bundled_bin):
+                directory.mkdir()
+                for name in ("cmake.exe", "ctest.exe"):
+                    (directory / name).write_bytes(b"tool selection fixture, never executed")
+            developer_env["PATH"] = str(bundled_bin) + os.pathsep + developer_env["PATH"]
+            initial = {"NEXA_CMAKE_BIN": str(selected_bin), "PATH": str(selected_bin)}
+            with mock.patch.object(pack, "devcmd_environment", side_effect=lambda *_: developer_env.copy()):
+                first = pack.visual_studio_paths(selected, initial)[2]
+                second = pack.visual_studio_paths(selected, first)[2]
+            for env in (first, second):
+                self.assertEqual(env["NEXA_CMAKE_BIN"], str(selected_bin))
+                self.assertEqual(env["PATH"].split(os.pathsep)[0], str(selected_bin))
+                for name in ("cmake.exe", "ctest.exe"):
+                    self.assertEqual(pack.shutil.which(name, path=env["PATH"], mode=os.F_OK), str(selected_bin / name))
+
+    def test_explicit_cmake_directory_is_absolute_and_contains_both_tools(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            selected, env = self.vs_fixture(root)
+            with mock.patch.object(pack, "devcmd_environment", return_value=env.copy()), self.assertRaisesRegex(ValueError, "must be absolute"):
+                pack.visual_studio_paths(selected, {"NEXA_CMAKE_BIN": "relative-cmake"})
+            for present in ((), ("cmake.exe",)):
+                directory = root / ("empty" if not present else "missing-ctest")
+                directory.mkdir()
+                for name in present:
+                    (directory / name).write_bytes(b"fixture")
+                with self.subTest(present=present), mock.patch.object(pack, "devcmd_environment", return_value=env.copy()), self.assertRaises((OSError, ValueError)):
+                    pack.visual_studio_paths(selected, {"NEXA_CMAKE_BIN": str(directory)})
+
     def test_newest_usable_stable_instance_wins_and_broken_newer_instance_falls_back(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

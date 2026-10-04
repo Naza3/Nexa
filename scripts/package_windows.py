@@ -333,6 +333,17 @@ def visual_studio_paths(selected, base_env):
     dev = regular(vs / "Common7/Tools/VsDevCmd.bat")
     vs = vs.resolve()
     env = devcmd_environment(dev, visual_studio_environment(base_env))
+    # VsDevCmd can prepend its bundled older CMake. CI explicitly selects the
+    # Python Scripts directory where this run installed a compatible version;
+    # restore it after *every* VS initialization, including final packaging.
+    if base_env.get("NEXA_CMAKE_BIN"):
+        cmake_bin = Path(base_env["NEXA_CMAKE_BIN"])
+        if not cmake_bin.is_absolute():
+            fail("explicit CMake directory must be absolute")
+        for name in ("cmake.exe", "ctest.exe"):
+            regular(cmake_bin / name)
+        env["NEXA_CMAKE_BIN"] = str(cmake_bin)
+        env["PATH"] = str(cmake_bin) + os.pathsep + env.get("PATH", "")
     if not env.get("VSINSTALLDIR") or Path(env["VSINSTALLDIR"]).resolve() != vs:
         fail("VsDevCmd initialized a different Visual Studio instance")
     version = env.get("VCTOOLSVERSION", "").strip()

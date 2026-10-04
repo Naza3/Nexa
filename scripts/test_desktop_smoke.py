@@ -431,7 +431,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
 
     def test_launch_artifact_precedes_tauri_without_replacing_final_gate(self):
         workflow = (smoke.desktop.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
-        self.assertLess(workflow.index("name: Preserve early private desktop launch observation"),
+        self.assertLess(workflow.index("name: Preserve early desktop launch observation"),
                         workflow.index("name: Check independent desktop Rust graph and build actual Tauri Release"))
         self.assertIn("name: nexa-desktop-launch-probe-${{ github.sha }}", workflow)
         self.assertIn("artifacts/verification/windows-desktop/launch-probe-breakaway.json", workflow)

@@ -88,3 +88,5 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [Windows本机测试记录修复验证](docs/verification/2026-10-04-windows-model-evidence.md)
 
 - [运行策略与最终联合回归](docs/verification/2026-10-04-runtime-policy-and-final-regression.md) / [Windows联合验收步骤](docs/verification/2026-10-04-windows-model-management-checklist.md)
+
+- [公开仓库恢复Windows Actions](docs/verification/2026-10-04-public-actions-restoration.md)：用户最新构建授权、标准runner、同源工具链与推送前验证

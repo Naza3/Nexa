@@ -1,5 +1,11 @@
 # 开发与平台构建锁
 
+## 2026-10-04 最新覆盖：公开仓库恢复Actions
+
+用户明确改为公开仓库并恢复GitHub Actions构建，已通过GitHub API确认public。此要求覆盖本文旧“以后不在Actions执行Rust”安排；本地Windows手动构建和显式Linux交叉路径仍保留。后续优先标准托管Windows/Ubuntu runner，不使用收费larger runner、不自动改预算或购买资源。官方费用边界见[GitHub托管runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
+
+CI继续固定llama源码与已选依赖、同source_commit真实构建aria2，完整原生测试/真实模型/包验证不得跳过；标准Windows runner结果不代替Windows10 i5-8400/16GB实机、干净机器、离线或长期稳定性。默认长期开发分支承接后续改动，开发方负责同步main和冲突处理。
+
 ## 独立 Linux → Windows 测试路径（2026-10-04）
 
 按用户云端构建请求，新增[显式交叉测试流程](windows-cross-test-build.md)，原生 Windows/VS 打包链不变。实际探索工具组合为 Rust/Cargo1.98.1、Clang/LLD23.1.2、CMake4.2.3、Ninja1.13、cargo-xwin0.23.1 与指定 Microsoft SDK/CRT。Clang保持真实compiler_id，目标是x86_64-pc-windows-msvc，C/C++为Release /MD；不把MinGW库混进MSVC worker。CPU基线显式固定SSE4.2/AVX/AVX2/FMA/F16C/BMI2启用、AVX512关闭，并核验实际ggml-cpu flags/定义。

@@ -58,7 +58,7 @@ Import {
         with zipfile.ZipFile(archive, "w") as zipped:
             zipped.write(dll, member)
         license_file = root / "License.txt"
-        license_file.write_text("License fixture, not an actual Microsoft license")
+        license_file.write_text("License fixture, not an actual Microsoft license", encoding="utf-8")
         def record(path):
             return {"path": str(path), "sha256": pack.base.digest(path), "size_bytes": path.stat().st_size}
         value = {"schema_version": 1,
@@ -123,7 +123,7 @@ Import {
             dll = Path(value["dlls"][0]["path"])
             tool, ca, tsa = (root / name for name in ("osslsigncode", "ca.pem", "tsa.pem"))
             for item in (tool, ca, tsa):
-                item.write_text("signature tool or CA fixture, never executed")
+                item.write_text("signature tool or CA fixture, never executed", encoding="utf-8")
             valid = "O=Microsoft Corporation\nSignature verification: ok\nSignature CRL verification: ok\nTimestamp Server Signature verification: ok\nTimestamp Server Signature CRL verification: ok\nNumber of verified signatures: 1\nSucceeded\n"
             with mock.patch.object(pack.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=valid)) as run:
                 result = pack.verify_linux_signature(dll, tool, ca, tsa, root / "evidence")
@@ -157,7 +157,7 @@ Import {
                 fields["library." + name] = str(path)
             identity = native / "air-native-Release.txt"
             def write():
-                identity.write_text("\n".join(key + "=" + value for key, value in fields.items()) + "\n")
+                identity.write_text("\n".join(key + "=" + value for key, value in fields.items()) + "\n", encoding="utf-8")
             write()
             self.assertEqual(len(pack.native_identity(native)[1]), 8)
             (outside / "air_llama.lib").write_bytes(b"outside archive path fixture")
@@ -188,7 +188,7 @@ Import {
                 for name in ("README.md", "THIRD_PARTY_NOTICES.md"):
                     output = Path(temporary) / (role + name)
                     pack.copy_cross_document(templates / directory / name, output, role)
-                    text = output.read_text()
+                    text = output.read_text(encoding="utf-8")
                     for old in ("本次开发 Actions 产物", "验证 Microsoft Authenticode 并记录", "所选 Visual Studio 的合法", "实际 `vswhere` 所选"):
                         self.assertNotIn(old, text)
                     self.assertIn("Linux", text)

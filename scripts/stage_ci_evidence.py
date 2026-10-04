@@ -31,7 +31,7 @@ JSON_REPORTS = (
     "windows-desktop/acceptance.json",
 )
 LOG_REPORTS = tuple(f"windows-{name}.log" for name in (
-    "rust-setup", "cmake-setup", "upstream-runner-tests", "process-host-dependencies",
+    "rust-setup", "cmake-setup", "toolchain-identity", "upstream-runner-tests", "process-host-dependencies",
     "management-build", "api-cli-dependencies", "api-cli-independent-build", "configure",
     "native-build", "native-identity-tests", "ctest", "rustfmt", "rust-tests", "clippy", "real-model",
     "real-runtime", "worker-real-credit", "real-process-runtime",

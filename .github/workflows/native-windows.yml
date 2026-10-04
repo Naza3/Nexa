@@ -2,7 +2,7 @@ name: Windows CPU native and runtime verification
 
 on:
   push:
-    branches: ['codex/nexa-native-baseline']
+    branches: ['codex/nexa-add-model']
     # Only known isolated Android/docs paths are excluded; unknown paths still trigger.
     paths-ignore:
       - 'native/mnn-probe/**'
@@ -33,37 +33,44 @@ concurrency:
 
 jobs:
   download-component:
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Build the same-source pinned download component
         run: |
           python3 -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_aria2_build*.py'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
           bash scripts/build_aria2_windows.sh "$RUNNER_TEMP/aria2-build"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nexa-download-source-build-${{ github.sha }}
           path: ${{ runner.temp }}/aria2-build/artifacts/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
   native:
+    if: ${{ !github.event.repository.private }}
     needs: download-component
     runs-on: windows-2022
-    timeout-minutes: 90
+    timeout-minutes: 120
     defaults:
       run:
         shell: pwsh
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
       CARGO_INCREMENTAL: '0'
-      AIR_NATIVE_DIR: ${{ github.workspace }}/build/native-release
+      # Pin the effective toolchain too; a runner's stable alias is not evidence.
+      RUSTUP_TOOLCHAIN: '1.98.1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -76,14 +83,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows component policy failed' }
           python scripts/package_desktop_windows.py --prepare-download-component artifacts/aria2-build --component-dir build/download
           if ($LASTEXITCODE -ne 0) { throw 'Download component source/hash closure failed' }
-      - name: Install fixed development tools
+      - name: Install locked Rust and compatible CMake tools
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force artifacts/verification | Out-Null
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy 2>&1 | Tee-Object -FilePath artifacts/verification/windows-rust-setup.log
           if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
-          python -m pip install cmake==4.4.3 ninja==1.13.2 2>&1 | Tee-Object -FilePath artifacts/verification/windows-cmake-setup.log
+          python -m pip install "cmake>=4.2" ninja==1.13.2 2>&1 | Tee-Object -FilePath artifacts/verification/windows-cmake-setup.log
           if ($LASTEXITCODE -ne 0) { throw 'CMake setup failed' }
+          # Keep this installation ahead of VS's bundled CMake after every
+          # VsDevCmd entry. The shared packager validates both executables.
+          $env:NEXA_CMAKE_BIN = (python -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Installed CMake directory lookup failed' }
+          $env:PATH = "$env:NEXA_CMAKE_BIN;$env:PATH"
+          python scripts/build_windows_ci.py prepare 2>&1 | Tee-Object -FilePath artifacts/verification/windows-toolchain-identity.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native toolchain/source identity preparation failed' }
           python -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_*.py' 2>&1 | Tee-Object -FilePath artifacts/verification/windows-upstream-runner-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'Upstream process harness tests failed' }
           $threads = [Math]::Max(1, [Math]::Min(4, [Environment]::ProcessorCount))
@@ -121,7 +135,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Breakaway launch observation did not produce a valid bounded report' }
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --probe-launch inherit_job --harness target/debug/nexa-desktop-harness.exe
           if ($LASTEXITCODE -ne 0) { throw 'Inherited-Job launch observation did not produce a valid bounded report' }
-      - name: Preserve early private desktop launch observation
+      - name: Preserve early desktop launch observation
         if: ${{ !cancelled() && steps.desktop_launch_probe.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -202,15 +216,8 @@ jobs:
         id: native_build
         run: |
           $ErrorActionPreference = 'Stop'
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-          $vs = (& $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
-          if ($LASTEXITCODE -ne 0 -or !$vs) { throw 'Existing Visual Studio C++ instance missing' }
-          cmake -S native/llama-shim -B build/native-release -G 'Visual Studio 17 2022' -A x64 "-DCMAKE_GENERATOR_INSTANCE=$vs" -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL 2>&1 | Tee-Object -FilePath artifacts/verification/windows-configure.log
-          if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
-          cmake --build build/native-release --config Release --target air_llama air-stream-test air-template-test air-tool-parser-test llama-completion llama-bench --parallel 4 2>&1 | Tee-Object -FilePath artifacts/verification/windows-native-build.log
-          if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
-          ctest --test-dir build/native-release -C Release --output-on-failure 2>&1 | Tee-Object -FilePath artifacts/verification/windows-ctest.log
-          if ($LASTEXITCODE -ne 0) { throw 'Native stream test failed' }
+          python -X warn_default_encoding -W error::EncodingWarning scripts/build_windows_ci.py build
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned native build or CTest failed' }
       - name: Verify native build identity boundary
         run: |
           $ErrorActionPreference = 'Stop'
@@ -256,8 +263,8 @@ jobs:
         timeout-minutes: 14
         run: |
           $ErrorActionPreference = 'Stop'
-          $completion = (Get-ChildItem build/native-release -Recurse -Filter llama-completion.exe | Select-Object -First 1).FullName
-          $bench = (Get-ChildItem build/native-release -Recurse -Filter llama-bench.exe | Select-Object -First 1).FullName
+          $completion = (Get-ChildItem -LiteralPath $env:AIR_NATIVE_DIR -Recurse -Filter llama-completion.exe | Select-Object -First 1).FullName
+          $bench = (Get-ChildItem -LiteralPath $env:AIR_NATIVE_DIR -Recurse -Filter llama-bench.exe | Select-Object -First 1).FullName
           if (!$completion -or !$bench) { throw 'Upstream executable missing' }
           python scripts/run_upstream_baseline.py --completion $completion --bench $bench --model models/qa-small.gguf --prompt-file tests/fixtures/upstream-prompt-zh.txt --out-dir artifacts/verification --timeout-seconds 300 --threads $env:NEXA_TEST_THREADS --diagnostic-threads 1 4
           if ($LASTEXITCODE -ne 0) { throw 'Upstream bounded baseline failed; inspect upstream-processes.json and logs' }
@@ -307,12 +314,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'HTTP CLI smoke tools build failed' }
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_api_smoke.py --cli target/debug/ai-runtime.exe --xtask target/debug/xtask.exe --model models/qa-small.gguf --out-dir artifacts/verification/windows-api-cli --timeout-seconds 600 --disconnect-cycles 50
           if ($LASTEXITCODE -ne 0) { throw 'Real HTTP/CLI smoke failed; inspect its sanitized per-case report' }
-      - name: Build and integrity-check private Release packages
+      - name: Build and integrity-check Release packages
         id: portable_package
         timeout-minutes: 15
         run: |
           $ErrorActionPreference = 'Stop'
-          # Reuse this job's identity-checked native Release tree; the packager
+          # Reuse this job's VS/toolset-keyed native Release tree; the packager
           # only incrementally checks air_llama, then builds true Rust Release EXEs.
           cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
           if ($LASTEXITCODE -ne 0) { throw 'Portable Release packaging failed' }
@@ -407,7 +414,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --model models/qa-small.gguf --harness target/release/nexa-desktop-harness.exe
           if ($LASTEXITCODE -ne 0) { throw 'Extracted desktop/real bridge acceptance failed; native window interactions remain a separate gate' }
-      - name: Preserve private desktop package
+      - name: Preserve desktop package
         if: ${{ success() && steps.desktop_acceptance.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -416,8 +423,8 @@ jobs:
             dist/desktop-windows.zip
             dist/desktop-windows.zip.sha256
           if-no-files-found: error
-          retention-days: 14
-      - name: Preserve private Windows CPU product package
+          retention-days: 7
+      - name: Preserve Windows CPU product package
         if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -426,7 +433,7 @@ jobs:
             dist/windows-x64-cpu.zip
             dist/windows-x64-cpu.zip.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
       - name: Preserve separate acceptance tool package
         if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -436,20 +443,20 @@ jobs:
             dist/acceptance-tools.zip
             dist/acceptance-tools.zip.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
       - name: Preserve Release symbols when produced
-        if: ${{ !cancelled() && steps.portable_package.outcome == 'success' && hashFiles('build/windows-x64-cpu/cargo/x86_64-pc-windows-msvc/release/*.pdb') != '' }}
+        if: ${{ !cancelled() && steps.portable_package.outcome == 'success' && hashFiles('build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb') != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nexa-windows-symbols-${{ github.sha }}
-          path: build/windows-x64-cpu/cargo/x86_64-pc-windows-msvc/release/*.pdb
+          path: build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
       - name: Record reusable compiled-tool hashes
         id: native_manifest
         if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
         run: |
-          $files = @(Get-ChildItem build/native-release -Recurse -File | Where-Object { $_.Extension -eq '.lib' -or $_.Name -in @('llama-completion.exe', 'llama-bench.exe', 'air-stream-test.exe') })
+          $files = @(Get-ChildItem -LiteralPath $env:AIR_NATIVE_DIR -Recurse -File | Where-Object { $_.Extension -eq '.lib' -or $_.Name -in @('llama-completion.exe', 'llama-bench.exe', 'air-stream-test.exe') })
           if (Test-Path target/debug/examples/native-smoke.exe) { $files += Get-Item target/debug/examples/native-smoke.exe }
           $entries = foreach ($file in $files) {
             @{ path = [IO.Path]::GetRelativePath($PWD, $file.FullName).Replace('\', '/'); sha256 = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); size_bytes = $file.Length }
@@ -462,10 +469,10 @@ jobs:
           name: windows-native-tools-${{ github.sha }}
           path: |
             artifacts/verification/native-build-manifest.json
-            build/native-release/**/*.lib
-            build/native-release/**/llama-completion.exe
-            build/native-release/**/llama-bench.exe
-            build/native-release/**/air-stream-test.exe
+            ${{ env.AIR_NATIVE_DIR }}/**/*.lib
+            ${{ env.AIR_NATIVE_DIR }}/**/llama-completion.exe
+            ${{ env.AIR_NATIVE_DIR }}/**/llama-bench.exe
+            ${{ env.AIR_NATIVE_DIR }}/**/air-stream-test.exe
             target/debug/examples/native-smoke.exe
           retention-days: 7
       - name: Stage sanitized verification evidence
@@ -488,4 +495,4 @@ jobs:
           name: windows-cpu-native-${{ github.sha }}
           path: artifacts/upload-evidence/
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
