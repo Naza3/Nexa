@@ -103,7 +103,7 @@ export interface ModelSummary {
   availability_error: string | null;
 }
 export interface LocalValidation {
-  state: "untested" | "loaded" | "passed" | "failed" | "stale" | "deferred";
+  state: "untested" | "loaded" | "passed" | "failed" | "stale" | "deferred" | "unavailable";
   load_success: boolean;
   generation_pass: boolean;
   checked_at_unix_ms: number | null;

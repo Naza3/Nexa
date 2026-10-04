@@ -19,15 +19,21 @@ pub struct Inventory {
     pub generation: Uuid,
     pub entries: Vec<InventoryEntry>,
 }
+/// Validate only an application data directory. External picker/scan sources
+/// must use library::validate_directory_candidate and its stricter policy.
+pub fn validate_data_directory(root: &Path) -> Result<()> {
+    library::DirectoryGuard::open_data_directory(root).map(|_| ())
+}
 pub fn read(root: &Path) -> Result<Inventory> {
     let mut entries = Vec::new();
     let mut metadata_bytes = 0u64;
-    if root.exists() {
-        library::validate_directory_candidate(root)?;
-    }
+    let _root = root
+        .exists()
+        .then(|| library::DirectoryGuard::open_data_directory(root))
+        .transpose()?;
     let managed = root.join("models");
     if managed.exists() {
-        library::validate_directory_candidate(&managed)?;
+        let _managed = library::DirectoryGuard::open_data_directory(&managed)?;
         for entry in fs::read_dir(&managed).map_err(crate::io_error)? {
             if entries.len() >= MAX_INVENTORY_MODELS {
                 return Err(library::library_error(ErrorCode::ModelLibraryLimit));
@@ -39,7 +45,7 @@ pub fn read(root: &Path) -> Result<Inventory> {
                     .ok_or_else(|| invalid_manifest("invalid model ID"))?,
             )?;
             let directory = entry.path();
-            library::validate_directory_candidate(&directory)?;
+            let _directory = library::DirectoryGuard::open_data_directory(&directory)?;
             let file = library::open_read_file(&directory.join("manifest.json"), false)?;
             metadata_bytes =
                 metadata_bytes.saturating_add(file.metadata().map_err(crate::io_error)?.len());

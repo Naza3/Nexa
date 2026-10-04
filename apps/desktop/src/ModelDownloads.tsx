@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DesktopController, ViewState } from "./controller";
 import type { DownloadSource } from "./types";
-import { localValidationLabel, localValidationReason } from "./localValidation";
+import { LocalValidationFeedback } from "./ModelTestFeedback";
 
 const sourceName = (source: DownloadSource) => source === "modelscope" ? "ModelScope" : "Hugging Face";
 const fallbackDownloadMessage = "下载未完成，请提供诊断码和当前进度以便排查。";
@@ -49,7 +49,7 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
         {task.phase === "testing" && <p>正在执行已开启的自动加载与短文本测试。加载最多 300 秒，短测最多 30 秒；若服务忙碌或已加载其他模型，将暂缓，不会切换模型或中断其他客户端。</p>}
         {task.error !== null && <DownloadError error={task.error} />}
         {task.result?.registration_error && <div className="registration-error"><strong>自动登记未完成，已保存文件仍保留</strong><DownloadError error={task.result.registration_error} /></div>}
-        {task.result?.local_validation && <div className="download-validation"><strong>{localValidationLabel(task.result.local_validation)}</strong><p>{localValidationReason(task.result.local_validation) ?? "仅证明此文件与当前引擎、设备、加载参数的加载及短文本生成；不证明回答质量、长上下文或工具调用能力。"}</p>{task.result.local_validation.error_code && <p>本机测试诊断码：{task.result.local_validation.error_code}</p>}</div>}
+        {task.result?.local_validation && <div className="download-validation"><LocalValidationFeedback value={task.result.local_validation} /><p className="small-note">仅证明此文件与当前引擎、设备、加载参数的加载及短文本生成；不证明回答质量、长上下文或工具调用能力。</p></div>}
         {task.status === "completed" && state.snapshot?.model_directory.configured?.directory_id !== task.directory_id && <p>下载目录已变化，已保存文件仍在原下载位置。可使用“添加模型”选择该文件登记。</p>}
         {task.result?.cleanup_warning && <p className="warning-text">文件已保存，部分下载文件清理未确认，请勿重复下载。{task.result.cleanup_warning}</p>}
       </>}

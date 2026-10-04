@@ -15,7 +15,7 @@ export function safeError(error: unknown): SafeError {
     "code" in error &&
     "message" in error &&
     typeof error.code === "string" &&
-    /^[a-z0-9_]{1,80}$/.test(error.code) &&
+    /^[a-z0-9_]{1,96}$/.test(error.code) &&
     typeof error.message === "string"
   ) {
     return { code: error.code, message: error.message.slice(0, 500) };

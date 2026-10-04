@@ -25,7 +25,7 @@ describe("model onboarding interface", () => {
     expect(screen.getByText(/测试标签是此前的本机记录/)).toBeInTheDocument();
     expect(row.getByText("本机基础测试通过")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "刷新" })).toBeEnabled();
-    expect(row.getByRole("button", { name: "尝试加载" })).toBeEnabled();
+    expect(row.getByRole("button", { name: "加载模型" })).toBeEnabled();
     expect(row.getByText("加载将启动服务并短测")).toBeInTheDocument();
     expect(row.queryByText("已加载", { exact: true })).not.toBeInTheDocument();
     expect(api.start).not.toHaveBeenCalled();

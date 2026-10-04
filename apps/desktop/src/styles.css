@@ -1494,3 +1494,11 @@ h3 {
 .selected-model-files li > span { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; }
 .add-file-results p { margin: 5px 0; }
 .model-add-progress .card-heading { align-items: flex-start; gap: 16px; }
+
+.model-test-feedback { margin: 12px 0; padding: 12px 14px; border: 1px solid #b8c9e3; border-left: 4px solid #456b9d; border-radius: 8px; background: #f2f6fb; overflow-wrap: anywhere; }
+.model-test-feedback > strong { display: flex; align-items: center; gap: 8px; }
+.model-test-feedback p, .local-validation-record p { margin: 6px 0; }
+.model-test-feedback.attention { border-color: #d4b68e; border-left-color: #936126; background: #fff9ef; }
+.model-test-feedback.passed { border-color: #a9c7b0; border-left-color: #367145; background: #f1f8f2; }
+.local-validation-record { padding: 8px 0; font-size: 13px; }
+.model-test-feedback time, .local-validation-record time { font-variant-numeric: tabular-nums; }

@@ -120,7 +120,7 @@ describe("offline model inventory and local evidence", () => {
     await controller.loadPage(null);
     testing.resolve(proof()); await pending;
     expect(controller.getSnapshot().models.data[0]).toMatchObject({ id: "replacement", local_validation: { state: "untested" } });
-    expect(controller.getSnapshot().notice).not.toContain("通过");
+    expect(controller.getSnapshot().notice).toBeNull();
     expect(api.testModel).toHaveBeenCalledTimes(1);
   });
 

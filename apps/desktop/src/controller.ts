@@ -1,5 +1,5 @@
 import { DesktopError, safeError } from "./adapter";
-import { localValidationLabel, validLocalValidation } from "./localValidation";
+import { localValidationLabel, unavailableValidation, validLocalValidation, validationErrorReason } from "./localValidation";
 import { validAddOperation, validModelSelection } from "./modelSelection";
 import { lanBaseUrl, validateLanSettings } from "./lanApi";
 import type {
@@ -9,6 +9,9 @@ import type {
   ChatRequest,
   DesktopApi,
   ModelPage,
+  ModelSummary,
+  LocalValidation,
+  LoadOptions,
   DirectorySelection,
   ModelFileSelection,
   LibraryOperation,
@@ -109,6 +112,36 @@ export type ChatPhase =
   | "streaming"
   | "stopping"
   | "recovery";
+export interface ModelTestAttempt {
+  id: number;
+  model_id: string;
+  model_signature: string;
+  mode: "load" | "test";
+  phase: "running" | "finished";
+  started_at: number;
+  finished_at: number | null;
+  result: LocalValidation | null;
+  error: SafeError | null;
+}
+interface ModelTestScope {
+  attempt: ModelTestAttempt;
+  epoch: number;
+  page_after: string | null;
+  options: LoadOptions;
+  settings: string;
+  backend: string | null;
+  connection: Snapshot["connection"] | null;
+  selected_model: string | null;
+  runtime_options: string | null;
+}
+// Local evidence may change on reread without changing the model's identity.
+function modelSignature(model: ModelSummary): string {
+  return JSON.stringify([model.id, model.sha256, model.size_bytes, model.storage, model.architecture, model.quantization,
+    model.available, model.availability_error, model.loadable, model.context_limit, model.context_size]);
+}
+function loadOptions(value: LoadOptions): string {
+  return JSON.stringify([value.context_size, value.threads, value.batch_size]);
+}
 export interface ViewState {
   catalog: CatalogEntry[];
   catalog_loading: boolean;
@@ -119,6 +152,7 @@ export interface ViewState {
   discovery: "unchecked" | "checking" | "none" | "configured" | "failed";
   reconcile_status: "idle" | "checking" | "observing" | "pending" | "failed";
   testing_model: string | null;
+  model_tests: Record<string, ModelTestAttempt>;
   snapshot: Snapshot | null;
   booting: boolean;
   error: SafeError | null;
@@ -200,7 +234,7 @@ export class DesktopController {
   private state: ViewState = {
     catalog: [], catalog_loading: false, catalog_loaded: false,
     download: null, download_phase: "idle", download_auto_test: false, discovery: "unchecked",
-    reconcile_status: "idle", testing_model: null,
+    reconcile_status: "idle", testing_model: null, model_tests: {},
     snapshot: null,
     booting: true,
     error: null,
@@ -247,6 +281,10 @@ export class DesktopController {
   private nextMessage = 0;
   private modelsLoaded = false;
   private closing = false;
+  private modelFeedbackEpoch = 0;
+  private nextTest = 0;
+  private snapshotReadError: SafeError | null = null;
+  private modelsReadError: SafeError | null = null;
   constructor(readonly api: DesktopApi) {}
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -276,6 +314,7 @@ export class DesktopController {
     return () => {
       if (epoch !== this.pollEpoch) return;
       this.mounted = false;
+      this.leaveModelPage();
       clearTimeout(this.poll);
       clearTimeout(this.reconcileTimer);
       void this.discardModelSelection();
@@ -284,9 +323,10 @@ export class DesktopController {
       void this.cancelDownload();
     };
   };
-  refresh = (): Promise<void> => {
+  refresh = (modelAfter: string | null = null): Promise<void> => {
     if (this.snapshotPromise) return this.snapshotPromise;
     const epoch = this.snapshotEpoch;
+    this.snapshotReadError = null;
     this.snapshotPromise = (async () => {
       try {
         const snapshot = await this.api.snapshot();
@@ -314,9 +354,10 @@ export class DesktopController {
           !this.modelsLoaded &&
           !this.state.models_loading
         )
-          await this.loadPage(null);
+          await this.loadPage(modelAfter);
       } catch (error) {
         if (epoch !== this.snapshotEpoch) return;
+        this.snapshotReadError = safeError(error);
         this.update({
           booting: false,
           snapshot: this.state.snapshot
@@ -363,6 +404,7 @@ export class DesktopController {
       await this.refresh();
     });
   loadPage = (after: string | null): Promise<void> => {
+    if (after !== this.state.page_after) this.leaveModelPage();
     if (this.modelsPromise) return this.modelsPromise;
     if (
       !this.state.snapshot || !["connected", "stopped"].includes(this.state.snapshot.connection) ||
@@ -373,6 +415,7 @@ export class DesktopController {
     )
       return Promise.resolve();
     const epoch = this.modelsEpoch;
+    this.modelsReadError = null;
     this.update({ models_loading: true });
     this.modelsPromise = (async () => {
       let cursor = after;
@@ -383,14 +426,18 @@ export class DesktopController {
             const models = await this.api.modelsPage(cursor, generation);
             if (epoch !== this.modelsEpoch) return;
             if (!Array.isArray(models.data) || models.data.length > 64 || !models.generation ||
-                (models.source !== undefined && !["local", "runtime"].includes(models.source)) ||
-                models.data.some((model) => model.local_validation != null && !validLocalValidation(model.local_validation)))
+                (models.source !== undefined && !["local", "runtime"].includes(models.source)))
               throw new DesktopError(
                 "invalid_model_page",
                 "模型列表缺少有效版本或超过单页上限。",
               );
+            // A damaged per-model receipt must not hide an otherwise usable inventory.
+            const data = models.data.map((model) => model.local_validation != null && !validLocalValidation(model.local_validation)
+              ? { ...model, local_validation: unavailableValidation() } : model);
+            const model_tests = Object.fromEntries(Object.entries(this.state.model_tests).filter(([id, attempt]) =>
+              data.some((model) => model.id === id && modelSignature(model) === attempt.model_signature)));
             this.modelsLoaded = true;
-            this.update({ models, page_after: cursor });
+            this.update({ models: { ...models, data }, page_after: cursor, model_tests });
             return;
           } catch (error) {
             if (epoch !== this.modelsEpoch) return;
@@ -407,7 +454,10 @@ export class DesktopController {
           }
         }
       } catch (error) {
-        if (epoch === this.modelsEpoch) this.report(error);
+        if (epoch === this.modelsEpoch) {
+          this.modelsReadError = safeError(error);
+          this.report(error);
+        }
       } finally {
         this.modelsPromise = null;
         this.update({ models_loading: false });
@@ -839,59 +889,147 @@ export class DesktopController {
     if (this.state.snapshot)
       this.update({ snapshot: { ...this.state.snapshot, runtime } });
   }
-  private async refreshModelEvidence() {
+  /** Leaving a view invalidates feedback only; never replays or cancels native work. */
+  leaveModelPage = () => {
+    ++this.modelFeedbackEpoch;
+    this.update({ model_tests: {} });
+  };
+  private testScopeCurrent(scope: ModelTestScope): boolean {
+    const model = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id);
+    if (this.closing || scope.epoch !== this.modelFeedbackEpoch || !model ||
+        this.state.page_after !== scope.page_after || modelSignature(model) !== scope.attempt.model_signature ||
+        loadOptions(this.state.snapshot?.settings ?? DEFAULT_SETTINGS) !== scope.settings) return false;
+    const runtime = this.state.snapshot?.runtime;
+    if (scope.backend !== null && runtime && runtime.configured_backend !== scope.backend) return false;
+    return scope.attempt.mode !== "test" || this.state.snapshot?.connection === "error" ||
+      (this.state.snapshot?.connection === scope.connection && (runtime?.selected_model ?? null) === scope.selected_model &&
+        (runtime?.load_options ? loadOptions(runtime.load_options) : null) === scope.runtime_options);
+  }
+  private finishModelTest(scope: ModelTestScope, result: LocalValidation | null, error: SafeError | null = null) {
+    if (!this.testScopeCurrent(scope)) return;
+    this.update({ model_tests: { ...this.state.model_tests, [scope.attempt.model_id]: {
+      ...scope.attempt, phase: "finished", finished_at: Date.now(), result, error,
+    } } });
+    if (error) { this.report(error); return; }
+    const evidence = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id)?.local_validation;
+    this.update({ notice: result ? `${localValidationLabel(result)}${result.state !== "passed" && evidence?.state === "passed" ? "；列表中的通过标签来自此前记录。" : ""}` : "本次操作已结束，尚未取得可确认的短文本测试结果。" });
+  }
+  private async refreshModelEvidence(scope: ModelTestScope): Promise<SafeError | null> {
+    if (!this.testScopeCurrent(scope)) return null;
     ++this.modelsEpoch;
     this.modelsLoaded = false;
     if (this.modelsPromise) await this.modelsPromise;
     if (this.snapshotPromise) await this.snapshotPromise;
-    await this.refresh();
-    if (!this.modelsLoaded) await this.loadPage(null);
+    if (!this.testScopeCurrent(scope)) return null;
+    await this.refresh(scope.page_after);
+    if (this.snapshotReadError) return { code: "validation_refresh_failed", message: validationErrorReason("validation_refresh_failed") };
+    if (!this.modelsLoaded) await this.loadPage(scope.page_after);
+    if (this.modelsReadError || !this.modelsLoaded)
+      return { code: "validation_record_read_failed", message: validationErrorReason("validation_record_read_failed") };
+    const evidence = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id)?.local_validation;
+    if (evidence?.state === "unavailable" || evidence?.error_code?.startsWith("validation_")) {
+      const code = evidence.error_code ?? "validation_record_read_failed";
+      return { code, message: validationErrorReason(code) };
+    }
+    if (evidence?.state === "stale") return { code: "validation_scope_changed", message: validationErrorReason("validation_scope_changed") };
+    return null;
   }
-  loadModel = (modelId: string) =>
-    this.action("正在加载并进行本机基础测试", async () => {
-      const model = this.state.models.data.find((entry) => entry.id === modelId);
-      if (!model?.available || model.loadable !== true)
-        throw new Error("当前模型不可尝试加载，请刷新匹配版本的模型列表");
-      const snapshot = this.state.snapshot;
-      if (snapshot?.connection === "stopped") {
-        // Only this explicit load action may start the service; listing never does.
-        this.update({ snapshot: await this.api.start(!snapshot.initialized) });
-        ++this.modelsEpoch;
-        this.modelsLoaded = false;
+  private runModelTest = async (modelId: string, mode: "load" | "test") => {
+    if (this.closing) return;
+    const model = this.state.models.data.find((entry) => entry.id === modelId);
+    if (!model) { this.report(new DesktopError("model_not_ready", validationErrorReason("model_not_ready"))); return; }
+    const snapshot = this.state.snapshot;
+    const runtime = snapshot?.connection === "connected" ? snapshot.runtime : null;
+    const settings = snapshot?.settings ?? DEFAULT_SETTINGS;
+    const options = mode === "test" && runtime?.load_options ? { ...runtime.load_options } : {
+      context_size: settings.context_size, threads: settings.threads, batch_size: settings.batch_size,
+    };
+    const attempt: ModelTestAttempt = {
+      id: ++this.nextTest, model_id: modelId, model_signature: modelSignature(model), mode,
+      phase: "running", started_at: Date.now(), finished_at: null, result: null, error: null,
+    };
+    const scope: ModelTestScope = { attempt, epoch: this.modelFeedbackEpoch, page_after: this.state.page_after,
+      options, settings: loadOptions(settings), backend: runtime?.configured_backend ?? null,
+      connection: snapshot?.connection ?? null, selected_model: runtime?.selected_model ?? null,
+      runtime_options: runtime?.load_options ? loadOptions(runtime.load_options) : null };
+    if (this.state.operation || this.stream || this.libraryTask || this.downloadTask || runtime?.stopping ||
+        runtime?.registry_busy || runtime?.active_request || (runtime?.queued_jobs ?? 0) > 0 ||
+        ["loading", "generating", "unloading"].includes(runtime?.state ?? "")) {
+      if (this.state.model_tests[modelId]?.phase === "running") {
+        this.update({ notice: "此模型的本次加载或测试仍在进行，请等待本行结果；未重复启动。" });
+      } else {
+        this.finishModelTest(scope, { state: "deferred", load_success: false, generation_pass: false,
+          checked_at_unix_ms: Date.now(), error_code: "runtime_busy" });
       }
-      const settings = this.state.snapshot?.settings ?? DEFAULT_SETTINGS;
-      this.update({ testing_model: modelId });
+      return;
+    }
+    await this.action(mode === "load" ? "正在加载并进行本机基础测试" : "正在进行本机短文本测试", async () => {
+      this.update({ testing_model: modelId, model_tests: { ...this.state.model_tests, [modelId]: attempt } });
+      let result: LocalValidation | null = null;
+      let failure: SafeError | null = null;
       try {
-        this.setRuntime(await this.api.loadModel(modelId, {
-          context_size: settings.context_size,
-          threads: settings.threads,
-          batch_size: settings.batch_size,
-        }));
-        await this.refreshModelEvidence();
-        const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
-        this.update({ notice: evidence ? localValidationLabel(evidence) : "模型加载操作已结束，尚未取得本机基础测试记录，请刷新查看。" });
+        if (mode === "load") {
+          if (!model.available || model.loadable !== true)
+            throw new DesktopError("model_not_ready", "当前模型不可加载，请刷新匹配版本的模型列表。");
+          if (snapshot?.connection === "stopped") {
+            const started = await this.api.start(!snapshot.initialized);
+            // Close or navigation during startup must not launch new native work afterwards.
+            if (!this.testScopeCurrent(scope)) return;
+            this.update({ snapshot: started });
+          }
+          if (!this.testScopeCurrent(scope)) return;
+          const loaded = await this.api.loadModel(modelId, options);
+          if (!this.testScopeCurrent(scope)) return;
+          this.setRuntime(loaded);
+          result = { state: "loaded", load_success: loaded.selected_model === modelId && ["ready", "generating"].includes(loaded.state),
+            generation_pass: false, checked_at_unix_ms: Date.now(), error_code: "validation_result_missing" };
+          if (!result.load_success) result = unavailableValidation("validation_result_missing");
+        } else {
+          if (!runtime?.load_options || runtime.selected_model !== modelId || runtime.state !== "ready")
+            throw new DesktopError("model_not_ready", validationErrorReason("model_not_ready"));
+          result = await this.api.testModel(modelId, options);
+          if (!validLocalValidation(result)) {
+            result = null;
+            throw new DesktopError("invalid_local_validation", validationErrorReason("invalid_local_validation"));
+          }
+        }
       } catch (error) {
-        await this.refreshModelEvidence();
-        throw error;
-      } finally { this.update({ testing_model: null }); }
-    });
-  testModel = (modelId: string) =>
-    this.action("正在进行本机短文本测试", async () => {
-      const options = this.state.snapshot?.runtime?.load_options;
-      if (!options || this.state.snapshot?.runtime?.selected_model !== modelId)
-        throw new DesktopError("model_not_ready", "请先显式加载此模型再测试。");
-      this.update({ testing_model: modelId });
+        const code = safeError(error).code;
+        failure = { code, message: validationErrorReason(code) };
+      }
       try {
-        const result = await this.api.testModel(modelId, options);
-        if (!validLocalValidation(result)) throw new DesktopError("invalid_local_validation", "测试返回的记录无效，未按通过处理。");
-        // Never attach a late response to a changed file, page, engine or options.
-        await this.refreshModelEvidence();
-        const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
-        this.update({ notice: result.state !== "passed"
-          ? `${localValidationLabel(result)}${evidence?.state === "passed" ? "；列表中的通过标签来自此前记录。" : ""}`
-          : evidence ? localValidationLabel(evidence) : "本机测试已结束，请查看对应模型的最新本机记录。" });
-      } finally { this.update({ testing_model: null }); }
+        if (!this.testScopeCurrent(scope)) return;
+        const readError = await this.refreshModelEvidence(scope);
+        if (!failure) failure = readError;
+        if (!this.testScopeCurrent(scope)) return;
+        if (mode === "load" && !failure) {
+          const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
+          // model_load returns runtime state, not the probe's DTO. An old Passed is never this attempt's proof.
+          if (evidence && evidence.checked_at_unix_ms !== null && evidence.checked_at_unix_ms >= attempt.started_at &&
+              evidence.checked_at_unix_ms !== model.local_validation?.checked_at_unix_ms) result = evidence;
+        }
+        if (mode === "test" && result?.state === "passed" && !failure) {
+          const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
+          if (!evidence || evidence.state !== "passed" || evidence.checked_at_unix_ms !== result.checked_at_unix_ms) {
+            const code = evidence?.state === "stale" ? "validation_scope_changed" : "validation_result_unconfirmed";
+            failure = { code, message: validationErrorReason(code) };
+          }
+        }
+        this.finishModelTest(scope, result, failure);
+      } finally {
+        this.update({ testing_model: null });
+      }
     });
+    // Early returns while awaiting service startup still release UI ownership.
+    if (this.state.testing_model === modelId) this.update({ testing_model: null });
+    if (this.state.model_tests[modelId]?.id === attempt.id && this.state.model_tests[modelId].phase === "running") {
+      const model_tests = { ...this.state.model_tests };
+      delete model_tests[modelId];
+      this.update({ model_tests });
+    }
+  };
+  loadModel = (modelId: string) => this.runModelTest(modelId, "load");
+  testModel = (modelId: string) => this.runModelTest(modelId, "test");
   unload = () =>
     this.action("正在卸载模型", async () => {
       this.setRuntime(await this.api.unloadModel());
@@ -910,6 +1048,7 @@ export class DesktopController {
             "偏好已保存。加载参数在下次加载时生效，输出预算用于下次发送。",
         });
         if (optionsChanged) {
+          this.leaveModelPage();
           // Old proof stays historical even if the authoritative reread fails.
           this.update({ models: { ...this.state.models, data: this.state.models.data.map((model) => ({
             ...model, ...(model.local_validation ? { local_validation: { ...model.local_validation, state: "stale" as const } } : {}),
@@ -1016,6 +1155,7 @@ export class DesktopController {
   close = async () => {
     if (this.closing || (this.state.operation && !this.state.testing_model && this.state.operation !== "正在选择 GGUF 文件")) return;
     this.closing = true;
+    this.leaveModelPage();
     try {
       const selected = !!this.state.model_selection;
       const discarded = this.discardModelSelection();

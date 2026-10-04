@@ -7,8 +7,20 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
-            "validation_record_unavailable" => {
-                "模型已加载，但本机测试记录无法写入。旧记录不代表本次测试结果，请检查数据目录后重试测试。"
+            "validation_record_unavailable" | "validation_record_write_failed" => {
+                "本机测试记录无法保存，未确认本次验证通过。已加载模型仍可继续使用，请检查数据目录后重试测试。"
+            }
+            "validation_record_read_failed" | "validation_record_invalid" => {
+                "本机测试记录无法读取，不能判定为未测试或已通过。原记录已保留，请检查数据目录和记录文件。"
+            }
+            "validation_engine_unavailable" => {
+                "无法读取当前运行时及推理进程的验证身份，未确认本次验证通过。请检查完整安装包后重试。"
+            }
+            "validation_scope_unavailable" => {
+                "无法读取模型或数据目录的本机验证条件，未确认本次验证通过。请检查模型和数据目录后重试。"
+            }
+            "validation_scope_changed" => {
+                "模型、运行时或验证条件在测试期间发生变化，本次结果不再有效。请重新加载并测试。"
             }
             "model_download_engine_unavailable" => {
                 "已验证的下载组件尚未就绪。请使用包含受控下载组件的完整安装包，或手动下载后扫描模型目录。"

@@ -1,6 +1,6 @@
 import type { ModelFileResult } from "./types";
 import type { DesktopController, ViewState } from "./controller";
-import { localValidationLabel, localValidationReason } from "./localValidation";
+import { LocalValidationFeedback } from "./ModelTestFeedback";
 
 function size(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -49,7 +49,7 @@ export function AddModelProgress({ state, controller }: { state: ViewState; cont
     {operation?.error && <p className="warning-text">{operation.error.message}（{operation.error.code}）</p>}
     <ol className="selected-model-files add-file-results">{files.map((file) => <li key={file.selection_index}>
       <div><strong>{file.file_name}</strong><p>{labels[file.status]}{file.error_code ? `（${file.error_code}）` : ""}</p>
-        {file.local_validation ? <><p>{localValidationLabel(file.local_validation)}</p><p className="small-note">{localValidationReason(file.local_validation)}</p>{file.local_validation.error_code && <p className="small-note">测试诊断码：{file.local_validation.error_code}</p>}</> : (file.status === "registered" || file.status === "already_registered") && <p className="small-note">本次未取得加载或测试通过记录，可在模型列表显式加载与测试。</p>}
+        {file.local_validation ? <LocalValidationFeedback value={file.local_validation} /> : (file.status === "registered" || file.status === "already_registered") && <p className="small-note">本次未取得加载或测试通过记录，可在模型列表显式加载与测试。</p>}
       </div>
     </li>)}</ol>
     {!active && <p className="small-note">以上是本次操作结果。源文件未移动或删除；已有本机测试历史以模型列表为准。</p>}

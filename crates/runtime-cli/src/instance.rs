@@ -75,11 +75,11 @@ impl InstanceLock {
     pub fn observe(data_dir: &Path) -> io::Result<InstanceObservation> {
         let root = data_dir.join("runtime");
         if data_dir.try_exists()? {
-            model_store::library::validate_directory_candidate(data_dir)
+            model_store::inventory::validate_data_directory(data_dir)
                 .map_err(|_| invalid("unsafe data directory"))?;
         }
         if root.try_exists()? {
-            model_store::library::validate_directory_candidate(&root)
+            model_store::inventory::validate_data_directory(&root)
                 .map_err(|_| invalid("unsafe runtime directory"))?;
         }
         let path = root.join("instance.lock");
@@ -308,5 +308,22 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn canonical_data_directory_observes_same_instance_without_creating_another() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("data");
+        let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+        let canonical = fs::canonicalize(&root).unwrap();
+        assert!(matches!(
+            InstanceLock::observe(&canonical).unwrap(),
+            InstanceObservation::Running
+        ));
+        drop(lock);
+        assert!(matches!(
+            InstanceLock::observe(&canonical).unwrap(),
+            InstanceObservation::Stopped(Some(_))
+        ));
     }
 }

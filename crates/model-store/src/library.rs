@@ -906,7 +906,45 @@ fn local_drive_type(kind: u32) -> bool {
     // missing cannot establish the local-disk sharing contract.
     matches!(kind, 2 | 3 | 5 | 6)
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryPolicy {
+    ExternalSelected,
+    DataDirectory,
+}
+/// Lexical Windows policy, deliberately independent of the host's Path parser.
+/// Returns only the drive letter for GetDriveTypeW; never a rewritten path.
+#[cfg(any(test, windows))]
+fn windows_directory_drive(text: &str, policy: DirectoryPolicy) -> Option<u8> {
+    if text.len() > 32768 || text.contains('\0') || text.contains("://") {
+        return None;
+    }
+    let (disk, verbatim) = match text.strip_prefix(r"\\?\") {
+        Some(disk) if policy == DirectoryPolicy::DataDirectory => (disk, true),
+        Some(_) => return None,
+        None => (text, false),
+    };
+    let bytes = disk.as_bytes();
+    if bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || !(bytes[2] == b'\\' || (!verbatim && bytes[2] == b'/'))
+        || (verbatim && disk.contains('/'))
+    {
+        return None;
+    }
+    let components: Vec<_> = disk[3..]
+        .split(['\\', '/'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if components.contains(&"..") || components.len() + 2 > MAX_DIRECTORY_COMPONENTS {
+        return None;
+    }
+    Some(bytes[0])
+}
 fn validate_directory_syntax(path: &Path) -> Result<()> {
+    validate_directory_policy(path, DirectoryPolicy::ExternalSelected)
+}
+fn validate_directory_policy(path: &Path, policy: DirectoryPolicy) -> Result<()> {
     let text = path
         .to_str()
         .ok_or_else(|| library_error(ErrorCode::ModelDirectoryUnsupported))?;
@@ -914,8 +952,6 @@ fn validate_directory_syntax(path: &Path) -> Result<()> {
         || text.len() > 32768
         || path.components().count() > MAX_DIRECTORY_COMPONENTS
         || text.contains("://")
-        || text.starts_with("\\\\")
-        || text.starts_with("//")
         || text.contains('\0')
         || path.components().any(|c| matches!(c, Component::ParentDir))
     {
@@ -924,29 +960,41 @@ fn validate_directory_syntax(path: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         use std::path::Prefix;
-        let Some(Component::Prefix(prefix)) = path.components().next() else {
-            return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
+        let valid_prefix = match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::Disk(_) => true,
+                Prefix::VerbatimDisk(_) => policy == DirectoryPolicy::DataDirectory,
+                _ => false,
+            },
+            _ => false,
         };
-        let Prefix::Disk(_) = prefix.kind() else {
+        if !valid_prefix || windows_directory_drive(text, policy).is_none() {
             return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
-        };
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = policy;
+        if text.starts_with("\\\\") || text.starts_with("//") {
+            return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
+        }
     }
     Ok(())
 }
 fn directory_drive_present(path: &Path) -> Result<bool> {
-    validate_directory_syntax(path)?;
+    directory_drive_present_with_policy(path, DirectoryPolicy::ExternalSelected)
+}
+fn directory_drive_present_with_policy(path: &Path, policy: DirectoryPolicy) -> Result<bool> {
+    validate_directory_policy(path, policy)?;
     #[cfg(windows)]
     {
-        use std::path::Prefix;
-        let Some(Component::Prefix(prefix)) = path.components().next() else {
-            unreachable!("validated disk prefix")
-        };
-        let Prefix::Disk(letter) = prefix.kind() else {
-            unreachable!("validated disk prefix")
-        };
+        let letter =
+            windows_directory_drive(path.to_str().unwrap(), policy).expect("validated disk prefix");
         let root: Vec<u16> = format!("{}:\\\0", char::from(letter))
             .encode_utf16()
             .collect();
+        // Query only X:\. All actual opens retain the original path, including
+        // canonical verbatim semantics and its long/trailing-space components.
         // SAFETY: this terminated root string is live for a read-only OS query.
         let kind = unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(root.as_ptr()) };
         if kind == 1 {
@@ -979,18 +1027,24 @@ fn indirect(metadata: &fs::Metadata) -> bool {
 pub fn validate_directory_candidate(path: &Path) -> Result<()> {
     DirectoryGuard::open(path).map(|_| ())
 }
-pub(crate) fn directory_object_identity(path: &Path) -> Result<(u64, u64)> {
-    let guard = DirectoryGuard::open(path)?;
+pub(crate) fn data_directory_object_identity(path: &Path) -> Result<(u64, u64)> {
+    let guard = DirectoryGuard::open_data_directory(path)?;
     Ok((guard.identity.volume, guard.identity.file))
 }
-struct DirectoryGuard {
+pub(crate) struct DirectoryGuard {
     path: PathBuf,
     identity: FileIdentity,
     _ancestors: Vec<File>,
 }
 impl DirectoryGuard {
     fn open(path: &Path) -> Result<Self> {
-        if !directory_drive_present(path)? {
+        Self::open_with_policy(path, DirectoryPolicy::ExternalSelected)
+    }
+    pub(crate) fn open_data_directory(path: &Path) -> Result<Self> {
+        Self::open_with_policy(path, DirectoryPolicy::DataDirectory)
+    }
+    fn open_with_policy(path: &Path, policy: DirectoryPolicy) -> Result<Self> {
+        if !directory_drive_present_with_policy(path, policy)? {
             return Err(library_error(ErrorCode::ModelDirectoryUnavailable));
         }
         let mut current = PathBuf::new();
@@ -1132,6 +1186,73 @@ pub(crate) fn prepared_guard_fixture(path: &Path) -> Result<PreparedExternal> {
 #[cfg(test)]
 mod control_tests {
     use super::*;
+    #[test]
+    fn windows_directory_policy_is_host_independent_and_never_rewrites() {
+        use DirectoryPolicy::{DataDirectory, ExternalSelected};
+        for (path, external, internal) in [
+            (r"C:\", true, true),
+            (r"c:\Nexa\模型", true, true),
+            ("D:/Nexa/models", true, true),
+            (r"\\?\C:\Nexa\models", false, true),
+            (r"\\?\C:\Nexa\tail. ", false, true),
+            (r"\\?\C:\", false, true),
+            (r"\\server\share\models", false, false),
+            (r"\\?\UNC\server\share", false, false),
+            (r"\\.\C:\models", false, false),
+            (r"\\?\Volume{123}\models", false, false),
+            (r"\\?\GLOBALROOT\Device\HarddiskVolume1", false, false),
+            (r"\\?\C:relative", false, false),
+            (r"\\?\C:/models", false, false),
+            (r"C:relative", false, false),
+            (r"\root-relative", false, false),
+            (r"models", false, false),
+            (r"C:\models\..\elsewhere", false, false),
+            (r"\\?\C:\models\..\elsewhere", false, false),
+            (r"1:\models", false, false),
+            ("C:\\models\0hidden", false, false),
+        ] {
+            let before = path.to_owned();
+            assert_eq!(
+                windows_directory_drive(path, ExternalSelected).is_some(),
+                external,
+                "{path:?}"
+            );
+            assert_eq!(
+                windows_directory_drive(path, DataDirectory).is_some(),
+                internal,
+                "{path:?}"
+            );
+            assert_eq!(path, before);
+        }
+        let long = format!(r"\\?\C:\{}", "x".repeat(260));
+        assert_eq!(windows_directory_drive(&long, DataDirectory), Some(b'C'));
+        assert!(
+            windows_directory_drive(&format!(r"C:\{}", "x".repeat(32769)), DataDirectory).is_none()
+        );
+        let deep = format!(r"C:\{}", vec!["x"; MAX_DIRECTORY_COMPONENTS].join("\\"));
+        assert!(windows_directory_drive(&deep, DataDirectory).is_none());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn canonical_data_directory_retains_exact_path_and_object_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temp.path()).unwrap();
+        assert!(
+            matches!(canonical.components().next(), Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_)))
+        );
+        assert!(DirectoryGuard::open(&canonical).is_err());
+        let normal = DirectoryGuard::open_data_directory(temp.path()).unwrap();
+        let verbatim = DirectoryGuard::open_data_directory(&canonical).unwrap();
+        assert_eq!(verbatim.path, canonical);
+        assert!(same_object(&normal.identity, &verbatim.identity));
+        let special = canonical.join("kept-trailing. ");
+        fs::create_dir(&special).unwrap();
+        let special_guard = DirectoryGuard::open_data_directory(&special).unwrap();
+        assert_eq!(special_guard.path, special);
+        drop(special_guard);
+        fs::remove_dir(special).unwrap();
+    }
     #[test]
     fn directory_syntax_limits_do_not_probe_or_truncate_paths() {
         let mut path = PathBuf::from(if cfg!(windows) { r"C:\" } else { "/" });

@@ -86,6 +86,6 @@ describe("adding models from native file selection", () => {
     expect(choice).not.toBeChecked(); fireEvent.click(choice); fireEvent.click(screen.getByRole("button", { name: "确认添加 1 个模型" }));
     expect(await screen.findByRole("heading", { name: "添加完成：1 个已登记" })).toBeInTheDocument();
     expect(screen.getByText("本机加载通过 · 短文本测试失败")).toBeInTheDocument();
-    expect(screen.getByText("测试诊断码：deadline_exceeded")).toBeInTheDocument(); expect(api.addModels).toHaveBeenCalledWith(selection.selection_id, true);
+    expect(screen.getByText("本机测试诊断码：deadline_exceeded")).toBeInTheDocument(); expect(api.addModels).toHaveBeenCalledWith(selection.selection_id, true);
   });
 });

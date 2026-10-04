@@ -349,7 +349,7 @@ impl DesktopBridge {
             runtime_types::ModelId::new(after).map_err(|_| BridgeError::new("invalid_request"))?;
         }
         if self.root.exists() {
-            model_store::library::validate_directory_candidate(&self.root)
+            model_store::inventory::validate_data_directory(&self.root)
                 .map_err(|_| BridgeError::new("data_directory_unavailable"))?;
         }
         if local_owner {

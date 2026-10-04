@@ -12,6 +12,8 @@ import type { Preferences, RuntimeStatus, Settings } from "./types";
 import { ModelDownloads, DownloadProgress } from "./ModelDownloads";
 import { ModelSelectionPanel, AddModelProgress } from "./ModelAdd";
 import { modelCompatibility } from "./modelCompatibility";
+import { localValidationReason } from "./localValidation";
+import { LocalValidationFeedback, ModelTestFeedback } from "./ModelTestFeedback";
 import { Modal } from "./Modal";
 import { LanApiSettings } from "./LanApiSettings";
 
@@ -500,6 +502,7 @@ function ModelsPage({
   goSettings: () => void;
 }) {
   const [view, setView] = useState<"local" | "download">("local");
+  useEffect(() => () => controller.leaveModelPage(), [controller, view]);
   const runtime = state.snapshot?.connection === "connected" ? state.snapshot.runtime : null;
   const settings = state.snapshot?.settings ?? DEFAULT_SETTINGS;
   const connected = state.snapshot?.connection === "connected";
@@ -514,6 +517,8 @@ function ModelsPage({
     state.chat_phase !== "idle" ||
     !!runtime?.registry_busy ||
     !!runtime?.stopping ||
+    !!runtime?.active_request ||
+    (runtime?.queued_jobs ?? 0) > 0 ||
     ["loading", "generating", "unloading"].includes(runtime?.state ?? "");
   const loaded = runtime?.state === "ready" || runtime?.state === "generating";
   const different =
@@ -665,9 +670,11 @@ function ModelsPage({
                       <span>{model.architecture || "架构未知"}</span>
                       <span>{formatSize(model.size_bytes)}</span>
                       <span>登记时已识别 GGUF</span>
-                      <span>{state.testing_model === model.id ? "正在进行本机基础测试" : compatibility.admission}</span>
+                      {state.testing_model === model.id ? <span>正在进行本机基础测试</span> : !model.local_validation && <span>{compatibility.admission}</span>}
                     </div>
                     <p className="small-note">{compatibility.architecture}</p>
+                    {state.model_tests[model.id] && <ModelTestFeedback attempt={state.model_tests[model.id]} />}
+                    {model.local_validation ? <LocalValidationFeedback value={model.local_validation} history /> : <p className="small-note">本机记录未提供，尚未取得本机测试证明。</p>}
                     <details>
                       <summary>模型信息</summary>
                       <p className="hash">API ID：{model.id}</p>
@@ -675,8 +682,6 @@ function ModelsPage({
                       <p>历史矩阵验证记录：{model.validated ? "有精确模型验证记录" : "未实测"} · 历史验证上下文：{model.context_size ?? "未实测"}</p>
                       {model.local_validation && <>
                         <p>本机加载证明：{model.local_validation.load_success ? "曾通过" : "未取得"} · 本机短文本证明：{model.local_validation.generation_pass ? "曾通过" : "未取得"}{model.local_validation.state === "stale" ? "（记录已过期，当前组合待重测）" : ""}</p>
-                        {model.local_validation.checked_at_unix_ms !== null && <p>本机检查时间：{new Date(model.local_validation.checked_at_unix_ms).toLocaleString()}</p>}
-                        {model.local_validation.error_code && <p>本机测试诊断码：{model.local_validation.error_code}</p>}
                       </>}
                       <p>本机基础测试仅覆盖对应文件、引擎、设备和加载参数的加载与短文本生成；不证明回答质量、长上下文、工具调用或全部功能可用。</p>
                       <p>当前上下文请求上限（模型与运行时约束）：{model.context_limit ?? "未知"}，不代表设备可承受</p>
@@ -686,7 +691,7 @@ function ModelsPage({
                         兼容性依据登记元数据，不代表当前文件完整性；加载时仍须核验源文件。
                       </p>
                     </details>
-                    {compatibility.reason && (
+                    {compatibility.reason && compatibility.reason !== (model.local_validation && localValidationReason(model.local_validation)) && (
                       <p className="warning-text small-note">
                         {compatibility.reason}
                         {model.availability_error &&
@@ -720,15 +725,19 @@ function ModelsPage({
                   >
                     {current
                       ? "已加载"
-                      : !model.available ||
+                      : state.testing_model === model.id && state.model_tests[model.id]?.mode === "load"
+                        ? "加载与测试中…"
+                        : runtime?.selected_model === model.id && runtime.state === "loading"
+                          ? "加载中…"
+                          : !model.available ||
                       model.loadable !== true
                         ? compatibility.unavailableLabel
                         : runtime?.state === "faulted" &&
                             model.id === runtime.selected_model
                           ? "重新加载"
-                          : model.validated ? "加载模型" : "尝试加载"}
+                          : "加载模型"}
                   </button>
-                  {current && <button disabled={busy} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>基础测试</button>}
+                  {current && <><button disabled={busy} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>{state.testing_model === model.id ? "测试中…" : "基础测试"}</button>{busy && state.testing_model !== model.id && <span className="small-note">当前有任务进行中，空闲后可基础测试</span>}</>}
                   {!connected && model.available && model.loadable === true && <span className="small-note">加载将启动服务并短测</span>}
                   </div>
                 </article>

@@ -11,22 +11,25 @@ impl DesktopBridge {
     fn inventory_with_observations(&self) -> Result<(inventory::Inventory, Vec<LocalValidation>)> {
         let inventory =
             inventory::read(&self.root).map_err(|e| BridgeError::new(e.code.as_str()))?;
-        let receipts = Receipts::read(&self.root).unwrap_or_default();
-        let build = if receipts.entries.is_empty() {
-            None
-        } else {
-            let stamps = local_validation::engine_file_stamps(&self.executable).ok();
-            let mut cached = self.validation_build.lock().unwrap();
-            if let Some(stamps) = stamps {
-                if cached.as_ref().is_none_or(|(old, _)| old != &stamps) {
-                    *cached = local_validation::engine_build(&self.executable)
-                        .ok()
-                        .map(|build| (stamps, build));
-                }
-                cached.as_ref().map(|(_, build)| build.clone())
-            } else {
-                None
+        let receipts = match Receipts::read(&self.root) {
+            Ok(receipts) => receipts,
+            Err(_) => {
+                let observations = inventory
+                    .entries
+                    .iter()
+                    .map(|_| LocalValidation {
+                        state: ValidationState::Unavailable,
+                        error_code: Some("validation_record_read_failed".into()),
+                        ..LocalValidation::default()
+                    })
+                    .collect();
+                return Ok((inventory, observations));
             }
+        };
+        let build = if receipts.entries.is_empty() {
+            Err("validation_engine_unavailable")
+        } else {
+            self.validation_engine_build()
         };
         let preferences = settings::preferences(&self.root)?;
         let options = runtime_types::LoadOptions {
@@ -38,26 +41,48 @@ impl DesktopBridge {
             .entries
             .iter()
             .map(|entry| {
-                let scope = build.as_ref().and_then(|build| {
-                    local_validation::scope(&self.root, entry, options, build).ok()
+                let Some(prior) = receipts
+                    .entries
+                    .iter()
+                    .rev()
+                    .find(|r| r.scope.model_id == entry.manifest.id)
+                else {
+                    return LocalValidation::default();
+                };
+                let scope = build.as_ref().map_err(|code| *code).and_then(|build| {
+                    local_validation::scope(&self.root, entry, options, build)
+                        .map_err(|_| "validation_scope_unavailable")
                 });
-                if let Some(scope) = scope {
-                    receipts.observation(&scope, entry.availability_error.is_none())
-                } else {
-                    receipts
-                        .entries
-                        .iter()
-                        .rev()
-                        .find(|r| r.scope.model_id == entry.manifest.id)
-                        .map(|r| LocalValidation {
-                            state: ValidationState::Stale,
-                            ..r.observation.clone()
-                        })
-                        .unwrap_or_default()
+                match scope {
+                    Ok(scope) => receipts.observation(&scope, entry.availability_error.is_none()),
+                    Err(code) => LocalValidation {
+                        state: ValidationState::Stale,
+                        error_code: Some(code.into()),
+                        ..prior.observation.clone()
+                    },
                 }
             })
             .collect();
         Ok((inventory, observations))
+    }
+    fn validation_engine_build(&self) -> std::result::Result<String, &'static str> {
+        let stamps = local_validation::engine_file_stamps(&self.executable)
+            .map_err(|_| "validation_engine_unavailable")?;
+        let mut cached = self
+            .validation_build
+            .lock()
+            .map_err(|_| "validation_engine_unavailable")?;
+        if cached.as_ref().is_none_or(|(old, _)| old != &stamps) {
+            *cached = None;
+            *cached = Some(
+                local_validation::engine_identity(&self.executable)
+                    .map_err(|_| "validation_engine_unavailable")?,
+            );
+        }
+        cached
+            .as_ref()
+            .map(|(_, build)| build.clone())
+            .ok_or("validation_engine_unavailable")
     }
     pub(crate) fn local_observation(&self, id: &runtime_types::ModelId) -> Result<LocalValidation> {
         let (inventory, observations) = self.inventory_with_observations()?;
@@ -136,7 +161,11 @@ impl DesktopBridge {
         tokio::select! {
             biased;
             _=self.closing_requested()=>{self.load_disconnected.store(true,Ordering::Release);Err(BridgeError::new("model_load_interrupted"))},
-            result=self.json(Method::POST,"/runtime/model-test",Some(&body))=>result,
+            result=self.json::<LocalValidation>(Method::POST,"/runtime/model-test",Some(&body))=> {
+                let observation = result?;
+                check_observation_error(&observation)?;
+                Ok(observation)
+            },
         }
     }
     /// Compatibility endpoint: ordinary refresh is strictly read-only and never
@@ -152,8 +181,22 @@ pub(crate) fn check_load_observation(value: &Value) -> Result<()> {
         .ok_or_else(|| BridgeError::new("response_invalid"))?;
     let observation: LocalValidation = serde_json::from_value(observation.clone())
         .map_err(|_| BridgeError::new("response_invalid"))?;
-    if observation.error_code.as_deref() == Some("validation_record_unavailable") {
-        return Err(BridgeError::new("validation_record_unavailable"));
+    check_observation_error(&observation)
+}
+fn check_observation_error(observation: &LocalValidation) -> Result<()> {
+    if let Some(code) = observation.error_code.as_deref().filter(|code| {
+        matches!(
+            *code,
+            "validation_record_unavailable"
+                | "validation_record_read_failed"
+                | "validation_record_write_failed"
+                | "validation_engine_unavailable"
+                | "validation_scope_unavailable"
+                | "validation_scope_changed"
+                | "validation_record_invalid"
+        )
+    }) {
+        return Err(BridgeError::new(code));
     }
     Ok(())
 }
@@ -205,6 +248,38 @@ mod tests {
             }),
         )
         .unwrap()
+    }
+    fn inventory_fixture(root: &Path, id: runtime_types::ModelId) {
+        use model_store::{ModelManifest, ModelSource, ModelStorage};
+        let directory = root.join("models").join(id.as_str());
+        fs::create_dir_all(&directory).unwrap();
+        let manifest = ModelManifest {
+            schema_version: 1,
+            storage: ModelStorage::Managed,
+            id,
+            display_name: "Synthetic inventory".into(),
+            relative_file: "model.gguf".into(),
+            size_bytes: 64,
+            sha256: "0".repeat(64),
+            source: ModelSource::local("synthetic"),
+            architecture: "qwen3".into(),
+            quantization: "Q8_0".into(),
+            gguf_file_type: 7,
+            template_sha256: "1".repeat(64),
+            context_limit: 40960,
+            default_context: 2048,
+            validated_llama_commit: None,
+            capabilities: Default::default(),
+            validated: false,
+            validation: None,
+            extra: Default::default(),
+        };
+        fs::write(
+            directory.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::write(directory.join("model.gguf"), [0; 64]).unwrap();
     }
     #[tokio::test]
     async fn stopped_inventory_does_not_initialize_spawn_recover_or_create_lock() {
@@ -337,41 +412,14 @@ mod tests {
     #[tokio::test]
     async fn evidence_beyond_first_page_and_pagination_scope_changes_are_consistent() {
         use model_store::local_validation::Receipt;
-        use model_store::{ModelManifest, ModelSource, ModelStorage};
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("private");
         fs::create_dir(&root).unwrap();
         for index in 0..65 {
-            let id = runtime_types::ModelId::new(format!("fixture-{index:03}")).unwrap();
-            let directory = root.join("models").join(id.as_str());
-            fs::create_dir_all(&directory).unwrap();
-            let manifest = ModelManifest {
-                schema_version: 1,
-                storage: ModelStorage::Managed,
-                id,
-                display_name: "Synthetic inventory".into(),
-                relative_file: "model.gguf".into(),
-                size_bytes: 64,
-                sha256: "0".repeat(64),
-                source: ModelSource::local("synthetic"),
-                architecture: "qwen3".into(),
-                quantization: "Q8_0".into(),
-                gguf_file_type: 7,
-                template_sha256: "1".repeat(64),
-                context_limit: 40960,
-                default_context: 2048,
-                validated_llama_commit: None,
-                capabilities: Default::default(),
-                validated: false,
-                validation: None,
-                extra: Default::default(),
-            };
-            fs::write(
-                directory.join("manifest.json"),
-                serde_json::to_vec(&manifest).unwrap(),
-            )
-            .unwrap();
-            fs::write(directory.join("model.gguf"), [0; 64]).unwrap();
+            inventory_fixture(
+                &root,
+                runtime_types::ModelId::new(format!("fixture-{index:03}")).unwrap(),
+            );
         }
         let b = bridge(&root);
         fs::write(&b.executable, b"synthetic-runtime").unwrap();
@@ -470,5 +518,77 @@ mod tests {
         );
         assert!(check_load_observation(&json!({})).is_err());
         assert!(check_load_observation(&json!({"local_validation":{"state":"made_up"}})).is_err());
+    }
+    #[tokio::test]
+    async fn unreadable_receipts_remain_visible_distinct_from_never_tested() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        let id = runtime_types::ModelId::new("fixture").unwrap();
+        inventory_fixture(&root, id.clone());
+        let b = bridge(&root);
+        assert_eq!(
+            b.local_observation(&id).unwrap().state,
+            ValidationState::Untested
+        );
+        let path = root.join("local-model-validation.json");
+        fs::write(&path, b"private-invalid-evidence").unwrap();
+        let page = b.models_page(None, None).await.unwrap();
+        assert_eq!(page.data.len(), 1);
+        let observation = page.data[0].local_validation.as_ref().unwrap();
+        assert_eq!(observation.state, ValidationState::Unavailable);
+        assert_eq!(
+            observation.error_code.as_deref(),
+            Some("validation_record_read_failed")
+        );
+        assert!(!observation.load_success && !observation.generation_pass);
+        assert_eq!(fs::read(&path).unwrap(), b"private-invalid-evidence");
+        assert!(
+            !serde_json::to_string(&page)
+                .unwrap()
+                .contains("private-invalid")
+        );
+        #[cfg(windows)]
+        {
+            let canonical = fs::canonicalize(&root).unwrap();
+            let reopened = bridge(&canonical);
+            assert_eq!(
+                reopened.models_page(None, None).await.unwrap().data[0]
+                    .local_validation
+                    .as_ref()
+                    .unwrap()
+                    .state,
+                ValidationState::Unavailable
+            );
+        }
+    }
+    #[test]
+    fn manual_and_load_checks_report_every_evidence_stage_without_private_details() {
+        for code in [
+            "validation_record_unavailable",
+            "validation_record_read_failed",
+            "validation_record_write_failed",
+            "validation_engine_unavailable",
+            "validation_scope_unavailable",
+            "validation_scope_changed",
+        ] {
+            let observation = LocalValidation {
+                state: ValidationState::Loaded,
+                load_success: true,
+                error_code: Some(code.into()),
+                ..LocalValidation::default()
+            };
+            assert_eq!(
+                check_observation_error(&observation).unwrap_err().code,
+                code
+            );
+            assert_eq!(
+                check_load_observation(&json!({"local_validation": observation}))
+                    .unwrap_err()
+                    .code,
+                code
+            );
+            let error = BridgeError::new(code);
+            assert!(!error.message.contains("\\\\") && !error.message.contains("private"));
+        }
     }
 }

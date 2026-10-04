@@ -1,5 +1,13 @@
 # Nexa 当前状态
 
+## 2026-10-04 Windows 本机测试记录修复（源码验证完成）
+
+本批冲突已在长期开发分支 `codex/nexa-add-model` 通过真实merge提交 `f496aac6da0f28980ceee15211ff4a8eddf0ff26` 解决并推送，父为Add206d965与main26206ef；main未由开发方改动。联合437 Rust/291前端/Python153+2skip及独立交叉回归通过，无残留文本冲突。
+
+当前在同一分支按[ADR0022](docs/decisions/0022-windows-local-validation-paths-and-feedback.md)修复Windows canonical数据根被外部路径规则误拒、本机证明错误被隐藏、本次测试结果/按钮与历史矩阵混用。原始路径不重写，外部UNC/设备/reparse限制不放宽。源码全workspace/all-targets449通过/0失败/7既有忽略（另4项doc-tests通过）、完整clippy/fmt、前端343项/typecheck/lint/build、Python153+2skip通过；Windows四crate all-targets交叉检查通过，真实Windows与本批真实GGUF仍待最终验收。详见[本轮记录](docs/verification/2026-10-04-windows-model-evidence.md)。本检查点未打包。
+
+下一步仍为可配置文件校验超时和不自动卸载，随后统一构建与新PR。用户已明确长期一个开发分支，除确需隔离不再为每功能新开；下文旧“各片独立分支”的历史安排不再适用。
+
 ## 2026-10-04 本批关联功能整合（合并提交前验证快照）
 
 用户指出平行功能分支容易冲突并已关闭PR #6，要求由开发方处理；随后明确要求长期维护一个开发分支，除非确需隔离不为每个功能开分支，覆盖此前逐功能从main开分支规则。已确认main `26206ef882e0d47d506767dd683aa32e20da111d`包含LAN c216722；添加模型 `206d965cb9a40c61b94b8fe8cb9c3ea3821eb7a2`来自更早main，导致公共文件冲突。当前将最新main合入现有 `codex/nexa-add-model`，保留两套功能并统一回归，不强推、不改main、不要求用户手工选边。

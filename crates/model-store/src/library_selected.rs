@@ -126,7 +126,7 @@ fn managed_target(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(library_error(ErrorCode::ModelLibraryChanged)),
     }
-    let _managed_directory = DirectoryGuard::open(&expected)?;
+    let _managed_directory = DirectoryGuard::open_data_directory(&expected)?;
     let canonical_expected = fs::canonicalize(&expected).map_err(file_error)?;
     if path_key(&fs::canonicalize(parent).map_err(file_error)?) != path_key(&canonical_expected) {
         return Ok(None);

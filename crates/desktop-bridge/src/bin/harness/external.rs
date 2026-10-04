@@ -162,7 +162,8 @@ pub(super) async fn run(
         "effective_directory_verified":false,"direct_chat_prepared":false,"owned_preparation_cancelled":false,
         "write_access_blocked_while_loaded":false,"delete_access_blocked_while_loaded":false,
         "guard_retained_after_unload":false,"guard_released_after_stop":false,"preexisting_writer_rejected":false,
-        "failed_preparation_updates_list":false,"changed_identity_rejected":false
+        "failed_preparation_updates_list":false,"changed_identity_rejected":false,
+        "local_text_validation":false,"repeat_text_validation":false,"offline_validation_retained":false
     });
     *stage = "external_start";
     let snapshot = start(&bridge).await?;
@@ -282,11 +283,64 @@ pub(super) async fn run(
         sharing_denied(open_write(model))?;
         sharing_denied(open_delete_access(model))?;
         report["guard_retained_after_unload"] = true.into();
+        *stage = "external_load_and_test";
+        observer.load_model(load_request(id.as_str())).await?;
+        let tested = observer.models_page(None, None).await?;
+        ensure(tested.data.iter().any(|entry| {
+            entry.id == id
+                && entry.local_validation.as_ref().is_some_and(|v| {
+                    v.state == model_store::local_validation::ValidationState::Passed
+                        && v.load_success
+                        && v.generation_pass
+                        && v.error_code.is_none()
+                })
+        }))?;
+        report["local_text_validation"] = true.into();
+        *stage = "external_repeat_model_test";
+        let repeated = observer.model_test(load_request(id.as_str())).await?;
+        ensure(
+            repeated.state == model_store::local_validation::ValidationState::Passed
+                && repeated.load_success
+                && repeated.generation_pass
+                && repeated.error_code.is_none(),
+        )?;
+        let receipts = model_store::local_validation::Receipts::read(root)
+            .map_err(|_| Fault::new("assertion_failed"))?;
+        ensure(
+            receipts
+                .entries
+                .iter()
+                .filter(|entry| entry.scope.model_id == id)
+                .count()
+                == 1,
+        )?;
+        ensure(
+            receipts
+                .entries
+                .iter()
+                .any(|entry| entry.scope.model_id == id && entry.observation == repeated),
+        )?;
+        report["repeat_text_validation"] = true.into();
         *stage = "external_stop";
         observer.stop().await?;
         drop(open_write(model)?);
         drop(open_delete_access(model)?);
         report["guard_released_after_stop"] = true.into();
+        *stage = "external_offline_validation";
+        let canonical = fs::canonicalize(root)?;
+        let offline_bridge = DesktopBridge::new(canonical, runtime.to_owned())?;
+        let offline = offline_bridge.models_page(None, None).await?;
+        ensure(
+            offline.source == desktop_bridge::ModelsSource::Local
+                && offline.data.iter().any(|entry| {
+                    entry.id == id
+                        && entry
+                            .local_validation
+                            .as_ref()
+                            .is_some_and(|v| v == &repeated)
+                }),
+        )?;
+        report["offline_validation_retained"] = true.into();
 
         *stage = "external_preexisting_writer";
         let writer = open_write(model)?;
