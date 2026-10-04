@@ -16,6 +16,7 @@ import { localValidationReason } from "./localValidation";
 import { LocalValidationFeedback, ModelTestFeedback } from "./ModelTestFeedback";
 import { Modal } from "./Modal";
 import { LanApiSettings } from "./LanApiSettings";
+import { IdleUnloadSettings, VerificationTimeoutSettings } from "./RuntimeSettings";
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -1078,13 +1079,11 @@ function SettingsPage({
     close_runtime_on_exit: settings.close_runtime_on_exit,
     download_source: settings.download_source,
   }));
-  const [idle, setIdle] = useState(settings.idle_unload_seconds);
   const [modal, setModal] = useState<"token" | "stop" | null>(null);
   const runtime = state.snapshot?.runtime;
   const running =
     state.snapshot?.connection === "connected" ||
     state.snapshot?.connection === "connecting";
-  const stopped = state.snapshot?.connection === "stopped";
   const validation = validatePreferences(draft);
   const fields: {
     key: "context_size" | "threads" | "batch_size" | "max_output_tokens";
@@ -1235,49 +1234,8 @@ function SettingsPage({
           </button>
         </div>
       </form>
-      <section className="settings-card idle-card">
-        <div className="card-heading">
-          <div>
-            <h2>空闲卸载</h2>
-            <p>运行服务配置，必须先停止服务；保存后在下次启动时生效。</p>
-          </div>
-          <span className="mini-label">独立应用</span>
-        </div>
-        <div className="idle-controls">
-          <label htmlFor="idle">
-            空闲等待时间
-            <div className="number-field">
-              <input
-                type="number"
-                id="idle"
-                min={1}
-                max={86400}
-                value={Number.isNaN(idle) ? "" : idle}
-                onChange={(event) => setIdle(event.target.valueAsNumber)}
-              />
-              <span>秒</span>
-            </div>
-          </label>
-          <button
-            disabled={
-              !stopped ||
-              !!state.operation ||
-              state.library_phase !== "idle" ||
-              state.download_phase !== "idle" ||
-              !Number.isSafeInteger(idle) ||
-              idle < 1 ||
-              idle > 86400
-            }
-            onClick={() => void controller.saveIdle(idle)}
-          >
-            应用空闲卸载设置
-          </button>
-        </div>
-        <p className="small-note">
-          当前服务配置：{settings.idle_unload_seconds} 秒
-          {!stopped ? " · 请先停止运行服务再修改" : ""}
-        </p>
-      </section>
+      <IdleUnloadSettings key={`idle:${settings.idle_unload_enabled}:${settings.idle_unload_seconds}`} state={state} controller={controller} />
+      <VerificationTimeoutSettings key={`verification:${settings.model_verification_timeout_seconds}`} state={state} controller={controller} />
       <section className="settings-card">
         <div className="card-heading">
           <div>

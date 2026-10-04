@@ -142,6 +142,12 @@ struct SettingsRequest {
 #[serde(deny_unknown_fields)]
 struct IdleRequest {
     idle_unload_seconds: u64,
+    idle_unload_enabled: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerificationRequest {
+    model_verification_timeout_seconds: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -554,7 +560,22 @@ async fn runtime_idle_save(
     request: IdleRequest,
 ) -> Result<DesktopSnapshot> {
     guard(&window, &state)?;
-    state.bridge.save_idle(request.idle_unload_seconds).await
+    state
+        .bridge
+        .save_idle_policy(request.idle_unload_seconds, request.idle_unload_enabled)
+        .await
+}
+#[tauri::command]
+async fn runtime_verification_save(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: VerificationRequest,
+) -> Result<DesktopSnapshot> {
+    guard(&window, &state)?;
+    state
+        .bridge
+        .save_verification_timeout(request.model_verification_timeout_seconds)
+        .await
 }
 #[tauri::command]
 async fn runtime_lan_save(
@@ -787,6 +808,7 @@ pub fn run() {
             chat_cancel,
             settings_save,
             runtime_idle_save,
+            runtime_verification_save,
             runtime_lan_save,
             lan_token_copy,
             token_copy,

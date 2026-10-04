@@ -15,7 +15,11 @@ max_queued_jobs = 8
 queue_timeout_seconds = 120
 execution_timeout_seconds = 300
 load_timeout_seconds = 300
+# 关闭自动卸载保留秒数；显式卸载/切换/停服仍有效
+idle_unload_enabled = true
 idle_unload_seconds = 300
+# 整次文件校验预算30..7200秒，不改变native加载/生成计时
+model_verification_timeout_seconds = 300
 cancel_grace_seconds = 5
 
 [inference]

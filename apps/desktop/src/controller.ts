@@ -2,6 +2,7 @@ import { DesktopError, safeError } from "./adapter";
 import { localValidationLabel, unavailableValidation, validLocalValidation, validationErrorReason } from "./localValidation";
 import { validAddOperation, validModelSelection } from "./modelSelection";
 import { lanBaseUrl, validateLanSettings } from "./lanApi";
+import { preferencesOnly, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 import type {
   CatalogEntry,
   DownloadOperation,
@@ -39,6 +40,8 @@ export const DEFAULT_SETTINGS: Settings = {
   batch_size: 128,
   max_output_tokens: 512,
   idle_unload_seconds: 300,
+  idle_unload_enabled: true,
+  model_verification_timeout_seconds: 300,
   close_runtime_on_exit: false,
 };
 const encoder = new TextEncoder();
@@ -282,6 +285,7 @@ export class DesktopController {
   private modelsLoaded = false;
   private closing = false;
   private modelFeedbackEpoch = 0;
+  private settingsEpoch = 0;
   private nextTest = 0;
   private snapshotReadError: SafeError | null = null;
   private modelsReadError: SafeError | null = null;
@@ -302,6 +306,7 @@ export class DesktopController {
     this.update({ error: safeError(error) });
   }
   mount = () => {
+    ++this.settingsEpoch;
     this.mounted = true;
     const epoch = ++this.pollEpoch;
     const tick = async () => {
@@ -314,6 +319,7 @@ export class DesktopController {
     return () => {
       if (epoch !== this.pollEpoch) return;
       this.mounted = false;
+      ++this.settingsEpoch;
       this.leaveModelPage();
       clearTimeout(this.poll);
       clearTimeout(this.reconcileTimer);
@@ -387,6 +393,8 @@ export class DesktopController {
     this.update({ operation: label, error: null, notice: null });
     try {
       await task();
+      // A rejected concurrent settings attempt is no longer busy after this action succeeds.
+      if (this.state.error?.code === "operation_in_progress") this.update({ error: null });
     } catch (error) {
       this.report(error);
     } finally {
@@ -1043,7 +1051,7 @@ export class DesktopController {
         const previous = this.state.snapshot?.settings;
         const optionsChanged = !previous || (["context_size", "threads", "batch_size"] as const).some((key) => previous[key] !== settings[key]);
         this.update({
-          snapshot: await this.api.saveSettings(settings),
+          snapshot: await this.api.saveSettings(preferencesOnly(settings)),
           notice:
             "偏好已保存。加载参数在下次加载时生效，输出预算用于下次发送。",
         });
@@ -1061,18 +1069,47 @@ export class DesktopController {
       },
       true,
     );
-  saveIdle = (seconds: number) =>
-    this.action("正在应用空闲卸载设置", async () => {
-      if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 86400)
-        throw new DesktopError(
-          "invalid_settings",
-          "空闲卸载时间须为 1–86400 秒。",
-        );
-      this.update({
-        snapshot: await this.api.saveIdle(seconds),
-        notice: "空闲卸载设置已保存，下次启动运行服务时生效。",
-      });
+  private saveRuntimeSettings(label: string, save: () => Promise<Snapshot>, notice: string) {
+    if (this.closing) return Promise.resolve();
+    if (this.state.operation || this.stream || this.libraryTask || this.downloadTask) {
+      this.update({ notice: null });
+      this.report(new DesktopError("operation_in_progress", "有其他操作正在进行，请等待完成或取消后再保存设置。"));
+      return Promise.resolve();
+    }
+    return this.action(label, async () => {
+      const epoch = this.settingsEpoch;
+      const snapshot = this.state.snapshot;
+      if (!snapshot?.initialized) throw new DesktopError("not_initialized", "请先在模型页显式初始化运行服务，再停止服务后保存设置。");
+      if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先显式停止运行服务，再保存设置；不会自动中断任务。");
+      try {
+        const saved = await save();
+        if (epoch !== this.settingsEpoch || this.closing) return;
+        this.update({ snapshot: saved, notice, error: null });
+      } catch (error) {
+        if (epoch !== this.settingsEpoch || this.closing) return;
+        const code = safeError(error).code;
+        if (code === "runtime_running") throw new DesktopError(code, "运行服务已启动。请先显式停止服务，再保存设置。");
+        if (code === "settings_durability_unconfirmed") throw new DesktopError(code, "设置可能已保存，但磁盘持久化尚未确认。请重新读取并核对已保存配置后再重试；当前不代表已回滚。");
+        throw error;
+      }
     });
+  }
+  saveIdle = (seconds: number, enabled?: boolean) =>
+    this.saveRuntimeSettings("正在应用空闲卸载设置", async () => {
+      const validation = validateIdleSeconds(seconds);
+      if (validation) throw new DesktopError("invalid_settings", validation);
+      if (enabled !== undefined && (typeof enabled !== "boolean" || typeof this.state.snapshot?.settings.idle_unload_enabled !== "boolean"))
+        throw new DesktopError("idle_settings_unavailable", "当前桌面版本未提供不自动卸载设置，请更新桌面应用。");
+      return enabled === undefined ? this.api.saveIdle(seconds) : this.api.saveIdle(seconds, enabled);
+    }, "空闲卸载设置已保存，下次显式启动运行服务时生效。保存不会启动服务；关闭自动卸载不提供关机或睡眠保护。");
+  saveVerificationTimeout = (seconds: number) =>
+    this.saveRuntimeSettings("正在保存模型文件校验超时", async () => {
+      if (typeof this.state.snapshot?.settings.model_verification_timeout_seconds !== "number")
+        throw new DesktopError("verification_settings_unavailable", "当前桌面版本未提供模型文件校验超时设置，请更新桌面应用。");
+      const validation = validateVerificationSeconds(seconds);
+      if (validation) throw new DesktopError("invalid_settings", validation);
+      return this.api.saveVerificationTimeout(seconds);
+    }, "模型文件校验超时已保存，后续新校验使用此值；加载前校验在下次显式启动运行服务后使用新值。正在执行的操作不会改动计时。");
   copyToken = () =>
     this.action(
       "正在复制令牌",

@@ -30,6 +30,7 @@ fn main() {
                 "chat_cancel",
                 "settings_save",
                 "runtime_idle_save",
+                "runtime_verification_save",
                 "runtime_lan_save",
                 "lan_token_copy",
                 "token_copy",

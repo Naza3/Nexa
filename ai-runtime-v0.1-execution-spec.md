@@ -228,7 +228,9 @@ max_queued_jobs = 8
 queue_timeout_seconds = 120
 execution_timeout_seconds = 300
 load_timeout_seconds = 300
+idle_unload_enabled = true
 idle_unload_seconds = 300
+model_verification_timeout_seconds = 300
 cancel_grace_seconds = 5
 
 [inference]
@@ -243,6 +245,8 @@ gpu_layers = 0
 当前API默认context4096/batch512、线程min(4,可用逻辑CPU)，桌面验证档2048/2线程/128；历史仅证实各自测过的组合。开放候选上限为模型metadata与131072既有硬限中的较小值，实际loader可进一步拒绝；这不是16GB可运行该窗口的保证。调整默认须实测，不静默降级。execution_timeout 包含 prepare/prefill/decode，不包含排队和模型加载；三类计时分别记录。
 
 `backend`、`context_size` 是 load-time 参数；修改后需要卸载并重新加载。当前构建仅接受backend=cpu和gpu_layers=0；保留字段不等于提供GPU支持。`max_output_tokens` 是请求未提供输出预算时的默认值，不是无条件可用的剩余上下文。
+
+按[ADR0023](docs/decisions/0023-model-verification-and-idle-policy.md)，文件校验超时范围30..7200秒，整次校验共用预算，不改变下载传输、原生加载或短文本计时；缺省300秒。`idle_unload_enabled=false`明确关闭空闲卸载，保留等待秒数（桌面新保存1..86400秒，旧手工长TTL读取保持兼容），显式卸载/切换/关停继续有效。旧配置缺少字段按true/300秒读取；新字段不保证旧版程序可读。运行策略须停服持锁保存，新操作/下次启动生效。
 
 ### 5.3 CPU设备与资源
 

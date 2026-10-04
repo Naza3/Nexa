@@ -35,6 +35,35 @@ pub(crate) fn config(root: &Path) -> Result<Config> {
     )
     .map_err(|_| BridgeError::new("configuration_invalid"))
 }
+/// Uninitialized model-library operations retain the historical default, while
+/// malformed or unreadable existing configuration must never silently downgrade.
+pub(crate) fn verification_timeout(root: &Path) -> Result<std::time::Duration> {
+    match fs::symlink_metadata(root.join("config.toml")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(model_store::library::SCAN_TIMEOUT)
+        }
+        _ => Ok(config(root)?.model_verification_timeout()),
+    }
+}
+/// Bounded metadata lookup only; never opens/hashes any GGUF. Even a currently
+/// loaded external model may idle-unload before API admission, so the local
+/// transport allows its prospective verification without extending native work.
+pub(crate) fn external_verification_budget(
+    root: &Path,
+    model: &str,
+) -> Result<Option<std::time::Duration>> {
+    let id = runtime_types::ModelId::new(model).map_err(|_| BridgeError::new("invalid_request"))?;
+    let library = model_store::library::ModelLibrary::read(root)
+        .map_err(|e| BridgeError::new(e.code.as_str()))?;
+    if library
+        .as_ref()
+        .is_some_and(|library| library.entry(&id).is_some())
+    {
+        Ok(Some(config(root)?.model_verification_timeout()))
+    } else {
+        Ok(None)
+    }
+}
 pub(crate) fn require_initialized(root: &Path) -> Result<Config> {
     load_private_token(root).map_err(|_| BridgeError::new("credentials_unavailable"))?;
     config(root)
@@ -118,5 +147,119 @@ fn replace(source: &Path, target: &Path) -> io::Result<()> {
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use std::time::Duration;
+    fn string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend((value.len() as u64).to_le_bytes());
+        bytes.extend(value.as_bytes());
+    }
+    fn tiny_model(path: &Path) {
+        let mut b = b"GGUF".to_vec();
+        b.extend(3_u32.to_le_bytes());
+        b.extend(1_u64.to_le_bytes());
+        b.extend(4_u64.to_le_bytes());
+        for (k, v) in [
+            ("general.architecture", "qwen3"),
+            ("tokenizer.chat_template", "test template"),
+        ] {
+            string(&mut b, k);
+            b.extend(8_u32.to_le_bytes());
+            string(&mut b, v);
+        }
+        for (k, v) in [
+            ("general.file_type", 7_u32),
+            ("qwen3.context_length", 40960),
+        ] {
+            string(&mut b, k);
+            b.extend(4_u32.to_le_bytes());
+            b.extend(v.to_le_bytes());
+        }
+        string(&mut b, "w");
+        b.extend(1_u32.to_le_bytes());
+        b.extend(32_u64.to_le_bytes());
+        b.extend(0_u32.to_le_bytes());
+        b.extend(0_u64.to_le_bytes());
+        b.resize(b.len().next_multiple_of(32), 0);
+        b.resize(b.len() + 128, 0);
+        fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn verification_config_defaults_only_when_absent_and_reads_once_per_operation() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            verification_timeout(root.path()).unwrap(),
+            Duration::from_secs(300)
+        );
+        assert!(!root.path().join("config.toml").exists());
+        let mut config = Config::default();
+        config.runtime.model_verification_timeout_seconds = 30;
+        fs::write(root.path().join("config.toml"), config.to_toml().unwrap()).unwrap();
+        let frozen_budget = verification_timeout(root.path()).unwrap();
+        config.runtime.model_verification_timeout_seconds = 7200;
+        fs::write(root.path().join("config.toml"), config.to_toml().unwrap()).unwrap();
+        assert_eq!(frozen_budget, Duration::from_secs(30));
+        assert_eq!(
+            verification_timeout(root.path()).unwrap(),
+            Duration::from_secs(7200)
+        );
+        fs::write(root.path().join("config.toml"), b"malformed").unwrap();
+        assert_eq!(
+            verification_timeout(root.path()).unwrap_err().code,
+            "configuration_invalid"
+        );
+    }
+    #[test]
+    fn transport_budget_is_only_for_registered_external_models_without_payload_io() {
+        use model_store::library::{LIBRARY_FILE, ScanControl, scan_directory};
+        let root = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let path = source.path().join("tiny.gguf");
+        tiny_model(&path);
+        let scanned =
+            scan_directory(root.path(), source.path(), None, &ScanControl::default()).unwrap();
+        let library = scanned.library().unwrap().clone();
+        let id = library.models[0].manifest.id.clone();
+        fs::write(root.path().join(LIBRARY_FILE), library.encode().unwrap()).unwrap();
+        drop(scanned);
+        let mut config = Config::default();
+        config.runtime.model_verification_timeout_seconds = 7200;
+        fs::write(root.path().join("config.toml"), config.to_toml().unwrap()).unwrap();
+        assert_eq!(
+            external_verification_budget(root.path(), id.as_str()).unwrap(),
+            Some(Duration::from_secs(7200))
+        );
+        assert_eq!(
+            external_verification_budget(root.path(), "managed").unwrap(),
+            None
+        );
+        fs::remove_file(path).unwrap();
+        assert_eq!(
+            external_verification_budget(root.path(), id.as_str()).unwrap(),
+            Some(Duration::from_secs(7200))
+        );
+        fs::write(root.path().join("config.toml"), b"malformed").unwrap();
+        assert_eq!(
+            external_verification_budget(root.path(), "managed").unwrap(),
+            None
+        );
+        assert_eq!(
+            external_verification_budget(root.path(), id.as_str())
+                .unwrap_err()
+                .code,
+            "configuration_invalid"
+        );
+        fs::write(root.path().join(LIBRARY_FILE), b"malformed").unwrap();
+        assert_eq!(
+            external_verification_budget(root.path(), id.as_str())
+                .unwrap_err()
+                .code,
+            "model_library_changed"
+        );
     }
 }

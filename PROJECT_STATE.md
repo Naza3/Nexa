@@ -1,5 +1,9 @@
 # Nexa 当前状态
 
+## 2026-10-04 校验超时与空闲策略（源码联合回归完成）
+
+Windows本机记录/反馈修复已在同一长期分支推送 `abcb1a0a9b448915cf311e4cf33c427cf6af017b`，449项Rust加4项doc、343前端、Python153+2skip和Windows交叉检查通过。按[ADR0023](docs/decisions/0023-model-verification-and-idle-policy.md)的两设置已实现并冻结，仍在同一开发分支。父全workspace/all-targets464通过/0失败/7忽略、clippy/fmt、前端414项/typecheck/lint/build、Python153+2skip，以及Windows六crate/壳all-targets交叉check均通过；独立审查无剩余阻断。见[联合回归](docs/verification/2026-10-04-runtime-policy-and-final-regression.md)。新版Linux release与真实固定Qwen0.6B harness通过，含重复短测、停止后离线证明与取消；Windows external链路仍未运行。随后clean提交、重新捕获来源并构建一个Windows包及一个新PR；main仍为26206ef且未由开发方更改，目标Windows待用户实机验收。
+
 ## 2026-10-04 Windows 本机测试记录修复（源码验证完成）
 
 本批冲突已在长期开发分支 `codex/nexa-add-model` 通过真实merge提交 `f496aac6da0f28980ceee15211ff4a8eddf0ff26` 解决并推送，父为Add206d965与main26206ef；main未由开发方改动。联合437 Rust/291前端/Python153+2skip及独立交叉回归通过，无残留文本冲突。

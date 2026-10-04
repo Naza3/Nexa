@@ -11,9 +11,19 @@ pub struct DesktopSettings {
     pub batch_size: u32,
     pub max_output_tokens: u32,
     pub idle_unload_seconds: u64,
+    #[serde(default = "default_idle_enabled")]
+    pub idle_unload_enabled: bool,
+    #[serde(default = "default_verification_seconds")]
+    pub model_verification_timeout_seconds: u64,
     pub close_runtime_on_exit: bool,
     #[serde(default)]
     pub download_source: DownloadSource,
+}
+fn default_idle_enabled() -> bool {
+    true
+}
+fn default_verification_seconds() -> u64 {
+    model_store::library::SCAN_TIMEOUT.as_secs()
 }
 impl Default for DesktopSettings {
     fn default() -> Self {
@@ -23,6 +33,8 @@ impl Default for DesktopSettings {
             batch_size: 128,
             max_output_tokens: 512,
             idle_unload_seconds: 300,
+            idle_unload_enabled: true,
+            model_verification_timeout_seconds: default_verification_seconds(),
             close_runtime_on_exit: false,
             download_source: DownloadSource::default(),
         }
@@ -58,6 +70,11 @@ impl From<DesktopSettings> for DesktopPreferences {
 }
 impl DesktopPreferences {
     pub fn with_idle(self, idle_unload_seconds: u64) -> DesktopSettings {
+        let mut settings = self.with_runtime(&runtime_api::Config::default());
+        settings.idle_unload_seconds = idle_unload_seconds;
+        settings
+    }
+    pub fn with_runtime(self, config: &runtime_api::Config) -> DesktopSettings {
         DesktopSettings {
             context_size: self.context_size,
             threads: self.threads,
@@ -65,7 +82,9 @@ impl DesktopPreferences {
             max_output_tokens: self.max_output_tokens,
             close_runtime_on_exit: self.close_runtime_on_exit,
             download_source: self.download_source,
-            idle_unload_seconds,
+            idle_unload_seconds: config.runtime.idle_unload_seconds,
+            idle_unload_enabled: config.runtime.idle_unload_enabled,
+            model_verification_timeout_seconds: config.runtime.model_verification_timeout_seconds,
         }
     }
 }

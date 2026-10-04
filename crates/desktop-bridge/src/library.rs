@@ -233,7 +233,9 @@ impl DesktopBridge {
                 result: None,
                 error: None,
             }),
-            control: Arc::new(ScanControl::default()),
+            control: Arc::new(ScanControl::with_timeout(settings::verification_timeout(
+                &self.root,
+            )?)),
             changed: tokio::sync::Notify::new(),
             owns_instance: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
@@ -398,11 +400,13 @@ impl DesktopBridge {
         if lock.has_discovery() {
             return Err(BridgeError::new("runtime_stop_unconfirmed"));
         }
+        let control = Arc::new(ScanControl::with_timeout(settings::verification_timeout(
+            &self.root,
+        )?));
         let id = Uuid::new_v4();
         let selected = files
             .take()
             .ok_or_else(|| BridgeError::new("selection_expired"))?;
-        let control = Arc::new(ScanControl::default());
         control.selected_count(selected.len());
         let initial_results = selected
             .iter()

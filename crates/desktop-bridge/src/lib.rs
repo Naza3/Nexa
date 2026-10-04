@@ -123,7 +123,22 @@ impl DesktopBridge {
         body: Option<&Value>,
     ) -> Result<T> {
         let mut connection = self.connect().await?;
-        let value = connection.json(method, path, body).await?;
+        let verification = if runtime_cli::client::may_verify_model(&method, path) {
+            body.and_then(|body| body.get("model"))
+                .and_then(Value::as_str)
+                .map(|model| settings::external_verification_budget(&self.root, model))
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
+        let value = if let Some(budget) = verification {
+            connection
+                .json_with_verification(method, path, body, budget)
+                .await?
+        } else {
+            connection.json(method, path, body).await?
+        };
         serde_json::from_value(value).map_err(|_| BridgeError::new("response_invalid"))
     }
     pub async fn snapshot(&self) -> Result<DesktopSnapshot> {
@@ -155,7 +170,7 @@ impl DesktopBridge {
             connection: ConnectionState::Stopped,
             api_address: Some(format!("http://{}", config.api.listen)),
             runtime: None,
-            settings: preferences.with_idle(config.runtime.idle_unload_seconds),
+            settings: preferences.with_runtime(&config),
             lan_api: config.lan_api.clone(),
             model_directory: library::directory_snapshot(&self.root, None)?,
         };
@@ -507,21 +522,55 @@ impl DesktopBridge {
         settings::save_preferences(&self.root, &preferences)?;
         self.snapshot_inner().await
     }
+    /// Legacy callers change the positive idle budget without toggling its policy.
     pub async fn save_idle(&self, idle_unload_seconds: u64) -> Result<DesktopSnapshot> {
+        self.save_idle_policy(idle_unload_seconds, None).await
+    }
+    pub async fn save_idle_policy(
+        &self,
+        idle_unload_seconds: u64,
+        idle_unload_enabled: Option<bool>,
+    ) -> Result<DesktopSnapshot> {
+        if !(1..=86400).contains(&idle_unload_seconds) {
+            return Err(BridgeError::new("settings_invalid"));
+        }
+        self.save_runtime_config(|config| {
+            config.runtime.idle_unload_seconds = idle_unload_seconds;
+            if let Some(enabled) = idle_unload_enabled {
+                config.runtime.idle_unload_enabled = enabled;
+            }
+        })
+        .await
+    }
+    pub async fn save_verification_timeout(&self, seconds: u64) -> Result<DesktopSnapshot> {
+        self.save_runtime_config(|config| {
+            config.runtime.model_verification_timeout_seconds = seconds;
+        })
+        .await
+    }
+    async fn save_runtime_config(
+        &self,
+        update: impl FnOnce(&mut runtime_api::Config),
+    ) -> Result<DesktopSnapshot> {
         self.open()?;
         let _work = self
             .work
             .try_lock()
             .map_err(|_| BridgeError::new("desktop_busy"))?;
         self.open()?;
+        if !self.root.join("config.toml").exists() {
+            return Err(BridgeError::new("not_initialized"));
+        }
         let lock = InstanceLock::try_acquire(&self.root)
             .map_err(|_| BridgeError::new("instance_unavailable"))?
             .ok_or_else(|| BridgeError::new("runtime_running"))?;
-        let mut config = settings::require_initialized(&self.root)?;
-        if !(1..=86400).contains(&idle_unload_seconds) {
-            return Err(BridgeError::new("settings_invalid"));
+        if lock.has_discovery() {
+            return Err(BridgeError::new("runtime_stop_unconfirmed"));
         }
-        config.runtime.idle_unload_seconds = idle_unload_seconds;
+        // Re-read under the cross-process lock, preserving LAN and every field
+        // not owned by this action. Settings take effect on the next operation.
+        let mut config = settings::require_initialized(&self.root)?;
+        update(&mut config);
         config
             .validate()
             .map_err(|_| BridgeError::new("settings_invalid"))?;

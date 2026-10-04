@@ -330,3 +330,206 @@ async fn lan_save_rejects_uninitialized_and_unclean_instance_without_side_effect
     assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), original);
     assert!(!root.join("secrets/lan-api-token").exists());
 }
+
+#[tokio::test]
+async fn runtime_policy_saves_preserve_each_other_lan_preferences_and_credentials() {
+    let (_temp, root, bridge) = initialized();
+    let token = std::fs::read(root.join("secrets/api-token")).unwrap();
+    let mut config =
+        Config::from_toml(&std::fs::read_to_string(root.join("config.toml")).unwrap()).unwrap();
+    config.lan_api.listen = Some("192.168.1.20:19090".parse().unwrap());
+    config.inference.threads = Some(3);
+    std::fs::write(root.join("config.toml"), config.to_toml().unwrap()).unwrap();
+    let disabled = bridge.save_idle_policy(600, Some(false)).await.unwrap();
+    assert!(!disabled.settings.idle_unload_enabled);
+    assert_eq!(disabled.settings.idle_unload_seconds, 600);
+    for seconds in [30, 7200, 300] {
+        let saved = bridge.save_verification_timeout(seconds).await.unwrap();
+        assert_eq!(saved.settings.model_verification_timeout_seconds, seconds);
+        assert!(!saved.settings.idle_unload_enabled);
+        assert_eq!(saved.settings.idle_unload_seconds, 600);
+    }
+    let legacy = bridge.save_idle(900).await.unwrap();
+    assert!(!legacy.settings.idle_unload_enabled);
+    assert_eq!(legacy.settings.idle_unload_seconds, 900);
+    let saved =
+        Config::from_toml(&std::fs::read_to_string(root.join("config.toml")).unwrap()).unwrap();
+    assert_eq!(saved.lan_api.listen, config.lan_api.listen);
+    assert_eq!(saved.inference.threads, Some(3));
+    assert_eq!(saved.runtime.model_verification_timeout_seconds, 300);
+    assert_eq!(
+        std::fs::read(root.join("secrets/api-token")).unwrap(),
+        token
+    );
+    assert!(!root.join("desktop-settings.json").exists());
+    assert!(!root.join("secrets/lan-api-token").exists());
+    let enabled = bridge.save_idle_policy(900, Some(true)).await.unwrap();
+    assert!(enabled.settings.idle_unload_enabled);
+}
+
+#[tokio::test]
+async fn invalid_runtime_policy_saves_are_atomic_even_when_idle_disabled() {
+    let (_temp, root, bridge) = initialized();
+    let original = std::fs::read(root.join("config.toml")).unwrap();
+    for seconds in [0, 29, 7201, u64::MAX] {
+        assert_eq!(
+            bridge
+                .save_verification_timeout(seconds)
+                .await
+                .unwrap_err()
+                .code,
+            "settings_invalid"
+        );
+        assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), original);
+    }
+    for seconds in [0, 86401, u64::MAX] {
+        assert_eq!(
+            bridge
+                .save_idle_policy(seconds, Some(false))
+                .await
+                .unwrap_err()
+                .code,
+            "settings_invalid"
+        );
+        assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), original);
+    }
+}
+
+#[tokio::test]
+async fn runtime_policy_saves_require_confirmed_stop_and_never_initialize() {
+    let (_temp, root, bridge) = initialized();
+    let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    let original = std::fs::read(root.join("config.toml")).unwrap();
+    assert_eq!(
+        bridge.save_verification_timeout(30).await.unwrap_err().code,
+        "runtime_running"
+    );
+    assert_eq!(
+        bridge
+            .save_idle_policy(1, Some(false))
+            .await
+            .unwrap_err()
+            .code,
+        "runtime_running"
+    );
+    lock.publish(&Discovery::current(Uuid::new_v4(), "127.0.0.1:1".parse().unwrap()).unwrap())
+        .unwrap();
+    drop(lock);
+    assert_eq!(
+        bridge.save_verification_timeout(30).await.unwrap_err().code,
+        "runtime_stop_unconfirmed"
+    );
+    assert_eq!(
+        bridge
+            .save_idle_policy(1, Some(false))
+            .await
+            .unwrap_err()
+            .code,
+        "runtime_stop_unconfirmed"
+    );
+    assert_eq!(
+        bridge.save_idle(1).await.unwrap_err().code,
+        "runtime_stop_unconfirmed"
+    );
+    assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), original);
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("absent");
+    let uninitialized = DesktopBridge::new(
+        missing.clone(),
+        temp.path().join(if cfg!(windows) {
+            "ai-runtime.exe"
+        } else {
+            "ai-runtime"
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        uninitialized
+            .save_verification_timeout(300)
+            .await
+            .unwrap_err()
+            .code,
+        "not_initialized"
+    );
+    assert_eq!(
+        uninitialized
+            .save_idle_policy(300, Some(false))
+            .await
+            .unwrap_err()
+            .code,
+        "not_initialized"
+    );
+    assert!(!missing.exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_windows_never_overwrite_other_runtime_policy_fields() {
+    let (_temp, root, first) = initialized();
+    let second = Arc::new(
+        DesktopBridge::new(
+            root.clone(),
+            root.join(if cfg!(windows) {
+                "ai-runtime.exe"
+            } else {
+                "ai-runtime"
+            }),
+        )
+        .unwrap(),
+    );
+    let a = first.clone();
+    let b = second.clone();
+    let (idle, verification) = tokio::join!(
+        tokio::spawn(async move { a.save_idle_policy(900, Some(false)).await }),
+        tokio::spawn(async move { b.save_verification_timeout(7200).await }),
+    );
+    // Fail-fast cross-process locking may admit one or both in sequence. Retry
+    // only the known losing action; never replay a whole stale configuration.
+    if let Err(error) = idle.unwrap() {
+        assert_eq!(error.code, "runtime_running");
+        first.save_idle_policy(900, Some(false)).await.unwrap();
+    }
+    if let Err(error) = verification.unwrap() {
+        assert_eq!(error.code, "runtime_running");
+        second.save_verification_timeout(7200).await.unwrap();
+    }
+    let saved =
+        Config::from_toml(&std::fs::read_to_string(root.join("config.toml")).unwrap()).unwrap();
+    assert!(!saved.runtime.idle_unload_enabled);
+    assert_eq!(saved.runtime.idle_unload_seconds, 900);
+    assert_eq!(saved.runtime.model_verification_timeout_seconds, 7200);
+}
+
+#[test]
+fn older_settings_dto_defaults_new_fields_without_changing_old_idle_value() {
+    let mut value = serde_json::to_value(desktop_bridge::DesktopSettings::default()).unwrap();
+    value.as_object_mut().unwrap().remove("idle_unload_enabled");
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("model_verification_timeout_seconds");
+    value["idle_unload_seconds"] = 120.into();
+    let settings: desktop_bridge::DesktopSettings = serde_json::from_value(value).unwrap();
+    assert!(settings.idle_unload_enabled);
+    assert_eq!(settings.idle_unload_seconds, 120);
+    assert_eq!(settings.model_verification_timeout_seconds, 300);
+}
+
+#[tokio::test]
+async fn legacy_long_idle_ttl_is_read_and_preserved_by_unrelated_save() {
+    let (_temp, root, bridge) = initialized();
+    let mut config = Config::default();
+    config.runtime.idle_unload_seconds = 172800;
+    std::fs::write(root.join("config.toml"), config.to_toml().unwrap()).unwrap();
+    let before = bridge.snapshot().await.unwrap();
+    assert_eq!(before.settings.idle_unload_seconds, 172800);
+    assert!(before.settings.idle_unload_enabled);
+    let after = bridge.save_verification_timeout(7200).await.unwrap();
+    assert_eq!(after.settings.idle_unload_seconds, 172800);
+    assert_eq!(
+        bridge.save_idle(172800).await.unwrap_err().code,
+        "settings_invalid"
+    );
+    let fixed = bridge.save_idle_policy(86400, Some(false)).await.unwrap();
+    assert_eq!(fixed.settings.idle_unload_seconds, 86400);
+    assert!(!fixed.settings.idle_unload_enabled);
+}

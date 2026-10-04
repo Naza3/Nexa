@@ -2,6 +2,7 @@
 import { DEFAULT_SETTINGS, wait } from "./controller";
 import { DesktopError } from "./adapter";
 import { DEFAULT_LAN_SETTINGS, validateLanSettings } from "./lanApi";
+import { preferencesOnly, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 import type {
   ChatEvent,
   DesktopApi,
@@ -310,13 +311,25 @@ export function createPreviewApi(): DesktopApi {
       return { request_id, status: "stopping" };
     },
     saveSettings: async (settings) => {
-      snapshot.settings = { ...snapshot.settings, ...settings };
+      snapshot.settings = { ...snapshot.settings, ...preferencesOnly(settings) };
       return clone();
     },
-    saveIdle: async (idle_unload_seconds) => {
+    saveIdle: async (idle_unload_seconds, idle_unload_enabled) => {
+      if (!snapshot.initialized) throw new DesktopError("not_initialized", "请先显式初始化。");
       if (snapshot.connection !== "stopped")
         throw new DesktopError("runtime_running", "请先停止运行服务。");
+      const validation = validateIdleSeconds(idle_unload_seconds);
+      if (validation) throw new DesktopError("invalid_settings", validation);
       snapshot.settings.idle_unload_seconds = idle_unload_seconds;
+      if (idle_unload_enabled !== undefined) snapshot.settings.idle_unload_enabled = idle_unload_enabled;
+      return clone();
+    },
+    saveVerificationTimeout: async (model_verification_timeout_seconds) => {
+      if (!snapshot.initialized) throw new DesktopError("not_initialized", "请先显式初始化。");
+      if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先停止运行服务。");
+      const validation = validateVerificationSeconds(model_verification_timeout_seconds);
+      if (validation) throw new DesktopError("invalid_settings", validation);
+      snapshot.settings.model_verification_timeout_seconds = model_verification_timeout_seconds;
       return clone();
     },
     saveLanSettings: async (lan_api) => {

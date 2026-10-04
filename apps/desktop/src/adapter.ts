@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { DesktopApi, SafeError } from "./types";
+import { preferencesOnly } from "./runtimeSettingsValues";
 
 export class DesktopError extends Error {
   readonly code: string;
@@ -71,9 +72,11 @@ export const nativeApi: DesktopApi = {
   chatStart: (request) => call("chat_start", request),
   chatNext: (request_id) => call("chat_next", { request_id }),
   chatCancel: (request_id) => call("chat_cancel", { request_id }),
-  saveSettings: (settings) => call("settings_save", { settings }),
-  saveIdle: (idle_unload_seconds) =>
-    call("runtime_idle_save", { idle_unload_seconds }),
+  saveSettings: (settings) => call("settings_save", { settings: preferencesOnly(settings) }),
+  saveIdle: (idle_unload_seconds, idle_unload_enabled) =>
+    call("runtime_idle_save", { idle_unload_seconds, ...(idle_unload_enabled === undefined ? {} : { idle_unload_enabled }) }),
+  saveVerificationTimeout: (model_verification_timeout_seconds) =>
+    call("runtime_verification_save", { model_verification_timeout_seconds }),
   copyToken: () => call("token_copy"),
   saveLanSettings: (lan_api) => call("runtime_lan_save", { lan_api }),
   copyLanToken: () => call("lan_token_copy"),

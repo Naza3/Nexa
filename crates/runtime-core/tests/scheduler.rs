@@ -1588,3 +1588,95 @@ fn loaded_only_submission_never_resolves_or_loads_and_preserves_fifo() {
     assert!(h.commands.try_recv().is_err());
     h.finish();
 }
+
+#[test]
+fn disabled_idle_unload_retains_ready_and_still_allows_explicit_unload_switch_and_stop() {
+    let c = RuntimeConfig {
+        idle_unload_enabled: false,
+        idle_unload: Duration::from_millis(1),
+        ..config()
+    };
+    let h = Harness::new(c, true);
+    let id = ModelId::new("qa-small").unwrap();
+    h.handle.load(id.clone(), LoadOptions::default()).unwrap();
+    thread::sleep(Duration::from_millis(30));
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Ready);
+    // loaded-only admission remains usable but never implicitly loads.
+    let receiver = h.handle.submit_loaded(request()).unwrap();
+    let pending = h.pending();
+    pending.prepared();
+    pending.complete();
+    terminal(&receiver);
+    h.handle.unload().unwrap();
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
+    assert_eq!(
+        h.handle.submit_loaded(request()).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    h.handle.load(id, LoadOptions::default()).unwrap();
+    h.handle
+        .load(ModelId::new("other").unwrap(), LoadOptions::default())
+        .unwrap();
+    assert_eq!(
+        h.handle.status().unwrap().selected_model.unwrap().as_str(),
+        "other"
+    );
+    let closed = h.closed.clone();
+    h.finish();
+    assert!(closed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn disabled_idle_unload_does_not_release_running_work_or_bypass_busy_checks() {
+    let c = RuntimeConfig {
+        idle_unload_enabled: false,
+        idle_unload: Duration::from_millis(1),
+        ..config()
+    };
+    let h = Harness::new(c, true);
+    let receiver = h.handle.submit(request()).unwrap();
+    let pending = h.pending();
+    thread::sleep(Duration::from_millis(30));
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Generating);
+    assert!(!pending.cancelled.load(Ordering::SeqCst));
+    assert_eq!(h.handle.unload().unwrap_err().code, ErrorCode::RuntimeBusy);
+    assert_eq!(
+        h.handle
+            .load(ModelId::new("other").unwrap(), LoadOptions::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    pending.prepared();
+    pending.complete();
+    terminal(&receiver);
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Ready);
+    h.finish();
+}
+
+#[test]
+fn disabled_idle_unload_shutdown_waits_for_active_cancellation_and_cleanup() {
+    let c = RuntimeConfig {
+        idle_unload_enabled: false,
+        idle_unload: Duration::from_millis(1),
+        ..config()
+    };
+    let mut h = Harness::new(c, true);
+    let receiver = h.handle.submit(request()).unwrap();
+    let pending = h.pending();
+    let (done, join) = h.begin_shutdown();
+    wait(|| pending.cancelled.load(Ordering::SeqCst));
+    assert!(done.try_recv().is_err());
+    assert!(!h.closed.load(Ordering::SeqCst));
+    pending.fail(ErrorCode::RequestCancelled);
+    assert!(matches!(
+        terminal(&receiver),
+        RequestEventKind::Cancelled {
+            reason: ErrorCode::RuntimeShutdown,
+            ..
+        }
+    ));
+    done.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    join.join().unwrap();
+    assert!(h.closed.load(Ordering::SeqCst));
+}

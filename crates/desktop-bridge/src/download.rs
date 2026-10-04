@@ -332,18 +332,22 @@ impl DesktopBridge {
         let sha = sha.to_owned();
         let task = task.clone();
         tokio::task::spawn_blocking(move || {
-            let control = Arc::new(model_store::library::ScanControl::default());
-            *task.scan_control.lock().unwrap() = Some(control.clone());
-            if task.onboarding_cancelled.load(Ordering::Acquire) {
-                control.cancel();
-            }
-            control.check().map_err(store_error)?;
             let lock = InstanceLock::try_acquire(&root)
                 .map_err(|_| BridgeError::new("instance_unavailable"))?
                 .ok_or_else(|| BridgeError::new("runtime_running"))?;
             if lock.has_discovery() {
                 return Err(BridgeError::new("runtime_stop_unconfirmed"));
             }
+            // Transfer has finished. Freeze one new registration budget here;
+            // do not charge download time or restart it for individual files.
+            let control = Arc::new(model_store::library::ScanControl::with_timeout(
+                settings::verification_timeout(&root)?,
+            ));
+            *task.scan_control.lock().unwrap() = Some(control.clone());
+            if task.onboarding_cancelled.load(Ordering::Acquire) {
+                control.cancel();
+            }
+            control.check().map_err(store_error)?;
             let previous = ModelLibrary::read(&root)
                 .map_err(store_error)?
                 .ok_or_else(|| BridgeError::new("model_directory_required"))?;

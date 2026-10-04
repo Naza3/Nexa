@@ -12,6 +12,10 @@ export interface Preferences extends LoadOptions {
 }
 export interface Settings extends Preferences {
   idle_unload_seconds: number;
+  /** Missing on older bridges; old configuration defaults to enabled. */
+  idle_unload_enabled?: boolean;
+  /** Seconds per verification operation, not per file. Missing on older bridges. */
+  model_verification_timeout_seconds?: number;
 }
 export interface SafeError {
   code: string;
@@ -275,7 +279,8 @@ export interface DesktopApi {
     request_id: string,
   ): Promise<{ request_id: string; status: "stopping" }>;
   saveSettings(settings: Preferences): Promise<Snapshot>;
-  saveIdle(idle_unload_seconds: number): Promise<Snapshot>;
+  saveIdle(idle_unload_seconds: number, idle_unload_enabled?: boolean): Promise<Snapshot>;
+  saveVerificationTimeout(model_verification_timeout_seconds: number): Promise<Snapshot>;
   copyToken(): Promise<{ copied: true }>;
   saveLanSettings(lan_api: LanApiSettings): Promise<Snapshot>;
   copyLanToken(): Promise<{ copied: true }>;

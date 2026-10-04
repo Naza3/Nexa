@@ -215,7 +215,9 @@ impl ApiState {
                 }
             })
             .await?;
-        let control = Arc::new(model_store::library::ScanControl::default());
+        let control = Arc::new(model_store::library::ScanControl::with_timeout(
+            self.config.model_verification_timeout(),
+        ));
         let shutdown = self.shutdown.clone();
         let shutdown_control = control.clone();
         let watcher = tokio::spawn(async move {

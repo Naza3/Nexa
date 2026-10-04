@@ -29,7 +29,10 @@ pub const MAX_EXTERNAL_MODELS: usize = 64;
 pub const MAX_DIRECTORY_COMPONENTS: usize = 64;
 pub const MAX_MODEL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 pub const MAX_SCAN_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+/// Default budget for one complete file verification/registration operation.
 pub const SCAN_TIMEOUT: Duration = Duration::from_secs(300);
+pub const MIN_VERIFICATION_TIMEOUT_SECONDS: u64 = 30;
+pub const MAX_VERIFICATION_TIMEOUT_SECONDS: u64 = 7200;
 pub const MAX_SCAN_DIAGNOSTIC_BYTES: usize = 512 * 1024;
 const BLOCK: usize = 64 * 1024;
 
@@ -1280,6 +1283,33 @@ mod control_tests {
         for kind in [2, 3, 5, 6] {
             assert!(local_drive_type(kind));
         }
+    }
+    #[test]
+    fn verification_budget_is_fixed_across_progress_and_expires_before_publication() {
+        let mut control = ScanControl::with_timeout(Duration::from_secs(30));
+        let deadline = control.deadline;
+        for phase in ["enumerating", "verifying", "testing"] {
+            control.phase(phase);
+            control.selected_count(2);
+            assert_eq!(control.deadline, deadline);
+            control.check().unwrap();
+        }
+        // Deterministic elapsed time, without delaying a test for 30 seconds.
+        control.deadline = Instant::now();
+        assert_eq!(
+            control.check().unwrap_err().code,
+            ErrorCode::ModelScanTimeout
+        );
+        assert_eq!(
+            control.begin_commit().unwrap_err().code,
+            ErrorCode::ModelScanTimeout
+        );
+        assert_ne!(control.progress().phase, "committing");
+        control.cancel();
+        assert_eq!(
+            control.check().unwrap_err().code,
+            ErrorCode::ModelScanCancelled
+        );
     }
     #[test]
     fn commit_clears_file_attribution_and_late_cancel_does_not_claim_rollback() {

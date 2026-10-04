@@ -1502,3 +1502,20 @@ h3 {
 .model-test-feedback.passed { border-color: #a9c7b0; border-left-color: #367145; background: #f1f8f2; }
 .local-validation-record { padding: 8px 0; font-size: 13px; }
 .model-test-feedback time, .local-validation-record time { font-variant-numeric: tabular-nums; }
+
+.runtime-setting-toggle {
+  margin-bottom: 20px;
+}
+.runtime-setting-toggle h3 {
+  font-size: 13px;
+  margin: 0;
+}
+.runtime-settings-save {
+  margin: 20px 0 0;
+  flex-wrap: wrap;
+}
+.runtime-settings-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}

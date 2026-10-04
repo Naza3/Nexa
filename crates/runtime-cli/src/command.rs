@@ -253,7 +253,7 @@ pub async fn execute(options: Options) -> Result<()> {
     if matches!(options.command, Command::Stop) && !root.exists() {
         return print(json!({"stopped":true,"was_running":false}));
     }
-    let _config = require_initialized(&root)?;
+    let config = require_initialized(&root)?;
     let lock = InstanceLock::try_acquire(&root)?;
     if let Some(lock) = lock {
         return match options.command {
@@ -344,9 +344,28 @@ pub async fn execute(options: Options) -> Result<()> {
             json!({"object":"list","data":all})
         }
         Command::Load(value) => {
-            client
-                .json(Method::POST, "/runtime/load", Some(&value))
-                .await?
+            let id = ModelId::new(
+                value
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .ok_or("model required")?,
+            )?;
+            let external = model_store::library::ModelLibrary::read(&root)?
+                .is_some_and(|library| library.entry(&id).is_some());
+            if external {
+                client
+                    .json_with_verification(
+                        Method::POST,
+                        "/runtime/load",
+                        Some(&value),
+                        config.model_verification_timeout(),
+                    )
+                    .await?
+            } else {
+                client
+                    .json(Method::POST, "/runtime/load", Some(&value))
+                    .await?
+            }
         }
         Command::Unload => {
             client

@@ -11,6 +11,7 @@ import {
 import type { SessionMessage } from "../src/controller";
 import type { ChatBatch, ChatEvent } from "../src/types";
 import { deferred, makeApi, model, snapshot } from "./fixtures";
+import { preferencesOnly } from "../src/runtimeSettingsValues";
 const batch = (events: ChatEvent[], terminal = false): ChatBatch => ({
   request_id: "request-1",
   events,
@@ -297,18 +298,19 @@ describe("controlled model and settings actions", () => {
   });
   it("coalesces concurrent snapshots and applies idle separately", async () => {
     const next = deferred<ReturnType<typeof snapshot>>();
-    const api = makeApi({ snapshot: vi.fn(() => next.promise) });
+    const stopped = { ...snapshot(), connection: "stopped" as const, runtime: null };
+    const api = makeApi({ snapshot: vi.fn(() => next.promise), saveSettings: vi.fn(async () => stopped) });
     const controller = new DesktopController(api);
     const a = controller.refresh(),
       b = controller.refresh();
     expect(api.snapshot).toHaveBeenCalledTimes(1);
     next.resolve(snapshot());
     await Promise.all([a, b]);
-    const { idle_unload_seconds: idle, ...preferences } = DEFAULT_SETTINGS;
+    const preferences = preferencesOnly(DEFAULT_SETTINGS);
     await controller.saveSettings(preferences);
     expect(api.saveSettings).toHaveBeenCalledWith(preferences);
     expect(api.saveIdle).not.toHaveBeenCalled();
-    await controller.saveIdle(idle);
+    await controller.saveIdle(DEFAULT_SETTINGS.idle_unload_seconds);
     expect(api.saveIdle).toHaveBeenCalledWith(300);
   });
 });

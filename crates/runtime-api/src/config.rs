@@ -53,6 +53,8 @@ pub struct SchedulingConfig {
     pub execution_timeout_seconds: u64,
     pub load_timeout_seconds: u64,
     pub idle_unload_seconds: u64,
+    pub idle_unload_enabled: bool,
+    pub model_verification_timeout_seconds: u64,
     pub cancel_grace_seconds: u64,
 }
 impl Default for SchedulingConfig {
@@ -65,6 +67,8 @@ impl Default for SchedulingConfig {
             execution_timeout_seconds: 300,
             load_timeout_seconds: 300,
             idle_unload_seconds: 300,
+            idle_unload_enabled: true,
+            model_verification_timeout_seconds: model_store::library::SCAN_TIMEOUT.as_secs(),
             cancel_grace_seconds: 5,
         }
     }
@@ -137,6 +141,14 @@ impl Config {
                 "this build supports only backend cpu and gpu_layers=0",
             ));
         }
+        if !(model_store::library::MIN_VERIFICATION_TIMEOUT_SECONDS
+            ..=model_store::library::MAX_VERIFICATION_TIMEOUT_SECONDS)
+            .contains(&self.runtime.model_verification_timeout_seconds)
+        {
+            return Err(RuntimeError::invalid(
+                "model verification seconds must be 30..=7200",
+            ));
+        }
         self.runtime_config().validate()?;
         self.generation_options().validate()
     }
@@ -162,6 +174,9 @@ impl Config {
             ..GenerationOptions::default()
         }
     }
+    pub fn model_verification_timeout(&self) -> Duration {
+        Duration::from_secs(self.runtime.model_verification_timeout_seconds)
+    }
     pub fn runtime_config(&self) -> RuntimeConfig {
         RuntimeConfig {
             max_queued_jobs: self.runtime.max_queued_jobs,
@@ -169,6 +184,7 @@ impl Config {
             load_timeout: Duration::from_secs(self.runtime.load_timeout_seconds),
             execution_timeout: Duration::from_secs(self.runtime.execution_timeout_seconds),
             idle_unload: Duration::from_secs(self.runtime.idle_unload_seconds),
+            idle_unload_enabled: self.runtime.idle_unload_enabled,
             load_options: self.load_options(),
             ..RuntimeConfig::default()
         }
@@ -205,6 +221,68 @@ mod tests {
             "[inference]\nthreads=0",
         ] {
             assert!(Config::from_toml(text).is_err());
+        }
+    }
+    #[test]
+    fn legacy_config_defaults_runtime_policies_and_explicit_disabled_round_trips() {
+        let mut c = Config::from_toml("[runtime]\nidle_unload_seconds=120").unwrap();
+        assert!(c.runtime.idle_unload_enabled);
+        assert_eq!(c.runtime.idle_unload_seconds, 120);
+        assert_eq!(c.runtime.model_verification_timeout_seconds, 300);
+        c.runtime.idle_unload_enabled = false;
+        c.runtime.model_verification_timeout_seconds = 7200;
+        let saved = Config::from_toml(&c.to_toml().unwrap()).unwrap();
+        assert!(!saved.runtime_config().idle_unload_enabled);
+        assert_eq!(saved.runtime_config().idle_unload, Duration::from_secs(120));
+        assert_eq!(
+            saved.model_verification_timeout(),
+            Duration::from_secs(7200)
+        );
+        assert_eq!(
+            saved.runtime_config().load_timeout,
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            saved.runtime_config().execution_timeout,
+            Duration::from_secs(300)
+        );
+    }
+    #[test]
+    fn runtime_policy_ranges_remain_bounded_including_disabled_idle() {
+        for enabled in [true, false] {
+            // Old manually configured positive idle TTLs remain readable.
+            for seconds in [1, 86400, 86401, i64::MAX as u64] {
+                let text = format!(
+                    "[runtime]\nidle_unload_enabled={enabled}\nidle_unload_seconds={seconds}"
+                );
+                assert!(Config::from_toml(&text).is_ok());
+            }
+            let text = format!("[runtime]\nidle_unload_enabled={enabled}\nidle_unload_seconds=0");
+            assert!(Config::from_toml(&text).is_err());
+        }
+        for seconds in [30, 300, 7200] {
+            assert!(
+                Config::from_toml(&format!(
+                    "[runtime]\nmodel_verification_timeout_seconds={seconds}"
+                ))
+                .is_ok()
+            );
+        }
+        for seconds in [0, 29, 7201, u64::MAX] {
+            assert!(
+                Config::from_toml(&format!(
+                    "[runtime]\nmodel_verification_timeout_seconds={seconds}"
+                ))
+                .is_err()
+            );
+        }
+        for field in [
+            "idle_unload_enabled=0",
+            "idle_unload_enabled='false'",
+            "model_verification_timeout_seconds=30.5",
+            "model_verification_timeout_seconds=-1",
+        ] {
+            assert!(Config::from_toml(&format!("[runtime]\n{field}")).is_err());
         }
     }
 }
