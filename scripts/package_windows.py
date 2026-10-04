@@ -26,6 +26,12 @@ OS_DLLS = set("advapi32 bcrypt bcryptprimitives combase crypt32 dbghelp gdi32 ip
 API_SET = re.compile(r"^(?:api|ext)-ms-win-[a-z0-9-]+\.dll$")
 DEBUG_CRT = re.compile(r"^(?:ucrtbased|(?:vcruntime|msvcp|msvcr|concrt|vcomp)\d+(?:_\d+)?d)\.dll$")
 ROOT_FILES = {"ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", "manifest.json", "SHA256SUMS", "THIRD_PARTY_NOTICES.md"}
+VS_GENERATORS = {17: "Visual Studio 17 2022", 18: "Visual Studio 18 2026"}
+VS_INSTALL_HELP = ("If Visual Studio is already installed, open Visual Studio Installer > Modify and add "
+                   "Desktop development with C++, MSVC x64/x86 tools and a Windows 10/11 SDK. "
+                   "Otherwise install Visual Studio 2022 Build Tools from "
+                   "https://aka.ms/vs/17/release/vs_buildtools.exe and select that workload. "
+                   "Review the installer terms yourself; this packaging script does not download or install software.")
 
 
 def fail(message):
@@ -269,29 +275,97 @@ def devcmd_environment(dev, env):
     return windows_environment(env, result.stdout)
 
 
-def selected_visual_studio():
-    env = windows_environment(os.environ, "")
-    base = Path(env.get("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
-    vswhere = regular(base / "Microsoft Visual Studio/Installer/vswhere.exe")
-    choices = json.loads(command([vswhere, "-latest", "-version", "[17.0,18.0)", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-format", "json", "-utf8"], env))
-    if len(choices) != 1:
-        fail("one existing Visual Studio C++ instance is required; no installation is attempted")
-    selected = choices[0]
-    if selected.get("isPrerelease") or not selected.get("isComplete", False):
-        fail("pre-release or incomplete Visual Studio instances are not distribution sources")
-    vs = Path(selected["installationPath"]).resolve()
+def visual_studio_version(selected):
+    value = selected.get("installationVersion", "")
+    if not isinstance(value, str) or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", value):
+        return ()
+    return tuple(int(part) for part in value.split("."))
+
+
+def msvc_toolset(version):
+    # VS2022 also ships 14.4x under v143; VS2026 introduces v145/14.5x.
+    # https://cmake.org/cmake/help/latest/generator/Visual%20Studio%2018%202026.html
+    if re.fullmatch(r"14\.[34]\d\.\d+", version):
+        return "v143"
+    if re.fullmatch(r"14\.5\d\.\d+", version):
+        return "v145"
+    fail("unsupported MSVC toolset version; expected stable 14.3x/14.4x (v143) or 14.5x (v145)")
+
+
+def visual_studio_environment(base):
+    env = base.copy()
+    # Re-enter from the pre-developer PATH when available. Stale VS variables
+    # otherwise let VsDevCmd skip setup or reuse another instance's toolchain.
+    if env.get("__VSCMD_PREINIT_PATH"):
+        env["PATH"] = env["__VSCMD_PREINIT_PATH"]
+    for key in list(env):
+        if key.startswith(("VSCMD_", "__VSCMD_", "VCTOOLS", "WINDOWSSDK", "UNIVERSALCRT")) or key in {
+            "VSINSTALLDIR", "VCINSTALLDIR", "VISUALSTUDIOVERSION", "DEVENVDIR", "UCRTVERSION",
+            "INCLUDE", "LIB", "LIBPATH", "VSCMD_VER", "VCVARSALL_INIT", "VCVARSALL_INIT_VERSION",
+        }:
+            env.pop(key)
+    return env
+
+
+def selected_msvc_tool(vs, env, name):
+    version = env.get("VCTOOLSVERSION", "").strip()
+    msvc_toolset(version)
+    expected = regular(vs / "VC/Tools/MSVC" / version / "bin/Hostx64/x64" / name)
+    # Avoid decoding localized where.exe output. Resolve from the explicit
+    # child PATH, and reject current-directory shadowing before any build.
+    for directory in (ROOT, Path.cwd()):
+        shadow = directory / name
+        if shadow.exists() and shadow.resolve() != expected.resolve():
+            fail(f"{name} is shadowed by a current-directory executable")
+    found = shutil.which(name, path=env.get("PATH", ""), mode=os.F_OK)
+    if not found or regular(Path(found)).resolve() != expected.resolve():
+        fail(f"{name} is not from the selected Visual Studio x64 toolset")
+    return expected
+
+
+def visual_studio_paths(selected, base_env):
+    installation = selected.get("installationPath", "")
+    if not installation or not Path(installation).is_absolute():
+        fail("Visual Studio installation path must be absolute")
+    # Check the original path before resolve(), which would conceal a symlink.
+    vs = Path(installation)
     dev = regular(vs / "Common7/Tools/VsDevCmd.bat")
-    env = devcmd_environment(dev, env)
-    folded = env.copy()
-    value = folded.get("VCTOOLSREDISTDIR")
+    vs = vs.resolve()
+    env = devcmd_environment(dev, visual_studio_environment(base_env))
+    if not env.get("VSINSTALLDIR") or Path(env["VSINSTALLDIR"]).resolve() != vs:
+        fail("VsDevCmd initialized a different Visual Studio instance")
+    version = env.get("VCTOOLSVERSION", "").strip()
+    if not version:
+        fail("selected VS has no MSVC C++ build tools; add Desktop development with C++ through Visual Studio Installer > Modify")
+    toolset = msvc_toolset(version)
+    if visual_studio_version(selected)[0] == 17 and toolset != "v143":
+        fail("VS2022 requires its supported v143 toolset")
+    tools = vs / "VC/Tools/MSVC" / version
+    if not env.get("VCTOOLSINSTALLDIR") or Path(env["VCTOOLSINSTALLDIR"]).resolve() != tools.resolve():
+        fail("MSVC tools are outside the selected Visual Studio toolset")
+    for name in ("cl.exe", "link.exe", "lib.exe", "dumpbin.exe"):
+        selected_msvc_tool(vs, env, name)
+    sdk_version = env.get("WINDOWSSDKVERSION", "").rstrip("\\/")
+    if not env.get("WINDOWSSDKDIR") or not re.fullmatch(r"10\.0\.\d+\.\d+", sdk_version):
+        fail("selected VS has no Windows 10/11 SDK; add it through Visual Studio Installer > Modify")
+    sdk = Path(env["WINDOWSSDKDIR"])
+    for name in (f"Include/{sdk_version}/um/Windows.h", f"Lib/{sdk_version}/um/x64/kernel32.lib", f"Lib/{sdk_version}/ucrt/x64/ucrt.lib"):
+        regular(sdk / name)
+    value = env.get("VCTOOLSREDISTDIR")
     if not value:
-        fail("selected VS has no VCToolsRedistDir; installing a redistributable requires separate authorization")
-    redist_dir = Path(value).resolve() / "x64/Microsoft.VC143.CRT"
+        fail("selected VS has no VCToolsRedistDir; add its C++ redistributable tools through Visual Studio Installer > Modify")
+    redist_root = Path(value)
     try:
-        redist_dir.relative_to(vs / "VC/Redist/MSVC")
+        subpath = redist_root.relative_to(vs / "VC/Redist/MSVC")
     except ValueError:
         fail("CRT source is outside the selected Visual Studio redistribution directory")
-    if not redist_dir.is_dir() or any("debug" in p.lower() for p in redist_dir.parts):
+    if len(subpath.parts) != 1:
+        fail("selected VS Release x64 CRT redistribution source is missing/invalid")
+    redist_toolset = msvc_toolset(subpath.name)
+    if tuple(map(int, subpath.name.split(".")[:2])) < tuple(map(int, version.split(".")[:2])):
+        fail("selected VS CRT redistribution version is older than its compiler toolset")
+    redist_dir = redist_root / "x64" / ("Microsoft.VC" + redist_toolset[1:] + ".CRT")
+    if not redist_dir.is_dir():
         fail("selected VS Release x64 CRT redistribution source is missing/invalid")
     redist = {}
     for path in redist_dir.glob("*.dll"):
@@ -302,7 +376,72 @@ def selected_visual_studio():
         redist[key] = path
     if not redist:
         fail("no existing Release CRT DLLs; no installer will be run")
-    return selected, vs, env, folded, redist
+    return selected, vs, env, env.copy(), redist
+
+
+def selected_visual_studio():
+    env = windows_environment(os.environ, "")
+    base = Path(env.get("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
+    discovery = base / "Microsoft Visual Studio/Installer/vswhere.exe"
+    if not discovery.exists():
+        fail("Visual Studio discovery tool vswhere.exe is missing; repair Visual Studio Installer if installed. " + VS_INSTALL_HELP)
+    vswhere = regular(discovery)
+    query = [vswhere, "-products", "*", "-format", "json", "-utf8"]
+    # A version-specific side-by-side toolset need not have the generic
+    # "latest C++ tools" component ID. Validate the actual initialized tools.
+    choices = json.loads(command(query, env))
+    candidates = [item for item in choices if visual_studio_version(item)[:1] in ((17,), (18,))
+                  and not item.get("isPrerelease") and item.get("isComplete") is True]
+    candidates.sort(key=lambda item: (visual_studio_version(item), item.get("instanceId", "")), reverse=True)
+    errors = []
+    for selected in candidates:
+        try:
+            return visual_studio_paths(selected, env)
+        except (ValueError, OSError) as error:
+            errors.append(f"VS {selected['installationVersion']}: {error}")
+    if not errors:
+        installed = json.loads(command([*query, "-all", "-prerelease"], env))
+        if installed:
+            errors.append("Existing Visual Studio installations have no supported complete stable VS2022/VS2026 C++ environment; preview/incomplete/unknown versions are not used")
+        else:
+            errors.append("No existing Visual Studio C++ installation was found")
+    fail("; ".join(errors) + ". " + VS_INSTALL_HELP)
+
+
+def native_build_settings(selected, vs, env):
+    version_parts = visual_studio_version(selected)
+    generator = VS_GENERATORS.get(version_parts[0] if version_parts else None)
+    if generator is None:
+        fail("unsupported Visual Studio CMake generator")
+    version = env["VCTOOLSVERSION"].strip()
+    toolset = f"{msvc_toolset(version)},host=x64,version={version}"
+    # Never switch generator/instance/toolset inside a prior build tree, or
+    # remove the user's build/native-release cache to make configuration pass.
+    key = hashlib.sha256((str(vs.resolve()).casefold() + "\n" + generator + "\n" + toolset).encode()).hexdigest()[:16]
+    native = ROOT / "build/windows-x64-cpu" / ("native-" + key)
+    cache = native / "CMakeCache.txt"
+    if cache.exists():
+        values = dict(re.findall(r"^([^#/:\n][^:\n]*):[^=\n]*=(.*)$", regular(cache).read_text(encoding="utf-8"), re.M))
+        expected = {"CMAKE_GENERATOR": generator, "CMAKE_GENERATOR_PLATFORM": "x64", "CMAKE_GENERATOR_TOOLSET": toolset}
+        instance = values.get("CMAKE_GENERATOR_INSTANCE", "")
+        if any(values.get(k) != v for k, v in expected.items()) or not instance or Path(instance).resolve() != vs.resolve():
+            fail("native CMake cache differs from selected VS generator/instance/toolset/x64; move that build directory aside and retry (no files were deleted)")
+    args = ["cmake", "-S", ROOT / "native/llama-shim", "-B", native, "-G", generator, "-A", "x64", "-T", toolset,
+            f"-DCMAKE_GENERATOR_INSTANCE={vs}", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"]
+    return native, args
+
+
+def visual_studio_redistribution(selected):
+    version = visual_studio_version(selected)
+    year = {17: "2022", 18: "2026"}.get(version[0] if version else None)
+    if year is None:
+        fail("unsupported Visual Studio redistribution reference")
+    return {"purpose": "private development acceptance",
+            "source_rule": "unmodified Release x64 files from the selected Visual Studio VC/Redist/MSVC tree",
+            "redist_list": f"https://learn.microsoft.com/en-us/visualstudio/releases/{year}/redistribution",
+            "community_terms_reference": ("https://visualstudio.microsoft.com/wp-content/uploads/2021/11/Visual-Studio-2022-Community-License-EN.docx" if year == "2022" else "https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/"),
+            "license_terms_directory": "https://visualstudio.microsoft.com/license-terms/",
+            "edition": selected.get("productId"), "license_acceptance_performed": False}
 
 
 def license_files(package_dir, explicit=None):
@@ -432,8 +571,9 @@ def build():
         fail("CMake 4.4.3 is required by the development build lock")
     build_root = ROOT / "build/windows-x64-cpu"
     build_root.mkdir(parents=True, exist_ok=True)
-    native = ROOT / "build/native-release"
-    cargo_target = build_root / "cargo"
+    native, configure_native = native_build_settings(selected, vs, env)
+    # cc-rs build outputs can otherwise remain cached after switching VS/MSVC.
+    cargo_target = build_root / ("cargo-" + native.name.removeprefix("native-"))
     env["CARGO_TARGET_DIR"] = str(cargo_target)
     # Prove the API/CLI has no native linkage in a separate Release build first.
     env["AIR_NATIVE_DIR"] = str(build_root / "deliberately-absent-native")
@@ -441,7 +581,8 @@ def build():
     if re.search(r"\b(engine-host|llama-adapter|runtime-worker)\b", tree):
         fail("management CLI has an unexpected native inference dependency")
     command(["cargo", "build", "--locked", "--release", "--target", TARGET, "-p", "runtime-cli", "--bin", "ai-runtime"], env)
-    command(["cmake", "-S", ROOT / "native/llama-shim", "-B", native, "-G", "Visual Studio 17 2022", "-A", "x64", f"-DCMAKE_GENERATOR_INSTANCE={vs}", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"], env)
+    command(configure_native, env)
+    native_build_settings(selected, vs, env)
     command(["cmake", "--build", native, "--config", "Release", "--target", "air_llama", "--parallel", env.get("CMAKE_BUILD_PARALLEL_LEVEL", "2")], env)
     env["AIR_NATIVE_DIR"] = str(native)
     command(["cargo", "build", "--locked", "--release", "--target", TARGET, "-p", "runtime-worker", "--bin", "ai-runtime-worker"], env)
@@ -469,9 +610,7 @@ def build():
             shutil.copyfile(regular(templates / name), stage / name)
         crt_sources = []
         pe_evidence = {}
-        dumpbin = regular(Path(command(["where.exe", "dumpbin.exe"], env).splitlines()[0]))
-        if not dumpbin.resolve().is_relative_to(vs):
-            fail("dumpbin is not from the selected Visual Studio instance")
+        dumpbin = selected_msvc_tool(vs, env, "dumpbin.exe")
         def inspect(path):
             pe_machine(path)
             headers = command([dumpbin, "/nologo", "/headers", path], env)
@@ -503,7 +642,7 @@ def build():
             "toolchain": {"rustc": rust, "cargo": command(["cargo", "--version"], env), "cmake": cmake, "visual_studio": {key: selected.get(key) for key in ("instanceId", "installationVersion", "productId", "displayName", "channelId", "isPrerelease")}, "msvc": identity.get("compiler_version"), "vc_tools_version": folded.get("VCTOOLSVERSION"), "windows_sdk_version": identity.get("windows_sdk_version"), "vsdevcmd_windows_sdk_version": folded.get("WINDOWSSDKVERSION"), "vctools_redist_dir": folded.get("VCTOOLSREDISTDIR"), "host_os": powershell("[Environment]::OSVersion.VersionString", env), "image_os": env.get("IMAGEOS"), "image_version": env.get("IMAGEVERSION")},
             "management_without_native": {"verified": True, "profile": "release", "dependencies": tree},
             "dependencies": dependencies, "crt_sources": crt_sources,
-            "redistribution": {"purpose": "private development acceptance", "source_rule": "unmodified Release x64 files from the selected Visual Studio VC/Redist/MSVC tree", "redist_list": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution", "community_terms_reference": "https://visualstudio.microsoft.com/wp-content/uploads/2021/11/Visual-Studio-2022-Community-License-EN.docx", "edition": selected.get("productId"), "license_acceptance_performed": False},
+            "redistribution": visual_studio_redistribution(selected),
             "acceptance": {"windows10_clean_machine": "not_run", "windows11": "not_run", "real_model": "separate acceptance report required", "target": "Windows 10 x64 first; Server 2022 build does not establish Windows 10 compatibility"},
             "files": entries(stage),
         }
