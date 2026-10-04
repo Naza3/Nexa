@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-04 Actions首轮Windows探针修正（进行中）
+
+公开库标准runner已实际分配：[run37197414719](https://github.com/Naza3/Nexa/actions/runs/37197414719)，精确head `cbba057b0106b7cc65131332858c0cedc993ff93`。Ubuntu同源aria2构建成功；WindowsServer2022在早期下载组件probe失败，32case中25通过、7失败，尚未进行Nexa/Rust/CMake构建。68policy、26Request/4socket、53payload以及公开HTTPS和三类错误证书拒绝已在该Windows运行中通过，不代替整任务成功。
+
+该run三个特殊数字私有地址观测到resolver在socket gate之前失败；四个非法URI原Windows仅有resume提示，源码分析及同源Linux单例观察指向Request::parseUri后的无URI debug分支，Windows debug证据待新run。探针分类/诊断修复已完成，严格Python188项（186通过、2平台skip）及独立37项子集通过，只修改测试分类/诊断，不改生产补丁、来源锁或TLS规则，不将任意DNS/非零退出当通过；原32case仍须下一轮实际执行。继续同一开发分支及PR #7，不改main。
+
 ## 2026-10-04 公开仓库恢复GitHub Actions（进行中）
 
 用户明确将仓库改为public并恢复后续GitHub Actions构建；GitHub API已确认visibility=public。此要求覆盖下文旧“不运行Actions Rust”的约束，但不授权收费runner或付费资源。继续维护codex/nexa-add-model，PR #7已经建立且在2f7478f时与main26206ef无冲突。
