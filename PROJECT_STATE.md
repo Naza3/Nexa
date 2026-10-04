@@ -1,5 +1,13 @@
 # Nexa 当前状态
 
+## 2026-10-04 本批交付完成与长期分支切换
+
+最终源码 `e0ff1e6cbb03fde6ae91a5f7272cd73d62b3f1ce` 的[Windows Actions37199537016](https://github.com/Naza3/Nexa/actions/runs/37199537016)已全部success。原生Windows真实模型、HTTP/CLI、模型下载自动登记、managed/external加载与重复短测、停服离线记录及完整提取包验收通过。54证据文件和最终包独立字节/PE/许可/对应源码复核通过；Win10用户GUI/选择器/剪贴板、两机LAN、干净机器/离线/长期稳定性仍独立待验。
+
+完整桌面包已交付：16791161字节、766文件，SHA256 `ef74e136acde2e381254dd0b8f191a9fe397d9b1ccac938a774713253ffbcf63`。其源身份始终为e0ff1e6，不改写为后续文档或合并提交。按用户明确请求，[PR #7](https://github.com/Naza3/Nexa/pull/7)已合并main，merge `e3c5cf2658ed8501c74466f2533d13c56f45edf7` 与包源tree完全相同。
+
+用户最新指定以后从main统一使用 `codex/dev`。已从上述最新main创建该分支；后续功能均在此推进，交付前同步main并处理冲突。旧 `codex/nexa-add-model` 仅保留历史，不再作为后续开发入口。本次只同步分支名/CI触发与规范、状态，不改变产品代码；纯配置提交明确跳过重复整包CI，后续功能提交仍正常触发标准Actions。
+
 ## 2026-10-04 Actions第二轮短路径修复（待新CI验证）
 
 [run37198513508](https://github.com/Naza3/Nexa/actions/runs/37198513508)，head `82bd70fcd40c03760d59ed9850443e1dbbd97ffb`：Ubuntu同源组件成功，Windows下载probe实际32/32通过（3数字别名为resolver提前拒绝、4非法URI为明确DEBUG解析拒绝，均不宣称socket gate执行）。Rust1.98.1、CMake4.4.4、VS2022/MSVC14.44.35207及源身份准备成功。

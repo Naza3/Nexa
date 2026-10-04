@@ -100,7 +100,7 @@ class WindowsCiTests(unittest.TestCase):
 
     def test_workflow_retains_full_pipeline_with_public_standard_runners(self):
         workflow = (ci.base.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
-        self.assertIn("branches: ['codex/nexa-add-model']", workflow)
+        self.assertIn("branches: ['codex/dev']", workflow)
         self.assertEqual(workflow.count("if: ${{ !github.event.repository.private }}"), 2)
         self.assertEqual(workflow.count("runs-on:"), 2)
         for runner in ("ubuntu-24.04", "windows-2022"):
