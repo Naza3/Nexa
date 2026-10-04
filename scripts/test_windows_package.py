@@ -13,6 +13,259 @@ spec.loader.exec_module(pack)
 
 
 class PackageTests(unittest.TestCase):
+    def vs_fixture(self, root, major=18, edition="Community", version=None, tools=None, redist=None):
+        version = version or ("18.0.10000.0" if major == 18 else "17.14.37710.0")
+        tools = tools or ("14.50.35707" if major == 18 else "14.44.35207")
+        redist = redist or ("14.50.35710" if major == 18 else "14.44.35112")
+        vs = root / f"VS{major}" / edition
+        sdk = root / "Windows Kits/10"
+        sdk_version = "10.0.26100.0"
+        tool_dir = vs / "VC/Tools/MSVC" / tools
+        redist_dir = vs / "VC/Redist/MSVC" / redist
+        crt = redist_dir / "x64" / ("Microsoft.VC" + pack.msvc_toolset(redist)[1:] + ".CRT")
+        files = [vs / "Common7/Tools/VsDevCmd.bat", crt / "vcruntime140.dll",
+                 root / "Microsoft Visual Studio/Installer/vswhere.exe",
+                 sdk / f"Include/{sdk_version}/um/Windows.h", sdk / f"Lib/{sdk_version}/um/x64/kernel32.lib",
+                 sdk / f"Lib/{sdk_version}/ucrt/x64/ucrt.lib"]
+        files.extend(tool_dir / "bin/Hostx64/x64" / name for name in ("cl.exe", "link.exe", "lib.exe", "dumpbin.exe"))
+        for path in files:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture, never executed")
+        selected = {"installationVersion": version, "installationPath": str(vs), "instanceId": f"vs{major}-{edition}",
+                    "productId": "Microsoft.VisualStudio.Product." + edition, "isPrerelease": False, "isComplete": True}
+        env = {"VSINSTALLDIR": str(vs), "VCTOOLSVERSION": tools, "VCTOOLSINSTALLDIR": str(tool_dir),
+               "VCTOOLSREDISTDIR": str(redist_dir), "WINDOWSSDKVERSION": sdk_version + "\\", "WINDOWSSDKDIR": str(sdk), "PATH": str(tool_dir / "bin/Hostx64/x64")}
+        return selected, env
+
+    def vs_where(self, args, env):
+        self.assertEqual(args[0], "where.exe")
+        return str(Path(env["VCTOOLSINSTALLDIR"]) / "bin/Hostx64/x64" / args[1])
+
+    def test_existing_vs2026_vs2022_and_build_tools_are_used_without_installing(self):
+        for major, edition in ((18, "Community"), (17, "Enterprise"), (18, "BuildTools"), (17, "BuildTools")):
+            with self.subTest(major=major, edition=edition), tempfile.TemporaryDirectory() as folder:
+                selected, env = self.vs_fixture(Path(folder), major, edition)
+                def run(args, actual_env):
+                    if args[0] == "where.exe":
+                        return self.vs_where(args, actual_env)
+                    self.assertEqual(Path(args[0]).name, "vswhere.exe")
+                    self.assertNotIn("-latest", args)
+                    self.assertNotIn("-version", args)
+                    self.assertNotIn("-prerelease", args)
+                    self.assertEqual(args[args.index("-products") + 1], "*")
+                    self.assertNotIn("-requires", args)
+                    return json.dumps([selected])
+                with mock.patch.dict(pack.os.environ, {"PROGRAMFILES(X86)": folder}, clear=True), mock.patch.object(pack, "command", side_effect=run), mock.patch.object(pack, "devcmd_environment", return_value=env) as dev:
+                    actual, vs, child, folded, crt = pack.selected_visual_studio()
+                self.assertEqual(actual, selected)
+                self.assertEqual(vs, Path(selected["installationPath"]))
+                self.assertEqual(dev.call_args.args[0], vs / "Common7/Tools/VsDevCmd.bat")
+                self.assertEqual(child, folded)
+                self.assertIsNot(child, folded)
+                self.assertEqual(set(crt), {"vcruntime140.dll"})
+                self.assertIn("Microsoft.VC145.CRT" if major == 18 else "Microsoft.VC143.CRT", str(crt["vcruntime140.dll"]))
+
+    def test_newest_usable_stable_instance_wins_and_broken_newer_instance_falls_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            old, old_env = self.vs_fixture(root, 17)
+            new, new_env = self.vs_fixture(root, 18, version="18.10.10000.0")
+            older18, _ = self.vs_fixture(root, 18, "Professional", version="18.9.10000.0")
+            ignored = [dict(new, installationVersion="19.0.0.0"), dict(new, isPrerelease=True, installationVersion="18.11.0.0"), dict(new, isComplete=False, installationVersion="18.12.0.0")]
+            choices = [old, older18, *ignored, new]
+            with mock.patch.object(Path, "exists", return_value=True), mock.patch.object(pack, "regular", side_effect=lambda p: p), mock.patch.object(pack, "command", return_value=json.dumps(choices)), mock.patch.object(pack, "visual_studio_paths", return_value="newest") as initialize:
+                self.assertEqual(pack.selected_visual_studio(), "newest")
+                self.assertEqual(initialize.call_args.args[0], new)
+            # The newest installed C++ environment may be unusable (e.g. missing
+            # SDK/CRT). Try the next stable installed environment before advising setup.
+            with mock.patch.object(Path, "exists", return_value=True), mock.patch.object(pack, "regular", side_effect=lambda p: p), mock.patch.object(pack, "command", return_value=json.dumps([old, new])), mock.patch.object(pack, "visual_studio_paths", side_effect=[ValueError("missing SDK"), (old, old_env)]) as initialize:
+                self.assertEqual(pack.selected_visual_studio(), (old, old_env))
+                self.assertEqual([c.args[0] for c in initialize.call_args_list], [new, old])
+
+    def test_missing_cpp_no_vs_and_missing_discovery_have_actionable_setup_messages(self):
+        for installed, message in (([{"installationVersion": "18.0.0.0"}], "Existing Visual Studio"), ([], "No existing Visual Studio")):
+            with self.subTest(installed=installed), mock.patch.object(Path, "exists", return_value=True), mock.patch.object(pack, "regular", side_effect=lambda p: p), mock.patch.object(pack, "command", side_effect=["[]", json.dumps(installed)]) as run, mock.patch.object(pack, "devcmd_environment") as dev:
+                with self.assertRaisesRegex(ValueError, message) as error:
+                    pack.selected_visual_studio()
+                self.assertIn("Visual Studio Installer > Modify", str(error.exception))
+                self.assertIn("https://aka.ms/vs/17/release/vs_buildtools.exe", str(error.exception))
+                self.assertIn("does not download or install", str(error.exception))
+                self.assertIn("-all", run.call_args.args[0])
+                dev.assert_not_called()
+        with mock.patch.object(Path, "exists", return_value=False), mock.patch.object(pack, "command") as run, self.assertRaisesRegex(ValueError, "vswhere.exe is missing"):
+            pack.selected_visual_studio()
+        run.assert_not_called()
+
+    def test_preview_incomplete_unknown_and_invalid_vs_versions_are_never_initialized(self):
+        entries = [{"installationVersion": version, "isComplete": complete, "isPrerelease": preview}
+                   for version, complete, preview in (("18.0.0.0", True, True), ("18.0.0.0", False, False), ("19.0.0.0", True, False), ("bad", True, False), ("17.0.0.0-preview", True, False))]
+        with mock.patch.object(Path, "exists", return_value=True), mock.patch.object(pack, "regular", side_effect=lambda p: p), mock.patch.object(pack, "command", return_value=json.dumps(entries)), mock.patch.object(pack, "visual_studio_paths") as initialize, self.assertRaisesRegex(ValueError, "preview/incomplete/unknown"):
+            pack.selected_visual_studio()
+        initialize.assert_not_called()
+
+    def test_old_developer_prompt_state_is_cleared_only_in_child_environment(self):
+        env = {"PATH": "old VS;user bin", "__VSCMD_PREINIT_PATH": "user bin", "VSCMD_VER": "17.0", "VSINSTALLDIR": "other VS", "VCTOOLSREDISTDIR": "stale", "VCTOOLSVERSION": "14.44.0", "LIB": "stale", "INCLUDE": "stale", "WINDOWSSDKDIR": "stale", "KEEP": "value"}
+        before = env.copy()
+        self.assertEqual(pack.visual_studio_environment(env), {"PATH": "user bin", "KEEP": "value"})
+        self.assertEqual(env, before)
+
+    def test_redistribution_references_follow_the_selected_visual_studio(self):
+        for version, year in (("17.14.37710.0", "2022"), ("18.0.10000.0", "2026")):
+            for edition in ("Community", "BuildTools"):
+                selected = {"installationVersion": version, "productId": "Microsoft.VisualStudio.Product." + edition}
+                metadata = pack.visual_studio_redistribution(selected)
+                self.assertIn("/" + year + "/redistribution", metadata["redist_list"])
+                self.assertIn(year, metadata["community_terms_reference"])
+                self.assertEqual(metadata["edition"], selected["productId"])
+                self.assertEqual(metadata["license_terms_directory"], "https://visualstudio.microsoft.com/license-terms/")
+                self.assertFalse(metadata["license_acceptance_performed"])
+        with self.assertRaises(ValueError):
+            pack.visual_studio_redistribution({"installationVersion": "19.0.0.0"})
+
+    def test_selected_tools_sdk_and_crt_cannot_be_inherited_from_another_instance(self):
+        for change, message in (({"VSINSTALLDIR": "other"}, "different Visual Studio"), ({"VCTOOLSINSTALLDIR": "other"}, "outside the selected"), ({"VCTOOLSREDISTDIR": "other"}, "outside the selected"), ({"VCTOOLSREDISTDIR": ""}, "no VCToolsRedistDir"), ({"WINDOWSSDKVERSION": ""}, "no Windows 10/11 SDK"), ({"VCTOOLSVERSION": "14.60.12345"}, "unsupported MSVC")):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
+                selected, env = self.vs_fixture(Path(folder))
+                env.update(change)
+                with mock.patch.object(pack, "devcmd_environment", return_value=env), mock.patch.object(pack, "command", side_effect=self.vs_where), self.assertRaisesRegex(ValueError, message):
+                    pack.visual_studio_paths(selected, {})
+        with tempfile.TemporaryDirectory() as folder:
+            selected, env = self.vs_fixture(Path(folder))
+            with mock.patch.object(pack, "devcmd_environment", return_value=dict(env, PATH=str(Path(folder) / "other"))), self.assertRaisesRegex(ValueError, "cl.exe is not from"):
+                pack.visual_studio_paths(selected, {})
+            (Path(env["WINDOWSSDKDIR"]) / "Lib/10.0.26100.0/um/x64/kernel32.lib").unlink()
+            with mock.patch.object(pack, "devcmd_environment", return_value=env), mock.patch.object(pack, "command", side_effect=self.vs_where), self.assertRaises(FileNotFoundError):
+                pack.visual_studio_paths(selected, {})
+
+    def test_unicode_tool_paths_use_child_path_and_reject_current_directory_shadowing(self):
+        with tempfile.TemporaryDirectory(prefix="nexa-中文 tools-") as folder:
+            root = Path(folder)
+            selected, env = self.vs_fixture(root)
+            vs = Path(selected["installationPath"])
+            expected = Path(env["PATH"]) / "cl.exe"
+            with mock.patch.object(pack, "command") as command:
+                self.assertEqual(pack.selected_msvc_tool(vs, env, "cl.exe"), expected)
+                command.assert_not_called()
+            project = root / "project"
+            project.mkdir()
+            (project / "cl.exe").write_bytes(b"shadow, never executed")
+            with mock.patch.object(pack, "ROOT", project), self.assertRaisesRegex(ValueError, "shadowed"):
+                pack.selected_msvc_tool(vs, env, "cl.exe")
+
+    def test_vs2026_v143_side_by_side_tools_can_use_its_newer_release_crt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            selected, env = self.vs_fixture(Path(folder), tools="14.44.35207", redist="14.50.35710")
+            with mock.patch.object(pack, "devcmd_environment", return_value=env), mock.patch.object(pack, "command", side_effect=self.vs_where):
+                _, _, _, _, crt = pack.visual_studio_paths(selected, {})
+            self.assertIn("Microsoft.VC145.CRT", str(crt["vcruntime140.dll"]))
+        for version, expected in (("14.39.33519", "v143"), ("14.44.35207", "v143"), ("14.50.35707", "v145"), ("14.51.36231", "v145")):
+            self.assertEqual(pack.msvc_toolset(version), expected)
+        for version in ("14.29.0", "14.60.0", "14.50.1-preview", "14.50/../1", ""):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                pack.msvc_toolset(version)
+
+    def test_crt_directory_must_be_regular_release_x64_and_current(self):
+        for mode, message in (("debug", "missing/invalid"), ("onecore", "missing/invalid"), ("old", "older than"), ("no_dll", "no existing Release CRT"), ("wrong_arch", "missing/invalid")):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:
+                selected, env = self.vs_fixture(Path(folder))
+                root = Path(env["VCTOOLSREDISTDIR"])
+                crt = root / "x64/Microsoft.VC145.CRT"
+                if mode in ("debug", "onecore"):
+                    env["VCTOOLSREDISTDIR"] = str(root / mode)
+                elif mode == "old":
+                    env["VCTOOLSREDISTDIR"] = str(root.parent / "14.44.35112")
+                elif mode == "no_dll":
+                    (crt / "vcruntime140.dll").unlink()
+                else:
+                    (root / "x64").rename(root / "arm64")
+                with mock.patch.object(pack, "devcmd_environment", return_value=env), mock.patch.object(pack, "command", side_effect=self.vs_where), self.assertRaisesRegex(ValueError, message):
+                    pack.visual_studio_paths(selected, {})
+
+    @unittest.skipIf(os.name == "nt", "symlink fixtures require developer-mode/admin permission on Windows")
+    def test_crt_rejects_symlink_ancestors_and_case_duplicate_dlls(self):
+        with tempfile.TemporaryDirectory() as folder:
+            selected, env = self.vs_fixture(Path(folder))
+            root = Path(env["VCTOOLSREDISTDIR"])
+            crt = root / "x64/Microsoft.VC145.CRT"
+            (crt / "VCRUNTIME140.dll").write_bytes(b"duplicate")
+            with mock.patch.object(pack, "devcmd_environment", return_value=env), mock.patch.object(pack, "command", side_effect=self.vs_where), self.assertRaisesRegex(ValueError, "duplicate CRT"):
+                pack.visual_studio_paths(selected, {})
+            (crt / "VCRUNTIME140.dll").unlink()
+            outside = Path(folder) / "outside"
+            root.rename(outside)
+            root.symlink_to(outside, target_is_directory=True)
+            with mock.patch.object(pack, "devcmd_environment", return_value=env), mock.patch.object(pack, "command", side_effect=self.vs_where), self.assertRaisesRegex(ValueError, "symlink/reparse"):
+                pack.visual_studio_paths(selected, {})
+
+    def test_cmake_generator_toolset_instance_and_build_cache_are_aligned(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pack, "ROOT", Path(folder)):
+            roots = []
+            for major, version, toolset in ((17, "14.44.35207", "v143"), (18, "14.50.35707", "v145"), (18, "14.44.35207", "v143")):
+                selected, env = self.vs_fixture(Path(folder), major, tools=version)
+                vs = Path(selected["installationPath"])
+                native, args = pack.native_build_settings(selected, vs, env)
+                roots.append(native)
+                self.assertEqual(args[args.index("-G") + 1], pack.VS_GENERATORS[major])
+                self.assertEqual(args[args.index("-A") + 1], "x64")
+                self.assertEqual(args[args.index("-T") + 1], f"{toolset},host=x64,version={version}")
+                self.assertIn(f"-DCMAKE_GENERATOR_INSTANCE={vs}", args)
+                self.assertIn("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL", args)
+                self.assertNotEqual(native, Path(folder) / "build/native-release")
+                native.mkdir(parents=True)
+                values = {"CMAKE_GENERATOR": pack.VS_GENERATORS[major], "CMAKE_GENERATOR_PLATFORM": "x64", "CMAKE_GENERATOR_TOOLSET": args[args.index("-T") + 1], "CMAKE_GENERATOR_INSTANCE": str(vs)}
+                def save(data):
+                    text = "// Fixture CMake cache\n" + "".join(f"{key}:INTERNAL={value}\n" for key, value in data.items())
+                    (native / "CMakeCache.txt").write_text(text, encoding="utf-8")
+                    return text
+                save(values)
+                self.assertEqual(pack.native_build_settings(selected, vs, env), (native, args))
+                for key, value in (("CMAKE_GENERATOR", "Ninja"), ("CMAKE_GENERATOR_PLATFORM", "Win32"), ("CMAKE_GENERATOR_TOOLSET", "v143"), ("CMAKE_GENERATOR_INSTANCE", str(vs.parent / "Other"))):
+                    expected = save(dict(values, **{key: value}))
+                    with self.subTest(key=key), self.assertRaisesRegex(ValueError, "no files were deleted"):
+                        pack.native_build_settings(selected, vs, env)
+                    self.assertEqual((native / "CMakeCache.txt").read_text(encoding="utf-8"), expected)
+            self.assertEqual(len(set(roots)), len(roots))
+            selected, env = self.vs_fixture(Path(folder), 18, "Other")
+            other, _ = pack.native_build_settings(selected, Path(selected["installationPath"]), env)
+            self.assertNotIn(other, roots)
+            for version in ("bad", "19.0.0.0"):
+                with self.assertRaisesRegex(ValueError, "unsupported Visual Studio CMake generator"):
+                    pack.native_build_settings(dict(selected, installationVersion=version), Path(selected["installationPath"]), env)
+
+    def test_build_wires_selected_vs2026_to_cmake_and_isolates_native_and_cargo_caches(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(pack, "ROOT", Path(folder)):
+            root = Path(folder)
+            selected, env = self.vs_fixture(root)
+            vs = Path(selected["installationPath"])
+            native, expected_args = pack.native_build_settings(selected, vs, env)
+            legacy = root / "build/native-release/CMakeCache.txt"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("CMAKE_GENERATOR:INTERNAL=Visual Studio 17 2022\n", encoding="utf-8")
+            cargo_envs = []
+            def run(args, child_env):
+                if args[:2] == ["rustc", "-vV"]:
+                    return "release: 1.98.1\nhost: x86_64-pc-windows-msvc"
+                if args[:2] == ["cmake", "--version"]:
+                    return "cmake version 4.4.3"
+                if args[:4] == ["git", "-C", "vendor/llama.cpp", "rev-parse"]:
+                    return pack.LLAMA_COMMIT
+                if args[:2] == ["git", "rev-parse"]:
+                    return "a" * 40
+                if args[0] == "cargo":
+                    cargo_envs.append(child_env.copy())
+                if args[:2] == ["cmake", "-S"]:
+                    self.assertEqual(args, expected_args)
+                if args[:2] == ["cmake", "--build"]:
+                    self.assertEqual(args[2], native)
+                    raise RuntimeError("stop before any real compilation")
+                return ""
+            with mock.patch.object(pack.sys, "platform", "win32"), mock.patch.dict(pack.os.environ, {}, clear=True), mock.patch.object(pack, "selected_visual_studio", return_value=(selected, vs, env, env.copy(), {})), mock.patch.object(pack, "command", side_effect=run), self.assertRaisesRegex(RuntimeError, "stop before"):
+                pack.build()
+            self.assertTrue(cargo_envs)
+            for child in cargo_envs:
+                self.assertEqual(child["CARGO_TARGET_DIR"], str(root / "build/windows-x64-cpu" / ("cargo-" + native.name.removeprefix("native-"))))
+            self.assertEqual(legacy.read_text(encoding="utf-8"), "CMAKE_GENERATOR:INTERNAL=Visual Studio 17 2022\n")
+
     def test_aws_lc_native_notices_are_retained_without_source_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

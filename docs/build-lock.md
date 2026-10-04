@@ -1,5 +1,21 @@
 # 开发与平台构建锁
 
+## 2026-10-04 当前覆盖：复用既有 Visual Studio，本地 Windows 手动构建
+
+本节覆盖下文历史记录中仅限 VS2022、固定旧缓存路径及后续 GitHub Actions Rust 构建的安排；历史提交、测试与产物证据仍只属于其原版本。本轮修正在 `0d5b1dd5e77807239d8af99d39755ee381b2fae9` 基线上准备，尚无新的已验证 Windows App。详见[本轮验证记录](verification/2026-10-04-windows-vs-selection.md)。
+
+- 构建方式：用户手动在自己的 Windows 电脑构建；以后不在 GitHub Actions 执行本项目 Rust 构建。用户目前不能连接电脑，不以连接为继续处理源码/说明的前提。本轮未运行或触发 CI
+- Visual Studio：`scripts/package_windows.py` 从既有完整、正式 VS2026（18.x）/VS2022（17.x）实例中按版本从高到低尝试，优先复用可用的 VS2026。实际核对同实例的 x64 C++ 工具、Windows 10/11 SDK 与 Release CRT；预览版、不完整或未知版本不视为可用。已有 VS 缺组件时先用 Visual Studio Installer 的“修改”补齐；没有可用环境时才提示 VS2022 Build Tools 兜底，脚本不会下载、安装或代用户接受许可
+- CMake：VS2026 使用 `Visual Studio 18 2026`，VS2022 使用 `Visual Studio 17 2022`；显式固定所选实例、x64、实际 `VCToolsVersion` 与对应 v143/v145 工具集。编译器、链接器、库工具、dumpbin 与 app-local CRT 均核验其来源，不混用另一 VS 实例，也不从 System32 复制 CRT
+- 缓存：runtime 原生与 Cargo 输出分别使用 `build/windows-x64-cpu/native-<身份摘要>`、`build/windows-x64-cpu/cargo-<同一身份摘要>`；摘要区分实例路径、生成器和精确工具集。复用前检查 CMake 缓存；不匹配时明确失败，不删除或覆盖用户旧 `build/native-release`、旧 `native` 或 `cargo` 缓存。本规则仅覆盖此 runtime packager，桌面壳独立 Cargo 输出不因此宣称已迁移
+- Rust/CMake/llama 锁不变：仍为 Rust `1.98.1`、原生 `x86_64-pc-windows-msvc`、CMake `4.4.3` 与 llama.cpp `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。用户已确认安装 `stable-x86_64-pc-windows-msvc`，但别名存在不证明实际 release 匹配；在工程目录运行 `rustc -vV` 后仍须核对 `release: 1.98.1` 和 host，不能把改用 stable 当作解除版本锁
+- 前端后续统一 pnpm 的意向已确认；本次先打通现有 Windows 构建，不中途迁移。现有 `package-lock.json`、npm 命令和许可核验保持原样，不能写成已生成 pnpm 锁或已完成迁移
+- aria2 来源闭包：已提供的 `0d5b1dd` 预编译组件只适用于该精确来源；本修复形成新提交后，须由交付方按新提交真实重建 aria2、生成对应源码/清单/许可并复核。用户不需要自行编译 aria2；不得只改 JSON 中的 commit、复用旧组件冒充新来源，或将组件直接塞入旧 App
+
+当前已发送的完整 App 仍为 `33f0e17`。`0d5b1dd` 源码与独立 aria2 预编译组件属于本地构建输入，和包含本次 VS 选择修复的新 App 分开记录。Python 逻辑/静态检查不等于目标 Windows 的 VsDevCmd、MSVC、CMake、Authenticode、真实模型或完整打包验收；上述 Windows 项仍待用户本地执行。
+
+### 以下保留历史构建锁与证据
+
 日期：2026-10-03。本文保留Windows/开发Linux的实际构建锁与历史证据；Linux是开发/验证环境，不是当前发布平台。已发送产品与当前实现以[当前状态](../PROJECT_STATE.md)为准；aria2下载器有独立来源锁与待验分支，不升级下述llama/推理工具链。Android构建锁已归历史快照，不驱动本轮开发。
 
 ## 固定输入
