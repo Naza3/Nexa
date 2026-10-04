@@ -21,7 +21,7 @@ const partial: LibraryOperation = { operation_id: "library-1", status: "partial"
 function stopped() { return { ...snapshot(), connection: "stopped" as const, runtime: null }; }
 async function mount(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi({ snapshot: vi.fn(async () => stopped()), pickModels: vi.fn(async () => selection), libraryNext: vi.fn(async () => partial), ...overrides });
-  const controller = new DesktopController(api); const view = render(<App controller={controller} />);
+  const controller = new DesktopController(api); const view = render(<App initialPage="models" controller={controller} />);
   await screen.findByRole("heading", { name: model.display_name, level: 3 });
   return { api, controller, ...view };
 }
@@ -42,7 +42,7 @@ describe("adding models from native file selection", () => {
   });
   it("does not run discovery or scan on initial, repeated model page navigation or refresh", async () => {
     const { api } = await mount();
-    fireEvent.click(screen.getByRole("button", { name: "设置" })); fireEvent.click(screen.getByRole("button", { name: "模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" })); fireEvent.click(screen.getByRole("button", { name: "模型库" }));
     fireEvent.click(screen.getByRole("button", { name: "刷新" })); await waitFor(() => expect(api.modelsPage).toHaveBeenCalledTimes(2));
     for (const call of [api.discoverDirectory, api.reconcileModels, api.scanModels, api.start, api.stop]) expect(call).not.toHaveBeenCalled();
     expect(screen.getByText("原有管理模型")).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe("adding models from native file selection", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加模型" })); fireEvent.click(await screen.findByRole("button", { name: "确认添加 3 个模型" }));
     await waitFor(() => expect(api.libraryNext).toHaveBeenCalledTimes(1)); fireEvent.click(screen.getByRole("button", { name: "取消添加" }));
     expect(api.libraryCancel).toHaveBeenCalledExactlyOnceWith("library-1"); expect(controller.getSnapshot().library_phase).toBe("stopping");
-    fireEvent.click(screen.getByRole("button", { name: "关闭应用" })); expect(api.close).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" })); expect(api.close).toHaveBeenCalledTimes(1);
     await act(async () => terminal.resolve({ ...partial, status: "cancelled", result: null, verified_files: 0, files: selection.files.map((file) => ({ ...file, status: "not_processed", error_code: "model_scan_cancelled" })) }));
     await waitFor(() => expect(controller.getSnapshot().library_phase).toBe("idle")); expect(screen.getByRole("heading", { name: "添加已取消" })).toBeInTheDocument();
   });
@@ -106,7 +106,7 @@ describe("explicitly closing add results", () => {
     expect(screen.queryByRole("region", { name: "添加模型结果" })).not.toBeInTheDocument();
     expect(controller.getSnapshot().library).toBeNull(); expect(controller.getSnapshot().library_selection).toBeNull();
     expect(await screen.findByRole("heading", { name: model.display_name, level: 3 })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "设置" })); fireEvent.click(screen.getByRole("button", { name: "模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" })); fireEvent.click(screen.getByRole("button", { name: "模型库" }));
     expect(screen.queryByRole("region", { name: "添加模型结果" })).not.toBeInTheDocument();
     for (const call of [api.libraryCancel, api.discardModelSelection, api.scanModels, api.unloadModel, api.stop]) expect(call).not.toHaveBeenCalled();
     if (status === "failed") expect(controller.getSnapshot().error?.code).toBe("model_scan_timeout");
@@ -164,7 +164,7 @@ describe("explicitly closing add results", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加模型" })); fireEvent.click(await screen.findByRole("button", { name: "确认添加 3 个模型" }));
     fireEvent.click(await screen.findByRole("button", { name: "关闭添加结果" }));
     expect(screen.queryByRole("region", { name: "添加模型结果" })).not.toBeInTheDocument();
-    expect(controller.getSnapshot().operation).toBe("正在重新读取模型目录");
+    expect(controller.getSnapshot().operation).toMatchObject({ kind: "read_models", label: "正在重新读取模型目录" });
     expect(screen.getByRole("button", { name: "添加模型" })).toBeDisabled();
     await act(async () => reread.resolve(stopped()));
     await waitFor(() => expect(screen.getByRole("button", { name: "添加模型" })).toBeEnabled());
@@ -178,8 +178,8 @@ describe("explicitly closing add results", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加模型" })); fireEvent.click(await screen.findByRole("button", { name: "确认添加 3 个模型" }));
     fireEvent.click(await screen.findByRole("button", { name: "关闭添加结果" }));
     await waitFor(() => expect(controller.getSnapshot().operation).toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: "关闭应用" })); await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
-    unmount(); render(<App controller={controller} />);
+    fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" })); await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+    unmount(); render(<App initialPage="models" controller={controller} />);
     expect(await screen.findByRole("heading", { name: model.display_name, level: 3 })).toBeVisible();
     expect(screen.queryByRole("region", { name: "添加模型结果" })).not.toBeInTheDocument();
     expect(api.libraryCancel).not.toHaveBeenCalled();

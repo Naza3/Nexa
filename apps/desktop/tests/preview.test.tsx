@@ -41,7 +41,7 @@ it("walks labelled mock initialization, explicit stop, configure-only directory 
     window.history.replaceState({}, "", "/?scenario=initial");
     // The preview reads its scenario at construction, before the UI is mounted.
     const controller = new DesktopController(createPreviewApi());
-    ({ unmount } = render(<App controller={controller} preview />));
+    ({ unmount } = render(<App initialPage="models" controller={controller} preview />));
     expect(screen.getByText(/全部运行数据与回复为模拟/)).toBeInTheDocument();
     // Passive startup reads status only; no discovery or scan is started.
     await untilPreview("初始化状态读取已结束", () => {
@@ -80,11 +80,11 @@ it("walks labelled mock initialization, explicit stop, configure-only directory 
       expect(controller.getSnapshot().snapshot?.connection).toBe("connected");
       expect(controller.getSnapshot().operation).toBeNull();
     });
-    await user.click(await readyButton("模型"));
+    await user.click(await readyButton("模型库"));
     const load = await readyButton("加载模型");
     expect(screen.getByRole("heading", { name: "Qwen3 中文 0.6B Q8_0" })).toBeInTheDocument();
     await user.click(load);
-    await user.click(await readyButton("开始聊天"));
+    await user.click(await readyButton("验证驻留模型"));
     await user.type(screen.getByRole("textbox", { name: "输入消息" }), "你好");
     await user.click(await readyButton("发送"));
     await untilPreview("收到模拟流式回复", () => expect(screen.getByText(/这是显式开发预览中的模拟回复/)).toBeInTheDocument());

@@ -10,7 +10,7 @@ const proof = (time = 1791104400000): LocalValidation => ({ state: "passed", loa
 async function mount(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi({ modelsPage: vi.fn(async () => ({ data: [{ ...model, validated: false, local_validation: proof() }], generation: "generation-1", next_after: null })), ...overrides });
   const controller = new DesktopController(api);
-  const rendered = render(<App controller={controller} />);
+  const rendered = render(<App initialPage="models" controller={controller} />);
   const heading = await screen.findByRole("heading", { name: model.display_name, level: 3 });
   const article = heading.closest("article")!;
   return { api, controller, article, row: within(article), ...rendered };
@@ -108,17 +108,22 @@ describe("visible current-attempt feedback", () => {
     expect(row.getByText("本机基础测试通过")).toBeVisible();
   });
 
-  it.each(["settings", "download", "close", "unmount"])("does not publish late completion after %s", async (destination) => {
+  it.each(["settings", "download", "close", "unmount"])("retains results across routes but invalidates closed-window scope: %s", async (destination) => {
     const next = deferred<LocalValidation>();
     const { row, controller, unmount } = await mount({ testModel: vi.fn(() => next.promise) });
     fireEvent.click(row.getByRole("button", { name: `测试 ${model.display_name}` }));
     if (destination === "settings") fireEvent.click(screen.getByRole("button", { name: "设置" }));
     if (destination === "download") fireEvent.click(screen.getByRole("button", { name: "下载模型" }));
-    if (destination === "close") fireEvent.click(screen.getByRole("button", { name: "关闭应用" }));
+    if (destination === "close") fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" }));
     if (destination === "unmount") unmount();
     await act(async () => next.resolve(proof()));
-    expect(controller.getSnapshot().model_tests[model.id]).toBeUndefined();
-    expect(controller.getSnapshot().notice).toBeNull();
+    if (["close", "unmount"].includes(destination)) {
+      expect(controller.getSnapshot().model_tests[model.id]).toBeUndefined();
+      expect(controller.getSnapshot().notice).toBeNull();
+    } else {
+      expect(controller.getSnapshot().model_tests[model.id]?.phase).toBe("finished");
+      expect(controller.getSnapshot().activities.some((item) => item.kind === "model" && item.model?.phase === "finished")).toBe(true);
+    }
     expect(screen.queryByText("本次基础测试通过")).not.toBeInTheDocument();
   });
 

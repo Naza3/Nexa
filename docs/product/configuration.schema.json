@@ -1,0 +1,824 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nexa:configuration-contract:1",
+  "title": "Nexa configuration management wire contract v1.1",
+  "$comment": "Wire-only schema. Existing Rust validators additionally enforce batch_size <= context_size; known model context limit; concrete loopback/private socket addresses; canonical, non-overlapping CIDRs; unique profile IDs; bounded serialized config; safe file ownership; authentication/CAS/locks. Revision absent is preview-only, never a config-save authority.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ConfigurationSnapshot"
+    },
+    {
+      "$ref": "#/$defs/ModelConfiguration"
+    },
+    {
+      "$ref": "#/$defs/ConfigurationSaveRequest"
+    },
+    {
+      "$ref": "#/$defs/ConfigurationMigrateRequest"
+    },
+    {
+      "$ref": "#/$defs/ModelLoadProfileRequest"
+    },
+    {
+      "$ref": "#/$defs/UiPreferencesSaveRequest"
+    },
+    {
+      "$ref": "#/$defs/UiPreferencesSnapshot"
+    }
+  ],
+  "$defs": {
+    "Revision": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "ModelId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "LoadOptions": {
+      "type": "object",
+      "properties": {
+        "context_size": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 131072
+        },
+        "threads": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        }
+      },
+      "required": [
+        "context_size",
+        "threads",
+        "batch_size"
+      ],
+      "additionalProperties": false
+    },
+    "LoadDefaults": {
+      "type": "object",
+      "properties": {
+        "context_size": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 131072
+        },
+        "threads": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        }
+      },
+      "required": [
+        "context_size",
+        "threads",
+        "batch_size"
+      ],
+      "additionalProperties": false
+    },
+    "LoadOverrides": {
+      "type": "object",
+      "properties": {
+        "context_size": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 32,
+              "maximum": 131072
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threads": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_size": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "context_size",
+        "threads",
+        "batch_size"
+      ],
+      "additionalProperties": false
+    },
+    "RequestDefaults": {
+      "type": "object",
+      "properties": {
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "top_p": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      },
+      "required": [
+        "max_output_tokens",
+        "temperature",
+        "top_p"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimePolicies": {
+      "type": "object",
+      "properties": {
+        "idle_unload_enabled": {
+          "type": "boolean"
+        },
+        "idle_unload_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "model_verification_timeout_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 7200
+        }
+      },
+      "required": [
+        "idle_unload_enabled",
+        "idle_unload_seconds",
+        "model_verification_timeout_seconds"
+      ],
+      "additionalProperties": false
+    },
+    "LocalApi": {
+      "type": "object",
+      "properties": {
+        "listen": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "listen"
+      ],
+      "additionalProperties": false
+    },
+    "LanApi": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "listen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowed_cidrs": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        }
+      },
+      "required": [
+        "enabled",
+        "listen",
+        "allowed_cidrs"
+      ],
+      "additionalProperties": false
+    },
+    "UiPreferences": {
+      "type": "object",
+      "properties": {
+        "close_runtime_on_exit": {
+          "type": "boolean"
+        },
+        "download_source": {
+          "enum": [
+            "modelscope",
+            "huggingface"
+          ]
+        }
+      },
+      "required": [
+        "close_runtime_on_exit",
+        "download_source"
+      ],
+      "additionalProperties": false
+    },
+    "ProfileEntry": {
+      "type": "object",
+      "properties": {
+        "model_id": {
+          "$ref": "#/$defs/ModelId"
+        },
+        "load_overrides": {
+          "$ref": "#/$defs/LoadOverrides"
+        }
+      },
+      "required": [
+        "model_id",
+        "load_overrides"
+      ],
+      "additionalProperties": false
+    },
+    "MigrationDifference": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "enum": [
+            "context_size",
+            "threads",
+            "batch_size",
+            "max_output_tokens"
+          ]
+        },
+        "api": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "desktop": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "field",
+        "api",
+        "desktop"
+      ],
+      "additionalProperties": false
+    },
+    "MigrationStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "not_needed",
+            "legacy_compatible",
+            "required",
+            "complete"
+          ]
+        },
+        "preferences_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "differences": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/MigrationDifference"
+          }
+        },
+        "backup_available": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "preferences_revision",
+        "differences",
+        "backup_available"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationValues": {
+      "type": "object",
+      "properties": {
+        "global_defaults": {
+          "$ref": "#/$defs/LoadDefaults"
+        },
+        "request_defaults": {
+          "$ref": "#/$defs/RequestDefaults"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimePolicies"
+        },
+        "local_api": {
+          "$ref": "#/$defs/LocalApi"
+        },
+        "lan_api": {
+          "$ref": "#/$defs/LanApi"
+        },
+        "model_profiles": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/ProfileEntry"
+          }
+        }
+      },
+      "required": [
+        "global_defaults",
+        "request_defaults",
+        "runtime",
+        "local_api",
+        "lan_api",
+        "model_profiles"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationSnapshot": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "const": "absent"
+            }
+          ]
+        },
+        "saved": {
+          "$ref": "#/$defs/ConfigurationValues"
+        },
+        "runtime_effective": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "revision": {
+                  "$ref": "#/$defs/Revision"
+                },
+                "values": {
+                  "$ref": "#/$defs/ConfigurationValues"
+                }
+              },
+              "required": [
+                "revision",
+                "values"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending_restart": {
+          "type": "boolean"
+        },
+        "migration": {
+          "$ref": "#/$defs/MigrationStatus"
+        }
+      },
+      "required": [
+        "schema_version",
+        "revision",
+        "saved",
+        "runtime_effective",
+        "pending_restart",
+        "migration"
+      ],
+      "additionalProperties": false
+    },
+    "ModelConfiguration": {
+      "type": "object",
+      "properties": {
+        "configuration_revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "model_id": {
+          "$ref": "#/$defs/ModelId"
+        },
+        "load_overrides": {
+          "$ref": "#/$defs/LoadOverrides"
+        },
+        "saved_effective": {
+          "$ref": "#/$defs/LoadOptions"
+        },
+        "saved_sources": {
+          "type": "object",
+          "properties": {
+            "context_size": {
+              "enum": [
+                "global",
+                "profile"
+              ]
+            },
+            "threads": {
+              "enum": [
+                "global",
+                "profile",
+                "automatic"
+              ]
+            },
+            "batch_size": {
+              "enum": [
+                "global",
+                "profile"
+              ]
+            }
+          },
+          "required": [
+            "context_size",
+            "threads",
+            "batch_size"
+          ],
+          "additionalProperties": false
+        },
+        "current_load_options": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LoadOptions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restore_load_options": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LoadOptions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending_apply": {
+          "type": "boolean"
+        },
+        "context_limit": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "configuration_revision",
+        "model_id",
+        "load_overrides",
+        "saved_effective",
+        "saved_sources",
+        "current_load_options",
+        "restore_load_options",
+        "pending_apply",
+        "context_limit"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationUpdate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "model_profile"
+            },
+            "model_id": {
+              "$ref": "#/$defs/ModelId"
+            },
+            "load_overrides": {
+              "$ref": "#/$defs/LoadOverrides"
+            }
+          },
+          "required": [
+            "kind",
+            "model_id",
+            "load_overrides"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "global_defaults"
+            },
+            "global_defaults": {
+              "$ref": "#/$defs/LoadDefaults"
+            }
+          },
+          "required": [
+            "kind",
+            "global_defaults"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "request_defaults"
+            },
+            "request_defaults": {
+              "$ref": "#/$defs/RequestDefaults"
+            }
+          },
+          "required": [
+            "kind",
+            "request_defaults"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "runtime"
+            },
+            "runtime": {
+              "$ref": "#/$defs/RuntimePolicies"
+            }
+          },
+          "required": [
+            "kind",
+            "runtime"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "local_api"
+            },
+            "local_api": {
+              "$ref": "#/$defs/LocalApi"
+            }
+          },
+          "required": [
+            "kind",
+            "local_api"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "lan_api"
+            },
+            "lan_api": {
+              "$ref": "#/$defs/LanApi"
+            }
+          },
+          "required": [
+            "kind",
+            "lan_api"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ConfigurationSaveRequest": {
+      "type": "object",
+      "properties": {
+        "expected_revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "update": {
+          "$ref": "#/$defs/ConfigurationUpdate"
+        }
+      },
+      "required": [
+        "expected_revision",
+        "update"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationMigrateRequest": {
+      "type": "object",
+      "properties": {
+        "expected_revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "expected_preferences_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "choice": {
+          "enum": [
+            "api",
+            "desktop",
+            "custom"
+          ]
+        },
+        "custom": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "global_defaults": {
+                  "$ref": "#/$defs/LoadDefaults"
+                },
+                "request_defaults": {
+                  "$ref": "#/$defs/RequestDefaults"
+                }
+              },
+              "required": [
+                "global_defaults",
+                "request_defaults"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "expected_revision",
+        "expected_preferences_revision",
+        "choice",
+        "custom"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "choice": {
+                "const": "custom"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "custom": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "custom": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ModelLoadProfileRequest": {
+      "type": "object",
+      "properties": {
+        "model_id": {
+          "$ref": "#/$defs/ModelId"
+        },
+        "load_overrides": {
+          "type": "object",
+          "properties": {
+            "context_size": {
+              "type": "integer",
+              "minimum": 32,
+              "maximum": 131072
+            },
+            "threads": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "batch_size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "additionalProperties": false
+    },
+    "UiPreferencesSaveRequest": {
+      "type": "object",
+      "properties": {
+        "expected_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "const": "absent"
+            }
+          ]
+        },
+        "preferences": {
+          "$ref": "#/$defs/UiPreferences"
+        }
+      },
+      "required": [
+        "expected_revision",
+        "preferences"
+      ],
+      "additionalProperties": false
+    },
+    "UiPreferencesSnapshot": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "const": "absent"
+            }
+          ]
+        },
+        "preferences": {
+          "$ref": "#/$defs/UiPreferences"
+        }
+      },
+      "required": [
+        "revision",
+        "preferences"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

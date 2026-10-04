@@ -217,7 +217,7 @@ describe("dismissal of confirmed add results", () => {
     const { api, controller } = await create({ snapshot: vi.fn().mockResolvedValueOnce({ ...snapshot(), connection: "stopped", runtime: null }).mockImplementationOnce(() => reread.promise) });
     await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
     const before = controller.getSnapshot(); const calls = apiCalls(api);
-    expect(before.library_phase).toBe("idle"); expect(before.operation).toBe("正在重新读取模型目录");
+    expect(before.library_phase).toBe("idle"); expect(before.operation).toMatchObject({ kind: "read_models", label: "正在重新读取模型目录" });
     controller.dismissAddResult(before.library!);
     expect(controller.getSnapshot()).toEqual({ ...before, library: null, library_selection: null });
     expect(apiCalls(api)).toEqual(calls);

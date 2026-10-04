@@ -5,7 +5,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 pub const MAX_BODY_BYTES: usize = 1_048_576;
 pub const MAX_NONSTREAM_RESPONSE_BYTES: usize = 96 * 1024;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub schema_version: u32,
@@ -13,6 +13,11 @@ pub struct Config {
     pub lan_api: crate::lan::LanApiConfig,
     pub runtime: SchedulingConfig,
     pub inference: InferenceConfig,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub model_profiles:
+        std::collections::BTreeMap<runtime_types::ModelId, crate::configuration::LoadOverrides>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub migration: Option<crate::configuration::MigrationReceipt>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -22,10 +27,12 @@ impl Default for Config {
             lan_api: crate::lan::LanApiConfig::default(),
             runtime: SchedulingConfig::default(),
             inference: InferenceConfig::default(),
+            model_profiles: Default::default(),
+            migration: None,
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ApiConfig {
     pub listen: SocketAddr,
@@ -43,7 +50,7 @@ impl Default for ApiConfig {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SchedulingConfig {
     pub max_active_models: usize,
@@ -73,7 +80,7 @@ impl Default for SchedulingConfig {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct InferenceConfig {
     pub backend: String,
@@ -114,13 +121,16 @@ impl Config {
     }
     pub fn validate(&self) -> Result<(), RuntimeError> {
         self.lan_api.validate()?;
-        if self.schema_version != 1
+        if ![1, 2].contains(&self.schema_version)
+            || (self.schema_version == 1
+                && (!self.model_profiles.is_empty() || self.migration.is_some()))
+            || self.model_profiles.len() > crate::configuration::MAX_MODEL_PROFILES
             || !self.api.listen.ip().is_loopback()
             || self.api.max_body_bytes == 0
             || self.api.max_body_bytes > MAX_BODY_BYTES
         {
             return Err(RuntimeError::invalid(
-                "configuration requires schema 1, loopback listen, and body limit 1..=1048576",
+                "configuration requires schema 1 or 2, loopback listen, and body limit 1..=1048576",
             ));
         }
         if self.api.token_file != std::path::Path::new("secrets/api-token") {
@@ -148,6 +158,12 @@ impl Config {
             return Err(RuntimeError::invalid(
                 "model verification seconds must be 30..=7200",
             ));
+        }
+        for (id, overrides) in &self.model_profiles {
+            crate::configuration::resolve_load_options(self, id, *overrides)?;
+        }
+        if let Some(receipt) = &self.migration {
+            receipt.validate()?;
         }
         self.runtime_config().validate()?;
         self.generation_options().validate()

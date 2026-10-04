@@ -109,8 +109,7 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
     unloadModel: vi.fn(async () => ({
       ...runtime(),
       state: "unloaded" as const,
-      selected_model: null,
-      load_options: null,
+      // The real actor preserves selected_model and load_options after unload.
     })),
     chatStart: vi.fn(async () => ({ request_id: "request-1" })),
     chatNext: vi.fn(

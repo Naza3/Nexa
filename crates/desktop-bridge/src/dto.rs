@@ -98,6 +98,12 @@ pub enum ConnectionState {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DesktopSnapshot {
+    #[serde(default)]
+    pub configuration: Option<runtime_api::configuration::ConfigurationSnapshot>,
+    #[serde(default)]
+    pub configuration_error: Option<crate::BridgeError>,
+    #[serde(default)]
+    pub ui_preferences: Option<runtime_api::configuration::UiPreferencesSnapshot>,
     pub initialized: bool,
     pub connection: ConnectionState,
     pub api_address: Option<String>,
@@ -569,3 +575,35 @@ pub struct ModelsReconcile {
     pub operation_id: Option<Uuid>,
 }
 pub use model_store::local_validation::LocalValidation;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLoadProfileRequest {
+    pub model_id: String,
+    #[serde(default)]
+    pub load_overrides: TemporaryLoadOverrides,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TemporaryLoadOverrides {
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "nonnull_optional_u32"
+    )]
+    pub context_size: Option<u32>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "nonnull_optional_u32"
+    )]
+    pub threads: Option<u32>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "nonnull_optional_u32"
+    )]
+    pub batch_size: Option<u32>,
+}
+fn nonnull_optional_u32<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<u32>, D::Error> {
+    u32::deserialize(d).map(Some)
+}

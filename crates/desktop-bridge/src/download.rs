@@ -402,8 +402,10 @@ impl DesktopBridge {
         let result:Result<LocalValidation>=async {
             if task.onboarding_cancelled.load(Ordering::Acquire){return Err(BridgeError::new("request_cancelled"));}
             self.start_inner(true,Some(&task.onboarding_cancelled)).await?;
-            let preferences=settings::preferences(&self.root)?;
-            let body=crate::onboarding::load_body(LoadModelRequest{model_id:id.to_string(),context_size:preferences.context_size,threads:preferences.threads,batch_size:preferences.batch_size})?;
+            let body=if settings::config(&self.root)?.schema_version==2{json!({"model":id})}else{
+                let preferences=settings::preferences(&self.root)?;
+                crate::onboarding::load_body(LoadModelRequest{model_id:id.to_string(),context_size:preferences.context_size,threads:preferences.threads,batch_size:preferences.batch_size})?
+            };
             let loading=self.json::<TestedLoad>(Method::POST,"/runtime/load-if-unloaded",Some(&body));
             tokio::select! {
                 biased;

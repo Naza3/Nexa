@@ -28,6 +28,14 @@ pub fn router(state: ApiState, security: Arc<SecurityContext>) -> Router {
         .route("/v1/models", get(available_models))
         .route("/v1/chat/completions", post(crate::chat::chat))
         .route("/runtime/status", get(status))
+        .route(
+            "/runtime/configuration",
+            get(configuration_get).put(configuration_save),
+        )
+        .route(
+            "/runtime/configuration/models/{model_id}",
+            get(configuration_model_get),
+        )
         .route("/runtime/devices", get(devices))
         .route("/runtime/models", get(models))
         .route("/runtime/models/import", post(import))
@@ -261,7 +269,7 @@ async fn load(State(state): State<ApiState>, request: Request) -> Result<Json<Va
     state.ensure_running()?;
     let bytes = json_body(request, state.config.api.max_body_bytes).await?;
     let load = LoadRequest::parse(&bytes)?;
-    let options = load.options(&state.config)?;
+    let options = load.options(&state.active_config()?)?;
     state
         .load(load.model, options, load.threads.is_some())
         .await?;
@@ -287,7 +295,7 @@ async fn desktop_load(
 ) -> Result<Json<Value>, ApiError> {
     let bytes = json_body(request, state.config.api.max_body_bytes).await?;
     let load = LoadRequest::parse(&bytes)?;
-    let options = load.options(&state.config)?;
+    let options = load.options(&state.active_config()?)?;
     let observation = state
         .desktop_load(
             load.model,
@@ -308,7 +316,21 @@ async fn model_test(
 ) -> Result<Json<Value>, ApiError> {
     let bytes = json_body(request, state.config.api.max_body_bytes).await?;
     let load = LoadRequest::parse(&bytes)?;
-    let options = load.options(&state.config)?;
+    let status = state.control(|runtime| runtime.status()).await?;
+    let options = if status.selected_model.as_ref() == Some(&load.model)
+        && matches!(status.state, ModelState::Ready | ModelState::Generating)
+    {
+        let actual = status.load_options.ok_or_else(ApiError::internal)?;
+        let mut validation = state.active_config()?;
+        validation.model_profiles.clear();
+        validation.inference.context_size = actual.context_size;
+        validation.inference.threads = Some(actual.threads);
+        validation.inference.batch_size = actual.batch_size;
+        load.options(&validation)?; // Explicit invalid fields must still fail.
+        actual
+    } else {
+        load.options(&state.active_config()?)?
+    };
     Ok(Json(
         serde_json::to_value(state.model_probe(load.model, options).await?)
             .map_err(|_| ApiError::internal())?,
@@ -346,4 +368,25 @@ async fn shutdown(
     state.shutdown.begin();
     state.wait_shutdown().await?;
     Ok(Json(json!({"status":"stopped"})))
+}
+
+async fn configuration_get(
+    State(state): State<ApiState>,
+) -> Result<Json<crate::configuration::ConfigurationSnapshot>, ApiError> {
+    Ok(Json(state.configuration_get().await?))
+}
+async fn configuration_save(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<crate::configuration::ConfigurationSnapshot>, ApiError> {
+    let bytes = json_body(request, state.config.api.max_body_bytes).await?;
+    let request = crate::configuration::parse_save_request(&bytes)?;
+    Ok(Json(state.configuration_save(request).await?))
+}
+async fn configuration_model_get(
+    State(state): State<ApiState>,
+    id: Result<Path<ModelId>, PathRejection>,
+) -> Result<Json<crate::configuration::ModelConfiguration>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::invalid("model_id", "Invalid model ID."))?;
+    Ok(Json(state.configuration_model_get(id).await?))
 }

@@ -15,7 +15,7 @@ function stopped() {
 async function mount(validation: LocalValidation = proof, overrides: Partial<DesktopApi> = {}) {
   const api = makeApi({ snapshot: vi.fn(async () => stopped()), modelsPage: vi.fn(async () => ({ source: "local" as const, generation: "local-generation", next_after: null, data: [{ ...model, validated: false, compatibility: "unvalidated" as const, local_validation: validation }] })), ...overrides });
   const controller = new DesktopController(api);
-  render(<App controller={controller} />);
+  render(<App initialPage="models" controller={controller} />);
   const heading = await screen.findByRole("heading", { name: model.display_name, level: 3 });
   return { api, controller, row: within(heading.closest("article")!) };
 }
@@ -51,10 +51,10 @@ describe("model onboarding interface", () => {
     await waitFor(() => expect(api.testModel).toHaveBeenCalledTimes(1));
     expect(row.getByText("正在进行本机基础测试")).toBeInTheDocument();
     expect(screen.getByText(/短文本测试最多 30 秒/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "关闭应用" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "关闭窗口并保留服务" })).toBeEnabled();
     expect(api.chatStart).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "停止生成" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "关闭应用" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" }));
     expect(api.close).toHaveBeenCalledTimes(1);
     await act(async () => testing.resolve(proof));
   });
@@ -75,8 +75,8 @@ describe("download opt-in and saved outcome display", () => {
     const { api } = await mount(proof, { catalog: vi.fn(async () => ({ entries: [entry] })) });
     fireEvent.click(screen.getByRole("button", { name: "下载模型" }));
     const choice = screen.getByRole("checkbox", { name: "下载后加载并进行基础测试（空闲时）" });
-    expect(choice).toBeChecked();
-    if (!autoTest) fireEvent.click(choice);
+    expect(choice).not.toBeChecked();
+    if (autoTest) fireEvent.click(choice);
     fireEvent.click(await screen.findByRole("button", { name: "下载 测试下载模型" }));
     await waitFor(() => expect(api.downloadStart).toHaveBeenCalledExactlyOnceWith("test-model", autoTest));
     expect(api.start).not.toHaveBeenCalled();

@@ -9,6 +9,15 @@ use uuid::Uuid;
 
 impl DesktopBridge {
     fn inventory_with_observations(&self) -> Result<(inventory::Inventory, Vec<LocalValidation>)> {
+        self.inventory_with_options(None)
+    }
+    fn inventory_with_options(
+        &self,
+        online: Option<(
+            &runtime_api::configuration::ConfigurationValues,
+            &RuntimeStatus,
+        )>,
+    ) -> Result<(inventory::Inventory, Vec<LocalValidation>)> {
         let inventory =
             inventory::read(&self.root).map_err(|e| BridgeError::new(e.code.as_str()))?;
         let receipts = match Receipts::read(&self.root) {
@@ -31,16 +40,64 @@ impl DesktopBridge {
         } else {
             self.validation_engine_build()
         };
-        let preferences = settings::preferences(&self.root)?;
+        let preferences = if let Some((values, _)) = online {
+            DesktopPreferences {
+                context_size: values.global_defaults.context_size,
+                threads: values
+                    .global_defaults
+                    .threads
+                    .unwrap_or_else(|| Config::available_parallelism().min(4)),
+                batch_size: values.global_defaults.batch_size,
+                max_output_tokens: values.request_defaults.max_output_tokens,
+                ..Default::default()
+            }
+        } else {
+            settings::preferences(&self.root)?
+        };
         let options = runtime_types::LoadOptions {
             context_size: preferences.context_size,
             threads: preferences.threads,
             batch_size: preferences.batch_size,
         };
+        let config = if online.is_none() && self.root.join("config.toml").exists() {
+            Some(settings::config(&self.root)?)
+        } else {
+            None
+        };
         let observations = inventory
             .entries
             .iter()
             .map(|entry| {
+                let options =
+                    if let Some(config) = config.as_ref().filter(|c| c.schema_version == 2) {
+                        runtime_api::configuration::resolve_load_options(
+                            config,
+                            &entry.manifest.id,
+                            Default::default(),
+                        )
+                        .unwrap_or(options)
+                    } else {
+                        options
+                    };
+                let options = if let Some((values, status)) = online {
+                    if status.selected_model.as_ref() == Some(&entry.manifest.id) {
+                        status.load_options.unwrap_or(options)
+                    } else {
+                        let p = values
+                            .model_profiles
+                            .iter()
+                            .find(|p| p.model_id == entry.manifest.id)
+                            .map(|p| p.load_overrides)
+                            .unwrap_or_default();
+                        runtime_types::LoadOptions {
+                            context_size: p.context_size.unwrap_or(options.context_size),
+                            threads: p.threads.unwrap_or(options.threads),
+                            batch_size: p.batch_size.unwrap_or(options.batch_size),
+                        }
+                    }
+                } else {
+                    options
+                };
                 let Some(prior) = receipts
                     .entries
                     .iter()
@@ -134,8 +191,35 @@ impl DesktopBridge {
             next_after,
         })
     }
-    pub(crate) fn runtime_observations(&self, page: &mut ModelsPage) -> Result<()> {
-        let (inventory, observations) = self.inventory_with_observations()?;
+    pub(crate) async fn runtime_observations(&self, page: &mut ModelsPage) -> Result<()> {
+        let status = self.status().await?;
+        let configuration: Option<ConfigurationSnapshot> =
+            match self.json(Method::GET, "/runtime/configuration", None).await {
+                Ok(value) => Some(value),
+                Err(error) if error.code == "not_found" => None,
+                Err(error) => return Err(error),
+            };
+        // Old runtimes expose no active profile contract. Keep the inventory,
+        // but do not manufacture validation scope from a disk fallback.
+        let (inventory, observations) = if let Some(configuration) = configuration {
+            let active = configuration
+                .runtime_effective
+                .ok_or_else(|| BridgeError::new("response_invalid"))?;
+            self.inventory_with_options(Some((&active.values, &status)))?
+        } else {
+            let inventory =
+                inventory::read(&self.root).map_err(|e| BridgeError::new(e.code.as_str()))?;
+            let observations = inventory
+                .entries
+                .iter()
+                .map(|_| LocalValidation {
+                    state: ValidationState::Unavailable,
+                    error_code: Some("configuration_unavailable".into()),
+                    ..Default::default()
+                })
+                .collect();
+            (inventory, observations)
+        };
         // Include the complete bounded local overlay so all pages share a
         // generation, including evidence/options changes between page reads.
         page.generation = overlay_generation(page.generation, &observations, ModelsSource::Runtime);

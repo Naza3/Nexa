@@ -1,6 +1,7 @@
 //! Native-free desktop boundary. All requests use endpoint-bound proof and the
 //! very same TCP connection; no arbitrary request, process, or token command.
 mod chat;
+mod configuration;
 mod download;
 pub mod dto;
 mod error;
@@ -13,9 +14,10 @@ pub use dto::*;
 pub use error::{BridgeError, Result};
 use hyper::Method;
 pub use model_store::library::selected::{SelectedFile, validate_selection};
-use runtime_api::{
-    Config,
-    token::{init_private_token, write_private_new},
+use runtime_api::Config;
+pub use runtime_api::configuration::{
+    ConfigurationMigrateRequest, ConfigurationSaveRequest, ConfigurationSnapshot,
+    ModelConfiguration, UiPreferencesSaveRequest, UiPreferencesSnapshot,
 };
 use runtime_cli::{
     client::VerifiedConnection,
@@ -24,7 +26,7 @@ use runtime_cli::{
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::{
-    fs, io,
+    fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -155,6 +157,9 @@ impl DesktopBridge {
                 && !self.root.join("secrets/api-token").exists())
         {
             return Ok(DesktopSnapshot {
+                configuration: Some(runtime_api::configuration::preview()),
+                configuration_error: None,
+                ui_preferences: Some(self.ui_preferences_get()?),
                 initialized: false,
                 connection: ConnectionState::Stopped,
                 api_address: None,
@@ -167,6 +172,9 @@ impl DesktopBridge {
         let config = settings::require_initialized(&self.root)?;
         let preferences = settings::preferences(&self.root)?;
         let mut snapshot = DesktopSnapshot {
+            configuration: None,
+            configuration_error: None,
+            ui_preferences: Some(self.ui_preferences_get()?),
             initialized: true,
             connection: ConnectionState::Stopped,
             api_address: Some(format!("http://{}", config.api.listen)),
@@ -176,11 +184,13 @@ impl DesktopBridge {
             model_directory: library::directory_snapshot(&self.root, None)?,
         };
         if self.library.lock().unwrap().owns_instance() || self.download_holds_instance() {
+            snapshot.configuration = Some(self.configuration_offline()?);
             return Ok(snapshot);
         }
         if let Some(lock) = InstanceLock::try_acquire(&self.root)
             .map_err(|_| BridgeError::new("instance_unavailable"))?
         {
+            snapshot.configuration = Some(self.configuration_offline()?);
             if lock.has_discovery() {
                 // A free OS lock alone does not establish successful cleanup.
                 snapshot.connection = ConnectionState::Error;
@@ -192,6 +202,43 @@ impl DesktopBridge {
                 snapshot.api_address = Some(format!("http://{}", discovery.listen));
                 match self.status().await {
                     Ok(status) => {
+                        snapshot.configuration =
+                            match self.json(Method::GET, "/runtime/configuration", None).await {
+                                Ok(configuration) => Some(configuration),
+                                Err(error) => {
+                                    snapshot.configuration_error =
+                                        Some(if error.code == "not_found" {
+                                            BridgeError::new("configuration_unavailable")
+                                        } else {
+                                            error
+                                        });
+                                    None
+                                }
+                            };
+                        if config.schema_version == 2
+                            && let Some(configuration) = snapshot.configuration.as_ref()
+                        {
+                            let values = &configuration
+                                .runtime_effective
+                                .as_ref()
+                                .ok_or_else(|| BridgeError::new("response_invalid"))?
+                                .values;
+                            snapshot.settings.context_size = values.global_defaults.context_size;
+                            snapshot.settings.threads = values
+                                .global_defaults
+                                .threads
+                                .unwrap_or_else(|| Config::available_parallelism().min(4));
+                            snapshot.settings.batch_size = values.global_defaults.batch_size;
+                            snapshot.settings.max_output_tokens =
+                                values.request_defaults.max_output_tokens;
+                            snapshot.settings.idle_unload_enabled =
+                                values.runtime.idle_unload_enabled;
+                            snapshot.settings.idle_unload_seconds =
+                                values.runtime.idle_unload_seconds;
+                            snapshot.settings.model_verification_timeout_seconds =
+                                values.runtime.model_verification_timeout_seconds;
+                            snapshot.lan_api = values.lan_api.clone();
+                        }
                         snapshot.model_directory =
                             library::directory_snapshot(&self.root, Some(&status))?;
                         snapshot.runtime = Some(status);
@@ -233,28 +280,21 @@ impl DesktopBridge {
         }
         self.check_start_cancelled(onboarding)?;
         *self.startup_diagnostics.lock().unwrap() = StartupDiagnostics::default();
-        if settings::require_initialized(&self.root).is_err() {
+        if !self.root.join("config.toml").exists() && !self.root.join("secrets/api-token").exists()
+        {
             if !initialize_if_missing {
                 return Err(BridgeError::new("not_initialized"));
             }
-            let _lock = InstanceLock::try_acquire(&self.root)
+            let lock = InstanceLock::try_acquire(&self.root)
                 .map_err(|_| BridgeError::new("instance_unavailable"))?
                 .ok_or_else(|| BridgeError::new("runtime_running"))?;
-            init_private_token(&self.root)
-                .map_err(|_| BridgeError::new("credentials_unavailable"))?;
-            match write_private_new(
-                &self.root.join("config.toml"),
-                Config::default()
-                    .to_toml()
-                    .map_err(|_| BridgeError::new("configuration_invalid"))?
-                    .as_bytes(),
-            ) {
-                Ok(()) => (),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
-                Err(_) => return Err(BridgeError::new("configuration_unavailable")),
+            if lock.has_discovery() {
+                return Err(BridgeError::new("runtime_stop_unconfirmed"));
             }
-            settings::require_initialized(&self.root)?;
+            runtime_api::configuration::initialize(&self.root)
+                .map_err(|e| BridgeError::new(e.code))?;
         }
+        settings::require_initialized(&self.root)?;
         let lock = InstanceLock::try_acquire(&self.root)
             .map_err(|_| BridgeError::new("instance_unavailable"))?;
         if lock.is_none() {
@@ -429,7 +469,7 @@ impl DesktopBridge {
             return Err(BridgeError::new("response_invalid"));
         }
         let upstream = page.generation;
-        self.runtime_observations(&mut page)?;
+        self.runtime_observations(&mut page).await?;
         if generation.is_some_and(|expected| expected != page.generation) {
             return Err(BridgeError::new("model_list_changed"));
         }
@@ -568,20 +608,14 @@ impl DesktopBridge {
         if lock.has_discovery() {
             return Err(BridgeError::new("runtime_stop_unconfirmed"));
         }
-        // Re-read under the cross-process lock, preserving LAN and every field
-        // not owned by this action. Settings take effect on the next operation.
-        let mut config = settings::require_initialized(&self.root)?;
-        update(&mut config);
-        config
-            .validate()
-            .map_err(|_| BridgeError::new("settings_invalid"))?;
-        settings::atomic_replace(
-            &self.root.join("config.toml"),
-            config
-                .to_toml()
-                .map_err(|_| BridgeError::new("configuration_invalid"))?
-                .as_bytes(),
-        )?;
+        settings::require_initialized(&self.root)?;
+        runtime_api::configuration::legacy_update(&self.root, update).map_err(|e| {
+            BridgeError::new(if e.code == "configuration_invalid" {
+                "settings_invalid"
+            } else {
+                e.code
+            })
+        })?;
         drop(lock);
         self.snapshot_inner().await
     }
@@ -603,21 +637,12 @@ impl DesktopBridge {
         if lock.has_discovery() {
             return Err(BridgeError::new("runtime_stop_unconfirmed"));
         }
-        let mut config = settings::require_initialized(&self.root)?;
+        settings::require_initialized(&self.root)?;
         lan_api
             .validate()
             .map_err(|_| BridgeError::new("lan_settings_invalid"))?;
-        config.lan_api = lan_api;
-        config
-            .validate()
-            .map_err(|_| BridgeError::new("lan_settings_invalid"))?;
-        settings::atomic_replace(
-            &self.root.join("config.toml"),
-            config
-                .to_toml()
-                .map_err(|_| BridgeError::new("configuration_invalid"))?
-                .as_bytes(),
-        )?;
+        runtime_api::configuration::legacy_update(&self.root, |config| config.lan_api = lan_api)
+            .map_err(|e| BridgeError::new(e.code))?;
         drop(lock);
         self.snapshot_inner().await
     }
@@ -657,7 +682,8 @@ impl DesktopBridge {
         if !self.root.exists() {
             return Ok(Stopped { stopped: true });
         }
-        settings::require_initialized(&self.root)?;
+        let token = runtime_api::token::load_private_token(&self.root)
+            .map_err(|_| BridgeError::new("credentials_unavailable"))?;
         if let Some(lock) = InstanceLock::try_acquire(&self.root)
             .map_err(|_| BridgeError::new("instance_unavailable"))?
         {
@@ -669,13 +695,8 @@ impl DesktopBridge {
         }
         let discovery =
             Discovery::read(&self.root).map_err(|_| BridgeError::new("connection_failed"))?;
-        let mut connection = VerifiedConnection::connect(
-            discovery.listen,
-            discovery.instance_id,
-            runtime_api::token::load_private_token(&self.root)
-                .map_err(|_| BridgeError::new("credentials_unavailable"))?,
-        )
-        .await?;
+        let mut connection =
+            VerifiedConnection::connect(discovery.listen, discovery.instance_id, token).await?;
         let _: Value = connection
             .json(Method::POST, "/runtime/shutdown", Some(&json!({})))
             .await?;

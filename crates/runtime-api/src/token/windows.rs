@@ -314,3 +314,37 @@ pub fn write_private_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+
+pub fn open_regular_file(path: &Path) -> io::Result<File> {
+    let held = directories(path.parent().ok_or_else(invalid)?, false)?;
+    validate(held.last().unwrap())?;
+    open(path, false)
+}
+
+pub fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(invalid)?;
+    let held = directories(parent, false)?;
+    validate(held.last().unwrap())?;
+    match open(path, false) {
+        Ok(file) => drop(file),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e),
+    }
+    let temporary = parent.join(format!(".nexa-config-{}", uuid::Uuid::new_v4()));
+    write_private_new(&temporary, bytes)?;
+    let source = wide(&temporary)?;
+    let target = wide(path)?;
+    if unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        let error = io::Error::last_os_error();
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}

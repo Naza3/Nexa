@@ -29,6 +29,8 @@ struct RegistrySnapshot {
 pub struct ApiState {
     pub runtime: RuntimeHandle,
     pub config: Arc<Config>,
+    active_configuration: Arc<RwLock<crate::configuration::Document>>,
+    configuration_gate: Arc<tokio::sync::Mutex<()>>,
     pub shutdown: ServiceShutdown,
     pub diagnostics: Option<ProcessDiagnostics>,
     lan_listening: Arc<std::sync::atomic::AtomicBool>,
@@ -50,9 +52,20 @@ impl ApiState {
         diagnostics: Option<ProcessDiagnostics>,
     ) -> Self {
         let import_cancel = ImportCancellation::default();
+        let config_bytes = config
+            .to_toml()
+            .expect("validated startup configuration")
+            .into_bytes();
+        let active = crate::configuration::Document {
+            config: config.clone(),
+            revision: crate::configuration::revision(&config_bytes),
+            bytes: config_bytes,
+        };
         Self {
             runtime: runtime.handle(),
             config: Arc::new(config),
+            active_configuration: Arc::new(RwLock::new(active)),
+            configuration_gate: Arc::new(tokio::sync::Mutex::new(())),
             shutdown: ServiceShutdown::new(runtime, import_cancel.clone()),
             diagnostics,
             lan_listening: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -68,6 +81,98 @@ impl ApiState {
             storage: Arc::new(Semaphore::new(1)),
         }
     }
+    pub fn active_config(&self) -> Result<Config, ApiError> {
+        Ok(self
+            .active_configuration
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .config
+            .clone())
+    }
+    pub async fn configuration_get(
+        &self,
+    ) -> Result<crate::configuration::ConfigurationSnapshot, ApiError> {
+        let _gate = self.configuration_gate.lock().await;
+        let active = self
+            .active_configuration
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .clone();
+        let root = self.store.data_directory().to_owned();
+        tokio::task::spawn_blocking(move || {
+            let saved = crate::configuration::read(&root)?;
+            crate::configuration::snapshot(&root, &saved, Some(&active))
+        })
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(Into::into)
+    }
+    pub async fn configuration_save(
+        &self,
+        request: crate::configuration::ConfigurationSaveRequest,
+    ) -> Result<crate::configuration::ConfigurationSnapshot, ApiError> {
+        self.ensure_running()?;
+        let gate = self
+            .configuration_gate
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| crate::configuration::ConfigurationError {
+                code: "configuration_busy",
+                param: None,
+            })?;
+        let active = self
+            .active_configuration
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .clone();
+        let root = self.store.data_directory().to_owned();
+        let limits = self
+            .registry
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .models
+            .iter()
+            .map(|m| (m.id.clone(), m.context_limit))
+            .collect();
+        let cache = self.active_configuration.clone();
+        tokio::task::spawn_blocking(move || {
+            // The detached blocking transaction owns the cache publication and
+            // gate even if the HTTP client disconnects while disk I/O runs.
+            let _gate = gate;
+            let next = crate::configuration::save(&root, request, Some(&active), &limits)?;
+            *cache
+                .write()
+                .map_err(|_| crate::configuration::ConfigurationError {
+                    code: "configuration_unavailable",
+                    param: None,
+                })? = next.clone();
+            crate::configuration::snapshot(&root, &next, Some(&next))
+        })
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(Into::into)
+    }
+    pub async fn configuration_model_get(
+        &self,
+        id: ModelId,
+    ) -> Result<crate::configuration::ModelConfiguration, ApiError> {
+        let _gate = self.configuration_gate.lock().await;
+        let root = self.store.data_directory().to_owned();
+        let saved = tokio::task::spawn_blocking(move || crate::configuration::read(&root))
+            .await
+            .map_err(|_| ApiError::internal())??;
+        let limit = self
+            .registry
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .models
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.context_limit);
+        let status = self.control(|runtime| runtime.status()).await?;
+        crate::configuration::model_configuration(&saved, id, Some(&status), limit)
+            .map_err(Into::into)
+    }
     pub async fn open_store(path: PathBuf) -> Result<Arc<ModelStore>, RuntimeError> {
         tokio::task::spawn_blocking(move || ModelStore::open(path).map(Arc::new))
             .await
@@ -79,6 +184,23 @@ impl ApiState {
             })?
     }
     pub async fn initialize_registry(&self) -> Result<(), ApiError> {
+        let root = self.store.data_directory().to_owned();
+        if root.join("config.toml").exists() {
+            let document = tokio::task::spawn_blocking(move || crate::configuration::read(&root))
+                .await
+                .map_err(|_| ApiError::internal())??;
+            if document.config != *self.config {
+                return Err(crate::configuration::ConfigurationError {
+                    code: "configuration_restart_required",
+                    param: None,
+                }
+                .into());
+            }
+            *self
+                .active_configuration
+                .write()
+                .map_err(|_| ApiError::internal())? = document;
+        }
         let build = self.probe_build.clone();
         tokio::task::spawn_blocking(move || {
             build.get_or_init(|| {
@@ -269,6 +391,7 @@ impl ApiState {
             "automatic_min_4_available_parallelism_fallback_1"
         };
         let selection = self.thread_selection.clone();
+        let self_schema_one = self.config.schema_version == 1;
         self.execute(move |runtime| {
             runtime.load(model, options)?;
             *selection.write().map_err(|_| {
@@ -276,7 +399,11 @@ impl ApiState {
                     ErrorCode::RuntimeFaulted,
                     "thread selection observation failed",
                 )
-            })? = Some((options, source));
+            })? = if explicit_threads || self_schema_one {
+                Some((options, source))
+            } else {
+                None
+            };
             Ok(())
         })
         .await
@@ -295,7 +422,7 @@ impl ApiState {
         {
             return Some(source);
         }
-        if options == self.config.load_options() {
+        if self.config.schema_version == 1 && options == self.config.load_options() {
             Some(if self.config.inference.threads.is_some() {
                 "configuration"
             } else {
@@ -327,7 +454,14 @@ impl ApiState {
     pub async fn submit(&self, request: GenerationRequest) -> Result<EventReceiver, ApiError> {
         self.ensure_running()?;
         self.prepare_external(request.model.clone()).await?;
-        self.execute(move |runtime| runtime.submit(request)).await
+        let config = self.active_config()?;
+        let options = crate::configuration::resolve_load_options(
+            &config,
+            &request.model,
+            Default::default(),
+        )?;
+        self.execute(move |runtime| runtime.submit_with_load_options(request, options))
+            .await
     }
     pub async fn submit_current(
         &self,

@@ -1338,6 +1338,8 @@ async fn lan_router_has_no_management_proof_or_ambient_authentication() {
     for path in [
         "/healthz",
         "/runtime/status",
+        "/runtime/configuration",
+        "/runtime/configuration/models/fixture",
         "/runtime/models",
         "/runtime/models/import",
         "/runtime/load",
@@ -1347,7 +1349,7 @@ async fn lan_router_has_no_management_proof_or_ambient_authentication() {
         "/runtime/load-and-test",
         "/runtime/model-test",
     ] {
-        for method in ["GET", "POST"] {
+        for method in ["GET", "POST", "PUT"] {
             let (code, headers, _) = lan_raw(&h, method, path, Some(key), "").await;
             assert_eq!(code, 404, "{method} {path}");
             assert!(!headers.contains("x-nexa-server-proof"));

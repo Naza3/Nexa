@@ -1538,3 +1538,45 @@ h3 {
   .sidebar .brand { padding-bottom: 18px; }
   .sidebar .local-card { display: none; }
 }
+
+.overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.overview-grid .settings-card { min-width: 0; }
+.workspace-actions, .model-id-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.model-id-row { margin-block: 8px; }
+.model-id-row .hash { overflow-wrap: anywhere; min-width: 0; }
+.activity-card { overflow-wrap: anywhere; }
+.api-row { flex-wrap: wrap; gap: 10px; }
+.api-row output { min-width: 0; overflow-wrap: anywhere; }
+:focus-visible { outline: 3px solid #447dbe; outline-offset: 3px; }
+@media (max-width: 850px) {
+  .overview-grid { grid-template-columns: 1fr; gap: 0; }
+  .main-content { padding: 24px 20px; }
+  .runtime-card, .model-row, .directory-summary { flex-wrap: wrap; }
+  .model-row-actions { max-width: none; flex-direction: row; flex-wrap: wrap; }
+}
+@media (max-width: 600px) {
+  body { min-width: 320px; }
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { position: static; width: auto; height: auto; max-height: 45vh; padding: 12px; overflow: auto; }
+  .sidebar-navigation nav { display: flex; flex-wrap: wrap; }
+  .sidebar .brand, .sidebar .local-card, .nav-label { display: none; }
+  .nav-item { width: auto; padding: 10px; }
+  .nav-item small { display: none; }
+  .sidebar-bottom { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .service-control { flex: 1; min-width: 180px; margin: 0; padding: 0; border: 0; }
+  .sidebar-footer { margin: 0; }
+  .workspace { min-width: 0; }
+  .page-heading { align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .main-content { padding: 18px 12px; }
+  .settings-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 850px) { body { min-width: 320px; } }
+@media (max-width: 600px) {
+  .app-shell { display: flex; flex-direction: column; }
+  .workspace { margin-left: 0; width: 100%; }
+  .sidebar { inset: auto; flex-shrink: 1; }
+  .topbar { padding-inline: 16px; gap: 8px; height: auto; min-height: 52px; }
+  button { white-space: normal; }
+}
+.workspace-pages { border: 0; margin: 0; padding: 0; min-width: 0; }
+.chat-content > .workspace-pages { display: flex; flex: 1; flex-direction: column; min-height: 0; }

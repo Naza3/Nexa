@@ -7,6 +7,24 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "configuration_conflict" => "配置已被其他窗口或程序更改。请重读并比较草稿后再保存。",
+            "configuration_migration_required" => {
+                "请先在设置中比较并确认旧桌面/API默认值，升级配置后再使用模型档案。"
+            }
+            "configuration_restart_required" => {
+                "磁盘配置与运行服务不同。请停服并重启后再主动加载或保存。"
+            }
+            "configuration_revision_required" => {
+                "此旧写入接口不支持配置版本检查。请使用新版设置页面。"
+            }
+            "configuration_busy" => "另一个配置事务正在进行，请稍后重试。",
+            "configuration_invalid" | "model_profile_invalid" => {
+                "配置或模型档案超出有效范围，未保存。"
+            }
+            "configuration_durability_unconfirmed" => {
+                "配置可能已保存，但磁盘持久化未确认。请先重新读取，不要直接重试。"
+            }
+
             "validation_record_unavailable" | "validation_record_write_failed" => {
                 "本机测试记录无法保存，未确认本次验证通过。已加载模型仍可继续使用，请检查数据目录后重试测试。"
             }
@@ -62,7 +80,7 @@ impl BridgeError {
             }
             "lan_address_discovery_limit" => "本机网卡信息超过读取上限，请手动填写 IPv4 地址。",
             "runtime_running" => "Stop the runtime before applying this runtime setting.",
-            "not_initialized" => "Initialize and start the runtime explicitly first.",
+            "not_initialized" => "请先明确初始化本机配置。初始化不会启动服务。",
             "runtime_not_running" => "Start the runtime first.",
             "connection_failed" => {
                 "The existing instance could not be securely verified. It was not replaced."
@@ -129,6 +147,27 @@ impl BridgeError {
             message: message.into(),
         }
     }
+    fn with_configuration_param(mut self, param: Option<&str>) -> Self {
+        let label = match param {
+            Some("expected_revision") => Some("保存版本"),
+            Some("expected_preferences_revision") => Some("旧桌面偏好版本"),
+            Some("update") => Some("配置组"),
+            Some("update.load_overrides") => Some("模型运行档案"),
+            Some("update.load_overrides.context_size") => Some("模型上下文上限"),
+            Some("update.global_defaults") => Some("全局加载默认值"),
+            Some("update.global_defaults.context_size") => Some("全局默认上下文与模型上限"),
+            Some("update.request_defaults") => Some("请求默认值"),
+            Some("update.runtime") => Some("运行策略"),
+            Some("update.runtime.idle_unload_seconds") => Some("空闲释放时间"),
+            Some("update.local_api") => Some("本机监听"),
+            Some("update.lan_api") => Some("局域网设置"),
+            _ => None,
+        };
+        if let Some(label) = label {
+            self.message.push_str(&format!("（字段：{label}）"));
+        }
+        self
+    }
     pub(crate) fn spawn(error: &std::io::Error) -> Self {
         let mut safe = Self::new("runtime_start_failed");
         if let Some(code) = error.raw_os_error() {
@@ -140,6 +179,18 @@ impl BridgeError {
     }
     pub(crate) fn api(code: Option<&str>) -> Self {
         const KNOWN: &[&str] = &[
+            "not_found",
+            "configuration_conflict",
+            "configuration_migration_required",
+            "configuration_restart_required",
+            "configuration_revision_required",
+            "configuration_busy",
+            "configuration_invalid",
+            "model_profile_invalid",
+            "configuration_unavailable",
+            "configuration_write_failed",
+            "configuration_durability_unconfirmed",
+            "runtime_running",
             "invalid_request",
             "unsupported_parameter",
             "unsupported_model",
@@ -192,9 +243,16 @@ impl std::error::Error for BridgeError {}
 impl From<runtime_cli::client::ClientError> for BridgeError {
     fn from(e: runtime_cli::client::ClientError) -> Self {
         match e {
-            runtime_cli::client::ClientError::Api { code, .. } => Self::api(code.as_deref()),
+            runtime_cli::client::ClientError::Api { code, param, .. } => {
+                Self::api(code.as_deref()).with_configuration_param(param.as_deref())
+            }
             _ => Self::new("connection_failed"),
         }
+    }
+}
+impl From<runtime_api::configuration::ConfigurationError> for BridgeError {
+    fn from(e: runtime_api::configuration::ConfigurationError) -> Self {
+        Self::new(e.code).with_configuration_param(e.param)
     }
 }
 pub type Result<T> = std::result::Result<T, BridgeError>;

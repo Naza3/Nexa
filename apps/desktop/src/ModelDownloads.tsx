@@ -58,11 +58,12 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
       <button disabled={state.download_phase === "stopping"} onClick={() => void controller.cancelDownload()}>{state.download_phase === "stopping" ? "正在取消…" : saved ? "取消后续步骤" : "取消下载"}</button> :
       task?.status === "completed" ? !task.result?.registered && <button disabled={state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.pickModels()}>选择已保存文件以登记</button> :
         task && <button disabled={state.snapshot?.connection !== "stopped" || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.startDownload(task.catalog_id, state.download_auto_test)}>重新下载</button>}
+    {!active && task?.terminal && <button onClick={() => controller.dismissDownloadResult(task)}>关闭下载结果</button>}
   </section>;
 }
 export function ModelDownloads({ state, controller, goSettings }: { state: ViewState; controller: DesktopController; goSettings: () => void }) {
   const [filter, setFilter] = useState("");
-  const [autoTest, setAutoTest] = useState(true);
+  const [autoTest, setAutoTest] = useState(false);
   useEffect(() => { void controller.loadCatalog(); }, [controller]);
   const source = state.snapshot?.settings.download_source ?? "modelscope";
   const directory = state.snapshot?.model_directory.configured;

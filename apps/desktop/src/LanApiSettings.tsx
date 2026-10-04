@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useConfigDraft } from "./configDraft";
+import { DraftConflict } from "./Configuration";
 import type { DesktopController, ViewState } from "./controller";
 import { DEFAULT_LAN_SETTINGS, lanBaseUrl, lanSettingsFromDraft, validateLanSettings } from "./lanApi";
 import { Modal } from "./Modal";
@@ -10,16 +12,11 @@ function draftFields(source: LanSettings) {
 
 export function LanApiSettings({ state, controller }: { state: ViewState; controller: DesktopController }) {
   const snapshot = state.snapshot;
-  const configured = snapshot?.lan_api ?? DEFAULT_LAN_SETTINGS;
-  const [form, setForm] = useState(() => ({ source: configured, ...draftFields(configured) }));
+  const configured = snapshot?.configuration?.saved.lan_api ?? snapshot?.lan_api ?? DEFAULT_LAN_SETTINGS;
+  const editor = useConfigDraft(draftFields(configured), snapshot?.configuration?.revision, "lan_api");
+  const form = { source: configured, ...editor.draft };
+  const setForm = (next: typeof form) => editor.setDraft({ enabled: next.enabled, host: next.host, port: next.port, clients: next.clients });
   const { enabled, host, port, clients } = form;
-  // A polling refresh can update saved configuration without discarding unsaved edits.
-  if (JSON.stringify(form.source) !== JSON.stringify(configured)) {
-    const { source, ...fields } = form;
-    const dirty = JSON.stringify(fields) !== JSON.stringify(draftFields(source));
-    const submitted = enabled ? lanSettingsFromDraft(true, host, port, clients) : { ...source, enabled: false };
-    setForm({ source: configured, ...(dirty && JSON.stringify(submitted) !== JSON.stringify(configured) ? fields : draftFields(configured)) });
-  }
   useEffect(() => { void controller.refreshLanAddresses(); }, [controller]);
   const [selectedInterface, setSelectedInterface] = useState<number | null>(null);
   const addresses = state.lan_addresses?.addresses ?? [];
@@ -54,6 +51,7 @@ export function LanApiSettings({ state, controller }: { state: ViewState; contro
 
   return (
     <section className="settings-card lan-settings" aria-labelledby="lan-api-title">
+      {editor.conflict && <DraftConflict reset={editor.reset} rebase={editor.rebase} draft={editor.draft} saved={draftFields(configured)} />}
       <div className="toggle-row">
         <div>
           <h2 id="lan-api-title">局域网 API</h2>
@@ -67,7 +65,7 @@ export function LanApiSettings({ state, controller }: { state: ViewState; contro
       <p className="small-note">仅开放 /v1/models 与 /v1/chat/completions。管理接口保持本机回环访问；不会自动修改防火墙或配置 NAT / 端口转发。</p>
       <p className="small-note">局域网客户端只能列出和调用本机已加载的模型。尚未加载或空闲自动卸载后，请回到本机模型页加载；客户端不能远程加载、卸载或切换模型。</p>
       {!supported ? <p className="warning-text">当前桌面版本未提供局域网 API 设置，继续使用本机 API。</p>
-        : !snapshot?.initialized ? <p className="warning-text">请先通过左侧服务按钮显式初始化运行服务，再停止服务后配置；此页面不会初始化服务或生成密钥。</p>
+        : !snapshot?.initialized ? <p className="warning-text">请先到设置选择“仅初始化配置”，无需先启动再停止服务；此页面不会初始化服务或生成密钥。</p>
         : !stopped && <p className="warning-text">请先显式停止运行服务再修改。保存不会自动中断任务或切换监听地址。</p>}
       {enabled && <div className="lan-fields">
         <div className="lan-discovery">
@@ -118,8 +116,8 @@ export function LanApiSettings({ state, controller }: { state: ViewState; contro
       {validation && <p role="alert" className="warning-text">{validation}</p>}
       <div className="save-row">
         <span className="muted">{changed ? "有未保存的更改" : "配置与已保存内容一致"}</span>
-        <button className="primary" disabled={!editable || !!validation || !changed}
-          onClick={() => void controller.saveLanSettings(draft)}>保存局域网 API 设置</button>
+        <button className="primary" disabled={!editable || !!validation || !changed || editor.conflict}
+          onClick={() => void (snapshot?.configuration ? controller.saveConfiguration({ expected_revision: editor.baseRevision!, update: { kind: "lan_api", lan_api: draft } }) : controller.saveLanSettings(draft))}>保存局域网 API 设置</button>
       </div>
       {baseUrl && <div className="lan-client-url">
         <div className="api-row"><span>客户端 Base URL</span><output aria-label="局域网客户端 Base URL">{baseUrl}</output></div>

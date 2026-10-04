@@ -9,7 +9,7 @@ import { deferred, makeApi, snapshot } from "./fixtures";
 const stopped = (): Snapshot => ({ ...snapshot(), connection: "stopped", runtime: null, api_address: null });
 async function setup(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi(overrides); const controller = new DesktopController(api);
-  render(<App controller={controller} />);
+  render(<App initialPage="models" controller={controller} />);
   await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
   return { api, controller, user: userEvent.setup() };
 }
@@ -18,7 +18,7 @@ const control = () => within(screen.getByRole("region", { name: "运行服务控
 describe("persistent sidebar service control", () => {
   it("keeps one primary service control available on every page", async () => {
     const { user, api } = await setup();
-    for (const page of ["模型", "聊天", "设置"]) {
+    for (const page of ["模型库", "API 接入", "活动", "设置"]) {
       await user.click(screen.getByRole("button", { name: page }));
       expect(control().getByRole("button", { name: "停止运行服务" })).toBeEnabled();
       expect(screen.getAllByRole("button", { name: "停止运行服务" })).toHaveLength(1);
@@ -67,7 +67,7 @@ describe("persistent sidebar service control", () => {
     let current: Snapshot = { ...stopped(), initialized, connection: "error" };
     const pending = deferred<Snapshot>();
     const api = makeApi({ snapshot: vi.fn().mockResolvedValueOnce(current).mockImplementationOnce(() => pending.promise).mockImplementation(async () => current) });
-    const controller = new DesktopController(api); render(<App controller={controller} />);
+    const controller = new DesktopController(api); render(<App initialPage="models" controller={controller} />);
     await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
     expect(control().getByText("服务状态待确认")).toBeInTheDocument();
     const check = control().getByRole("button", { name: "重新检查服务" }); fireEvent.click(check); fireEvent.click(check);
@@ -100,7 +100,7 @@ describe("persistent sidebar service control", () => {
   });
   it("disables global stop while the local chat needs cancellation or recovery", async () => {
     const terminal = deferred<ChatBatch>(); const { api, controller, user } = await setup({ chatNext: vi.fn(() => terminal.promise) });
-    await user.click(screen.getByRole("button", { name: "聊天" }));
+    await user.click(screen.getByRole("button", { name: "聊天测试" }));
     await user.type(screen.getByRole("textbox", { name: "输入消息" }), "你好");
     await user.click(screen.getByRole("button", { name: "发送" }));
     expect(control().getByRole("button", { name: "停止运行服务" })).toBeDisabled();

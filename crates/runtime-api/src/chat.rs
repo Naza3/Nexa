@@ -478,7 +478,8 @@ async fn chat_request(
     let bytes = to_bytes(request.into_body(), state.config.api.max_body_bytes)
         .await
         .map_err(|_| too_large())?;
-    let validated = parse_chat(&bytes, id, &state.config)?;
+    let defaults = state.active_config()?;
+    let validated = parse_chat(&bytes, id, &defaults)?;
     drop(bytes);
     let (model, events) = if let Some(model) = validated.model {
         let request = runtime_types::GenerationRequest {

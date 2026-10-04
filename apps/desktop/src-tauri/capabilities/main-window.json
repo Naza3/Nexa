@@ -6,6 +6,7 @@
   "windows": ["main"],
   "webviews": ["main"],
   "permissions": [
+    "allow-runtime-initialize", "allow-configuration-get", "allow-configuration-model-get", "allow-configuration-save", "allow-configuration-migrate", "allow-model-load-profile", "allow-ui-preferences-get", "allow-ui-preferences-save",
     "allow-desktop-snapshot", "allow-runtime-start", "allow-model-pick",
     "allow-models-pick",
     "allow-models-add",

@@ -15,12 +15,12 @@ import { deferred, makeApi, model, snapshot } from "./fixtures";
 async function mount(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi(overrides),
     controller = new DesktopController(api);
-  const result = render(<App controller={controller} />);
+  const result = render(<App initialPage="models" controller={controller} />);
   await screen.findByText(model.display_name);
   return { api, controller, user: userEvent.setup(), ...result };
 }
 async function chat(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "聊天" }));
+  await user.click(screen.getByRole("button", { name: "聊天测试" }));
 }
 const terminal: ChatBatch = {
   request_id: "request-1",
@@ -84,8 +84,8 @@ describe("desktop React interaction", () => {
     const { user } = await mount();
     expect(screen.getByText(/原生后端观测：unavailable/)).toBeInTheDocument();
     await chat(user);
-    expect(screen.getByRole("heading", { name: "聊天" })).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: "3", altKey: true });
+    expect(screen.getByRole("heading", { name: "聊天测试" })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "5", altKey: true });
     expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: /上下文长度/ })).toHaveValue(
       2048,
@@ -122,7 +122,7 @@ describe("desktop React interaction", () => {
     const send = screen.getByRole("button", { name: "发送" });
     fireEvent.click(send);
     fireEvent.click(send);
-    await user.click(screen.getByRole("button", { name: "模型" }));
+    await user.click(screen.getByRole("button", { name: "模型库" }));
     await chat(user);
     expect(screen.getByText("你好")).toBeInTheDocument();
     expect(api.chatStart).toHaveBeenCalledTimes(1);
@@ -192,7 +192,7 @@ describe("desktop React interaction", () => {
         generation: "generation-1",
       })),
     });
-    render(<App controller={new DesktopController(api)} />);
+    render(<App initialPage="models" controller={new DesktopController(api)} />);
     const init = await screen.findByRole("button", { name: "初始化并启动" });
     expect(api.start).not.toHaveBeenCalled();
     expect(screen.getByText("你的模型库还是空的")).toBeInTheDocument();
@@ -227,7 +227,7 @@ describe("desktop React interaction", () => {
   });
   it("copies via native command only after clipboard risk confirmation, with no token getter", async () => {
     const { user, api } = await mount();
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("button", { name: "API 接入" }));
     await user.click(screen.getByRole("button", { name: "复制 API 令牌" }));
     expect(api.copyToken).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toHaveTextContent(

@@ -43,6 +43,14 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
   }
 }
 export const nativeApi: DesktopApi = {
+  initialize: () => call("runtime_initialize"),
+  configurationGet: () => call("configuration_get"),
+  configurationModelGet: (model_id) => call("configuration_model_get", { model_id }),
+  configurationSave: (request) => call("configuration_save", request),
+  configurationMigrate: (request) => call("configuration_migrate", request),
+  loadModelProfile: (model_id, load_overrides) => call("model_load_profile", { model_id, ...(load_overrides ? { load_overrides } : {}) }),
+  uiPreferencesGet: () => call("ui_preferences_get"),
+  uiPreferencesSave: (request) => call("ui_preferences_save", request),
   catalog: () => call("model_catalog"),
   discoverDirectory: () => call("model_directory_discover"),
   downloadStart: (catalog_id, auto_test) => call("model_download_start", { catalog_id, ...(auto_test === undefined ? {} : { auto_test }) }),

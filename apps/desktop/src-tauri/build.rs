@@ -3,6 +3,14 @@ fn main() {
         let attributes = tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new().commands(&[
                 "desktop_snapshot",
+                "runtime_initialize",
+                "configuration_get",
+                "configuration_model_get",
+                "configuration_save",
+                "configuration_migrate",
+                "model_load_profile",
+                "ui_preferences_get",
+                "ui_preferences_save",
                 "runtime_start",
                 "model_pick",
                 "models_pick",

@@ -370,13 +370,16 @@ impl LoadRequest {
         if self.gpu_layers.unwrap_or(config.inference.gpu_layers) != 0 {
             return Err(ApiError::unsupported("gpu_layers"));
         }
-        let defaults = config.load_options();
-        let options = LoadOptions {
-            context_size: self.context_size.unwrap_or(defaults.context_size),
-            threads: self.threads.unwrap_or(defaults.threads),
-            batch_size: self.batch_size.unwrap_or(defaults.batch_size),
-        };
-        options.validate().map_err(|_| {
+        let options = crate::configuration::resolve_load_options(
+            config,
+            &self.model,
+            crate::configuration::LoadOverrides {
+                context_size: self.context_size,
+                threads: self.threads,
+                batch_size: self.batch_size,
+            },
+        )
+        .map_err(|_| {
             ApiError::invalid(
                 "load_options",
                 "Invalid context size, thread count, or batch size.",

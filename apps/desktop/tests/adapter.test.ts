@@ -111,3 +111,21 @@ describe("native-only adapter", () => {
     );
   });
 });
+
+describe("canonical native configuration commands", () => {
+  it("uses the eight frozen commands without adding inference fields to UI preferences or ordinary load", async () => {
+    const revision = `sha256:${"a".repeat(64)}`;
+    await nativeApi.initialize!(); expect(invoke).toHaveBeenLastCalledWith("runtime_initialize", undefined);
+    await nativeApi.configurationGet!(); expect(invoke).toHaveBeenLastCalledWith("configuration_get", undefined);
+    await nativeApi.configurationModelGet!("model-a"); expect(invoke).toHaveBeenLastCalledWith("configuration_model_get", { request: { model_id: "model-a" } });
+    const update = { expected_revision: revision, update: { kind: "model_profile" as const, model_id: "model-a", load_overrides: { context_size: 2048, threads: null, batch_size: null } } };
+    await nativeApi.configurationSave!(update); expect(invoke).toHaveBeenLastCalledWith("configuration_save", { request: update });
+    const migration = { expected_revision: revision, expected_preferences_revision: null, choice: "api" as const, custom: null };
+    await nativeApi.configurationMigrate!(migration); expect(invoke).toHaveBeenLastCalledWith("configuration_migrate", { request: migration });
+    await nativeApi.loadModelProfile!("model-a"); expect(invoke).toHaveBeenLastCalledWith("model_load_profile", { request: { model_id: "model-a" } });
+    await nativeApi.loadModelProfile!("model-a", { threads: 2 }); expect(invoke).toHaveBeenLastCalledWith("model_load_profile", { request: { model_id: "model-a", load_overrides: { threads: 2 } } });
+    await nativeApi.uiPreferencesGet!(); expect(invoke).toHaveBeenLastCalledWith("ui_preferences_get", undefined);
+    const ui = { expected_revision: revision, preferences: { download_source: "modelscope" as const, close_runtime_on_exit: false } };
+    await nativeApi.uiPreferencesSave!(ui); expect(invoke).toHaveBeenLastCalledWith("ui_preferences_save", { request: ui });
+  });
+});

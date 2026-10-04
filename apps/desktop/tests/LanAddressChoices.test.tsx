@@ -15,9 +15,9 @@ const detected: LanAddressDiscovery = { status: "available", addresses: [
 const stopped = (): Snapshot => ({ ...snapshot(), connection: "stopped", runtime: null, lan_api: lan });
 async function setup(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi({ snapshot: vi.fn(async () => stopped()), lanAddresses: vi.fn(async () => detected), ...overrides });
-  const controller = new DesktopController(api); render(<App controller={controller} />);
+  const controller = new DesktopController(api); render(<App initialPage="models" controller={controller} />);
   await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
-  const user = userEvent.setup(); await user.click(screen.getByRole("button", { name: "设置" }));
+  const user = userEvent.setup(); await user.click(screen.getByRole("button", { name: "API 接入" }));
   await waitFor(() => expect(api.lanAddresses).toHaveBeenCalledTimes(1));
   return { api, controller, user };
 }

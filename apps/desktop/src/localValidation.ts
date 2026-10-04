@@ -62,6 +62,13 @@ export function validationErrorReason(code: string): string {
     request_cancelled: "本次短文本测试已取消，取消不算通过。",
     deadline_exceeded: "本次短文本测试超时，未按通过处理；请在空闲时重试。",
     worker_failed: "推理进程未完成本次测试，未按通过处理。请检查运行状态后重试。",
+    configuration_migration_required: "请先在设置中确认旧配置迁移来源，再按统一档案加载。",
+    configuration_restart_required: "已保存配置尚未被运行实例采用，请显式停止并重新启动服务后再加载。",
+    load_timeout: "原生加载超时，请检查模型文件与加载参数。此错误不等同于上下文超限或内存不足。",
+    model_load_interrupted: "本次加载连接已中断，实际结果尚未确认。请先核对运行状态，不自动重放。",
+    context_length_exceeded: "输入、模板与输出预算超过上下文限制，请减少输入或输出预算，或使用模型支持的上下文配置。",
+    context_too_large: "请求上下文超过模型或运行时上限，请降低该模型的上下文配置后重新加载。",
+    model_load_failed: "模型加载失败，请检查文件、内存及当前加载参数；不能据此判断为上下文超限。",
     unsupported_model: "本次加载或测试未通过当前引擎检查，请查看模型与运行服务诊断。",
   };
   return reasons[code] ?? "本次操作未完成或结果尚未确认，请检查运行状态并在空闲时重试。";

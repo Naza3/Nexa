@@ -47,6 +47,7 @@ impl Drop for RegistryLease {
 }
 enum Command {
     Submit(GenerationRequest, Reply<EventReceiver>),
+    SubmitWithLoadOptions(GenerationRequest, LoadOptions, Reply<EventReceiver>),
     SubmitLoaded(GenerationRequest, Reply<EventReceiver>),
     SubmitCurrent(
         RequestId,
@@ -123,6 +124,16 @@ impl RuntimeHandle {
     pub fn submit(&self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
         request.validate()?;
         self.ask(|reply| Command::Submit(request, reply))
+    }
+    /// Supply resolved defaults for a first cold selection only. A session
+    /// selection, including an idle-unloaded selection, keeps its actual options.
+    pub fn submit_with_load_options(
+        &self,
+        request: GenerationRequest,
+        options: LoadOptions,
+    ) -> Result<EventReceiver, RuntimeError> {
+        request.validate()?;
+        self.ask(|reply| Command::SubmitWithLoadOptions(request, options, reply))
     }
     /// Admit inference only for an already loaded model, atomically in the
     /// scheduler. Unlike submit, this can never resolve or start loading a model.
@@ -455,6 +466,10 @@ impl Actor {
                 let result = self.submit(request);
                 let _ = reply.send(result);
             }
+            Command::SubmitWithLoadOptions(request, options, reply) => {
+                let result = self.submit_with_options(request, options);
+                let _ = reply.send(result);
+            }
             Command::SubmitLoaded(request, reply) => {
                 let result = if !matches!(self.state, ModelState::Ready | ModelState::Generating)
                     || self.selected.is_none()
@@ -563,6 +578,13 @@ impl Actor {
         Ok(model)
     }
     fn submit(&mut self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
+        self.submit_with_options(request, self.config.load_options)
+    }
+    fn submit_with_options(
+        &mut self,
+        request: GenerationRequest,
+        cold_options: LoadOptions,
+    ) -> Result<EventReceiver, RuntimeError> {
         if self.stopping {
             return Err(stopped());
         }
@@ -604,7 +626,8 @@ impl Actor {
             return Err(error(ErrorCode::QueueFull));
         }
         if self.selected.is_none() {
-            let options = self.config.load_options;
+            let options = cold_options;
+            options.validate()?;
             let model = self.resolve(&request.model, options)?;
             self.selected = Some(model);
             self.options = Some(options);
@@ -1503,5 +1526,76 @@ mod ledger_tests {
             },
         );
         assert_eq!(actor.state, ModelState::Ready);
+    }
+    #[test]
+    fn configured_cold_selection_and_session_restore_keep_separate_options() {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let (events, event_receiver) = mpsc::sync_channel(32);
+        let resolver = |id: &ModelId| {
+            Ok(ResolvedModel {
+                id: id.clone(),
+                path: "fake.gguf".into(),
+                context_limit: 8192,
+                default_context: 4096,
+                loadable: true,
+            })
+        };
+        let mut actor = Actor::new(
+            RuntimeConfig::default(),
+            Box::new(resolver),
+            Box::new(Noop),
+            rx,
+            events,
+            event_receiver,
+        );
+        let id = ModelId::new("a").unwrap();
+        let request = |id: ModelId| GenerationRequest {
+            request_id: RequestId::new(),
+            model: id,
+            messages: vec![Message::new(Role::User, "test")],
+            options: GenerationOptions::default(),
+        };
+        let profile = LoadOptions {
+            context_size: 2048,
+            threads: 2,
+            batch_size: 128,
+        };
+        let _first = actor
+            .submit_with_options(request(id.clone()), profile)
+            .unwrap();
+        assert_eq!(actor.options, Some(profile));
+        // Emulate a completed session followed by idle release: selection and
+        // actual options survive even though no model is resident.
+        actor.active = None;
+        actor.operation = None;
+        actor.state = ModelState::Unloaded;
+        let invalid = LoadOptions {
+            context_size: 0,
+            threads: 0,
+            batch_size: 0,
+        };
+        let _second = actor
+            .submit_with_options(request(id.clone()), invalid)
+            .unwrap();
+        assert_eq!(actor.options, Some(profile));
+        let failure = actor.submit_with_options(request(ModelId::new("b").unwrap()), invalid);
+        assert!(matches!(
+            failure,
+            Err(RuntimeError {
+                code: ErrorCode::ModelConflict,
+                ..
+            })
+        ));
+        actor.active = None;
+        actor.operation = None;
+        actor.state = ModelState::Unloaded;
+        let replacement = LoadOptions {
+            context_size: 4096,
+            threads: 3,
+            batch_size: 256,
+        };
+        let (reply, _receiver) = mpsc::channel();
+        actor.explicit_load(id, replacement, reply);
+        assert_eq!(actor.options, Some(replacement));
     }
 }

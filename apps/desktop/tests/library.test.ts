@@ -415,7 +415,7 @@ describe("post-rename durability ambiguity", () => {
     next.resolve({ ...progress("failed"), error });
     await vi.advanceTimersByTimeAsync(0);
     expect(api.snapshot).toHaveBeenCalledTimes(2);
-    expect(controller.getSnapshot().operation).toBe("正在重新读取模型目录");
+    expect(controller.getSnapshot().operation).toMatchObject({ kind: "read_models", label: "正在重新读取模型目录" });
     beforeCommit.resolve(stopped());
     await oldRead;
     await vi.advanceTimersByTimeAsync(0);

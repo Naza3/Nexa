@@ -1,5 +1,9 @@
 # Nexa 当前状态
 
+## 2026-10-04 整体产品体验实施（进行中）
+
+四项修复6aa0e1f已通过[Actions37206035656](https://github.com/Naza3/Nexa/actions/runs/37206035656)并交付完整Windows包；[PR8](https://github.com/Naza3/Nexa/pull/8)仍未合并。随后完成整体流程审查与12页设计，用户15:05 UTC明确批准按方案实施。当前在同一codex/dev落实[整体体验契约](docs/product/experience-implementation.md)，先状态/配置/CAS与模型档案，再页面及任务流程，保持单actor、安全边界与原接口兼容。本批源码已冻结，联合Rust507/0/7、前端610、Python190/4skip、clippy/fmt及Windows交叉check通过；独立前后端审查无剩余阻断，Linux固定真实GGUF的档案/CAS/重载/空闲恢复/空model/SSE及坏配置停服13项通过。详见[实施验证](docs/verification/2026-10-04-unified-product-experience.md)。现在进入统一提交与GitHub原生Windows构建，尚不宣称新Windows包已通过。main仍e3c5，无自动合并或新功能分支。
+
 ## 2026-10-04 四项修复统一提交与Windows构建（进行中）
 
 用户13:28明确要求“修复完成后再提交，在GitHub上构建”，解除下文13:01起暂缓安排。添加结果关闭、LAN网卡候选选择、侧栏统一服务主控、空model默认当前加载模型四项源码与独立审查已完成；联合Rust482通过/0失败/7既有忽略、前端508项、严格Python190通过/4平台skip、clippy/fmt及必要Windows交叉检查通过。现在在 `codex/dev` 统一提交并使用公开仓库标准Actions原生Windows构建；确切run与产物按提交后结果记录，尚不宣称新Windows包已通过。最后交付仍为e0ff1e6。main未自动合并；HTTPS、GPU和复制API ID不在本批。

@@ -42,7 +42,7 @@ enum Mode {
 }
 struct Fixture {
     _temp: tempfile::TempDir,
-    _lock: InstanceLock,
+    _lock: Option<InstanceLock>,
     bridge: Arc<DesktopBridge>,
     server: tokio::task::JoinHandle<()>,
     auth: Arc<AtomicUsize>,
@@ -178,6 +178,11 @@ impl Fixture {
                         header(&request, "authorization").unwrap().as_bytes()
                     ));
                     a.fetch_add(1, Ordering::SeqCst);
+                    if request.starts_with("POST /runtime/shutdown ") {
+                        let body = r#"{"status":"stopped"}"#;
+                        let _=socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes()).await;
+                        return;
+                    }
                     if request.starts_with("POST /runtime/model-test ") {
                         let error = match mode {
                             Mode::ProbeEvidenceError(code) => Some(code),
@@ -314,7 +319,7 @@ impl Fixture {
         });
         Self {
             _temp: temp,
-            _lock: lock,
+            _lock: Some(lock),
             bridge,
             server,
             auth,
@@ -737,4 +742,52 @@ async fn manual_test_does_not_hide_evidence_errors_in_successful_http_responses(
         model_store::local_validation::ValidationState::Passed
     );
     assert!(result.load_success && result.generation_pass && result.error_code.is_none());
+}
+
+#[tokio::test]
+async fn corrupt_configuration_does_not_prevent_proved_stop_or_get_rewritten() {
+    let mut f = Fixture::new(Mode::Valid).await;
+    let root = f._temp.path().join("private");
+    let token = std::fs::read(root.join("secrets/api-token")).unwrap();
+    std::fs::write(root.join("config.toml"), b"damaged configuration").unwrap();
+    let bridge = f.bridge.clone();
+    let stopping = tokio::spawn(async move { bridge.stop().await });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while f.auth.load(Ordering::SeqCst) == 0 {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let lock = f._lock.take().unwrap();
+    lock.remove_own(Discovery::read(&root).unwrap().instance_id)
+        .unwrap();
+    drop(lock);
+    assert!(stopping.await.unwrap().unwrap().stopped);
+    assert_eq!(
+        std::fs::read(root.join("config.toml")).unwrap(),
+        b"damaged configuration"
+    );
+    assert_eq!(
+        std::fs::read(root.join("secrets/api-token")).unwrap(),
+        token
+    );
+}
+#[tokio::test]
+async fn corrupt_configuration_never_allows_stop_without_server_proof_or_valid_token() {
+    let f = Fixture::new(Mode::BadProof).await;
+    let root = f._temp.path().join("private");
+    std::fs::write(root.join("config.toml"), b"damaged configuration").unwrap();
+    let error = f.bridge.stop().await.unwrap_err();
+    assert_ne!(error.code, "configuration_invalid");
+    assert_eq!(f.auth.load(Ordering::SeqCst), 0);
+    assert!(InstanceLock::try_acquire(&root).unwrap().is_none());
+    std::fs::write(root.join("secrets/api-token"), b"invalid token").unwrap();
+    assert_eq!(
+        f.bridge.stop().await.unwrap_err().code,
+        "credentials_unavailable"
+    );
+    assert_eq!(f.auth.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        std::fs::read(root.join("config.toml")).unwrap(),
+        b"damaged configuration"
+    );
 }
