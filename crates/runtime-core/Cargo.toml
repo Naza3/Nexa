@@ -1,0 +1,9 @@
+[package]
+name = "runtime-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+runtime-types = { path = "../runtime-types" }
+serde.workspace = true

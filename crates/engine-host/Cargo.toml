@@ -1,0 +1,15 @@
+[package]
+name = "engine-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+runtime-core = { path = "../runtime-core" }
+runtime-types = { path = "../runtime-types" }
+llama-adapter = { path = "../llama-adapter" }
+
+[dev-dependencies]
+model-store = { path = "../model-store" }
+serde_json = "1.0"
+sha2 = "0.10"

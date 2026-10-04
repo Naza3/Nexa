@@ -1,91 +1,66 @@
 # Nexa Runtime v0.1 开发执行文档
 
-- 版本：1.1
-- 日期：2026-09-30
+- 版本：2.1（Windows 开放模型开发契约）
+- 日期：2026-10-03
 - 项目名：Nexa；命令与原生符号沿用 `ai-runtime` / `ai-runtime-worker` / `air_*`
 - 文档对象：实现项目的开发者、编码 AI、验收人员
 
-> 本文是可以据此分阶段开发和验收的实施规格，不是已经完成的软件。项目命令、接口和目录是需要实现的交付约定；本次文档导出没有编译项目、运行模型或做真机性能测试。上游能力已经参考官方资料核对，具体依赖版本在任务 T00 中锁定。
+> 本文定义Windows runtime契约与后续验收，不代表所有规划已经实现。ADR0015开放模型字段/行为已由50c9d41 WindowsCI固定GGUF回归并发送，用户目标机待验；ADR0016混合目录与诊断源码已冻结、本机合成回归/独立审查通过，WindowsCI/整包及交付仍待完成。35bfd85/389eeef不能追溯获得新行为。实现/真实模型/CI/目标设备结果见当前状态；旧混合平台v1.3保留于历史快照，不再作为当前要求。
 
-本文负责 runtime 的具体契约。项目总体边界见 [架构](docs/architecture.md)，首个业务见 [Telegram 摘要方案](docs/telegram-summary.md)，任务依赖见 [路线](docs/roadmap.md)，实际进度见 [当前状态](PROJECT_STATE.md)。v1.1 按 [ADR 0001](docs/decisions/0001-nexa-scope-and-layers.md) 同步项目定位与文档职责；未新增已实现能力或改变下述 HTTP 子集。
+本文负责runtime具体契约；[架构](docs/architecture.md)负责职责，[ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)负责范围，[路线](docs/roadmap.md)负责W00–W05依赖，[当前状态](PROJECT_STATE.md)记录事实。deepseek harness接入新增门槛见[harness契约](docs/windows-harness-contract.md)。
 
 ## 1. 目标与冻结决策
 
-构建一个轻量的本地大模型运行时，让桌面应用通过本机 HTTP API 调用，让移动应用通过嵌入式库调用。第一版只接入 llama.cpp，复用模型管理、任务调度、推理适配和事件协议。
+构建面向 Windows 桌面 CPU 的本地 LLM runtime，以固定 llama.cpp 为推理核心，让其他应用通过本机 API 调用。Rust保留模型、调度、取消/超时、生命周期、HTTP/CLI与安全边界；桌面界面管理模型与服务，聊天辅助验证。Windows10 x64 / i5-8400 / 16GB内存优先，后续以真实设备证据扩大Intel/AMD桌面CPU与Windows11。
 
-本项目首先为用户自己的 PC / Android 应用提供统一推理核心；首个业务验证是 Telegram 群消息摘要，同时保留本地聊天与短文本生成能力。UI 用于管理模型和验证能力，runtime 可以独立于 UI 使用。
+| 项目 | 当前决定 |
+| --- | --- |
+| 推理引擎 | 固定llama.cpp + 自有C++ shim；不把Rust封装当成新计算内核 |
+| 模型 | 合规单文件GGUF开放候选尝试，不按型号/hash白名单；精确矩阵仅记录已测证据，结构/完整性/模板/资源仍检查 |
+| 运行形态 | Rust管理进程 + 按需独立CPU worker；父端不链接原生库 |
+| UI | Tauri 2 + React/TypeScript/Vite；管理器增量见W03 |
+| HTTP | Axum + Tokio，默认`127.0.0.1:18080`，回环/Bearer/Host/Origin边界保持 |
+| 现有外部接口 | `/v1/models`、`/v1/chat/completions`严格文本子集及`/runtime/*` |
+| 接入目标 | 官方dsh的pi-ai自定义openai-completions provider；兼容增量尚待实施/验证 |
+| 并发与历史 | 1个模型、1个运行槽、有限FIFO；调用方提交完整messages并保存业务历史 |
+| KV cache | 每请求独立，当前不跨请求复用 |
+| 模型目录 | managed受控复制导入 + external只读零复制登记；不内置市场 |
 
-Telegram 消息获取、来源快照、分块、摘要任务与产物属于调用层；runtime 只处理有界单次推理，不持久化聊天历史或自动执行摘要工作流。摘要任务 S00–S04 和业务质量验收独立于本文 T00–T10、A01–A26。
+### 1.1 交付顺序
 
-| 项目 | 第一版决定 |
-|---|---|
-| 核心语言 | Rust；C++ 仅用于 llama.cpp 适配层 |
-| 推理引擎 | 固定 commit 的 llama.cpp，不跟随 master 自动升级 |
-| 模型 | 本地单文件 GGUF，文本生成模型；按明确清单验收 |
-| PC 形态 | Rust 常驻管理进程 + 按需启动的独立推理 worker |
-| 移动形态 | 同一核心嵌入 App，专用原生线程执行推理 |
-| PC UI | Tauri 2 + React + TypeScript + Vite |
-| 移动 UI | Flutter；flutter_rust_bridge 2 作为 Dart/Rust 桥 |
-| HTTP | Axum + Tokio，默认 `127.0.0.1:18080` |
-| 外部接口 | `/v1/models`、`/v1/chat/completions` 的明确文本子集 |
-| 并发 | 1 个加载模型、1 个运行任务、有限 FIFO 等待队列 |
-| 对话历史 | 调用方提交完整 messages；runtime 不持久化聊天历史 |
-| KV cache | 每个请求独立；第一版不跨请求复用 |
-| 模型导入 | 复制本地文件到管理目录；不内置模型下载市场 |
-| GPU | 按平台单独构建、按设备验证；CPU 始终作为基础路径 |
-| NPU | 第一版不承诺，也不接入 MNN、QNN、CoreML、ONNX |
+W00后，W01当前包短验与W04最小harness文本互通并行推进；真实工具闭环依赖W02实用模型/工具能力准入，W04文本不被W03托盘阻塞。各阶段门槛通过后进行W05后期发行验收。W阶段定义见路线；T00–T06是已有建设/验证背景，不重复开发。
 
-### 1.1 发布顺序
+目标硬件不等于已支持。当前Server2022 CI与旧Windows10短验分层，Windows11和新Intel/AMD CPU独立验收。无开发工具、实际离线和长期稳定性仍按用户要求放在后期，不阻塞当前开发，也不提前写成通过。
 
-“统一 PC 和移动端”指统一核心源码、接口和可兼容的模型资产，不表示使用同一个二进制，也不表示所有平台共享后台服务生命周期。[S1][S2][S5]
+### 1.2 非当前目标
 
-| 发布层级 | 平台与范围 | 发布条件 |
-|---|---|---|
-| v0.1 必须完成 | Windows x64 CPU；Android arm64 CPU；PC HTTP；两端最小 UI | 两个平台真实模型与真机用例通过 |
-| v0.1 GPU 扩展 | Windows CUDA / Vulkan，分别构建发行包 | 每个声明支持的后端有硬件验收记录 |
-| v0.1.x 平台扩展 | Linux x64 CPU / Vulkan；macOS arm64 CPU / Metal | 独立构建、安装、推理、卸载验证通过 |
-| 后续移动扩展 | Android Vulkan 设备清单；iOS arm64 CPU / Metal | 驱动、内存、前后台和签名打包验证通过 |
+Android/MNN/Flutter、其他操作系统、GPU/NPU、完整聊天产品、账号/云同步、模型市场、公开网络服务和Telegram业务均不作为当前产品依赖。历史代码、隔离CI和未提交研究工作保留，不删除或覆盖。
 
-架构从第一天保留 Linux、macOS 和 iOS 适配边界；首个正式验收集中在 Windows 与 Android。没有设备实测的平台只能标注“构建通过”或“待验证”。
+首阶段不增加多模型并行、连续批处理、跨会话KV复用、分布式推理、embedding/RAG或动态插件ABI。harness需要的工具消息协议单独设计和验收；工具执行由调用方拥有，runtime不成为自主操作工具的Agent。
 
-首批目标设备为用户提供的 Windows Intel i5-8400 / 16GB，以及 Android 骁龙 8E5 / 12GB；准确系统、手机型号和设备参数在 T00/T07 记录。这些信息不是模型容量或性能实测结论。
-
-### 1.2 暂不实现
-
-多模型同时运行、连续批处理、跨会话 KV 复用、分布式推理、工具调用、图片/音频、embedding、RAG、Agent、账号、云同步、模型市场、动态插件 ABI、远程公网服务、Android 常驻 HTTP 服务。
-
-不把“Windows 小于 20 MB”“空闲固定 50 MB”“8B 模型固定使用 6 GB”作为既定事实。包体、内存、速度必须按模型、后端和设备分别实测。
+不预设固定包体、内存或tokens/s；按模型/参数/目标设备实测。文本协议兼容、模型文本质量和模型工具能力分别准入。
 
 ## 2. 架构与职责
 
-```mermaid
-flowchart TD
-  A["第三方桌面应用"] --> B["PC API 进程"]
-  C["Tauri 桌面 UI"] --> B
-  B --> D["共享 runtime-core"]
-  E["Flutter 移动 UI"] --> F["Rust 移动桥"]
-  F --> D
-  D --> G{"运行形态"}
-  G --> H["PC worker 进程"]
-  G --> I["App 内推理线程"]
-  H --> J["共享 llama 适配层"]
-  I --> J
-  J --> K["llama.cpp 与平台计算后端"]
+```text
+其他本机应用 / dsh / 桌面bridge
+→ API管理进程(runtime-core + model-store + process-host)
+→ 私有IPC → worker → engine-host专用线程
+→ llama-adapter / C++ shim / llama.cpp
 ```
 
-图中的共享核心表示代码复用：PC 进程和手机 App 各有自己的 runtime 实例。
-
 | 模块 | 负责 | 不负责 |
-|---|---|---|
-| runtime-types | 请求、事件、错误、配置的数据类型与协议版本 | UI、原生指针 |
-| runtime-core | 队列、任务取消、模型状态、超时、空闲卸载 | llama.h、HTTP、Flutter 类型 |
-| model-store | 导入、校验、manifest、目录与原子写入 | 自动寻找和下载模型 |
-| engine-host | 把核心操作映射到进程或嵌入式执行器 | 业务会话历史 |
-| llama-adapter | 模板、分词、采样、prefill、decode、资源释放 | HTTP、App 页面 |
-| runtime-api | 鉴权、请求验证、HTTP/SSE 映射 | 直接操作模型指针 |
-| runtime-worker | IPC 控制、推理线程、原生崩溃隔离 | 公开监听端口 |
-| runtime-mobile | Flutter 桥、App 生命周期通知 | 复制一份调度算法 |
-| UI | 导入、选择模型、聊天、取消、状态和错误提示 | 自己拼接模型专用提示词 |
+| --- | --- | --- |
+| runtime-types | 请求、事件、错误、配置与协议版本 | UI/HTTP/原生指针 |
+| runtime-core | 单actor、队列、取消、状态、deadline、空闲卸载 | tokenizer、计算内核、业务会话 |
+| model-store | managed/external GGUF、manifest、加载资格/完整性 | 市场下载、业务数据库 |
+| process-host / runtime-ipc | 父端执行器、回收、私有协议与信用 | 父进程链接原生库 |
+| engine-host / llama-adapter / shim | 专用线程、模板/tokenizer/采样/推理/释放 | HTTP或UI |
+| runtime-api / runtime-cli | 鉴权、HTTP/SSE、管理、发现/关停 | 直接操作模型指针 |
+| runtime-worker | IPC控制、原生线程、故障隔离 | 公开端口或第二调度器 |
+| desktop-bridge / UI | 模型/服务管理、验证聊天与状态 | 自建推理队列、把token交给WebView |
+
+保留有实际Windows作用的Executor/ModelResolver边界，不为移动复用继续加抽象，不重写已验证调度为上游server转发。
 
 ### 2.1 PC 进程
 
@@ -98,15 +73,9 @@ flowchart TD
 
 worker 崩溃属于模型运行失败，不自动重放已经输出一部分的请求。正在执行和排队的请求全部失败，状态转为 Faulted；用户显式 load 或重启服务后才能恢复。避免后台反复崩溃重启。
 
-### 2.2 移动端执行
-
-Flutter 通过 Rust 桥提交请求与接收事件。Rust 创建专用推理线程，线程内部创建并独占原生资源。HTTP、PC IPC 和子进程管理不编入移动包。
-
-第一版 Android 前台文本生成；App 进入后台即发出取消，任务安全结束后卸载。系统终止进程后不自动恢复未完成生成。原生层崩溃仍可能导致 App 退出，Rust 不会自动消除 FFI 内部的崩溃风险。摘要调用层如保存已完成阶段，须显式创建新的推理请求继续；不因此承诺后台定时摘要。
-
 ## 3. 工程目录与依赖边界
 
-以下路径从项目根目录算起；是需要创建的仓库结构。
+以下路径从项目根目录算起；实际已存在入口见项目索引，不为规划预建空目录。
 
 | 路径 | 内容 |
 |---|---|
@@ -114,36 +83,35 @@ Flutter 通过 Rust 桥提交请求与接收事件。Rust 创建专用推理线�
 | `rust-toolchain.toml` | 精确 Rust 工具链版本 |
 | `crates/runtime-types/` | 类型、事件、错误和序列化 |
 | `crates/runtime-core/` | 调度器、生命周期、资源策略 |
-| `crates/model-store/` | GGUF 导入与 manifest 管理 |
-| `crates/engine-host/` | PC 进程执行器与移动嵌入执行器 |
+| `crates/model-store/` | GGUF managed/external存储、独立loadable与历史validated |
+| `crates/engine-host/` | 已有 PC llama 原生线程执行器 |
+| `crates/process-host/`、`crates/runtime-ipc/` | PC父进程执行器、私有NDJSON与信用校验 |
 | `crates/llama-adapter/` | Rust 安全封装及 native 构建入口 |
 | `crates/runtime-api/` | Axum 路由、鉴权、SSE |
 | `crates/runtime-worker/` | `ai-runtime-worker` 二进制 |
 | `crates/runtime-cli/` | `ai-runtime` 二进制 |
-| `crates/runtime-mobile/` | Flutter 桥的受控导出模块 |
 | `native/llama-shim/` | 自有 C ABI 头文件、C++ 适配、CMake |
 | `vendor/llama.cpp/` | 固定 commit 的 Git submodule |
 | `apps/desktop/` | Tauri + React 应用及前端锁文件 |
-| `apps/mobile/` | Flutter 应用及 pubspec.lock |
 | `xtask/` | 构建、打包、验收命令 |
-| `tests/contract/` | HTTP、SSE、IPC、错误协议测试 |
+| 各crate的`tests/` | 已有HTTP/SSE/IPC/错误契约测试；不将规划中的`tests/contract/`当现有入口 |
 | `tests/fixtures/` | 小型输入文本、畸形文件；不提交大型模型 |
-| `docs/build-lock.md` | 工具版本、llama commit、构建选项、设备信息 |
-| `docs/model-matrix.md` | 支持模型、GGUF SHA-256、模板与验证结果 |
+| `docs/build-lock.md` | 工具版本、对应引擎commit、按资产路径记录的转换来源、构建选项、设备信息 |
+| `docs/model-matrix.md` | 模型文件/包 hash、模板、变体/后端与验证结果 |
 | `docs/decisions/` | 需要改变本规格的技术决策记录 |
 | `artifacts/verification/` | 测试与性能报告，不提交聊天正文 |
 
-依赖方向：types 被其他模块引用；core 仅依赖类型、存储接口和执行器接口；API、CLI、mobile 作为组装入口。llama.cpp 类型不能泄漏到 core。
+依赖方向：types 被其他模块引用；core 仅依赖类型、存储接口和执行器接口；API、CLI、worker作为组装入口。llama原生类型不能泄漏到core。
 
 技术依赖冻结：Tokio、Axum、Serde、thiserror、tracing、Clap、SHA-256 实现、平台数据目录库。只按实际用途引入依赖，不预先加入数据库、gRPC、WebSocket、插件系统。
 
-Flutter bridge 只导出 `runtime-mobile/src/api/` 下明确标记的接口；llama-adapter 内部函数不在生成器扫描范围内。生成代码提交版本控制；改变导出时重新生成并检查差异。[S8]
+## 4. 原生集成规格
 
-## 4. llama.cpp 集成规格
+本节描述Windows llama路径；已有契约保持，新增模型能力按精确版本另行验收。
 
 ### 4.1 选择库集成
 
-最终产品使用 llama.cpp 库和自有轻量 C++ 适配层。上游 server 用作基线对照，不作为移动运行时，也不与自有 API 形成两套生产实现。
+Windows 产品使用 llama.cpp 库和自有轻量 C++ 适配层。上游工具可用于行为对照，不与自有API形成两套生产实现；当前CMake关闭LLAMA_BUILD_SERVER。
 
 llama.cpp 提供 C API；复杂聊天模板还需要关注同版本的 common/chat 辅助实现。不能把所有模型的 messages 简单拼成一段字符串。第一版在 C++ shim 内使用锁定版本的模板辅助代码，封装其 C++ 依赖。[S3][S4]
 
@@ -187,23 +155,33 @@ llama.cpp 提供 C API；复杂聊天模板还需要关注同版本的 common/ch
 
 上下文预算规则：`prompt_tokens + max_tokens <= context_size`。prompt_tokens 必须包含模板和特殊 token。第一版不静默截断历史，不自动摘要，也不开启上下文滑动。
 
-### 4.4 模型与模板范围
+### 4.4 开放模型与历史验证（ADR0015，用户目标机待验）
 
-最初用 Qwen3 系列小型 GGUF 验证链路，例如 0.6B；业务质量可比较 1.7B 与 4B。量化选择以实际可获取并锁定的文件为准，可对照 Q8_0、Q4_K_M 等配置，不假定每个官方仓库都有相同量化文件。这些是候选验证配置，不是本文件已经验证的产品支持清单。
+用户要求16GB目标机支持很多模型，不将运行范围固化为特定几个型号。候选加载不依赖模型名、文件名、架构名列表或预先批准的hash；锁定llama.cpp实际loader判断架构、张量与执行能力。精确[模型矩阵](docs/model-matrix.md)仍记录已测输入/设备/参数，不能把未列入表等同禁止尝试。
 
-T00/T01 必须在 model-matrix 中记录精确来源、模型修订、量化格式、文件 SHA-256、GGUF 架构、模板校验和、默认上下文、支持平台及许可证信息。支持能力按这一组合认定，不能用“所有 GGUF 都支持”替代。
+`validated`、`validation`和已有capabilities继续表示精确历史证据；伪造证据或不一致manifest必须拒绝。独立`loadable`表示manifest满足受控候选条件，不证明当前文件完整性；实际提交native前仍须store准备成功，`available`结合已观察到的文件/目录失败；二者都不是成功加载、质量或内存保证。登记时的hash/metadata也不能代替实际load前完整性复验。
 
-第一版只发布非思考聊天模式：对模板支持关闭思考的已验收模型，在模型配置中固定关闭。上游当前模板辅助层包含思考开关，但不同版本和模板需要验证。[S4]
+当前开放切片的结构边界为GGUF v2/v3、单文件、已实现tensor布局和有界metadata。常规/K等已实现布局可检查，未知layout不放行；split.count>1或split.no!=0拒绝，防止引擎打开未纳入hash/lease保护的邻接文件。加载后拒绝encoder、diffusion、noncausal或不具备所需decoder的执行方式。文件名、GGUF magic或metadata架构名称不能替代这些检查。
 
-不在用户输入尾部私自拼接控制词；不对输出做通用正则删除 `<think>`。如果关闭思考仍不能稳定得到预期聊天输出，该组合不能进入第一版正式清单。
+### 4.5 原始模板与文本能力边界
 
-缺失/不支持的模板返回 `unsupported_chat_template`；未验收架构返回 `unsupported_model`。GGUF magic 正确不代表模型可以成功加载。
+必须使用GGUF内非空原始Jinja模板及其vocab。直接应用时关闭可用的thinking选项，但不要求每个模板都声明该开关，也不因原模板不包含此开关便按型号拒绝。禁止fallback模板、system/role合并改写、静默丢内容或通用正则剥离思考/控制标签。
+
+当前单轮/多轮与实际每个请求检查文本continuation：带generation prompt的前缀必须与追加assistant探针后的前缀一致；末尾符合原vocab EOG与允许空白规则，vocab自动EOS特例单独检查。system不受支持时明确报错，不静默塞入user。需要额外输出framing、工具/思考解析或遇到非EOG控制token的情况明确失败，不把这些输出拼成正常完成。
+
+该窄文本契约不等于支持全部Jinja、全部模型或可靠关闭任意模型的思考模式。缺失/不支持模板返回unsupported_chat_template；实际架构/执行方式不支持返回受控模型错误，普通加载/资源失败如实区分，不伪装成未通过hash许可。
+
+开放文本加载不授予工具能力、结构化输出或完整harness兼容性。1.7B/4B等只是CPU内存/质量基准样本，不是产品清单。工具wire/模型能力/实际agent回合见独立[工具契约草案](docs/windows-tools-contract.md)，尚未实现；任何实测标签必须保留精确资产、模板、引擎、参数和设备证据。
+
+原始模板、metadata key与tensor name含NUL时拒绝，避免Rust/native的C-string身份截断；普通tokenizer metadata values含NUL不一概禁止。Engine初始化强制关闭common/Jinja日志并使用受控静态模板错误，最终隐私canary只证明被覆盖的成功/异常路径，不作绝对无泄漏承诺。
 
 ## 5. 模型、配置与资源
 
 ### 5.1 数据目录
 
-桌面端使用平台用户数据目录；支持 `--data-dir` 显式覆盖。Android 使用 App 私有持久目录，不使用易被系统清理的缓存目录。
+Windows使用用户数据目录，支持`--data-dir`显式覆盖；同一实例的所有客户端必须使用相同目录。
+
+以下是既有managed GGUF布局；external行为见[目录契约](docs/t06-model-directory-contract.md)。
 
 | 相对路径 | 用途 |
 |---|---|
@@ -219,9 +197,13 @@ T00/T01 必须在 model-matrix 中记录精确来源、模型修订、量化格�
 
 导入顺序：检查空间和来源可读 → 复制到临时文件并计算 SHA-256 → 检查 GGUF / manifest → 在同文件系统原子移动 → 更新索引。失败清理 `.partial`。默认不覆盖同名模型；删除注册项不删除用户原始文件。
 
-Android 通过系统文件选择器取得 URI，使用 ContentResolver 打开输入流，复制到 App 私有目录；不能把 `content://` 当普通路径传给 C++。[S2]
+现有 Windows GGUF manifest 至少包含：schema_version、id、display_name、relative_file、size_bytes、sha256、source、architecture、quantization、template_sha256、context_limit、default_context、validated_llama_commit、capabilities。未知字段可保留；缺失关键校验字段不标记为已验证；无历史validated不等于不能成为受控加载候选。T02目录原子提交、Windows保留文件名限制和验证缓存决策见 [ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)，不改变公共model_id语法。
 
-manifest 至少包含：schema_version、id、display_name、relative_file、size_bytes、sha256、source、architecture、quantization、template_sha256、context_limit、default_context、validated_llama_commit、capabilities。未知字段可保留；缺失关键校验字段不标记为已验证。
+managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限额保持。该文件读取/登记预算不是16GB RAM成功保证。已交付50c9d41在metadata context小于默认2048时默认扫描登记仍失败。本轮ADR0016仅自动扫描改取min(2048,metadata)，显式import/load和UI设置不静默夹紧；增量已过本机合成回归/独立审查，WindowsCI与目标机另验。
+
+外部目录应用/重扫按[ADR0016](docs/decisions/0016-mixed-model-directory-diagnostics.md)：完整有界扫描后一次原子发布合法集合；好坏混合为partial并返回完整内容拒绝诊断，全坏failed/model_scan_no_usable_files保旧目录/index/generation，无GGUF候选可空提交。坏文件计全部候选/字节预算，GGUF parser的header/string/metadata/tensor等限额，以及I/O、路径/reparse、身份、取消/timeout/save均硬失败。私有read_for_scan只为扫描将typed预算映射既有ModelLibraryLimit，不改变managed读取语义。
+
+scan-only在同一DirectoryGuard核旧目录身份，apply可由显式selection换新目录；成功与软拒source guard保持到提交或放弃决定，已确定不可发布的硬失败退出后可释放。私有DTO增加partial/file_errors/rejected_files，旧completed缺字段按[]/0；完整diagnostics≤512KiB、operation≤1MiB，诊断只在当前App生命周期内保存。terminal在工作/实例锁释放后发布。公共HTTP、worker/native/library schema及包内preflight均不改；详见[目录契约](docs/t06-model-directory-contract.md)，本轮结果另行登记。
 
 ### 5.2 默认配置
 
@@ -254,19 +236,19 @@ top_p = 0.9
 gpu_layers = 0
 ```
 
-Android 覆盖默认值：context_size=2048、max_output_tokens=256、max_queued_jobs=1、idle_unload_seconds=60。execution_timeout 包含 prepare/prefill/decode，不包含排队和模型加载；三类计时分别记录。
+当前API默认context4096/batch512、线程min(4,可用逻辑CPU)，桌面验证档2048/2线程/128；历史仅证实各自测过的组合。开放候选上限为模型metadata与131072既有硬限中的较小值，实际loader可进一步拒绝；这不是16GB可运行该窗口的保证。调整默认须实测，不静默降级。execution_timeout 包含 prepare/prefill/decode，不包含排队和模型加载；三类计时分别记录。
 
-`backend`、`context_size`、`gpu_layers` 是 load-time 参数；修改后需要卸载并重新加载。`max_output_tokens` 是请求未提供输出预算时的默认值，不是无条件可用的剩余上下文。
+`backend`、`context_size` 是 load-time 参数；修改后需要卸载并重新加载。当前构建仅接受backend=cpu和gpu_layers=0；保留字段不等于提供GPU支持。`max_output_tokens` 是请求未提供输出预算时的默认值，不是无条件可用的剩余上下文。
 
-### 5.3 设备选择
+### 5.3 CPU设备与资源
 
-设备状态至少分开报告：`compiled`、`driver_available`、`probed`、`validated`、`selected`。检测到 GPU 不代表模型已经使用 GPU。
+当前仅CPU，显式请求其他backend或gpu_layers非零必须拒绝，不假装回退成功。status/devices区分配置与实际观察；未知指标保持null/unavailable。构建关闭GGML_NATIVE但仍有实际指令集要求，见[构建锁](docs/build-lock.md)，不能宣称任意x64兼容。
 
-默认从 CPU 起步。GPU 发行包允许选择其对应后端；`auto` 只在已安装且已经该设备验证的候选中选择。第一版不根据显卡名称自动决定模型大小，不根据 TOPS 推导模型容量。
+Windows10/i5-8400为首测目标，其他Intel/AMD桌面CPU按实际硬件扩展；线程、batch、context推荐须测量，不按品牌或核心数直接推导最优值。
 
-手动指定 CUDA/Vulkan/Metal 失败就返回可读错误。auto 允许在尚未开始生成时尝试 CPU 一次，状态必须显示回退原因；已经输出文本的请求不得自动从头生成。
+内存成本包含权重、KV、计算缓冲、API/worker/UI及其他程序。用户16GB总内存不等于可用量，当前Job没有RAM硬限制；进程隔离不是完整OOM或系统响应性保障。资源不足应明确失败/提示减小context或模型，不偷偷换量化、模型或删历史。资源预测与硬限制均不得写成已实现。
 
-内存预算包含权重、KV cache、计算缓冲、运行时与 UI。内存不足时优先提示减少上下文或使用更小模型；不在用户不知道的情况下改变模型、量化或历史内容。
+每次实际加载（含idle重载和显式恢复Unload后）须重新resolve并检查ID、loadable、文件指纹/metadata与context限制，历史validated不能代替当前完整性；选中缓存不是永久授权。变化时拒绝native Load，保留模型ID和原参数，完整校验仍在actor外进行。
 
 空闲计时只在无活动任务、无排队任务时启动。计时器触发与新请求到达由调度器串行决定，禁止卸载正在推理的 context。
 
@@ -298,13 +280,15 @@ stateDiagram-v2
 - 重启 runtime 后 selected_model 为空；不恢复旧任务。
 - 加载失败使当前批次任务失败；不能让后续请求无限等待。Faulted 只接受查询、关停或显式 load 重试。
 
+进程回收未获OS确认是窄化的fail-closed例外：父端专用CleanupUnconfirmed事件使状态保持Faulted、last_error为executor_cleanup_unconfirmed，当前及排队请求均Failed（即使先前已请求取消）。此执行器不可再显式Load恢复，不允许创建第二个child；shutdown必须有界返回清理错误，不能冒充reaped或安全ACK。状态查询仍可用，诊断保留未确认PID；该事件/错误码不允许worker通过wire声明。它不改变普通已确认死亡后的显式Load恢复规则。
+
 ### 6.2 请求状态与事件
 
 请求状态：`Queued → Preparing → Running → Completed / Cancelled / Failed`。Preparing 可以包含按需加载、模板格式化和分词。
 
 公共事件至少包括：Accepted、Queued、Loading、Started、TextDelta、Completed、Cancelled、Failed。每个事件带 `request_id`、单调递增的 `seq`；每个请求只能有一个终态。Started 表示模型已准备好、token 预算通过，此时才可开始正常 SSE 响应。
 
-这些事件是 core/移动桥的公共语义；HTTP 按第 7 节映射，Started 前不提供正常 SSE。当前 status 只有聚合状态和活动 ID，不承诺全量排队事件或断线重放；更细的请求观察契约在 S01 明确后另行同步。
+这些事件是core内部公共语义；HTTP 按第 7 节映射，Started 前不提供正常 SSE。当前 status 只有聚合状态和活动 ID，不承诺全量排队事件或断线重放；更细的请求观察仅在当前调用方实际需要时另行设计。
 
 请求 ID 使用 UUID。调用方可提供 `X-Request-ID`，服务校验格式并拒绝当前仍存在的重复 ID；未提供则生成。ID 同时出现在 HTTP 响应头、日志、状态事件中。UI 自行生成 ID，以便响应头尚未返回时也能取消。
 
@@ -314,28 +298,42 @@ stateDiagram-v2
 
 ### 6.3 取消与背压
 
-取消来源：UI 停止按钮、HTTP 客户端断开、显式取消接口、超时、移动 App 后台事件、消费者停止读取。
+取消来源：UI 停止按钮、HTTP 客户端断开、显式取消接口、超时、消费者停止读取。
 
 1. 取消等待任务：移出队列并发布 Cancelled，不加载模型。
 2. 取消运行任务：控制通道立即设置原子标志；推理循环在 prefill 批次间和 decode 步骤间检查。
 3. 原生 abort 回调仅在锁定后端确实支持时使用；不能承诺任何 GPU 内核都能立即中断。官方当前 C 头文件对相关回调标有 CPU 执行限制。[S3]
 4. PC 超过 5 秒仍未结束时，父进程终止 worker，当前请求为 Cancelled，其余请求因 worker 重置失败，进入 Faulted；必须显式重新 load。
-5. 移动端不强杀正在执行原生代码的线程，也不释放仍被使用的指针。UI 显示“正在停止”，等待原生调用返回；长期无响应属于待修复的后端问题，不宣称取消已完成。
+5. 不释放仍被执行的原生资源。UI显示“正在停止”直到安全返回或整个worker经OS确认回收；无法确认清理时返回错误，不宣称取消完成。
 
-事件缓冲有界：每请求最多 256 KiB 待发送文本，单个 delta 最多 4 KiB，按 UTF-8 字符边界切分。缓冲超过上限且 10 秒没有消费进展，取消为 `slow_consumer`。不能为了发布终态继续无限等待一个已经阻塞的消费者。
+终态归因：普通取消意图（request_cancelled、consumer_stopped、slow_consumer、runtime_shutdown）不能覆盖执行器随后报告的真实非控制错误，GenerationFailed与Faulted均保留该失败。执行器对取消/队列、加载、执行超时的控制确认仍按原取消或deadline语义处理，PC已回收强杀不因此改为原生故障；既有deadline/协议失败原因优先级不变。CleanupUnconfirmed仍最高优先级，断流不强制补发事件，已经发布的终态不重写。
 
-一般设备上的交互目标：UI 立即响应停止操作，CPU 小模型取消通常应在 1 秒内完成；这是验收目标，必须记录实测。GPU 取消延迟单独报告。
+shutdown始终等待安全边界并调用close。关闭进行中新发生且未被控制原因归类的故障须保留，即使相应加载请求已经Cancelled；返回优先级为清理未确认、close自身错误、本次关闭的新真实错误、成功。关闭前已处理或恢复的历史last_error不自动污染后续shutdown。返回真实错误不自动证明清理未确认；调用方须结合具体执行器契约判断，不能把任意close错误假称资源已回收。
+
+事件缓冲有界：每请求最多 256 KiB 待发送文本，单个 delta 最多 4 KiB，按 UTF-8 字符边界切分。缓冲超过上限且 10 秒没有消费进展，取消为 `slow_consumer`。不能为了发布终态继续无限等待一个已经阻塞的消费者。T02以一个共享预算计入执行器、actor和消费队列的全部在途文本；短delta可保守计费以同时约束事件开销。原生同步回调只允许在decode步骤之间有界、可取消等待；活动槽仍保留到原生调用安全返回。
+
+一般设备上的交互目标：UI 立即响应停止操作，CPU 小模型取消通常应在 1 秒内完成；这是验收目标，必须记录实测。取消目标必须由目标CPU实测，不能借CI样本作普遍保证。
 
 ### 6.4 PC IPC
 
-使用逐行 JSON（NDJSON），每帧一行，字符串内换行由 JSON 转义。帧带 protocol_version、kind、request_id、payload；事件另带 seq。
+使用逐行 JSON（NDJSON），每帧一行，字符串内换行由 JSON 转义。共享实现位于 runtime-ipc，父端 process-host 不链接原生库；runtime-worker 直接使用 EngineHost，不创建第二个 Runtime。父端仍是公共状态、FIFO、deadline 与 request seq 的唯一来源。
 
-- 请求帧上限 2 MiB，事件帧上限 64 KiB；超限/畸形帧触发协议错误并回收 worker。
-- 启动先交换 Hello，核对 protocol、shim 与 llama commit；不匹配则拒绝执行。
-- worker 的管道读取/控制线程独立于推理线程，Cancel 不等待 Generate 返回。
-- stdout 只用于协议，llama 和 Rust 日志全部重定向到 stderr。
-- 写事件采用有界队列及可取消写入；stdout 阻塞不得阻塞读取取消命令。
-- EOF、破损帧、worker 异常退出都要让所有受影响的请求收到一次终态。
+- 每帧带 protocol_version、session_id（每次spawn的新UUID）、operation_id、request_id、kind、payload及seq。Hello和命令的seq为null；worker事件seq从1开始，在同session内严格递增，不重置为公共seq
+- 请求帧上限2 MiB，事件帧上限64 KiB，均包含最后LF。完整编码必须在首次写出前检查；读取在累积前检查上限，拒绝残缺EOF、非法UTF-8、未知字段/kind、重复字段、版本或身份不符
+- 父端先发送Hello并指定session；worker读取实际build_info，35bfd85基线双方严格核对protocol=1、shim=2、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
+- 命令为Load、Generate、Unload、Cancel、Credit、Shutdown。普通操作operation_id非零递增，Generate的request_id须与payload相同；Cancel/Credit只作用于绑定的session/operation/request。Shutdown为session控制帧，operation_id=0、request_id=null
+- 事件为原始ExecutorEvent，包括Prepared、TextDelta和清理后的终态；Loaded/Unloaded对应各自操作。Prepared只能一次，TextDelta/Completed不能抢在它前面，usage须匹配Prepared及请求max_tokens；每操作仅一次终态
+- 父端是唯一输出预算账本。每Generate预留16 KiB暂存和最多两个120 KiB信用，合计≤256 KiB。信用ID在session内非零严格递增，每个信用只准一次≤4 KiB UTF-8 delta，其完整编码≤25 KiB（最坏24 KiB转义正文+1 KiB封套）
+- 信用不会在worker写出或父端读取时自动归还。不可复制的TextPermit贯穿IPC→actor→EventLease；消费写入完成/丢弃后才释放。关闭、旧代际、失败或未用信用仅释放自己持有的permit，不把共享总账本清零
+- 最近已结束操作可接收在终态传播竞态中刚发出的新Credit并立即退休；迟到Cancel幂等，均不得转用于下一操作。重复/倒退信用、跨session或其他旧operation仍是协议错误
+- 两信用是保守内存取舍，不是吞吐保证。256 KiB只表示callback之后合规待发送输出的保守账本；输入帧、畸形帧解析有独立硬限，模型、KV、原生tokenizer/stop暂存、分配器与线程栈另计，不能宣传整个堆≤256 KiB
+- worker读取控制线程独立于推理和stdout写线程。Cancel立即设置独立标志并唤醒信用等待；stdout阻塞不得堵住读取取消。stdout只用于协议，原生日志写stderr
+- 首次取消开始五秒宽限，重复取消不重置期限。未获安全清理ACK时终止并回收整个worker，确认死亡后才报告Faulted；正常终态在资源清理后发送，槽位一直保留到ACK/已回收故障
+- EOF、破损帧、异常退出、握手或退出超时使受影响请求内部各终结一次；不重放任何部分输出。Faulted后只由显式Load启动新worker；旧worker已回收时显式Load恢复链内部的ExecutorCommand::Unload可直接确认；Faulted下公共unload仍返回RuntimeFaulted。Runtime shutdown还等待Executor::close完成并报告回收错误
+
+W02内部ResolvedModel由validated改为独立loadable，私有IPC现为2，shim行为身份为3，公共协议仍1，C ABI布局保持v2。adapter Engine::new核对实际build_info，旧AIR_NATIVE_DIR archive、旧父/worker混搭和伪造identity均拒绝；worker Hello及包manifest/独立验收器同步。此tuple已在50c9d41 WindowsCI回归并随包发送，用户目标机待验；本轮目录增量不改该tuple；其他信用、终态及取消门槛不降低。
+
+Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md) 及 [T03验证](docs/verification/2026-10-01-t03-worker.md)，不把Linux开发探针当作Windows目标验收。
 
 ## 7. HTTP 与客户端契约
 
@@ -346,7 +344,8 @@ stateDiagram-v2
 | 路由 | 行为 |
 |---|---|
 | `GET /healthz` | 无鉴权，仅返回 API 进程是否存活；不暴露模型/路径 |
-| `GET /v1/models` | 已注册且可供使用的模型，标准 list/data 结构 |
+| `GET /v1/models` | 可供使用的模型，标准 list/data 结构；有界 limit/after 分页 |
+| `GET /runtime/models` | 鉴权安全管理摘要，包含未验证模型；有界 limit/after 分页 |
 | `POST /v1/chat/completions` | 文本 messages，流式或非流式 |
 | `GET /runtime/status` | 模型状态、队列数、活动 ID、后端、错误与内存指标 |
 | `GET /runtime/devices` | 本构建后端与设备探测结果 |
@@ -356,9 +355,19 @@ stateDiagram-v2
 | `POST /runtime/requests/{id}/cancel` | 标记取消；存在活动请求返回 202，未知 ID 返回 404 |
 | `POST /runtime/shutdown` | 停止接收新请求、取消任务、回收 worker、退出 |
 
+T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。35bfd85基线`/v1/models`仅列旧准入模型；ADR0015增量改按当前available/loadable筛选，未有历史validated的合法候选也可列出，列表不承诺实际load必成功；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
+
 所有 `/v1/*` 和 `/runtime/*` 使用 `Authorization: Bearer <token>`。只接受本机回环连接；v0.1 不提供 `0.0.0.0` 监听开关。令牌由 init 生成，日志不得输出，读取权限限当前用户。
 
+healthz可选HMAC-SHA256 challenge/proof headers用于CLI在发送Bearer前认证服务端；MAC绑定版本域、实际instance UUID、随机32字节nonce及accept socket实际client/server端点，CLI必须在同一固定HTTP/1连接恒时验证，不能依赖公开nonce、重连或重定向。health正文仍仅表存活。详见[T04决策](docs/decisions/0005-t04-loopback-http-and-management.md)。
+
 HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确配置的可信来源，并验证 Host。桌面 UI 通过 Tauri Rust 命令代理调用本机 API，令牌不进入前端脚本。不要用允许任意 origin 的 CORS 设置解决 UI 接入问题。
+
+### 7.1.1 deepseek harness增量（W04规划，未实现）
+
+当前7.2及既有SSE仍是严格文本契约。工具定义、assistant.tool_calls、role:tool/null content、tool delta与finish_reason=tool_calls尚未由本次文档实现。新增字段须贯穿DTO/core/IPC/shim/模板/事件，并保持预算、终态、取消和安全边界；工具执行仍归调用方。
+
+接入使用dsh-llm-pi-ai自定义openai-completions provider，不先实现Messages。compat开关、真实请求fixture、工具/usage/错误/Stop/重试及H01–H12以[harness契约](docs/windows-harness-contract.md)为准。当前接口明确拒绝未支持字段，不能静默忽略来冒充兼容。
 
 ### 7.2 Chat 请求字段
 
@@ -380,9 +389,9 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 
 不支持的已知功能字段（如 tools、tool_choice、response_format、logprobs、非零 penalties、多模态 content）返回 400 `unsupported_parameter`，不得静默忽略。frequency_penalty/presence_penalty=0、logprobs=false、tool_choice="none" 可作为兼容空操作接受。其他未知字段返回 400，并指明字段名。
 
-第一版没有 developer/tool 角色、Responses API、会话恢复或服务端聊天历史。接入第三方客户端时关闭工具调用等超出范围的功能，并单独记录兼容测试结果。
+当前已实现文本接口没有developer/tool角色、Responses API、会话恢复或服务端聊天历史。W04工具协议另行实施；文本smoke关闭工具并单独记录兼容结果，不把规划说成现版本行为。
 
-群消息摘要将来源记录序列化为待分析的 user 内容，不将每位群成员映射为 assistant。调用层分块所需的模型能力、精确 token 预算查询目前属于 S01 契约设计任务；内部 air_prepare 不是已经发布的计数 API，具体扩展须记录 ADR 并同步两种宿主。
+内部air_prepare不是已经发布的计数API。调用方如需单独预算查询，应按实际需求记录ADR并同步Windows接口；可选摘要业务不驱动本版公共协议。
 
 ### 7.3 请求与非流式响应示例
 
@@ -410,6 +419,8 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
   "usage": {"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35}
 }
 ```
+
+非流式完整JSON（含转义和封套）上限96KiB，使用同一输出预算的紧凑permit转移；超限取消并返回400 `invalid_request_error` / `response_too_large` / param=`stream`，建议流式或减小输出，不截断、落盘或重放。
 
 示例时间戳、token 数和回复仅示范格式；实现必须使用实际统计。prompt_tokens 包括模板 token；completion_tokens 包括生成过程中采样的终止/stop token，文本字符数不能代替 token 数。
 
@@ -455,9 +466,9 @@ stop 检测必须保留可能跨 chunk 匹配的尾部，命中的 stop 文本�
 | 504 | queue_timeout、load_timeout、execution_timeout |
 | 500 | internal_error；不向客户端暴露原始文件路径与栈 |
 
-runtime/models/import 的成功结果至少包括 id、size_bytes、sha256。runtime/load 请求至少包括 model、backend、context_size、gpu_layers；未提供的加载参数来自配置。管理操作的忙碌判断与调度器在同一处完成。
+runtime/models/import 的成功结果至少包括 id、size_bytes、sha256。runtime/load 请求至少包括 model、backend、context_size、gpu_layers；未提供的加载参数来自配置。管理操作的忙碌判断与调度器在同一处完成。导入须获得actor原子排他RegistryLease，复制/hash在有界blocking任务中，实际提交或失败清理结束后才释放；期间status/cancel保持响应，shutdown取消并等待lease。API普通同步调用、控制和存储采用独立有界blocking容量，不能堵塞Tokio reactor或把取消排在长导入之后。状态与devices未知指标为null/unavailable。导入若已提交但最后持久性确认失败，核对注册事实、更新安全摘要并返回500 `import_committed_durability_unconfirmed`，提示先查询列表；不能冒充未注册或自动重试。
 
-## 8. CLI 与两端 UI
+## 8. CLI 与 Windows UI
 
 ### 8.1 CLI 契约
 
@@ -491,80 +502,56 @@ Tauri 后端发现已有匹配协议的 runtime 则连接；否则从应用随�
 
 UI 不周期性轮询整个日志；状态更新最多每秒一次，文本事件批量合并到约 30 次/秒以内刷新，避免逐 token 重绘整个聊天列表。
 
-### 8.3 Android UI
+### 8.3 桌面管理器增量（W03规划）
 
-三个界面：模型导入、聊天、运行设置。Dart 通过 bridge 订阅公共事件，不直接持有 llama 指针。桥接入口只负责初始化、导入、加载、生成、取消、状态和生命周期通知。
+现有参数设置、空闲卸载、服务启停、默认关窗口保留服务和同时退出不重复开发。W03补托盘可见性、重新打开、明确运行状态与API接入诊断；工具执行与完整聊天历史仍归调用方。
 
-进入后台取消并在安全点卸载；返回前台显示“模型未加载”，由下次发送触发加载。不在本版启动前台服务，不公开本机端口，不申请无关存储权限。
-
-模型复制会暂时占用额外空间，UI 在导入前展示文件大小和目标位置。大文件复制、SHA-256、tokenizer 与推理全部离开 UI 线程。
-
-Flutter 的推理事件流订阅不代替取消句柄：初始化得到 runtime handle，每次 generate 使用独立 request_id；关闭流订阅也要向 core 发取消。桥只导出可序列化的自有类型和受控不透明句柄，错误映射为公共错误码，不把 C++ 异常或裸指针直接交给 Dart。
+每个新的窗口/托盘/退出路径须验证重复操作、运行中关闭、重新打开、同实例连接、其他客户端仍工作，以及显式停止时真实清理。新增UI不能创建第二服务、自动重放请求或绕过既有确认和凭据边界。
 
 ## 9. 构建、发行与版本锁定
 
-### 9.1 T00 必须锁定的内容
+### 9.1 固定构建身份
 
-| 项目 | 保存位置/要求 |
-|---|---|
-| Rust | rust-toolchain.toml 精确版本；Cargo.lock 提交 |
-| llama.cpp | submodule 精确 commit；不能只有分支名 |
-| C/C++ | Windows MSVC、CMake、Ninja 的版本；统一运行库设置 |
-| 桌面前端 | Node、包管理器精确版本；前端锁文件；Tauri 版本 |
-| 移动 | Flutter SDK、Dart、bridge/codegen、JDK、Gradle、NDK 版本 |
-| 模型 | 来源、revision、文件 SHA-256、模板 hash、量化 |
-| 平台 | OS 版本、ABI、最低版本、GPU 驱动与构建选项 |
-
-本文件不编造一个尚未实际构建验证的 llama commit。T00 的交付条件就是补齐这些值，并证明固定的组合可以构建。依赖下载可以在开发环境发生；发布后的文本推理不依赖联网。
+以[构建锁](docs/build-lock.md)、root与Tauri各自Cargo.lock、前端npm锁、实际原生构建identity及manifest为准。llama.cpp精确commit、Rust/MSVC/SDK、CMake选项、CRT、目标架构、模型/模板hash和source/tree必须可追溯，不跟随master或latest。
 
 ### 9.2 编译边界
 
-- `engine-host/process` 只编译 IPC 客户端，不依赖 llama 原生库。
-- `engine-host/embedded` 引入 llama-adapter，供移动端使用。
-- worker 的 backend-cpu/cuda/vulkan/metal 功能按目标构建；GPU 功能仍保留 CPU 路径。
-- 构建脚本仅从锁定 vendor 源码构建，不在 build.rs 中执行 git pull 或下载未知二进制。
-- x64/arm64 发布包不能直接使用构建机的全部本机指令集。关闭隐式 native 优化，并验证选定的基础指令集；不要假定单个开关等于兼容所有旧 CPU。
-- CMake 在独立目录构建，Release 与 Debug 分离。Windows Rust/C++ ABI、运行库和链接配置一致。
-- 不使用 `--all-features` 构建所有互斥 GPU 后端；xtask 根据目标选择特性。
-
-llama.cpp 的 CUDA、Vulkan、Metal 等构建路径分别维护；具体 CMake 选项以锁定版本为准。[S1][S7]
-
-Android 初始 ABI 为 arm64-v8a、minSdk=28；targetSdk 和 NDK 根据锁定的 Flutter 与发行要求记录。验证 native 库打包、动态依赖、目标设备页大小和指令集，不仅检查 APK 是否生成。CPU 通路稳定后才增加 Vulkan。
+- API/CLI和desktop-bridge不链接engine-host/llama-adapter/native；原生仅进worker
+- engine-host负责专用线程，worker不创建第二Runtime
+- CMake当前静态库、CPU、GGML_NATIVE=OFF，关闭CUDA/Vulkan/Metal/OpenMP及上游server；实际指令集见锁
+- build.rs不执行git pull或下载模型/未知二进制；CMake构建目录与Release/Debug隔离
+- Rust/C++配置、CRT和原生库身份严格对应，不能混用另一commit、架构或Debug产物
+- Windows x64支持由实际指令集/OS/设备测试决定，不把构建机全部本机特性带入发行包
 
 ### 9.3 发行包
 
 | 产物 | 内容 |
 |---|---|
 | `windows-x64-cpu` | CLI/API、CPU worker、必要运行依赖、配置示例、许可证 |
-| `windows-x64-cuda` | 对应 CUDA worker 与实际需要的运行库，单独统计大小 |
-| `windows-x64-vulkan` | 对应 Vulkan worker 与依赖 |
 | `desktop-windows` | Tauri UI + 匹配架构的 runtime 包 |
-| `android-arm64` | Flutter APK/AAB + Rust/llama 原生库；不内置模型 |
-| 后续平台包 | 依照同样原则独立构建、签名和验证 |
 
 第一版采用整包发行，无运行时自动下载加速插件。模型独立导入。符号文件另外保存，不混入普通用户包。
 
+T05当前实现以[ADR0006](docs/decisions/0006-t05-windows-portable-package.md)为准：`dist/windows-x64-cpu`只放两个Rust Release产品EXE、实际PE依赖闭包所需app-local运行库、配置/README、manifest/SHA256SUMS和许可；独立工具放`dist/acceptance-tools`，各有ZIP及外部SHA-256。二者分别补齐实际CRT依赖，验收器不属于产品也不能为产品补DLL。构建复用同一`build/native-release`可信Release原生树，不增加重复全量native workflow。
+
+已安装VS的标准未修改Release x64 CRT仅从所选实例的`VCToolsRedistDir`取所需文件，记录来源/版本/签名/适用许可；不复制System32/Debug/Preview/整个工具链，不静默安装运行库。严格manifest/hash与实际PE普通/延迟导入闭包一致，缺app-local VC DLL静态检查必须失败，即便CI全局已安装VC运行库。项目root LICENSE尚未选定不阻塞私有内部开发包，外部分发/公开Release另行决策。
+
 包体报告分别列出：压缩下载大小、安装大小、UI、runtime、原生运行依赖、模型大小。Windows WebView 运行环境存在与否也要写清；不把外置运行库当成不存在的成本。
 
-## 10. 可执行开发任务
+## 10. 当前开发任务与历史编号
 
-按照依赖推进，编号不要求 Windows UI 完成后才做 Android。T01 可提前安排 Android 构建探针；T02 后优先尽早开展 T07，完整真机验收仍不可省略。允许在完成依赖后穿插 UI 工作，但不能用 UI 截图替代模型运行验收。每个任务单独交付可审查变更与验证记录；Git 初始化后按项目指引提交。
+W00–W05是当前唯一后续路线，最小增量、依赖与验收见[Windows路线](docs/roadmap.md)。T00–T05已按当时阶段收口，T06现有功能与新包待手验范围见状态；不重新排成待实现。
 
-| ID | 前置 | 必须交付 | 完成判据 |
-|---|---|---|---|
-| T00 锁定基线 | 无 | workspace、构建锁、模型清单、xtask 框架、上游基线报告 | 固定 llama commit 在 Windows CPU 运行候选小模型；保存真实输入和统计 |
-| T01 原生链路 | T00 | C ABI、Rust 封装、模板/prefill/decode/sampler、取消 | 不经过 UI/HTTP，真实 GGUF 完成中英文流式生成；重复加载释放；特殊 token 正确 |
-| T02 存储与调度 | T01 | 导入、manifest、队列、状态机、deadline、空闲卸载 | 并发、切换模型、队列超限、取消和资源回收通过 A05–A12 |
-| T03 PC worker | T02 | 进程执行器、NDJSON、握手、崩溃与退出处理 | 杀掉 worker 时 API 存活且所有受影响请求终结；无遗留进程 |
-| T04 HTTP/CLI | T03 | 第 7/8 节接口、SSE、令牌、CLI；xtask api-smoke | curl 非流式/流式和错误用例通过；两客户端串行执行 |
-| T05 Windows 发行 | T04 | CPU 便携包、依赖清单、安装说明 | 无开发工具的验收机可启动并运行已导入模型 |
-| T06 PC UI | T05 | 模型、聊天、设置；runtime 发现/启动/退出 | UI 可完成导入、聊天、停止；UI 关闭后 API 按设置继续服务 |
-| T07 Android 核心 | T02 | 移动构建、Rust 桥、生命周期、原生线程 | Android 真机运行真实模型；复用 core/adapter，无重复调度实现 |
-| T08 Android UI | T07 | 文件导入、流式聊天、取消、状态、APK | 飞行模式运行；后台取消；恢复前台不重放旧任务 |
-| T09 发布验收 | T06、T08 | contract-tests、平台 smoke、性能/包体报告、支持矩阵 | 所有 v0.1 必须用例通过；跳过项不能写成通过 |
-| T10 GPU/平台扩展 | T09 | 每个后端/平台独立包与报告 | 对应设备测试通过，才将组合列入支持矩阵 |
+| 当前阶段 | 范围 |
+| --- | --- |
+| W00 | Windows桌面CPU/API范围与文档收敛，历史设计归档 |
+| W01 | 最新已发送50c9d41包目录/自动名/零复制/剪贴板与独立API短验，原生窗口及用户目标机待验 |
+| W02 | 开放模型候选/历史验证分离、16GB基准样本、独立工具能力与CPU资源性能 |
+| W03 | 托盘与管理器体验，复用现有服务/设置能力 |
+| W04 | dsh/pi-ai准确配置、协议差异和真实harness工具回合 |
+| W05 | 无开发工具/离线/长期稳定性、升级回退、Windows11与发行矩阵 |
 
-T00 的上游基线用该固定版本附带的 CLI/server/bench 工具，命令来自该版本 `--help`，记录在 build-lock。上游命令名称和参数可能变化，不把本文中的自有项目命令误用于 llama.cpp。
+旧T07/T08移动任务不驱动本版；旧T09/T10不再含Android发布前置，其历史目标保留在快照。旧A编号保留，不挪用历史通过结果。文档修改不自动启动功能开发。
 
 ### 10.1 AI 执行规则
 
@@ -578,13 +565,15 @@ T00 的上游基线用该固定版本附带的 CLI/server/bench 工具，命令�
 4. 运行所用模型 hash、后端和设备；无真实模型时明确写“未验证推理”。
 5. 剩余问题与下一任务所需信息。
 
-允许在调度/协议单元测试中使用 fake backend；fake 必须仅在测试或显式开发构建启用，不能替代发行验收。没有 Android 真机时可以完成交叉编译，但 T07/T08 真机验收保持未完成。
+允许在调度/协议单元测试中使用 fake backend；fake 必须仅在测试或显式开发构建启用，不能替代发行验收。没有目标Windows设备时可完成独立自动检查，但目标设备/原生窗口验收保持未完成。
 
 改变接口、默认行为、数据目录或目标平台时写入 docs/decisions，说明原因和迁移方式。依赖升级和功能开发分开验证，不能为解决编译报错悄悄追随上游 master。
 
+T05按Release CI和独立Windows 10短验的当前阶段范围收口，T06可推进；无开发工具、实际离线和长期稳定性列为后期验证。A19长期稳定性与A20仍未验证，阶段完成不等于完整v0.1发布验收。
+
 ## 11. 验收矩阵
 
-下面用例由 T01–T09 逐步实现。协议/状态类可自动化，真实推理和生命周期必须包含设备验证。
+以下保留历史A编号中的Windows CPU适用项；新W阶段与H01–H12另列，不追溯授予通过。协议/状态可自动化，真实推理、原生窗口和目标CPU仍需各自证据。
 
 | ID | 测试 | 预期 |
 |---|---|---|
@@ -602,26 +591,24 @@ T00 的上游基线用该固定版本附带的 CLI/server/bench 工具，命令�
 | A12 | 队列/加载/执行分别触发超时 | 对应错误码、清理资源，不永久占用槽位 |
 | A13 | 强制结束 worker | API 仍存活；任务失败；Faulted；显式 load 可恢复 |
 | A14 | API Ctrl+C / stop / 父进程异常退出 | 正常路径回收 worker；异常路径无长期遗留进程 |
-| A15 | 损坏 GGUF、缺模板、不支持架构 | 清晰错误，API 不崩溃，无无限重试 |
-| A16 | 内存不足或 GPU 加载失败 | 正确错误/明确回退，已输出请求不自动重放 |
+| A15 | 损坏GGUF、缺失/不支持模板、不支持架构 | 清晰错误，宿主不崩溃，无无限重试 |
+| A16 | 内存不足或CPU加载失败 | 正确错误与资源清理，已输出请求不自动重放 |
 | A17 | 无令牌、错误令牌、外部来源、超大 body | 拒绝；正文和令牌不进入默认日志 |
 | A18 | 重复 request_id、畸形 IPC、协议版本不匹配 | 稳定错误，无任务混淆 |
 | A19 | 100 次短请求、20 次加载/卸载 | 无崩溃；请求终态完整；检查长期内存趋势 |
 | A20 | 未安装开发工具的 Windows 验收机 | 包内依赖齐备，CPU 路径离线运行 |
-| A21 | Android URI 导入中断、空间不足 | 不留下已注册的半文件，原文件不损坏 |
-| A22 | Android 前后台切换、重建 UI、系统结束 App | 不后台无限生成；不复用已销毁句柄 |
-| A23 | Android 连续生成 15 分钟 | 记录热降频、内存和速度，无 UI 线程阻塞 |
 | A24 | PC 两个应用同时调用相同模型 | 串行正确；历史不共享；队列和取消互不串线 |
-| A25 | GPU 构建在指定硬件运行 | 日志/状态证明实际使用后端，记录 CPU 对照 |
-| A26 | 模型卸载前后内存与显存 | 记录实际释放；不能把 OS 文件缓存误报为泄漏 |
+| A26 | 模型卸载前后进程私有内存与可观测分配 | 记录实际释放；不能把 OS 文件缓存误报为泄漏 |
 
-A19 的报告区分权重 mmap、进程私有内存、驱动缓存与 GPU 分配。预热后若仍持续增长必须定位；不要求 OS 工作集立即归零。
+A21–A23（旧Android）与A25（旧加速后端）编号退出现行CPU验收，不复用编号或标为通过；原要求见历史快照。harness兼容需另过H01–H12。
+
+A19的报告区分权重mmap、进程私有内存和OS文件缓存。预热后若仍持续增长必须定位；不要求 OS 工作集立即归零。
 
 至少包含一项真实模型端到端自动 smoke。对输出不做跨后端逐字相同断言；断言协议、预算、非空有效文本、终止和资源状态。只有固定环境的受控基线才做细粒度 token 对比。
 
 ## 12. 验证命令与操作步骤
 
-> 以下是项目必须实现的命令契约。生成本文本并不代表这些命令已经存在。T00/T04/T09 要分别实现对应 xtask 和 CLI；读者在完成相关阶段后运行。所有路径均可调整为自己的实际路径。
+> 以下是项目必须实现的命令契约。生成本文本并不代表这些命令已经存在。已有T00/T04/T05命令与后续W阶段计划分别记录；实际可运行范围见xtask/README.md，不能把下面的规划check/contract命令当成已实现。所有路径均可调整为自己的实际路径。
 
 ### 12.1 开发验证
 
@@ -638,29 +625,45 @@ cargo run --locked -p xtask -- test --suite contract
 cargo run --locked -p xtask -- build --platform windows-x64 --backend cpu
 ```
 
-xtask check 要执行对应目标的编译检查与 Clippy；contract 套件验证协议、状态、队列，不要求大型模型。build 输出固定到 `dist/windows-x64-cpu/`，包含可启动的 CLI/API 和 worker。
+`check`与`test --suite contract`仍为后续契约，目前应直接使用`cargo fmt --all -- --check`、`cargo test --locked --workspace -- --test-threads=1`和`cargo clippy --locked --workspace --all-targets -- -D warnings`。T05实现的Windows专用`build`输出`dist/windows-x64-cpu/`及独立`dist/acceptance-tools/`，只在原生Windows x64 MSVC主机运行；实际构建结果按[T05验证](docs/verification/2026-10-01-t05-windows-package.md)记录。
 
 网络依赖首次准备完成后，CI 使用锁文件构建。没有完整依赖缓存时不误用 offline 参数并把失败算作代码错误。
 
 ### 12.2 Windows 真实模型验证
 
+T04实现`ccb2053fe514f582f6161f9fc87ee25346aa55e4`已通过固定Windows Server 2022 CPU CI，包括临时凭据真实CLI在线导入、HTTP/SSE、50次断连恢复与关停。证据见[T04验证](docs/verification/2026-10-01-t04-http-cli.md)。T05发行交付按下一节独立工具执行并单列证据；该CI不替代Windows 10本地电脑或无开发工具验收。
+
+源码6a7e9d0已在[Windows CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)完成Release包、CRT闭包/签名、中文空格路径和独立HTTP50验收。结果见[T05记录](docs/verification/2026-10-01-t05-windows-package.md)；另有独立Windows 10手工短验通过，A20与长期稳定性仍未验证。T05按当前阶段范围收口，T06继续。
+
+T05产品与独立工具ZIP完整解压为相邻目录后，推荐无需开发工具的短验入口：
+
+```powershell
+.\acceptance-tools\nexa-acceptance.exe --model 'C:\模型 空格\Qwen3-0.6B-Q8_0.gguf' --out '.\package-report.json' --machine-role target
+# 两包不相邻时再传 --package 'C:\实际 产品目录\windows-x64-cpu'
+```
+
+只需已有固定模型与报告输出路径，不安装Rust/Python/VS。工具严格核对产品完整性/PE闭包，再从自有中文空格临时目录用清理后的环境实际运行产品CLI、HTTP、取消、断流恢复和退出；短命data/凭据由工具拥有，不初始化用户长期服务。退出0仅证明该短验范围，A20/独立无开发工具/实际离线条件仍须如实记录；Windows Server2022不等于Win10，Win11后续。详见[独立验收说明](xtask/PACKAGE_ACCEPTANCE.md)。
+
+以下为开发者手动HTTP检查，不是要求目标机安装Cargo。
+
 终端 A，在项目根目录运行。`C:\models\qa-small.gguf` 要替换成 model-matrix 已记录的实际文件。
 
 ```powershell
 $aiExe = Join-Path $PWD 'dist/windows-x64-cpu/ai-runtime.exe'
-$aiData = Join-Path $env:LOCALAPPDATA 'ai-runtime-test'
+$aiData = Join-Path $env:TEMP ('Nexa manual test ' + [Guid]::NewGuid().ToString('N'))
 & $aiExe --data-dir $aiData init
 & $aiExe --data-dir $aiData models import --id qa-small --file 'C:\models\qa-small.gguf'
+Write-Host ('本次 data-dir：' + $aiData)
 & $aiExe --data-dir $aiData serve
 ```
 
-终端 B，同样在项目根目录运行：
+终端 B，同样在项目根目录运行。复制终端 A 显示的数据目录路径，两个终端必须指向同一实例；只传递目录路径，不打印或分享令牌：
 
 ```powershell
 $aiExe = Join-Path $PWD 'dist/windows-x64-cpu/ai-runtime.exe'
-$aiData = Join-Path $env:LOCALAPPDATA 'ai-runtime-test'
+$aiData = Read-Host '粘贴终端 A 显示的完整 data-dir 路径（不要重新生成目录）'
 $apiToken = (Get-Content -Raw (Join-Path $aiData 'secrets/api-token')).Trim()
-& $aiExe --data-dir $aiData load qa-small --backend cpu --context 4096
+& $aiExe --data-dir $aiData load qa-small --backend cpu --context 2048 --threads 2 --batch 128
 & $aiExe --data-dir $aiData status
 curl.exe -sS -f 'http://127.0.0.1:18080/healthz'
 curl.exe -sS -f -H "Authorization: Bearer $apiToken" 'http://127.0.0.1:18080/v1/models'
@@ -688,40 +691,25 @@ curl.exe -sS -N -f -H "Authorization: Bearer $apiToken" -H 'Content-Type: applic
 
 预期看到多个 SSE 事件、一个 finish chunk 和 `[DONE]`。只看到 HTTP 200 或一个完整回复不能证明流式实现正确。
 
-运行自动 API 验收，工具从指定数据目录读取令牌，不把令牌写入报告：
+当前固定矩阵真实smoke使用context2048、两线程、batch128；core按每个模型的执行上限校验，允许已覆盖的较小逻辑context。通用配置默认4096不变，直接使用默认值会明确返回context错误，不自动降级。API未设置threads时取min(4,available_parallelism)，查询失败1，显式用户值保持；来源与超配见状态/决策。
+
+运行自动 API 验收，工具从指定数据目录读取令牌，不把令牌写入报告；套件最后关停该短命测试服务并验证实例退出：
 
 ```powershell
 cargo run --locked -p xtask -- api-smoke --base-url 'http://127.0.0.1:18080' --data-dir $aiData --model qa-small --out 'artifacts/verification/windows-cpu.json'
-& $aiExe --data-dir $aiData unload
-& $aiExe --data-dir $aiData stop
+# api-smoke 已包含卸载、最终关停和确认实例退出
 Remove-Item -LiteralPath $requestFile
 ```
 
 api-smoke 至少覆盖 A01–A12、A17–A18 中可远程验证的部分，并将每一项标为 pass/fail/skipped。worker 崩溃、强制退出、长时间内存与设备测试使用独立 integration 套件；不为了一个成功 JSON 就把整套验收记为通过。
 
-### 12.3 Android 真机验证
+### 12.3 W阶段验证入口
 
-开发机配置好 T00 锁定的 Android 工具链后：
-
-```powershell
-flutter doctor -v
-adb devices
-cargo run --locked -p xtask -- build --platform android-arm64 --backend cpu
-adb install -r dist/android-arm64/app-release.apk
-```
-
-1. 用系统选择器导入 model-matrix 中的移动测试 GGUF，核对显示的 hash。
-2. 打开飞行模式，发送一轮中文和一轮多轮聊天，确认本地生成。
-3. 在长输入处理和持续生成时分别停止，记录取消耗时。
-4. 切到后台，再回到前台，检查取消和卸载状态。
-5. 持续生成 15 分钟，记录速度、温度/热状态和内存变化。
-6. 结束 App 后重新打开，不应显示旧任务仍在执行。
-
-模型 hash 相同只说明输入文件相同；不要求 Android 与 Windows 生成结果逐字一致。
+现有CLI/xtask命令以xtask/README.md为准。W01使用已交付包和已有API示例；W02实用模型/CPU与W04harness的命令、客户端lockfile及合成fixture在对应实现时建立并记录，不能把计划命令写成现有可执行成果。harness入口与所需证据见[契约](docs/windows-harness-contract.md)。
 
 ## 13. 性能与轻量化验收
 
-以锁定 llama.cpp 的上游工具或最小适配基线作对照，在相同模型、模板、采样、上下文、线程数、GPU 层数和设备条件下测量。上游 bench 与端到端 HTTP 测量不是同一指标。[S10]
+以锁定llama.cpp的上游工具或最小适配基线作对照，在相同模型资产变体、模板、采样、上下文、后端配置和设备条件下测量。上游 bench 与端到端 HTTP 测量不是同一指标。[S10]
 
 | 指标 | 必须记录的定义 |
 |---|---|
@@ -730,54 +718,47 @@ adb install -r dist/android-arm64/app-release.apk
 | TTFT | 请求提交到第一个用户可见文本增量；另列 queue/load/prefill 耗时 |
 | Prefill | 实际 prompt token 数 / prefill 用时 |
 | Decode | 输出阶段 token 生成速度；注明是否排除首 token |
-| 峰值内存 | PC 父进程/worker 分列；Android App 与 native 内存 |
-| GPU 内存 | 推理前、峰值、卸载后；注明工具与共享内存情况 |
+| 峰值内存 | API父进程、worker、桌面UI分列 |
 | 空闲成本 | 未加载模型、模型保持加载、卸载后分别测 |
 | 取消延迟 | 发出取消到实际停止原生推理 |
-| 手机持续性能 | 前 1 分钟与第 15 分钟速度、热状态、电量变化 |
 | 包体 | 依赖/符号/模型是否计入，下载大小与安装大小分别报告 |
 
 每组固定输入至少预热一次，再重复测量 5 次，报告中位数与范围。首次模型验证至少包含短对话和长输入摘要两个场景；输入长度使用 tokenizer 结果确认。
 
-PC 包装层对稳定 decode 吞吐的额外损耗以不超过基线约 10% 为优化目标，超出时调查 IPC、过密刷新、日志和构建差异；这是项目目标，不是已实测保证。该比例对照包含相同采样逻辑的最小适配基线，不直接拿 HTTP 端到端速度与不包含分词/采样的 llama-bench 数字相除。手机不采用同一速度门槛，按目标机型记录可用性。
+PC 包装层对稳定 decode 吞吐的额外损耗以不超过基线约 10% 为优化目标，超出时调查 IPC、过密刷新、日志和构建差异；这是项目目标，不是已实测保证。该比例对照包含相同采样逻辑的最小适配基线，不直接拿 HTTP 端到端速度与不包含分词/采样的 llama-bench 数字相除。不同桌面CPU按相同定义分别报告，不用CI数字替代目标机表现。
 
 空闲无模型时应事件驱动、无忙循环。默认日志不记录 prompt、回复正文、令牌或完整用户路径，只记录请求 ID、模型 ID、状态、耗时、token 数、后端与错误码。需要诊断内容时使用用户主动开启的本地诊断方式。
 
-验收报告固定字段：项目 commit、llama commit、工具链、OS/设备/驱动、模型 hash、加载参数、用例结果、性能值、已知限制。测不到的值写 unavailable，不能写 0。
+验收报告固定字段：项目commit、对应引擎commit及补丁hash、资产来源路径、转换来源（预转换可明确unknown，自导出须精确commit/参数）、工具链、OS/设备/驱动、模型 hash、加载参数、用例结果、性能值、已知限制。测不到的值写 unavailable，不能写 0。
 
-## 14. runtime 第一版完成标准
+## 14. Windows runtime 完成标准
 
-同时满足以下条件才能标记 v0.1 完成：
+阶段完成与最终发行分开。W00–W04可以在后期条件未齐时继续，但最终Windows CPU版本须满足：
 
-- Windows CPU 发行包能够在独立验收机离线加载真实模型；API、CLI、UI 均可操作。
-- Android arm64 真机复用同一 core/adapter，能够导入模型、离线生成、取消并处理前后台。
-- 单模型、有限队列、超时、空闲卸载、错误、崩溃恢复符合本文约定。
-- 实现并记录 Chat Completions 兼容子集，没有把缺失功能静默当作支持。
-- 固定依赖、模型和构建参数；附带重现命令、支持矩阵和测试报告。
-- 包体、内存、速度、取消延迟都有真实记录；没有把目标值写成测试结果。
+- API、CLI与桌面管理入口可操作，独立Windows目标机能真实加载合法候选与回归模型
+- 单模型/队列/超时/空闲卸载/错误/崩溃恢复符合本规格，清理未确认不能冒充成功
+- 固定的dsh/pi-ai接入配置通过对应H矩阵；协议支持与实用模型工具能力分别报告，未支持项明确拒绝
+- 模型/工具链/引擎/模板/参数/设备有可复现矩阵，文本与工具质量及内存/速度/取消有真实记录
+- W05完成无开发工具、实际离线、长期稳定性与数据保留/更新回退验收；未通过前不宣布完整发行验收
+- Windows11和新增Intel/AMD桌面CPU只在各自验收后列为支持；没有其证据不扩大支持清单
 
-GPU 或其他平台可以随 v0.1 一起交付，但只有完成对应设备测试的组合才能标为支持；不因此阻塞 Windows/Android CPU 基础版。
-
-上述条件只定义 runtime v0.1。Telegram 摘要业务还需完成独立输入/覆盖、证据、质量、整任务取消和两端调用方验收，见摘要方案的 S-A01–S-A10；两类结果分别报告。
+Android、GPU/NPU、其他平台和Telegram业务不构成本版完成条件。历史设计与证据原位保留。
 
 ## 15. 交给编码 AI 的启动指令
 
 以下仅为用户授权工程实施时可使用的启动指令。阅读、审查或更新本文件本身不启动功能开发；实际授权和任务起点以当前会话及 PROJECT_STATE.md 为准。
 
-> 按 Nexa 的 AGENTS.md、PROJECT_STATE.md 和开发路线实施已授权任务。先检查现有工程；从状态记录的下一步继续，空工程先完成 T00/T01，按实际功能建立第 3 节所需结构。锁定 llama.cpp commit、工具链及小型 GGUF，实现真实原生推理、流式与取消。保留后续 T02–T10 边界，摘要按 S00–S04 独立推进，不把 Telegram 接入塞进 runtime。记录修改、实际命令、退出码、模型/设备和未验证项。缺少模型或设备时继续独立可验证工作，不把模拟或仅编译结果算成推理验收。每个任务完成后同步状态，在授权范围内按依赖推进；范围变化说明原因并记录决策。
+> 按AGENTS.md、PROJECT_STATE.md和Windows W00–W05路线实施本轮已授权任务。先保护现有改动，保持llama.cpp精确锁与原生/服务边界。选最小可验收增量，不重复已有模型目录、API或服务控制。记录真实命令、退出码、source/hash、设备和未验证项。API接入以固定dsh/pi-ai契约为准，开放候选不按型号/hash名单限制，完整性仍严格；工具能力必须经过模型与协议双重验收。不得恢复Android开发、修改其未提交WIP或混入独立项目。文档规划不等于功能开发授权。
 
 ## 16. 官方依据与更新规则
 
-资料核对日期：2026-09-29。下面链接是上游资料入口，不是固定版本依赖；T00 应把与实现相关的链接补为所选 commit 的永久链接。本文中队列大小、接口子集、超时、发布顺序等属于项目设计决策。
+llama基线核对日期：2026-09-29；当前Windows范围收敛：2026-10-03。下面链接是上游资料入口，不是固定版本依赖；实现相关API须以构建锁中精确commit为准。本文中队列大小、接口子集、超时、发布顺序等属于项目设计决策。
 
 - [S1 — llama.cpp 项目与计算后端](https://github.com/ggml-org/llama.cpp)：C/C++ 引擎、硬件后端与工具入口。
-- [S2 — llama.cpp Android 文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/android.md)：Android NDK 路径、模型文件与移动示例。
 - [S3 — llama.h](https://github.com/ggml-org/llama.cpp/blob/master/include/llama.h)：资源、分词、推理与取消相关 C API；具体签名以锁定版本为准。
 - [S4 — common/chat.h](https://github.com/ggml-org/llama.cpp/blob/master/common/chat.h)：聊天模板、思考模式和格式化辅助代码。
-- [S5 — Apple XCFramework](https://github.com/ggml-org/llama.cpp/blob/master/docs/xcframework.md)：Apple 平台库集成入口。
 - [S6 — llama.cpp server 文档](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)：聊天接口、流式行为与兼容范围参考；不是本项目全量功能要求。
 - [S7 — llama.cpp 构建文档](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)：CPU/GPU 与目标平台构建路径。
-- [S8 — flutter_rust_bridge 官方文档](https://cjycode.com/flutter_rust_bridge/)：Flutter/Rust 接口桥接。
 - [S9 — Tauri 外部二进制打包](https://v2.tauri.app/develop/sidecar/)：桌面 runtime 随包分发与调用。
 - [S10 — llama-bench](https://github.com/ggml-org/llama.cpp/blob/master/tools/llama-bench/README.md)：输入处理与生成基准；参数在 T00 对照锁定版本验证。
 

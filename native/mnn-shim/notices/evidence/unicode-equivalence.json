@@ -1,0 +1,27 @@
+{
+  "python_ucd": "15.0.0",
+  "official_ucd": "15.0.0",
+  "category_ranges": 4007,
+  "lower_entries": 1432,
+  "scope": "Matching establishes reproducibility from these data, not historical upstream generator Python version. No repository source was modified.",
+  "files": {
+    "unicode_data.hpp": {
+      "original_sha256": "1f2e5db80ad4659b59cf578f33e4ed00bc34873f6b1ca4a5d60c0f9ef39b9752",
+      "official_generated_sha256": "1f2e5db80ad4659b59cf578f33e4ed00bc34873f6b1ca4a5d60c0f9ef39b9752",
+      "byte_equal": true,
+      "nonempty_lines_equal": true
+    },
+    "unicode_data.cpp": {
+      "original_sha256": "e8c7050623e49b74107c0afecf4082458b1f11f7ead7d608251c0f7db323cea0",
+      "official_generated_sha256": "3e6b8cd414f133f9462c0e16336db528aafa0e0fb6b8cd010f97cbce897c0d74",
+      "byte_equal": false,
+      "nonempty_lines_equal": true
+    }
+  },
+  "input_sha256": {
+    "gen_unicode_data.py": "1837ba6682bdd5d14f17ea91a57debe28befe52f971848108bb975adbcba5f23",
+    "UnicodeData-15.0.0.txt": "806e9aed65037197f1ec85e12be6e8cd870fc5608b4de0fffd990f689f376a73",
+    "SpecialCasing-15.0.0.txt": "78b29c64b5840d25c11a9f31b665ee551b8a499eca6c70d770fcad7dd710f494",
+    "UCD15-ReadMe.txt": "53672c0d0b5185e3cf04c8e970d544c3af81ae7c8eeba0b9cf6d355aa954ae1f"
+  }
+}

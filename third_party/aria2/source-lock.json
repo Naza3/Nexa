@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "aria2": {
+    "version": "1.37.0",
+    "url": "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.xz",
+    "filename": "aria2-1.37.0.tar.xz",
+    "sha256": "60a420ad7085eb616cb6e2bdf0a7206d68ff3d37fb5a956dc44242eb2f79b66b",
+    "root": "aria2-1.37.0"
+  },
+  "patch": {
+    "filename": "nexa-network-policy.patch",
+    "sha256": "797bd6205909e0a762ac3973aa2b5b7df1ebbc50eb703123cd9eda0692bda966"
+  },
+  "toolchain": {
+    "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz",
+    "filename": "llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz",
+    "sha256": "27d33157cc252c29ad6f777a96a0d94176fea1b534ff09b5071485def143b90e",
+    "root": "llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64",
+    "llvm_source": "https://github.com/llvm/llvm-project/tree/llvmorg-18.1.8",
+    "mingw_source": "https://github.com/mingw-w64/mingw-w64/tree/7c9cfe6708cafc83c14a2654308b2db62b126eae",
+    "build_source": "https://github.com/mstorsjo/llvm-mingw/tree/20240619"
+  },
+  "runtime_licenses": [
+    {
+      "filename": "compiler-rt-LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/compiler-rt/LICENSE.TXT",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d"
+    },
+    {
+      "filename": "libcxx-LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libcxx/LICENSE.TXT",
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "filename": "libcxxabi-LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libcxxabi/LICENSE.TXT",
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+    },
+    {
+      "filename": "libunwind-LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libunwind/LICENSE.TXT",
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d"
+    }
+  ],
+  "additional_patches": [
+    {
+      "filename": "nexa-payload-limit.patch",
+      "sha256": "c027a39e84cf8e669c6256643e7498f3fe22aed083feebb36d40d73db9b95800"
+    },
+    {
+      "filename": "nexa-iofile-nul.patch",
+      "sha256": "c052132bc5e94cc2187544d89c954fd73a6ad94f19c6cf70684cc66f26f7fb86"
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+name: Android MNN CPU prototype verification
+
+on:
+  push:
+    branches: ['codex/nexa-native-baseline']
+    paths:
+      - 'native/mnn-probe/**'
+      - 'scripts/android_mnn/**'
+      - '.github/workflows/android-mnn-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-mnn-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-prototype:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      MNN_SOURCE: ${{ github.workspace }}/build/t07a/mnn
+      INPUTS: ${{ github.workspace }}/build/t07a/inputs
+      EVIDENCE: ${{ github.workspace }}/artifacts/verification/t07a-ci
+      LINUX_BUILD: ${{ github.workspace }}/build/t07a/linux
+      ANDROID_BUILD: ${{ github.workspace }}/build/t07a/android
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check out exact upstream MNN source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: alibaba/MNN
+          ref: d407447ed56c4121a11ccbd266dc184ca1ead0c2
+          path: build/t07a/mnn
+          persist-credentials: false
+      - name: Install fixed build tools and test verification helpers
+        id: tools
+        run: |
+          set -euo pipefail
+          python -m pip install cmake==4.4.3 ninja==1.13.2
+          python scripts/android_mnn/ci_verify.py tools --report "$EVIDENCE/tools.json"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(git -C "$MNN_SOURCE" rev-parse HEAD)" = 'd407447ed56c4121a11ccbd266dc184ca1ead0c2'
+          test -z "$(git -C "$MNN_SOURCE" status --porcelain --untracked-files=all)"
+          python -m unittest discover -s scripts/android_mnn -p 'test_*.py' -v
+      - name: Explicitly acquire hash-locked NDK and public synthetic-test model
+        id: inputs
+        run: |
+          set -euo pipefail
+          # Prerequisite: Android NDK license review; no additional SDK installation or agreement acceptance.
+          python scripts/android_mnn/ci_verify.py setup --destination "$INPUTS" --report "$EVIDENCE/setup.json"
+      - name: Build and check Linux development probe
+        id: linux_build
+        run: |
+          set -euo pipefail
+          cmake -S native/mnn-probe -B "$LINUX_BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DNEXA_MNN_SOURCE="$MNN_SOURCE"
+          cmake --build "$LINUX_BUILD" --target nexa-mnn-probe -j4
+          ctest --test-dir "$LINUX_BUILD" --output-on-failure
+      - name: Verify real Linux CPU templates tokens generation and bounds
+        id: linux_suite
+        run: |
+          set -euo pipefail
+          python scripts/android_mnn/ci_verify.py suite --binary "$LINUX_BUILD/nexa-mnn-probe" --model "$INPUTS/model" --out "$EVIDENCE/suite"
+      - name: Cross-compile Android arm64 API28 CPU probe
+        id: android_build
+        if: ${{ !cancelled() && steps.inputs.outcome == 'success' && steps.tools.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          cmake -S native/mnn-probe -B "$ANDROID_BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DNEXA_MNN_SOURCE="$MNN_SOURCE" \
+            -DCMAKE_TOOLCHAIN_FILE="$INPUTS/android-ndk-r30/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28
+          cmake --build "$ANDROID_BUILD" --target nexa-mnn-probe -j4
+      - name: Verify Android ELF identity system dependencies and 16KiB alignment
+        id: elf
+        if: ${{ !cancelled() && steps.android_build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python scripts/android_mnn/ci_verify.py elf --binary "$ANDROID_BUILD/nexa-mnn-probe" \
+            --readelf "$INPUTS/android-ndk-r30/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            --report "$EVIDENCE/android-elf.json"
+      - name: Stage only sanitized allowlisted evidence including failures
+        if: ${{ always() }}
+        run: |
+          python scripts/android_mnn/ci_verify.py stage --evidence "$EVIDENCE" --linux-build "$LINUX_BUILD" \
+            --android-build "$ANDROID_BUILD" --destination artifacts/t07a-upload \
+            --outcomes 'tools:${{ steps.tools.outcome }},inputs:${{ steps.inputs.outcome }},linux_build:${{ steps.linux_build.outcome }},linux_suite:${{ steps.linux_suite.outcome }},android_build:${{ steps.android_build.outcome }},elf:${{ steps.elf.outcome }}'
+      - name: Upload verification reports only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-android-mnn-probe-${{ github.sha }}
+          path: artifacts/t07a-upload/*.json
+          if-no-files-found: error
+          retention-days: 7

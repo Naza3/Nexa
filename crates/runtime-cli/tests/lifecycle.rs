@@ -1,0 +1,245 @@
+//! These tests spawn the actual built CLI in isolated private directories. No
+//! PATH/CWD worker override or production test hook is used.
+use runtime_cli::instance::{Discovery, InstanceLock};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+fn binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_ai-runtime"))
+}
+fn run(root: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(binary())
+        .arg("--data-dir")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap()
+}
+#[test]
+fn init_is_idempotent_and_argument_errors_are_two() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    assert!(run(&root, &["init"]).status.success());
+    let token = fs::read(root.join("secrets/api-token")).unwrap();
+    let config = fs::read(root.join("config.toml")).unwrap();
+    assert!(run(&root, &["init"]).status.success());
+    assert_eq!(fs::read(root.join("secrets/api-token")).unwrap(), token);
+    assert_eq!(fs::read(root.join("config.toml")).unwrap(), config);
+    assert_eq!(run(&root, &["start"]).status.code(), Some(2));
+    assert!(run(&root, &["models", "list"]).status.success());
+    assert!(run(&root, &["stop"]).status.success());
+    assert!(run(&root, &["stop"]).status.success());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(root.join("secrets/api-token"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(root.join("secrets"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+}
+#[test]
+fn serve_never_initializes_credentials() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("absent");
+    assert_eq!(run(&root, &["serve"]).status.code(), Some(1));
+    assert!(!root.exists());
+    assert!(run(&root, &["stop"]).status.success());
+    assert!(!root.exists());
+}
+struct Running(Child);
+impl Drop for Running {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+fn packaged_binary(temp: &Path) -> PathBuf {
+    let package = temp.join("package");
+    fs::create_dir(&package).unwrap();
+    let cli = package.join(if cfg!(windows) {
+        "ai-runtime.exe"
+    } else {
+        "ai-runtime"
+    });
+    fs::copy(binary(), &cli).unwrap();
+    // Serve only verifies presence before load; the actual CLI binary itself is
+    // a controlled fixture that is never launched as a worker in this empty-store
+    // lifecycle test. No fake path enters production code or the environment.
+    fs::copy(
+        binary(),
+        package.join(if cfg!(windows) {
+            "ai-runtime-worker.exe"
+        } else {
+            "ai-runtime-worker"
+        }),
+    )
+    .unwrap();
+    cli
+}
+#[test]
+fn actual_serve_lock_discovery_proof_and_stop_lifecycle() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    let cli = packaged_binary(temp.path());
+    assert!(run(&root, &["init"]).status.success());
+    let config = root.join("config.toml");
+    let text = fs::read_to_string(&config)
+        .unwrap()
+        .replace("127.0.0.1:18080", "127.0.0.1:0");
+    fs::write(config, text).unwrap();
+    let mut child = Running(
+        Command::new(&cli)
+            .arg("--data-dir")
+            .arg(&root)
+            .arg("serve")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let original = loop {
+        if let Ok(record) = Discovery::read(&root) {
+            break record;
+        }
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "serve exited before discovery"
+        );
+        assert!(Instant::now() < deadline, "serve did not publish discovery");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(InstanceLock::try_acquire(&root).unwrap().is_none());
+    assert_eq!(
+        Command::new(&cli)
+            .arg("--data-dir")
+            .arg(&root)
+            .arg("serve")
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+    assert_eq!(Discovery::read(&root).unwrap(), original);
+    for args in [&["status"][..], &["devices"], &["models", "list"]] {
+        assert!(run(&root, args).status.success(), "{args:?}");
+    }
+    assert!(run(&root, &["stop"]).status.success());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.0.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(InstanceLock::try_acquire(&root).unwrap().is_some());
+    assert!(!root.join("runtime/instance.json").exists());
+    assert!(run(&root, &["stop"]).status.success());
+}
+#[test]
+fn held_offline_instance_lock_prevents_model_store_open() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    assert!(run(&root, &["init"]).status.success());
+    let _lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    assert_eq!(run(&root, &["models", "list"]).status.code(), Some(1));
+    assert!(!root.join("runtime/model-store.lock").exists());
+}
+#[test]
+fn stale_port_attacker_never_receives_cli_bearer() {
+    use std::io::{Read, Write};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    assert!(run(&root, &["init"]).status.success());
+    let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut record =
+        Discovery::current(uuid::Uuid::new_v4(), listener.local_addr().unwrap()).unwrap();
+    record.pid = 1;
+    record.process_created = "deliberately stale identity; never authority to kill".into();
+    lock.publish(&record).unwrap();
+    let attack = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut all = Vec::new();
+        let mut byte = [0];
+        while all.len() < 16384 {
+            if socket.read(&mut byte).unwrap_or(0) == 0 {
+                break;
+            }
+            all.push(byte[0]);
+            if all.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        let request = String::from_utf8(all).unwrap();
+        assert!(!request.to_ascii_lowercase().contains("authorization:"));
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+            .unwrap();
+        let mut remaining = Vec::new();
+        let _ = socket.read_to_end(&mut remaining);
+        assert!(
+            !String::from_utf8_lossy(&remaining)
+                .to_ascii_lowercase()
+                .contains("authorization:")
+        );
+    });
+    assert_eq!(run(&root, &["status"]).status.code(), Some(1));
+    attack.join().unwrap();
+    assert_eq!(Discovery::read(&root).unwrap().pid, 1);
+}
+#[test]
+fn bind_failure_preserves_existing_discovery_and_releases_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    let cli = packaged_binary(temp.path());
+    assert!(run(&root, &["init"]).status.success());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let config = root.join("config.toml");
+    fs::write(
+        &config,
+        fs::read_to_string(&config)
+            .unwrap()
+            .replace("127.0.0.1:18080", &address.to_string()),
+    )
+    .unwrap();
+    let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    let record = Discovery::current(uuid::Uuid::new_v4(), address).unwrap();
+    lock.publish(&record).unwrap();
+    drop(lock);
+    assert_eq!(
+        Command::new(cli)
+            .arg("--data-dir")
+            .arg(&root)
+            .arg("serve")
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+    assert_eq!(Discovery::read(&root).unwrap(), record);
+    assert!(InstanceLock::try_acquire(&root).unwrap().is_some());
+}

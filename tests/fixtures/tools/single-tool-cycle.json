@@ -1,0 +1,192 @@
+{
+  "fixture_version": 1,
+  "origin": "synthetic-design",
+  "execution_status": "not_run",
+  "scope": "Planned bounded tool slice; not a DSH capture or real model result",
+  "model": "synthetic-tools-fixture",
+  "description": "One synthetic read-only tool and exactly two model requests. IDs and expected values are fixture data, not sampled output.",
+  "harness_limits": {
+    "max_model_requests": 2,
+    "max_tool_executions": 1,
+    "retry_count": 0,
+    "registered_tools": [
+      "lookup_test_color"
+    ],
+    "external_io": false
+  },
+  "synthetic_table": {
+    "A1": {
+      "code": "A1",
+      "color": "绿色",
+      "fixture_tag": "fixture-a1-v1"
+    },
+    "B7": {
+      "code": "B7",
+      "color": "蓝色",
+      "fixture_tag": "fixture-b7-v1"
+    },
+    "C9": {
+      "code": "C9",
+      "color": "琥珀色",
+      "fixture_tag": "fixture-c9-v1"
+    }
+  },
+  "first_request": {
+    "model": "synthetic-tools-fixture",
+    "messages": [
+      {
+        "role": "system",
+        "content": "需要测试编号的颜色时调用 lookup_test_color。收到工具结果后，用一句中文说明编号、实际颜色和 fixture_tag。缺少编号时先询问，不猜测。"
+      },
+      {
+        "role": "user",
+        "content": "请查询测试编号 B7 的颜色，并告诉我结果中的 fixture_tag。"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "lookup_test_color",
+          "description": "Look up the color and fixture tag for a synthetic code in the local in-memory test table. No network or file access.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "A1",
+                  "B7",
+                  "C9"
+                ]
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tool_choice": "auto",
+    "max_tokens": 256,
+    "temperature": 0,
+    "top_p": 1,
+    "seed": 17
+  },
+  "expected_first_assistant": {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+      {
+        "id": "call_00000000000040008000000000000001_0",
+        "type": "function",
+        "function": {
+          "name": "lookup_test_color",
+          "arguments": "{\"code\":\"B7\"}"
+        }
+      }
+    ],
+    "finish_reason": "tool_calls"
+  },
+  "harness_tool_result": {
+    "code": "B7",
+    "color": "蓝色",
+    "fixture_tag": "fixture-b7-v1"
+  },
+  "second_request": {
+    "model": "synthetic-tools-fixture",
+    "messages": [
+      {
+        "role": "system",
+        "content": "需要测试编号的颜色时调用 lookup_test_color。收到工具结果后，用一句中文说明编号、实际颜色和 fixture_tag。缺少编号时先询问，不猜测。"
+      },
+      {
+        "role": "user",
+        "content": "请查询测试编号 B7 的颜色，并告诉我结果中的 fixture_tag。"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_00000000000040008000000000000001_0",
+            "type": "function",
+            "function": {
+              "name": "lookup_test_color",
+              "arguments": "{\"code\":\"B7\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_00000000000040008000000000000001_0",
+        "content": "{\"code\":\"B7\",\"color\":\"蓝色\",\"fixture_tag\":\"fixture-b7-v1\"}"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "lookup_test_color",
+          "description": "Look up the color and fixture tag for a synthetic code in the local in-memory test table. No network or file access.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "A1",
+                  "B7",
+                  "C9"
+                ]
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tool_choice": "auto",
+    "max_tokens": 256,
+    "temperature": 0,
+    "top_p": 1,
+    "seed": 17
+  },
+  "second_response_assertions": {
+    "finish_reason": "stop",
+    "tool_calls_count": 0,
+    "content_must_contain": [
+      "B7",
+      "蓝色",
+      "fixture-b7-v1"
+    ],
+    "exact_text_required": false
+  },
+  "token_budget_assertions": [
+    "Tokenize the complete actual rendered template separately for both requests",
+    "Include tools, descriptions, schema, IDs, tool results, generation prefix and special tokens",
+    "prompt_tokens + max_tokens <= selected context_size",
+    "No fixed prompt-token count is supplied by this synthetic design fixture"
+  ],
+  "first_request_headers": {
+    "X-Request-ID": "00000000-0000-4000-8000-000000000001"
+  },
+  "second_request_headers": {
+    "X-Request-ID": "00000000-0000-4000-8000-000000000002"
+  },
+  "header_notice": "Synthetic request IDs make expected call IDs reproducible in protocol tests; real authentication is supplied only by the isolated test harness, never this fixture."
+}

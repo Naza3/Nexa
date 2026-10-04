@@ -1,0 +1,29 @@
+# 合并到已有插件列表；仅用于无工具的低层文本调用，不启用完整 agent。
+# 修改端口及模型 ID；NEXA_API_KEY 只引用环境变量，不把真实令牌写入文件。
+- name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      nexa-local:
+        displayName: Nexa Local
+        api: openai-completions
+        baseURL: http://127.0.0.1:18080/v1
+        apiKeyEnv: NEXA_API_KEY
+        cacheRetention: none
+        compat:
+          supportsStore: false
+          supportsDeveloperRole: false
+          supportsReasoningEffort: false
+          supportsUsageInStreaming: true
+          supportsFinishReason: true
+          supportsStrictMode: false
+          maxTokensField: max_tokens
+        retryPolicy:
+          mode: normal
+          maxRetries: 0
+        models:
+          - id: REPLACE_WITH_REGISTERED_MODEL_ID
+            name: Nexa CPU text smoke
+            contextWindow: 2048
+            maxTokens: 128
+            input: [text]
+            reasoningEfforts: false

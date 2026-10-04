@@ -1,0 +1,57 @@
+# ADR0017：默认模型目录发现与固定双源下载目录
+
+日期：2026-10-03。原始目录发现/双源下载切片已由33f0e17 WindowsCI、包复核及发送验证，用户目标机完整验收未完成；当时基线4d30bfa与历史步骤保留在[原验证记录](../verification/2026-10-03-model-catalog-download.md)。随后用户要求通用下载引擎，已采纳[ADR0018](0018-generic-download-engine-candidate.md)的受控aria2 sidecar；该替代实现已落入工作树，最终Windows/真实源/新包仍待验。本文目录、来源、设置与保存后显式登记契约保持；下文标明的原传输实现不追溯赋能旧包。
+
+## 背景与范围
+
+用户反馈把模型放入models文件夹后没有自动识别，并要求在设置中选择下载源、默认ModelScope（魔搭），从Hugging Face/ModelScope候选列表直接下载到已选模型目录。原目录扫描、零复制、partial诊断和开放loadable规则继续复用；本片不新增模型运行许可名单或工具能力。
+
+本片涉及桌面/bridge的目录发现、固定候选目录、显式下载任务和设置；model-store提供受保护的目标文件事务；原版网络请求在bridge，ADR0018工作树改由bridge源适配器调用download-engine监督的aria2。公共runtime HTTP、worker/native协议及API凭据不参与下载，不升级引擎。
+
+## 1. 本地发现优先级
+
+桌面启动先读既有设置/模型库。已有选定目录始终优先，即使路径失效、目录身份改变或状态stale，也不偷偷回退到程序旁目录。只有尚未配置模型目录、服务已停止且没有冲突操作时，才检查实际桌面EXE旁已存在的`models/`并复用有界目录扫描/原子登记。
+
+不以进程CWD、`model/`、任意相邻文件夹或网络位置猜测默认目录，不递归搜索、不自动创建不存在的models目录，不因发现动作联网或初始化长期凭据。不存在时保持未配置并提示用户选择；扫描失败/全坏时按既有事务保留真实状态，不能显示为已登记。已有目录若需更换，继续使用显式选择/应用。
+
+自动发现只补“未配置时找到已有EXE/models”的入口；不是每次启动重新hash全部已配置模型。后续实际加载仍经过文件身份/hash/metadata、Windows lease和原始模板边界。
+
+## 2. 固定候选列表与两个源
+
+内置目录固定8个单文件GGUF，每个条目包含catalog_id、文件名、精确字节数/SHA256、架构/量化、许可证说明、保守context提示及两个来源。每个来源独立固定完整revision、repository及下载URL，不用`main/latest`。实际条目以[随源码目录](../../crates/desktop-bridge/src/model-catalog.json)为准。
+
+列表是下载建议，不是可加载名单；其他合法本地GGUF仍按ADR0015/0016尝试。仅原Qwen3-0.6B Q8_0有固定Windows真实推理历史，其他7条是未实测候选；量化名、架构存在于锁定引擎或仓库模板元信息都不替代实际GGUF解析/加载。下载通过也不会自动给validated或工具标签。
+
+启动和打开列表只读内置数据，不远程查询更新。网络只来自用户明确点击某一项下载；前端只传catalog_id，不传自由URL、任意目标路径、文件名、校验值或凭据。
+
+## 3. 下载源设置与回退兼容
+
+`desktop-settings.json`新增`download_source=modelscope|huggingface`，默认ModelScope；旧设置缺字段时按ModelScope读取。设置仍在同一个严格DTO文件中原子保存，runtime配置/凭据不迁移。下载开始时绑定已保存源和目标目录身份；中途改偏好不改正在传输的来源，不在失败后暗中切换HF/MS、无限重试或升级revision。
+
+兼容是单向的：新版可读旧设置，43ad5c2等旧版严格拒绝新增key。回退旧二进制前需恢复升级前desktop-settings备份，或在保留其他字段的前提下仅移除`download_source`。在新版UI点“恢复默认值”仍会保存该key，不能充当回退步骤；不为降级删除整个数据目录、模型库或凭据。
+
+## 4. 独立下载任务
+
+第一片要求服务已停止；若运行中即明确拒绝，不自动停服务。下载与目录应用/扫描等写入协调，后台网络不长期占用控制请求异步互斥锁。任务有独立ID、真实已写入/总字节、阶段、取消及有限关闭等待（当前实现最多10秒，否则保留窗口并报告cleanup未确认）；不能用点击取消或连接断开推定已清理。
+
+目录/来源/精确条目在接纳时冻结。原固定下载器的临时文件只用本任务新建的`.nexa-download-<UUID>.part`，已有任何同名最终文件拒绝，途中他人创建目标也不覆盖。目录祖先及目标身份继续拒绝reparse/链接等间接路径，受保护句柄覆盖写入、校验和发布。
+
+流式读取、计数与SHA256有界，实际总字节必须与固定目录完全相等；超长/短流、错误hash、HTTP错误、意外编码、非法重定向、取消或超时均不发布最终模型。发布前flush/sync，完成后一次原子no-clobber发布；不把`.part`当GGUF注册。原33f0e17固定下载器的网络策略为HTTPS、MS精确host modelscope.cn，HF精确host huggingface.co/us.aws.cdn.hf.co/cas-bridge.xethub.hf.co，至多5次重定向；15秒连接、30秒读、2小时整体上限，禁代理/referer/自动重试，不记录URL。64KiB写块与容量2的队列提供背压；不预分配大文件，磁盘写错安全失败。原版限额与清理已有33f0e17 Windows证据，但不转授后续aria2工作树。
+
+后续ADR0018执行器改为固定aria2进程：初始来源仍匹配所选MS/HF，重定向由HTTPS/实际公网socket策略负责；HTTP/Range/内部重试复用aria2。只有exit8可由上层在确认退出后执行一次全量重启，attempt1→2共享两小时deadline。model-store改用本任务UUID目录与固定payload/control文件，停写后独立size/SHA和取消CAS决定no-clobber发布；跨重启恢复/代理不属于首片。该替代当前仅工作树实现，验证见[aria2记录](../verification/2026-10-03-aria2-download-engine.md)。
+
+取消先赢则不发布；已提交的保存事实优先于晚到取消。发布成功但自有临时文件清理未确认时，仍明确`saved=true`并给受控cleanup_warning，不能改称回滚或重试覆盖。
+
+成功只代表文件已保存：`completed`结果为`saved=true, registered=false`。用户再单独扫描，由既有GGUF解析/partial事务决定登记，之后才能尝试加载。完整下载、登记、加载、真实推理是不同状态。
+
+## 5. 外部目录写入与包校验边界
+
+普通目录扫描/加载继续只读，不写源文件。用户明确下载是独立、狭窄的写入授权，仅创建本任务临时文件和不覆盖的目录条目；不改既有GGUF/manifest，不把源目录改造成managed store，不复制下载成品到AppData。
+
+原版包内仅程序根、`model/`、`models/`的直接子级可有严格命名的自有UUID `.part`例外，用于中断残留不阻止重启；至多64项、单项≤16GiB、普通文件/reparse仍受限。任意.part、其他层级、未声明DLL/EXE/脚本、产品manifest/hash变更均不放行。aria2新增严格UUID任务目录惰性识别：仅相同三位置、空目录或三固定普通文件；payload≤16GiB、两个control各≤1MiB，新旧残留合计≤64。未知/nested/reparse拒绝，不自动恢复/信任/删除；Linux壳回归已过，Windows仍待验，详见ADR0018及新记录。扫描忽略普通非GGUF临时文件，但仍计目录条目预算；不按命名推断任意残留可删除，只清理本次实际持有的对象。
+
+## 6. 验证与交付门槛
+
+先覆盖自动发现优先级/失效旧路径、固定目录身份、旧设置默认及回退、无隐式网络、源绑定/无fallback、服务运行快拒、字节/hash/redirect、取消/关闭、目标竞争/no-clobber、发布后清理警告、包内严格例外与重新扫描。
+
+Linux合成传输、UI组件、Windows文件保护/包、真实MS下载与真实模型各自留证；计划的Windows下载验收复用原固定0.6B文件，经ModelScope真实传输后由后续步骤使用，不把旧CI文件下载当新下载器证据。真实HF下载、其他7条推理、用户Win10/i5-8400/16GB、离线和长期条件未运行就保持未验。结果见[本轮记录](../verification/2026-10-03-model-catalog-download.md)；T0 parser CI属于上一提交，不覆盖本片。

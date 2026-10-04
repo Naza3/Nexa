@@ -1,76 +1,80 @@
 # Nexa 项目索引
 
-本文件提供定位入口，不表示规划模块已经实现。动态完成度只在 [PROJECT_STATE.md](PROJECT_STATE.md) 维护。先按任务选入口，再用 `rg` 限定范围搜索。
+本文件只负责定位，不将计划写成实现。动态状态见 [PROJECT_STATE.md](PROJECT_STATE.md)，当前范围见 [ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)。
 
-## 已存在的文档入口
+## 当前文档
 
 | 入口 | 用途 |
 | --- | --- |
-| [README.md](README.md) | 定位、交付形态、阅读顺序 |
-| [AGENTS.md](AGENTS.md) | 持续开发规则与不可破坏的边界 |
-| [PROJECT_STATE.md](PROJECT_STATE.md) | 当前授权、实际状态、待决项与下一步 |
-| [总体架构](docs/architecture.md) | 分层、依赖、执行流程、SDK 边界与资源归属 |
-| [runtime 执行规格](ai-runtime-v0.1-execution-spec.md) | 原生集成、HTTP/IPC、默认值、T00–T10、A01–A26 |
-| [Telegram 摘要方案](docs/telegram-summary.md) | 来源契约、分块、证据、任务生命周期与质量验收 |
-| [开发路线](docs/roadmap.md) | runtime 与摘要两条路线、任务状态及阶段门槛 |
-| [代理工作流](docs/agent-workflow.md) | 角色、派发和交接格式 |
-| [ADR 0001](docs/decisions/0001-nexa-scope-and-layers.md) | 项目命名、优先目标、runtime 与摘要的边界 |
-| [文档基线验证](docs/verification/2026-09-30-document-baseline.md) | 本轮文档检查及未验证范围 |
+| [README](README.md) / [AGENTS](AGENTS.md) | 产品定位与开发规则 |
+| [当前状态](PROJECT_STATE.md) / [Windows路线](docs/roadmap.md) | 已完成、待验与W00–W05依赖/门槛 |
+| [架构](docs/architecture.md) / [执行规格](ai-runtime-v0.1-execution-spec.md) | Windows模块归属、API/IPC/原生与A编号验收 |
+| [harness兼容契约](docs/windows-harness-contract.md) | 固定dsh/pi-ai接入路径、协议差异、H01–H12验收 |
+| [开放模型ADR0015](docs/decisions/0015-open-model-loading-and-validation-evidence.md) | 用户16GB/广泛模型目标，loadable与历史validated分离，50c9d41固定模型WindowsCI及发送完成，用户目标机待验 |
+| [混合目录ADR0016](docs/decisions/0016-mixed-model-directory-diagnostics.md) | 合法集合一次partial提交、完整有限诊断、全坏保旧及短context扫描；43ad5c2 WindowsCI/包复核及发送完成，用户目标机待验 |
+| [发现/双源下载ADR0017](docs/decisions/0017-model-discovery-and-catalog-download.md) | 默认EXE/models发现、MS/HF固定目录、保存与扫描分离；33f0e17已发送，通用引擎另评估 |
+| [aria2下载引擎ADR0018](docs/decisions/0018-generic-download-engine-candidate.md) | 已采纳受控aria2；工作树监督/发布/组件集成与下载socket/SChannel边界，最终Windows及新包待验 |
+| [工具契约草案](docs/windows-tools-contract.md) | 生产tools尚未实现；T0已有无模型parser观察并定位严格完整性/schema/普通文本缺口 |
+| [构建锁](docs/build-lock.md) / [模型矩阵](docs/model-matrix.md) | 固定工具链/llama与精确模型验证证据，非运行许可名单 |
+| [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |
+| [历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md) | 收敛前主文档、Android/MNN研究与历史状态，不驱动当前排期 |
 
-`.codex/config.toml` 和 `.codex/agents/*.toml` 是现有开发代理配置，不属于 Nexa 产品运行时，也不是产品依赖锁。
+## 实际 Windows 工程
 
-## 规划的 runtime 入口
-
-以下路径在工程任务中逐步创建，当前不可当作现有代码或可运行命令。
-
-| 规划路径 | 职责 | 对应任务 / 规格 |
-| --- | --- | --- |
-| `Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml` | workspace、依赖和工具链锁 | T00；规格第 3、9 节 |
-| `crates/runtime-types/` | 自有 DTO、事件、错误和版本 | T01/T02；第 2、6 节 |
-| `crates/runtime-core/` | actor、模型状态、队列、取消、deadline | T02；第 5–6 节 |
-| `crates/model-store/` | 文件导入、manifest、原子提交 | T02；第 5 节 |
-| `crates/engine-host/` | process / embedded 执行器 | T02/T03/T07；第 2、9 节 |
-| `crates/llama-adapter/`、`native/llama-shim/` | 安全封装、C ABI、模板和原生推理 | T01；第 4 节 |
-| `vendor/llama.cpp/` | 固定 commit 的上游源码 | T00；第 9 节 |
-| `crates/runtime-worker/` | PC IPC、控制线程、原生线程 | T03；第 6.4 节 |
-| `crates/runtime-api/`、`crates/runtime-cli/` | 本机 HTTP/SSE、鉴权和 CLI | T04；第 7–8 节 |
-| `crates/runtime-mobile/` | Dart/Rust 桥与生命周期入口 | T07；第 8.3 节 |
-| `apps/desktop/`、`apps/mobile/` | 最小模型管理及推理验证 UI | T06/T08；第 8 节 |
-| `xtask/`、`tests/contract/`、`tests/fixtures/` | 自动构建、协议与真实推理验证入口 | T00–T09 |
-| `docs/build-lock.md`、`docs/model-matrix.md` | 实测后的工具链与模型支持矩阵 | T00，之后增量维护 |
-| `artifacts/verification/` | 本机详细报告，不提交私有数据 | 按相关任务生成 |
-
-## 规划的摘要接入入口
-
-摘要层独立于 runtime，首期放在本项目作参考接入；真实业务应用可复用或自行实现相同调用契约。下面是设计路径，尚未创建。
-
-| 规划路径 | 职责 |
+| 路径 | 作用 / 说明 |
 | --- | --- |
-| `crates/summary-types/` | 来源快照、摘要任务、证据及产物类型 |
-| `crates/summary-core/` | 分块、逐级合并、任务预算和引用校验；依赖推理客户端接口 |
-| `examples/telegram-summary/` | 导出文件或已有数据的接入示例，来源方案在 S00 确定 |
-| `tests/summary/` | 合成样本、回归集索引、业务质量与端到端验收 |
+| `Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml` | Windows runtime主workspace与锁 |
+| `crates/runtime-types/`、[runtime-core](crates/runtime-core/README.md) | 自有DTO、单actor、队列/取消/deadline/资源治理 |
+| [model-store](crates/model-store/README.md) | managed复制导入与external只读目录、manifest/准入 |
+| [llama-adapter](crates/llama-adapter/README.md)、`native/llama-shim/`、`vendor/llama.cpp/` | 固定llama原生集成与安全边界 |
+| [engine-host](crates/engine-host/README.md) | 专用推理线程，供worker使用 |
+| [process-host](crates/process-host/README.md)、[runtime-ipc](crates/runtime-ipc/README.md)、[runtime-worker](crates/runtime-worker/README.md) | 独立进程、Job/回收、NDJSON/信用与原生执行 |
+| [runtime-api](crates/runtime-api/README.md)、[runtime-cli](crates/runtime-cli/README.md) | 本机HTTP/SSE与命令，父端不链接原生库 |
+| [desktop-bridge](crates/desktop-bridge/README.md)、`apps/desktop/` | native-free桥与React/Tauri模型/聊天/设置页 |
+| `apps/desktop/src-tauri/` | 独立Rust workspace/锁、ACL、原生Windows壳 |
+| [xtask](xtask/README.md)、`tests/fixtures/`、`scripts/` | 实际可执行验证、真实输入与打包脚本 |
+| `crates/desktop-bridge/src/model-catalog.json`、`download.rs`、`crates/model-store/src/library_download.rs` | 进行中的固定双源元信息、显式有界传输及受保护文件事务；不授予模型能力 |
+| `crates/download-engine/`、`third_party/aria2/`、`scripts/build_aria2_windows.*` | 工作树受控sidecar监督、三补丁来源锁/构建与组件身份，HTTP/Range由aria2负责；最终Windows待验 |
+| `native/llama-shim/tests/tool_parser_test.cpp` | T0合成上游模板/parser诊断，13case/无权重，不是生产工具接受算法 |
+| `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
-不预建账号服务、Telegram SDK、消息数据库或定时守护进程；只有对应接入决策确定后才增加具体实现。路线使用 S00–S04，与 runtime 的 T00–T10 分开。
+`RuntimeConfig::android()` 等遗留源码、独立移动workspace和隔离CI仍原位保留，不因本次文档收敛修改。`.codex/agents/`是开发代理配置，不是产品运行依赖。
 
-## 按任务选择阅读
+## Windows 接口、发行与原生窗口
 
-| 任务 | 先读 |
+- [HTTP/管理 ADR0005](docs/decisions/0005-t04-loopback-http-and-management.md)：鉴权、同连接proof、原子导入/输出预算与关停
+- [worker ADR0004](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md)：进程隔离、单一信用账本与消费lease
+- [模型/调度 ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)：存储、单actor与可观测性
+- [便携包 ADR0006](docs/decisions/0006-t05-windows-portable-package.md)、[runtime说明](packaging/windows-x64-cpu/README.md)、[独立验收器](xtask/PACKAGE_ACCEPTANCE.md)
+- [桌面契约](docs/t06-desktop-contract.md)、[壳ADR0007](docs/decisions/0007-t06-desktop-shell-boundary.md)、[目录/自动名契约](docs/t06-model-directory-contract.md)、[桌面包说明](packaging/desktop-windows/README.md)
+- `scripts/package_windows.py`、`scripts/package_desktop_windows.py`、`scripts/run_desktop_smoke.py`：真实Release/PE/许可/hash、中文空格解压与bridge
+- `crates/llama-adapter/native_identity.rs`、`scripts/stage_ci_evidence.py`：精确原生构建身份与封闭脱敏证据
+
+## 已有验证入口
+
+| 阶段 | 报告 |
 | --- | --- |
-| 工程启动 | 状态、路线 T00、执行规格第 3、9、10 节 |
-| 原生 / 模板 / 取消 | 架构执行流程、执行规格第 4、6 节、锁定版本上游头文件 |
-| 调度 / 存储 / IPC | 执行规格第 5–6 节、架构资源归属 |
-| API / SDK | 执行规格第 7–8 节、架构接入契约及未冻结扩展 |
-| Android | 架构移动生命周期、执行规格第 8.3、9.2、12.3 节 |
-| 摘要 | 摘要方案、路线 S00–S04；无需全文读原生实现 |
-| 依赖 / 后端扩展 | build-lock、model-matrix（创建后）、相关验证与决策 |
-| 文档 / 交接 | AGENTS、本文、状态；按改动同步具体规范 |
+| T00/T01 | [固定原生基线](docs/verification/2026-09-30-native-baseline.md) |
+| T02 | [存储/调度/真实执行](docs/verification/2026-10-01-t02-runtime.md) |
+| T03 | [独立worker与进程回收](docs/verification/2026-10-01-t03-worker.md) |
+| T04 | [HTTP/CLI](docs/verification/2026-10-01-t04-http-cli.md) |
+| T05 | [Windows便携发行阶段](docs/verification/2026-10-01-t05-windows-package.md) |
+| T06 | [桌面及目录版CI/手验界限](docs/verification/2026-10-01-t06-desktop.md) |
+| 后续修复 | [取消/真实故障优先级](docs/verification/2026-10-02-core-cancellation-faults.md) |
+| 历史389eeef | [模型兼容性与最终CI/交付](docs/verification/2026-10-02-windows-model-compatibility.md) |
+| W00 / W04 | [Windows主线收敛与Harness分层记录](docs/verification/2026-10-03-windows-scope-and-harness.md) |
+| W04/T0无模型诊断 | [工具parser探针](docs/verification/2026-10-03-tool-parser-probe.md)，13条行为观察与独立审查通过；4d30bfa WindowsCI CTest4/4/常规Rust344/0/7通过，生产工具与完整模板接受仍未成立 |
+| W04可执行窄文本验证 | [官方pi-ai验证与精确客户端锁](examples/harness/README.md)，尚非DSH/真模型/Windows通过 |
+| W02开放模型 | [开放候选与验证分离](docs/verification/2026-10-03-windows-open-models.md)，50c9d41固定GGUF的WindowsCI及包发送通过，其他模型/用户目标机待验 |
+| W02发现/双源下载 | [本轮验证](docs/verification/2026-10-03-model-catalog-download.md)，33f0e17 Windows363/0/7、MS固定0.6B实际下载与包复核/发送完成；用户4B下载故障另记，目标机完整验收未完成 |
+| W02 aria2下载引擎 | [分层验证记录](docs/verification/2026-10-03-aria2-download-engine.md)，区分原版/策略原型/源码构建/工作树/产品结果，未宣称新引擎已交付 |
+| W02下载故障诊断 | [MS重定向记录](docs/verification/2026-10-03-modelscope-redirect.md)；用户手动下载/扫描可用，具体被拒目标未知；最新CI状态见当前状态 |
+| W02混合目录 | [事务与诊断验证](docs/verification/2026-10-03-mixed-model-directory.md)，本机完整workspace343 pass/7 ignored、完整clippy/UI85项及独立审查通过，8crate266项不另加总；43ad5c2 Windows344/0/7与包复核/发送完成，目标机待验，不继承旧包手验 |
 
-## 验证入口的真实性
+历史报告是当时精确源码/设备的证据，不追溯覆盖新功能或新硬件。当前W阶段结果仍以状态与各自新报告为准。
 
-当前没有 Cargo、前端或 Flutter 构建入口。执行规格第 12 节中的 `cargo run -p xtask ...`、CLI 和 `adb install` 是未来命令契约，先检查实现和前置条件，再执行。
+## 可选调用层与历史
 
-- 文档：检查相对文件链接、围栏、旧项目残留和内容一致性；有 Git 时执行 `git diff --check`。
-- 工程建立后：按执行规格第 12 节和实际脚本执行定向检查，在状态和验证记录写退出码。
-- 真实推理：必须记录模型 hash、模板、后端、设备和输入版本；未测不填零或通过。
-- 摘要：必须核对覆盖、引用、事实归因和整份任务耗时，文本非空不等于质量合格。
+[Telegram摘要方案](docs/telegram-summary.md)是可选参考，不是runtime发布前置；源码规划路径未创建，不自动导入Telegram SDK、账号、数据库或定时任务。
+
+Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告仅从[历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md)进入，不放回当前推荐阅读顺序，不重新启动已暂停工作。

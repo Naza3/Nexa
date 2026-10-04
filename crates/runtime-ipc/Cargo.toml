@@ -1,0 +1,12 @@
+[package]
+name = "runtime-ipc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+runtime-types = { path = "../runtime-types" }
+runtime-core = { path = "../runtime-core" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

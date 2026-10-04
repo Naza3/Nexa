@@ -1,0 +1,244 @@
+use serde::{Deserialize, Serialize};
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BridgeError {
+    pub code: String,
+    pub message: String,
+}
+impl BridgeError {
+    pub(crate) fn new(code: &str) -> Self {
+        let message = match code {
+            "model_download_engine_unavailable" => {
+                "已验证的下载组件尚未就绪。请使用包含受控下载组件的完整安装包，或手动下载后扫描模型目录。"
+            }
+            "model_download_active" => {
+                "A download is active. Cancel it or wait before changing models, directories or settings."
+            }
+            "model_download_cleanup_unconfirmed" => {
+                "Download cleanup has not completed. Keep the window open and retry closing."
+            }
+            "model_download_cancelled" => "The download was cancelled before publication.",
+            "model_download_timeout" => {
+                "The download deadline was reached. Retry explicitly when the source is available."
+            }
+            "model_download_identity_mismatch" | "model_download_size_mismatch" => {
+                "The downloaded bytes do not match the pinned size and SHA256. No model was published."
+            }
+            "model_download_network_failed"
+            | "model_download_http_failed"
+            | "model_download_redirect_rejected" => {
+                "当前下载源连接、响应或重定向失败。未切换下载源，未发布模型文件。"
+            }
+            "already_exists" => {
+                "A file with this name already exists. It was not changed or overwritten."
+            }
+            "desktop_busy" => "This window already has an operation in progress.",
+            "desktop_closing" => "This window is closing.",
+            "runtime_running" => "Stop the runtime before applying this runtime setting.",
+            "not_initialized" => "Initialize and start the runtime explicitly first.",
+            "runtime_not_running" => "Start the runtime first.",
+            "connection_failed" => {
+                "The existing instance could not be securely verified. It was not replaced."
+            }
+            "runtime_start_failed" => {
+                "The packaged runtime did not become available. No business request was replayed."
+            }
+            "runtime_stop_unconfirmed" => {
+                "Runtime cleanup could not be confirmed. The window remains open."
+            }
+            "context_length_exceeded" => {
+                "The context or token budget exceeds the loaded model. Clear or reduce the conversation."
+            }
+            "history_limit" => {
+                "The conversation limit was reached. Explicitly clear or reduce it before sending again."
+            }
+            "response_limit" => {
+                "The reply exceeded the output limit. The partial reply is incomplete."
+            }
+            "slow_consumer" => {
+                "The window stopped consuming output. The partial reply is incomplete."
+            }
+            "stream_invalid" => {
+                "The stream was malformed or ended before a verified completion. The partial reply is incomplete."
+            }
+            "consumer_busy" => "Only one pending output read is allowed.",
+            "request_not_owned" => "This request does not belong to this window.",
+            "model_load_interrupted" => {
+                "This window's model request was disconnected. Preparation is cancelling; native loading, if already admitted, must finish cleanup."
+            }
+            "import_interrupted" => {
+                "The import connection was closed. Refresh the model list before retrying; a completed copy may already exist."
+            }
+            "import_cleanup_unconfirmed" => {
+                "The registry is still busy after closing this window's import. Keep the window open and retry closing."
+            }
+            "import_committed_durability_unconfirmed" => {
+                "The import may already be committed. Refresh the model list before any retry."
+            }
+            "settings_durability_unconfirmed" => {
+                "The setting was published but disk durability was not confirmed. Refresh before retrying."
+            }
+            "unsupported_model" => {
+                "This model cannot use the current engine/text adapter. Only protected single-file GGUF models are supported; split files are rejected."
+            }
+            "unsupported_chat_template" => {
+                "The embedded template is missing or cannot preserve this plain-text conversation. No replacement template is used."
+            }
+            "invalid_manifest" => "The selected GGUF structure or model registration is invalid.",
+            "model_scan_no_usable_files" => {
+                "Every GGUF candidate was rejected. The previous directory and index were preserved."
+            }
+            "settings_invalid" | "invalid_request" | "invalid_argument" => {
+                "The supplied settings or request are invalid."
+            }
+            "packaged_runtime_missing" => {
+                "The fixed packaged runtime or worker is missing or invalid."
+            }
+            "settings_write_failed" => "The settings could not be saved.",
+            _ => "The operation could not be completed safely. Refresh the status before retrying.",
+        };
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+    pub(crate) fn spawn(error: &std::io::Error) -> Self {
+        let mut safe = Self::new("runtime_start_failed");
+        if let Some(code) = error.raw_os_error() {
+            // A numeric OS code distinguishes denied Job breakaway from a
+            // missing binary without exposing an executable or user path.
+            safe.message.push_str(&format!(" (OS error {code})"));
+        }
+        safe
+    }
+    pub(crate) fn api(code: Option<&str>) -> Self {
+        const KNOWN: &[&str] = &[
+            "invalid_request",
+            "unsupported_parameter",
+            "unsupported_model",
+            "unsupported_chat_template",
+            "context_length_exceeded",
+            "model_not_found",
+            "request_not_found",
+            "model_conflict",
+            "runtime_busy",
+            "already_exists",
+            "duplicate_request_id",
+            "request_cancelled",
+            "consumer_stopped",
+            "slow_consumer",
+            "queue_full",
+            "queue_timeout",
+            "load_timeout",
+            "execution_timeout",
+            "runtime_faulted",
+            "worker_lost",
+            "runtime_shutdown",
+            "model_load_failed",
+            "insufficient_storage",
+            "internal_error",
+            "response_too_large",
+            "model_library_unsupported",
+            "model_directory_required",
+            "model_directory_unavailable",
+            "model_directory_unsupported",
+            "model_library_limit",
+            "model_library_changed",
+            "model_list_changed",
+            "model_scan_timeout",
+            "model_scan_cancelled",
+            "model_file_changed",
+            "model_file_unavailable",
+            "model_file_in_use",
+            "model_library_write_failed",
+            "import_committed_durability_unconfirmed",
+        ];
+        Self::new(code.filter(|s| KNOWN.contains(s)).unwrap_or("api_error"))
+    }
+}
+impl std::fmt::Display for BridgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+impl std::error::Error for BridgeError {}
+impl From<runtime_cli::client::ClientError> for BridgeError {
+    fn from(e: runtime_cli::client::ClientError) -> Self {
+        match e {
+            runtime_cli::client::ClientError::Api { code, .. } => Self::api(code.as_deref()),
+            _ => Self::new("connection_failed"),
+        }
+    }
+}
+pub type Result<T> = std::result::Result<T, BridgeError>;
+
+/// Only typed sidecar outcomes cross this boundary; never echo console output,
+/// URLs, response bodies, signed queries, executable paths or OS error strings.
+pub(crate) fn download_error(error: download_engine::DownloadError) -> BridgeError {
+    use download_engine::DownloadError as E;
+    match error {
+        E::InvalidSpec => BridgeError::new("model_catalog_invalid"),
+        E::InvalidOptions | E::UnsupportedPlatform | E::SpawnFailed => {
+            BridgeError::new("model_download_engine_unavailable")
+        }
+        E::Cancelled => BridgeError::new("model_download_cancelled"),
+        E::Timeout => BridgeError::new("model_download_timeout"),
+        E::CleanupUnconfirmed => BridgeError::new("model_download_cleanup_unconfirmed"),
+        E::PipeFailed => BridgeError {
+            code: "model_download_network_failed".into(),
+            message: "下载进程输出读取失败。未切换下载源，未发布模型文件。".into(),
+        },
+        E::SidecarExit { exit_code, .. } => {
+            let (code, reason) = match exit_code {
+                2 => ("model_download_timeout", "下载源等待超时"),
+                3 | 4 => ("model_download_http_failed", "下载源未找到指定文件"),
+                6 => ("model_download_network_failed", "下载源网络连接或传输失败"),
+                8 => (
+                    "model_download_http_failed",
+                    "下载源不支持本次续传，有限全量恢复后仍未完成",
+                ),
+                9 => ("model_download_write_failed", "模型目录可用空间不足"),
+                13 => ("already_exists", "下载目标已存在，未覆盖"),
+                14..=18 => ("model_download_write_failed", "本任务临时文件操作失败"),
+                19 => ("model_download_network_failed", "下载源域名解析失败"),
+                22 => ("model_download_http_failed", "下载源 HTTP 响应不符合要求"),
+                23 => (
+                    "model_download_redirect_rejected",
+                    "下载源重定向次数超过限制",
+                ),
+                24 => (
+                    "model_download_http_failed",
+                    "下载源要求认证，本下载器不使用账户凭据",
+                ),
+                29 => ("model_download_http_failed", "下载源服务暂不可用"),
+                32 => (
+                    "model_download_identity_mismatch",
+                    "下载字节不符合固定 SHA256",
+                ),
+                _ => ("model_download_network_failed", "下载进程未成功完成"),
+            };
+            BridgeError {
+                code: code.into(),
+                message: format!(
+                    "{reason}（下载进程退出码 {exit_code}）。未切换下载源，未发布模型文件。"
+                ),
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod download_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn sidecar_diagnostics_use_only_known_numeric_facts() {
+        for exit_code in [1, 2, 3, 6, 8, 9, 13, 17, 19, 22, 23, 24, 29, 32, u32::MAX] {
+            let error = download_error(download_engine::DownloadError::SidecarExit {
+                exit_code,
+                error_code: Some(999),
+            });
+            assert!(error.message.contains(&format!("退出码 {exit_code}")));
+            assert!(!error.message.contains("999"));
+            assert!(!error.message.contains("https://"));
+            assert!(error.message.len() < 400);
+        }
+    }
+}

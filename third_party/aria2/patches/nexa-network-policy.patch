@@ -1,0 +1,200 @@
+--- a/src/Request.cc
++++ b/src/Request.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "Request.h"
++#include "NexaNetworkPolicy.h"
+ 
+ #include <cassert>
+ #include <utility>
+@@ -104,7 +105,7 @@
+ {
+   supportsPersistentConnection_ = true;
+   ++redirectCount_;
+-  if (uri.empty()) {
++  if (uri.empty() || uri.find('#') != std::string::npos) {
+     return false;
+   }
+   std::string redirectedUri;
+@@ -148,9 +149,11 @@
+ 
+ bool Request::parseUri(const std::string& srcUri)
+ {
+-  currentUri_ = removeFragment(srcUri);
++  if (!nexa::uriShape(srcUri)) return false;
++  currentUri_ = srcUri;
+   uri::UriStruct us;
+-  if (uri::parse(us, currentUri_)) {
++  if (uri::parse(us, currentUri_) && us.protocol == "https" &&
++      us.port == 443 && us.username.empty() && !us.hasPassword) {
+     us_.swap(us);
+     return true;
+   }
+--- a/src/SocketCore.cc
++++ b/src/SocketCore.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "SocketCore.h"
++#include "NexaNetworkPolicy.h"
+ 
+ #ifdef HAVE_IPHLPAPI_H
+ #  include <iphlpapi.h>
+@@ -441,6 +442,11 @@
+   struct addrinfo* rp;
+   int errNum;
+   for (rp = res; rp; rp = rp->ai_next) {
++    // Validate the exact sockaddr passed to connect, on EVERY resolution/retry.
++    // No second resolver call between this check and connect.
++    if (sockType_ != SOCK_STREAM || !nexa::publicDestination(rp->ai_addr, rp->ai_addrlen)) {
++      throw DL_ABORT_EX("Nexa policy: destination rejected");
++    }
+     sock_t fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+     errNum = SOCKET_ERRNO;
+     if (fd == (sock_t)-1) {
+--- a/src/AbstractCommand.cc
++++ b/src/AbstractCommand.cc
+@@ -662,6 +662,11 @@
+ // then returns an empty string.
+ std::string getProxyUri(const std::string& protocol, const Option* option)
+ {
++  // No proxy CONNECT path in the dedicated Nexa binary, including per-item options.
++  if (!option->blank(PREF_ALL_PROXY) || !option->blank(PREF_HTTPS_PROXY) ||
++      !option->blank(PREF_HTTP_PROXY) || !option->blank(PREF_FTP_PROXY)) {
++    throw DL_ABORT_EX("Nexa policy: proxy rejected");
++  }
+   if (protocol == "http") {
+     return getProxyOptionFor(PREF_HTTP_PROXY, PREF_HTTP_PROXY_USER,
+                              PREF_HTTP_PROXY_PASSWD, option);
+--- a/src/MultiUrlRequestInfo.cc
++++ b/src/MultiUrlRequestInfo.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "MultiUrlRequestInfo.h"
++#include "NexaNetworkPolicy.h"
+ 
+ #include <signal.h>
+ 
+@@ -178,6 +179,15 @@
+ {
+   global::globalHaltRequested = 0;
+   try {
++    if (option_->getAsBool(PREF_ENABLE_RPC) || !option_->getAsBool(PREF_NO_NETRC) ||
++        !option_->getAsBool(PREF_CHECK_CERTIFICATE) ||
++        !option_->blank(PREF_HTTP_USER) || !option_->blank(PREF_HTTP_PASSWD) ||
++        !option_->blank(PREF_HEADER) || !option_->blank(PREF_LOAD_COOKIES) ||
++        !option_->blank(PREF_CERTIFICATE) || !option_->blank(PREF_PRIVATE_KEY) ||
++        !option_->blank(PREF_ALL_PROXY) || !option_->blank(PREF_HTTP_PROXY) ||
++        !option_->blank(PREF_HTTPS_PROXY) || !option_->blank(PREF_FTP_PROXY)) {
++      throw DL_ABORT_EX("Nexa policy: unsupported credential, proxy, RPC or TLS option");
++    }
+     SingletonHolder<Notifier>::instance(make_unique<Notifier>());
+ 
+ #ifdef ENABLE_SSL
+--- a/src/HttpRequest.cc
++++ b/src/HttpRequest.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "HttpRequest.h"
++#include "DlAbortEx.h"
+ 
+ #include <cassert>
+ #include <numeric>
+@@ -143,6 +144,13 @@
+ 
+ std::string HttpRequest::createRequest()
+ {
++  if (!option_->getAsBool(PREF_NO_NETRC) ||
++      !option_->getAsBool(PREF_CHECK_CERTIFICATE) ||
++      !option_->blank(PREF_HTTP_USER) || !option_->blank(PREF_HTTP_PASSWD) ||
++      !option_->blank(PREF_HEADER) || !option_->blank(PREF_LOAD_COOKIES) ||
++      !option_->blank(PREF_CERTIFICATE) || !option_->blank(PREF_PRIVATE_KEY)) {
++    throw DL_ABORT_EX("Nexa policy: per-request credentials or TLS option rejected");
++  }
+   authConfig_ = authConfigFactory_->createAuthConfig(request_, option_);
+   auto requestLine = request_->getMethod();
+   requestLine += ' ';
+--- a/src/HttpResponse.cc
++++ b/src/HttpResponse.cc
+@@ -159,8 +159,9 @@
+ void HttpResponse::processRedirect()
+ {
+   const auto& req = httpRequest_->getRequest();
+-  if (!req->redirectUri(util::percentEncodeMini(getRedirectURI()))) {
+-    throw DL_RETRY_EX(fmt(
++  if (getRedirectURI().find('#') != std::string::npos ||
++      !req->redirectUri(util::percentEncodeMini(getRedirectURI()))) {
++    throw DL_ABORT_EX(fmt(
+         "CUID#%" PRId64 " - Redirect to %s failed. It may not be a valid URI.",
+         cuid_, req->getCurrentUri().c_str()));
+   }
+--- /dev/null
++++ b/src/NexaNetworkPolicy.h
+@@ -0,0 +1,64 @@
++// Nexa dedicated sidecar policy; GPL-2.0-or-later, with upstream OpenSSL exception.
++// This build intentionally does not preserve general-purpose aria2 behavior.
++#ifndef NEXA_NETWORK_POLICY_H
++#define NEXA_NETWORK_POLICY_H
++#include "common.h"
++#include "a2netcompat.h"
++#include <cstdint>
++#include <cstring>
++#include <string>
++#if defined(ENABLE_BITTORRENT) || defined(ENABLE_METALINK) || defined(HAVE_LIBCARES) || defined(ENABLE_ASYNC_DNS) || defined(HAVE_LIBSSH2)
++#error Nexa sidecar requires BT, Metalink, c-ares and SSH disabled
++#endif
++namespace aria2 { namespace nexa {
++inline bool uriShape(const std::string& s)
++{
++  if (s.compare(0, 8, "https://") != 0 || s.find('#') != std::string::npos) return false;
++  for (unsigned char c : s) if (c <= 0x20 || c == 0x7f || c == '\\') return false;
++  auto end = s.find_first_of("/?", 8);
++  auto authority = s.substr(8, end == std::string::npos ? end : end - 8);
++  return !authority.empty() && authority.find('@') == std::string::npos &&
++         authority.find('%') == std::string::npos;
++}
++inline bool publicV4(const unsigned char* b)
++{
++  // Conservatively reject special-purpose blocks, including globally reachable
++  // subexceptions. IANA IPv4 Special-Purpose registry, reviewed 2026-10-03.
++  return !(b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 ||
++    (b[0] == 100 && (b[1] & 0xc0) == 64) ||
++    (b[0] == 169 && b[1] == 254) ||
++    (b[0] == 172 && (b[1] & 0xf0) == 16) ||
++    (b[0] == 192 && ((b[1] == 0 && (b[2] == 0 || b[2] == 2)) ||
++      (b[1] == 88 && b[2] == 99) || b[1] == 168)) ||
++    (b[0] == 198 && ((b[1] & 0xfe) == 18 || (b[1] == 51 && b[2] == 100))) ||
++    (b[0] == 203 && b[1] == 0 && b[2] == 113));
++}
++inline bool publicV6(const unsigned char* b)
++{
++  static const unsigned char mapped[12] = {0,0,0,0,0,0,0,0,0,0,255,255};
++  if (std::memcmp(b, mapped, 12) == 0) return publicV4(b + 12);
++  // Only 2000::/3 global unicast; exclude special-purpose/transition ranges.
++  // This also rejects NAT64, ULA, link local, multicast, unspecified and loopback.
++  if ((b[0] & 0xe0) != 0x20) return false;
++  if (b[0] == 0x20 && b[1] == 0x01 && (b[2] & 0xfe) == 0) return false; // /23
++  if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8) return false;
++  if (b[0] == 0x20 && b[1] == 0x02) return false; // 6to4
++  if (b[0] == 0x3f && b[1] == 0xff && (b[2] & 0xf0) == 0) return false; // /20
++  return true;
++}
++inline bool publicDestination(const sockaddr* sa, size_t len)
++{
++  if (!sa) return false;
++  if (sa->sa_family == AF_INET && len >= sizeof(sockaddr_in)) {
++    const auto* a = reinterpret_cast<const sockaddr_in*>(sa);
++    return ntohs(a->sin_port) == 443 && publicV4(reinterpret_cast<const unsigned char*>(&a->sin_addr));
++  }
++  if (sa->sa_family == AF_INET6 && len >= sizeof(sockaddr_in6)) {
++    const auto* a = reinterpret_cast<const sockaddr_in6*>(sa);
++    return ntohs(a->sin6_port) == 443 && a->sin6_scope_id == 0 &&
++      publicV6(reinterpret_cast<const unsigned char*>(&a->sin6_addr));
++  }
++  return false;
++}
++}} // namespace aria2::nexa
++#endif

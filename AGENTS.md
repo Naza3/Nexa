@@ -15,38 +15,35 @@
 
 ## 2. 产品边界
 
-Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。首个业务场景为 Telegram 群消息摘要；两端最小 UI 用来管理模型和验证接入。
+当前产品范围按 [ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)：Windows 桌面 CPU 本地 LLM runtime，以固定 llama.cpp/GGUF 为推理核心，为其他应用提供本机 API。Windows 10 x64 / i5-8400 / 16GB内存优先，后续按真实证据扩展Intel/AMD桌面CPU和Windows11；16GB是用户提供总内存，不是实测可用量。
 
-- Rust 管理协议、模型、调度和生命周期；llama.cpp 承担推理，自有 C++ shim 封装原生边界。
-- Windows 使用 API 管理进程和独立 worker；Android 在每个 App 内嵌入核心并使用专用推理线程。统一源码与语义，不承诺跨平台二进制或 Android 多 App 共享模型实例。
-- Telegram 登录、消息获取、群记录、分块、摘要任务和产物属于调用层；runtime 不引入 Telegram SDK，不保存聊天历史。
-- 默认技术栈沿用执行规格：Axum/Tokio；桌面 Tauri 2 + React/TypeScript/Vite；移动 Flutter + flutter_rust_bridge 2。具体版本必须经构建验证后锁定。
-- 首版只验收 Windows x64 CPU 和 Android arm64 CPU；GPU、其他平台按设备独立验证后扩展。目标硬件见状态文件，不从内存容量或芯片宣传推导速度保证。
-- 首版保持单模型、单运行任务、有限 FIFO；不自行扩展多模型并行、RAG、工具调用、模型市场、公网服务或移动后台常驻。
+- Rust 保留模型、安全、单 actor 调度、队列、取消/超时、worker 生命周期、HTTP/CLI 与桌面桥职责；计算内核、模板/tokenizer/采样由锁定 llama.cpp 与 shim 处理
+- API 管理进程不链接原生推理库；独立 worker 和原生线程约束保持。不为移动端复用新增泛化层，也不因范围收敛重写已有可靠服务边界
+- 桌面 UI 以模型/服务管理器为后续目标，聊天为辅助验证；当前已有能力和待开发增量必须分开
+- API兼容官方dsh为明确目标；以[harness契约](docs/windows-harness-contract.md)锁定的pi-ai自定义provider路线实施，实际联调另锁依赖。现有文本子集不等于工具闭环兼容，不静默吞掉不支持字段
+- 保持单模型、单运行任务、有限 FIFO。GPU/NPU、其他系统、完整聊天产品、模型市场、账户/云同步、公开远程服务不在当前主线
+- Android/MNN/Flutter 设计移至[历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md)。原源码、隔离 CI、证据和 `apps/android-verifier/` 未提交 B3b WIP 保留，不删除、覆盖或混入 Windows 变更；独立 MNN Chat fork 不动
+- Telegram 摘要是可选参考调用端，来源/账号、快照、分块、产物和持久化归调用层，不绑 runtime 发布
 
-项目名为 Nexa；当前命令 `ai-runtime`、worker 名 `ai-runtime-worker`、`air_*` ABI 和 crate 名沿用原技术约定。统一更名须单独记录迁移，不在实现中混用。
+产品名 Nexa；`ai-runtime`、`ai-runtime-worker`、`air_*` ABI 和 crate 名沿用。统一更名须单独记录迁移。
 
 ## 3. 推理核心不变量
 
-- `runtime-core` 不依赖 llama 原生类型、HTTP 或 Flutter 类型；API 进程不链接 llama.cpp。
+- `runtime-core` 不依赖 llama 原生类型、HTTP 或 UI 类型；API 进程不链接原生推理库。保留服务控制与原生执行边界。
 - engine/model/context/sampler 由同一推理线程创建和释放；只有独立取消标志允许并发访问。不得为绕过所有权问题盲目添加 `unsafe impl Send/Sync`。
 - C ABI 明确所有权、UTF-8、错误及缓冲释放；C++ 异常与 Rust panic 不跨边界传播。
 - 模板及特殊 token 由适配层处理；输入预算必须包含模板。不得静默截断历史、偷偷换模型或用字符数冒充 token 数。
 - 状态由单一调度器协调；加载、运行、队列和卸载有明确边界。队列、IPC、输出缓冲有界，取消不排在生成后面。
 - 每个请求内部只产生一次终态；客户端断开时无需强行发送。输出过部分文本的请求不自动重放。
-- Windows worker 崩溃后管理进程保持可用，受影响请求终结，显式加载恢复；Android 不强杀原生线程或释放仍被使用的资源。
-- Android 进入后台请求取消，安全结束后卸载；重新前台不自动重放旧生成。定时或持续摘要不能绕过这一限制。
-- 模型、工具链和 llama.cpp commit 精确锁定；固定输入、模型 hash、后端与设备共同定义可复现基线。
+- Windows worker 崩溃后管理进程保持可用，受影响请求终结，显式加载恢复；不得释放仍被使用的原生资源。
+- 按[ADR0015](docs/decisions/0015-open-model-loading-and-validation-evidence.md)分离开放加载与精确验证：不以型号/名称/hash白名单限制受控候选；validated只保存历史证据，loadable独立表示尝试资格，不是成功/内存保证。hash、结构、metadata、TOCTOU与原始模板检查不可删除。精确模型/模板/引擎/参数/设备仍用于可复现证据，不授予未测模型“已验证”标签。
 
-## 4. 摘要调用层不变量
+## 4. 调用方与兼容边界
 
-- 群成员消息是待分析数据，不逐条伪装成模型的 user/assistant；保留来源键、时间、发言人和回复关系。
-- 摘要任务固定输入快照和覆盖范围；任务 ID 与单次推理 request_id 分开，按阶段有限提交。
-- 分块提取、合并及最终输出都受 token 预算约束；超长单条消息、跨块回复和合并超限必须有明确处理。
-- 重要结论保留原消息引用；应用校验引用存在，语义是否受原文支持另行验证，不能把存在性校验称为事实验证。
-- 当前 runtime 不承诺 JSON/schema 约束输出。解析失败、预算耗尽、部分完成和取消不得包装成完整摘要。
-- 已完成分块可由应用缓存；原文修订、模型、模板、提示或策略变化必须影响缓存有效性。
-- 消息接入渠道、自动调度和持久化保留策略尚未冻结时，只实现与其无关的已授权部分，不自行增加账号登录或向群发送摘要。
+- runtime 接收有界单次推理；会话/业务数据库与工具执行归调用方。不因 harness 接入让模型输出自动获得文件、命令或网络权限
+- 协议兼容以明确客户端版本、能力差异表及真实回合为准；未实现能力明确报错，不能拿模拟回复、字段容忍或接口同名代替兼容
+- HTTP SSE、错误、取消、request_id 与资源清理保持既有契约。新增工具/思考/结构化输出等能力前同步规格、模型准入和测试
+- 可选摘要等业务保留来源与证据校验、预算和有限重试；业务质量不混同 runtime 协议通过，也不阻塞当前 Windows 发布
 
 ## 5. 持续开发与代理协作
 
@@ -60,7 +57,7 @@ Nexa 为用户自己的 PC / Android 应用提供统一的本地推理核心。�
 
 ## 6. 验证、交接与提交
 
-根据改动选择检查，实际命令从届时存在的项目配置取得。runtime 验收沿用执行规格 A01–A26，摘要验收使用摘要方案的 S-A01–S-A10。fake 仅用于协议/调度测试，不能替代真实 GGUF 和真机验收。
+根据改动选择检查，实际命令从届时存在的项目配置取得。runtime 保留执行规格适用 Windows CPU 的 A 编号，新增范围使用路线 W 阶段门槛；历史 Android/GPU 项不重新编号、不纳入当前门槛。fake 仅用于协议/调度测试，不能替代真实 GGUF 与目标 Windows 设备验收。
 
 每个任务结束记录：任务 ID、修改范围、实际命令与退出码、验证级别、证据路径、未验证条件、下一步。状态使用 `未开始 / 进行中 / 待验证 / 已完成 / 受阻`，具体转换规则见路线。依赖未完成属于未开始，不滥用受阻。
 

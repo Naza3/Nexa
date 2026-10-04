@@ -1,0 +1,5 @@
+rust_input: crate::api
+rust_root: rust/
+dart_output: lib/src/rust
+rust_output: rust/src/frb_generated.rs
+c_output: rust/frb_generated.h

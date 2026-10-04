@@ -1,0 +1,15 @@
+{
+  "kind": "nexa-t07a-research-input-v1",
+  "repository": "taobao-mnn/Qwen3-0.6B-MNN",
+  "revision": "34dfccda1187ded6e07ea06426da576b0b793c6b",
+  "exporter_commit": null,
+  "admitted_production_package": false,
+  "template_sha256": "87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5",
+  "files": {
+    "config.json": {"size": 403, "sha256": "d74912484c7f0527494c9184d8d6806554be501e15ca559a1610370b80839ef7"},
+    "llm_config.json": {"size": 4880, "sha256": "63f9a2f67ec2ae98b4c2363b46355040c34ca5c87a740ab3c94e08288a53225a"},
+    "llm.mnn": {"size": 461520, "sha256": "d426c65a5159c938ccc237cdfbd982137f276804f27b414ca0ecf3fc0a660f8c"},
+    "llm.mnn.weight": {"size": 450810338, "sha256": "953afb7e0165818add34a7a6caf0af5d0ed9428da102eb22c9b98ee9da292e9f"},
+    "tokenizer.txt": {"size": 3193569, "sha256": "77009625db0b18e74315dd89557c76feaab57e1d54e3240b442649a3c16ec4fb"}
+  }
+}

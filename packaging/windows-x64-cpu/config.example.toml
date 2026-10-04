@@ -1,0 +1,29 @@
+# 私有开发验收配置示例。复制到已 init 的独立 data-dir/config.toml 后使用。
+# 这不是凭据；实际令牌由显式 init 创建，不包含在分发包中。
+schema_version = 1
+
+[api]
+listen = "127.0.0.1:18080"
+max_body_bytes = 1048576
+token_file = "secrets/api-token"
+trusted_origins = []
+
+[runtime]
+max_active_models = 1
+max_running_jobs = 1
+max_queued_jobs = 8
+queue_timeout_seconds = 120
+execution_timeout_seconds = 300
+load_timeout_seconds = 300
+idle_unload_seconds = 300
+cancel_grace_seconds = 5
+
+[inference]
+backend = "cpu"
+context_size = 2048
+max_output_tokens = 512
+temperature = 0.7
+top_p = 0.9
+gpu_layers = 0
+threads = 2
+batch_size = 128

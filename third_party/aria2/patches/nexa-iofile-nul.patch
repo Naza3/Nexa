@@ -1,0 +1,26 @@
+--- a/src/IOFile.cc
++++ b/src/IOFile.cc
+@@ -33,6 +33,7 @@
+  */
+ /* copyright --> */
+ #include "IOFile.h"
++#include "DlAbortEx.h"
+ 
+ #include <array>
+ #include <cstring>
+@@ -70,6 +71,7 @@
+   char* ptr = gets(s, size);
+   if (ptr) {
+     int len = strlen(ptr);
++    if (len == 0) throw DL_ABORT_EX("Nexa policy: NUL-prefixed input line rejected");
+     if (ptr[len - 1] == '\n') {
+       ptr[len - 1] = '\0';
+     }
+@@ -86,6 +88,7 @@
+   std::array<char, 4_k> buf;
+   while (gets(buf.data(), buf.size())) {
+     size_t len = strlen(buf.data());
++    if (len == 0) throw DL_ABORT_EX("Nexa policy: NUL-prefixed input line rejected");
+     bool lineBreak = false;
+     if (buf[len - 1] == '\n') {
+       --len;
