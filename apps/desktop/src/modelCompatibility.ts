@@ -2,7 +2,7 @@ import type { ModelSummary } from "./types";
 import { localValidationLabel, localValidationReason } from "./localValidation";
 
 const sourceErrors: Record<string, string> = {
-  model_file_changed: "源文件已变动，请停止服务后重新扫描；仍须通过加载时核验",
+  model_file_changed: "源文件已变动，请停止服务后重新添加此文件；仍须通过加载时核验",
   model_file_unavailable: "源文件已失踪或无法读取，请恢复源文件后重试",
   model_file_in_use: "源文件被写入程序占用，请释放后重试",
   model_directory_unavailable: "源目录无法读取，请检查目录是否存在及读取权限",

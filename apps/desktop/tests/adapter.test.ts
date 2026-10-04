@@ -6,6 +6,7 @@ const { invoke, isTauri } = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke, isTauri }));
 import { nativeApi, safeError } from "../src/adapter";
 import { DEFAULT_SETTINGS } from "../src/controller";
+import { preferencesOnly } from "../src/runtimeSettingsValues";
 beforeEach(() => {
   isTauri.mockReturnValue(true);
   invoke.mockResolvedValue({});
@@ -32,15 +33,19 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("chat_cancel", {
       request: { request_id: "id" },
     });
-    const { idle_unload_seconds, ...settings } = DEFAULT_SETTINGS;
-    await nativeApi.saveSettings(settings);
+    const settings = preferencesOnly(DEFAULT_SETTINGS);
+    await nativeApi.saveSettings(DEFAULT_SETTINGS);
     expect(invoke).toHaveBeenLastCalledWith("settings_save", {
       request: { settings },
     });
-    await nativeApi.saveIdle(idle_unload_seconds);
+    await nativeApi.saveIdle(DEFAULT_SETTINGS.idle_unload_seconds);
     expect(invoke).toHaveBeenLastCalledWith("runtime_idle_save", {
       request: { idle_unload_seconds: 300 },
     });
+    await nativeApi.saveIdle(900, false);
+    expect(invoke).toHaveBeenLastCalledWith("runtime_idle_save", { request: { idle_unload_seconds: 900, idle_unload_enabled: false } });
+    await nativeApi.saveVerificationTimeout(7200);
+    expect(invoke).toHaveBeenLastCalledWith("runtime_verification_save", { request: { model_verification_timeout_seconds: 7200 } });
     const lan_api = { enabled: true, listen: "192.168.1.20:18081", allowed_cidrs: ["192.168.1.30/32"] };
     await nativeApi.saveLanSettings(lan_api);
     expect(invoke).toHaveBeenLastCalledWith("runtime_lan_save", { request: { lan_api } });
@@ -52,10 +57,18 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("desktop_snapshot", undefined);
     await nativeApi.pickDirectory();
     expect(invoke).toHaveBeenLastCalledWith("model_directory_pick", undefined);
+    await nativeApi.configureDirectory("selection-only");
+    expect(invoke).toHaveBeenLastCalledWith("model_directory_configure", { request: { selection_id: "selection-only" } });
     await nativeApi.applyDirectory("selection-only");
     expect(invoke).toHaveBeenLastCalledWith("model_directory_apply", {
       request: { selection_id: "selection-only" },
     });
+    await nativeApi.pickModels();
+    expect(invoke).toHaveBeenLastCalledWith("models_pick", undefined);
+    await nativeApi.addModels("opaque-selection", false);
+    expect(invoke).toHaveBeenLastCalledWith("models_add", { request: { selection_id: "opaque-selection", auto_test: false } });
+    await nativeApi.discardModelSelection("opaque-selection");
+    expect(invoke).toHaveBeenLastCalledWith("models_selection_discard", { request: { selection_id: "opaque-selection" } });
     await nativeApi.scanModels();
     expect(invoke).toHaveBeenLastCalledWith("models_scan", undefined);
     await nativeApi.reconcileModels();

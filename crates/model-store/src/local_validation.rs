@@ -24,6 +24,7 @@ pub enum ValidationState {
     Failed,
     Stale,
     Deferred,
+    Unavailable,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalValidation {
@@ -68,10 +69,14 @@ impl Default for Receipts {
 impl Receipts {
     pub fn read(root: &Path) -> Result<Self> {
         let path = root.join(FILE);
-        if !path.try_exists().map_err(crate::io_error)? {
-            return Ok(Self::default());
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(crate::io_error(error)),
+            Ok(_) => (),
         }
-        library::validate_directory_candidate(root)?;
+        let _directory = library::DirectoryGuard::open_data_directory(root)?;
         let file = library::open_read_file(&path, false)?;
         if file.metadata().map_err(crate::io_error)?.len() > MAX_BYTES as u64 {
             return Err(invalid());
@@ -84,23 +89,28 @@ impl Receipts {
             return Err(invalid());
         }
         let receipts: Self = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-        if receipts.schema_version != 1
-            || receipts.entries.len() > MAX_RECEIPTS
-            || receipts.entries.iter().any(|r| {
+        receipts.validate()?;
+        Ok(receipts)
+    }
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != 1
+            || self.entries.len() > MAX_RECEIPTS
+            || self.entries.iter().any(|r| {
                 r.scope.engine_build.len() > 256
                     || r.scope.platform.len() > 128
                     || r.scope.installation.len() != 64
                     || r.scope.model_sha256.len() != 64
                     || r.scope.template_sha256.len() != 64
                     || r.scope.options.validate().is_err()
-                    || r.observation.error_code.as_ref().is_some_and(|s| {
-                        s.len() > 96 || !s.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
-                    })
+                    || r.observation
+                        .error_code
+                        .as_ref()
+                        .is_some_and(|s| !valid_error_code(s))
             })
         {
             return Err(invalid());
         }
-        Ok(receipts)
+        Ok(())
     }
     pub fn observation(&self, scope: &Scope, available: bool) -> LocalValidation {
         let Some(receipt) = self
@@ -118,21 +128,28 @@ impl Receipts {
         observation
     }
     pub fn record(&mut self, root: &Path, receipt: Receipt) -> Result<()> {
-        self.entries
+        // Build the replacement separately; a failed publication must not
+        // mutate the caller's in-memory evidence either.
+        let mut next = Self {
+            schema_version: self.schema_version,
+            entries: self.entries.clone(),
+        };
+        next.entries
             .retain(|r| r.scope.model_id != receipt.scope.model_id);
-        self.entries.push(receipt);
-        if self.entries.len() > MAX_RECEIPTS {
-            self.entries.remove(0);
+        next.entries.push(receipt);
+        if next.entries.len() > MAX_RECEIPTS {
+            next.entries.remove(0);
         }
-        let bytes = serde_json::to_vec(self).map_err(|_| invalid())?;
+        next.validate()?;
+        let bytes = serde_json::to_vec(&next).map_err(|_| invalid())?;
         if bytes.len() > MAX_BYTES {
             return Err(invalid());
         }
-        library::validate_directory_candidate(root)?;
+        let _directory = library::DirectoryGuard::open_data_directory(root)?;
         let target = root.join(FILE);
-        if target.try_exists().map_err(crate::io_error)? {
-            let _ = library::open_read_file(&target, false)?;
-        }
+        // Do not silently replace unreadable/corrupt evidence, including a
+        // dangling symlink whose target does not exist.
+        Self::read(root)?;
         let temp = root.join(format!(".validation-{}.tmp", uuid::Uuid::new_v4()));
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -152,8 +169,17 @@ impl Receipts {
         if result.is_err() {
             let _ = fs::remove_file(&temp);
         }
-        result
+        result?;
+        self.entries = next.entries;
+        Ok(())
     }
+}
+fn valid_error_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 fn invalid() -> runtime_types::RuntimeError {
     library::library_error(ErrorCode::InvalidManifest)
@@ -164,7 +190,7 @@ pub fn scope(
     options: LoadOptions,
     engine_build: &str,
 ) -> Result<Scope> {
-    let (volume, file) = library::directory_object_identity(root)?;
+    let (volume, file) = library::data_directory_object_identity(root)?;
     let installation = format!(
         "{:x}",
         Sha256::digest(format!("{volume}:{file}:{}", std::env::consts::OS).as_bytes())
@@ -227,6 +253,17 @@ pub fn engine_build(runtime_executable: &Path) -> Result<String> {
         hash.update([0]);
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+/// Hash the actual executable pair, rejecting a replacement during hashing.
+/// Stamps are cache invalidators only; the persisted identity is the byte hash.
+pub fn engine_identity(runtime_executable: &Path) -> Result<(Vec<library::FileIdentity>, String)> {
+    let before = engine_file_stamps(runtime_executable)?;
+    let build = engine_build(runtime_executable)?;
+    let after = engine_file_stamps(runtime_executable)?;
+    if before != after {
+        return Err(library::library_error(ErrorCode::ModelFileChanged));
+    }
+    Ok((after, build))
 }
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -390,5 +427,128 @@ mod tests {
             Receipts::read(root.path()).unwrap().entries.len(),
             MAX_RECEIPTS
         );
+    }
+    #[test]
+    fn record_and_read_share_bounded_safe_error_codes_and_failed_write_keeps_state() {
+        let root = tempfile::tempdir().unwrap();
+        let mut receipts = Receipts::default();
+        for code in ["worker_exit_2".to_owned(), "x".repeat(96)] {
+            let mut observation = passed();
+            observation.state = ValidationState::Failed;
+            observation.generation_pass = false;
+            observation.error_code = Some(code.clone());
+            receipts
+                .record(
+                    root.path(),
+                    Receipt {
+                        scope: scope(),
+                        observation,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                Receipts::read(root.path()).unwrap().entries[0]
+                    .observation
+                    .error_code,
+                Some(code)
+            );
+        }
+        let before = fs::read(root.path().join(FILE)).unwrap();
+        for code in [
+            "".to_owned(),
+            "private/path".to_owned(),
+            "TEXT".to_owned(),
+            "x".repeat(97),
+        ] {
+            let mut observation = passed();
+            observation.error_code = Some(code);
+            assert!(
+                receipts
+                    .record(
+                        root.path(),
+                        Receipt {
+                            scope: scope(),
+                            observation
+                        }
+                    )
+                    .is_err()
+            );
+            assert_eq!(fs::read(root.path().join(FILE)).unwrap(), before);
+            assert_eq!(serde_json::to_vec(&receipts).unwrap(), before);
+        }
+    }
+    #[test]
+    fn corrupt_evidence_is_retained_and_never_treated_as_missing_or_overwritten() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Receipts::read(root.path()).unwrap().entries.is_empty());
+        let path = root.path().join(FILE);
+        for bytes in [
+            b"private-corrupt-evidence".to_vec(),
+            vec![b'x'; MAX_BYTES + 1],
+        ] {
+            fs::write(&path, &bytes).unwrap();
+            assert!(Receipts::read(root.path()).is_err());
+            let mut receipts = Receipts::default();
+            assert!(
+                receipts
+                    .record(
+                        root.path(),
+                        Receipt {
+                            scope: scope(),
+                            observation: passed()
+                        }
+                    )
+                    .is_err()
+            );
+            assert!(receipts.entries.is_empty());
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn dangling_receipt_symlink_is_unavailable_and_not_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(FILE);
+        std::os::unix::fs::symlink(root.path().join("missing"), &path).unwrap();
+        assert!(Receipts::read(root.path()).is_err());
+        let mut receipts = Receipts::default();
+        assert!(
+            receipts
+                .record(
+                    root.path(),
+                    Receipt {
+                        scope: scope(),
+                        observation: passed()
+                    }
+                )
+                .is_err()
+        );
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+        assert!(receipts.entries.is_empty());
+    }
+    #[test]
+    fn actual_runtime_and_worker_bytes_both_bind_engine_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join(if cfg!(windows) {
+            "ai-runtime.exe"
+        } else {
+            "ai-runtime"
+        });
+        let worker = root.path().join(if cfg!(windows) {
+            "ai-runtime-worker.exe"
+        } else {
+            "ai-runtime-worker"
+        });
+        fs::write(&runtime, b"runtime-fixture-v1").unwrap();
+        fs::write(&worker, b"worker-fixture-v1").unwrap();
+        let first = engine_identity(&runtime).unwrap();
+        fs::write(&runtime, b"runtime-fixture-v2").unwrap();
+        let second = engine_identity(&runtime).unwrap();
+        assert_ne!(first.1, second.1);
+        fs::write(&worker, b"worker-fixture-v2").unwrap();
+        let third = engine_identity(&runtime).unwrap();
+        assert_ne!(second.1, third.1);
+        fs::remove_file(worker).unwrap();
+        assert!(engine_identity(&runtime).is_err());
     }
 }

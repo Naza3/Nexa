@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import build_aria2_windows as build
 
@@ -13,6 +14,30 @@ spec.loader.exec_module(probe)
 
 
 class BuildContractTests(unittest.TestCase):
+    def test_ci_source_commit_uses_the_actual_clean_checkout(self):
+        commit = "a" * 40
+        with mock.patch.dict(build.os.environ, {"GITHUB_SHA": commit}, clear=True), mock.patch.object(build.subprocess, "run", side_effect=[mock.Mock(stdout=commit + "\n"), mock.Mock(stdout="")]) as run:
+            self.assertEqual(build.source_commit(), commit)
+            self.assertEqual([call.args[0] for call in run.call_args_list],
+                             [["git", "rev-parse", "HEAD"], ["git", "status", "--porcelain", "--untracked-files=all"]])
+
+    def test_ci_source_commit_cannot_relabel_old_or_dirty_source(self):
+        for head, status in (("b" * 40, ""), ("a" * 40, " M scripts/build_aria2_windows.py\n")):
+            with self.subTest(head=head, status=status), mock.patch.dict(build.os.environ, {"GITHUB_SHA": "a" * 40}, clear=True), mock.patch.object(build.subprocess, "run", side_effect=[mock.Mock(stdout=head), mock.Mock(stdout=status)]), self.assertRaisesRegex(ValueError, "clean checkout commit"):
+                build.source_commit()
+
+    def test_invalid_ci_source_is_rejected_and_local_build_stays_uncommitted(self):
+        with mock.patch.dict(build.os.environ, {}, clear=True), mock.patch.object(build.subprocess, "run") as run:
+            self.assertEqual(build.source_commit(), "local-uncommitted")
+            run.assert_not_called()
+        for commit in ("", "main", "a" * 39, "A" * 40):
+            with self.subTest(commit=commit), mock.patch.dict(build.os.environ, {"GITHUB_SHA": commit}), self.assertRaisesRegex(ValueError, "Invalid CI"):
+                build.source_commit()
+
+    def test_windows_checkout_preserves_hash_locked_patch_bytes(self):
+        attributes = (build.ROOT / ".gitattributes").read_text(encoding="utf-8")
+        self.assertIn("third_party/aria2/patches/*.patch -text", attributes.splitlines())
+
     def test_fixed_patch_identity(self):
         lock = json.loads(build.LOCK.read_text(encoding="utf-8"))
         build.verified(build.MATERIALS / "patches" / lock["patch"]["filename"], lock["patch"]["sha256"])

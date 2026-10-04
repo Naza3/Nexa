@@ -67,8 +67,8 @@ describe("GGUF catalog interface", () => {
     const controller = new DesktopController(makeApi());
     const task: DownloadOperation = { operation_id: "download", catalog_id: "candidate", source: "modelscope", file_name: entry.file_name, directory_id: "old-directory", target_display_path: "D:\\old", downloaded_bytes: 1024, total_bytes: 1024, phase: "finished", status: "completed", terminal: true, result: { saved: true, registered: false, file_name: entry.file_name, cleanup_warning: "清理待确认" }, error: null };
     render(<DownloadProgress state={{ ...controller.getSnapshot(), snapshot: stopped(), download: task }} controller={controller} />);
-    expect(screen.getByRole("button", { name: "扫描目录以登记" })).toBeDisabled();
-    expect(screen.getByText(/当前目录已变化/)).toBeInTheDocument(); expect(screen.getByText(/请勿重复下载/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择已保存文件以登记" })).toBeEnabled();
+    expect(screen.getByText(/下载目录已变化/)).toBeInTheDocument(); expect(screen.getByText(/请勿重复下载/)).toBeInTheDocument();
   });
 
   it("shows controlled failure details and a reportable diagnostic code without retrying automatically", () => {

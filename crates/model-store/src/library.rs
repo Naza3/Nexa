@@ -2,6 +2,8 @@
 //! the owning application; this module never writes into a selected directory.
 #[path = "library_download.rs"]
 pub mod download;
+#[path = "library_selected.rs"]
+pub mod selected;
 
 use crate::{ImportRequest, ModelManifest, ModelSource, ModelStorage, Result, gguf};
 use runtime_types::{ErrorCode, ModelId, ResolvedModel, RuntimeError};
@@ -27,7 +29,10 @@ pub const MAX_EXTERNAL_MODELS: usize = 64;
 pub const MAX_DIRECTORY_COMPONENTS: usize = 64;
 pub const MAX_MODEL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 pub const MAX_SCAN_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+/// Default budget for one complete file verification/registration operation.
 pub const SCAN_TIMEOUT: Duration = Duration::from_secs(300);
+pub const MIN_VERIFICATION_TIMEOUT_SECONDS: u64 = 30;
+pub const MAX_VERIFICATION_TIMEOUT_SECONDS: u64 = 7200;
 pub const MAX_SCAN_DIAGNOSTIC_BYTES: usize = 512 * 1024;
 const BLOCK: usize = 64 * 1024;
 
@@ -134,6 +139,12 @@ impl ScanControl {
         progress.current_file_name = None;
         Ok(())
     }
+    pub fn selected_count(&self, count: usize) {
+        self.progress.lock().unwrap().candidate_files = count;
+    }
+    pub fn phase(&self, phase: &'static str) {
+        self.progress.lock().unwrap().phase = phase;
+    }
     pub fn progress(&self) -> ScanProgress {
         self.progress.lock().unwrap().clone()
     }
@@ -168,18 +179,26 @@ pub struct FileIdentity {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ExternalSource {
+    pub directory: PathBuf,
+    pub directory_identity: FileIdentity,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExternalRegistration {
     pub manifest: ModelManifest,
     pub identity: FileIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ExternalSource>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelLibrary {
     pub schema_version: u32,
-    pub directory_id: Uuid,
+    pub directory_id: Option<Uuid>,
     pub library_generation: Uuid,
-    pub directory: PathBuf,
-    pub directory_identity: FileIdentity,
+    pub directory: Option<PathBuf>,
+    pub directory_identity: Option<FileIdentity>,
     pub models: Vec<ExternalRegistration>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -189,11 +208,31 @@ pub struct LibraryDirectoryInfo {
     pub library_generation: Uuid,
 }
 impl ModelLibrary {
-    pub fn info(&self) -> LibraryDirectoryInfo {
-        LibraryDirectoryInfo {
-            directory_id: self.directory_id,
-            display_path: self.directory.to_string_lossy().into_owned(),
+    pub fn info(&self) -> Option<LibraryDirectoryInfo> {
+        Some(LibraryDirectoryInfo {
+            directory_id: self.directory_id?,
+            display_path: self.directory.as_ref()?.to_string_lossy().into_owned(),
             library_generation: self.library_generation,
+        })
+    }
+    pub fn configured_directory(&self) -> Result<&Path> {
+        self.directory
+            .as_deref()
+            .ok_or_else(|| library_error(ErrorCode::ModelDirectoryUnavailable))
+    }
+    pub fn source<'a>(
+        &'a self,
+        entry: &'a ExternalRegistration,
+    ) -> Result<(&'a Path, &'a FileIdentity)> {
+        if let Some(source) = &entry.source {
+            Ok((&source.directory, &source.directory_identity))
+        } else {
+            Ok((
+                self.configured_directory()?,
+                self.directory_identity
+                    .as_ref()
+                    .ok_or_else(|| library_error(ErrorCode::ModelLibraryChanged))?,
+            ))
         }
     }
     pub fn read(root: &Path) -> Result<Option<Self>> {
@@ -229,9 +268,12 @@ impl ModelLibrary {
         Ok(bytes)
     }
     pub fn validate(&self) -> Result<()> {
-        validate_directory_syntax(&self.directory)?;
-        if self.schema_version != 1
-            || self.directory_id.is_nil()
+        match (&self.directory, &self.directory_identity, self.directory_id) {
+            (Some(path), Some(_), Some(id)) if !id.is_nil() => validate_directory_syntax(path)?,
+            (None, None, None) if self.schema_version == 2 => (),
+            _ => return Err(library_error(ErrorCode::ModelLibraryChanged)),
+        }
+        if !matches!(self.schema_version, 1 | 2)
             || self.library_generation.is_nil()
             || self.models.len() > MAX_EXTERNAL_MODELS
         {
@@ -239,19 +281,23 @@ impl ModelLibrary {
         }
         let mut ids = BTreeSet::new();
         let mut names = BTreeSet::new();
-        let mut total = 0_u64;
         for entry in &self.models {
             entry.manifest.validate()?;
             let m = &entry.manifest;
-            total = total
-                .checked_add(m.size_bytes)
-                .ok_or_else(|| library_error(ErrorCode::ModelLibraryLimit))?;
+            let (directory, directory_identity) = self.source(entry)?;
+            validate_directory_syntax(directory)?;
             if m.storage != ModelStorage::External
                 || m.size_bytes > MAX_MODEL_BYTES
-                || total > MAX_SCAN_BYTES
                 || m.size_bytes != entry.identity.size
                 || !ids.insert(m.id.clone())
-                || !names.insert(file_key(&m.relative_file))
+                || (self.schema_version == 1 && entry.source.is_some())
+                || !names.insert((
+                    directory_identity.volume,
+                    directory_identity.file,
+                    file_key(&m.relative_file),
+                ))
+                || directory_identity.modified_nanos >= 1_000_000_000
+                || entry.identity.modified_nanos >= 1_000_000_000
             {
                 return Err(library_error(ErrorCode::ModelLibraryChanged));
             }
@@ -259,10 +305,10 @@ impl ModelLibrary {
         Ok(())
     }
     pub fn directory_presence(&self) -> Result<bool> {
-        if !directory_drive_present(&self.directory)? {
+        if !directory_drive_present(self.configured_directory()?)? {
             return Ok(false);
         }
-        match fs::symlink_metadata(&self.directory) {
+        match fs::symlink_metadata(self.configured_directory()?) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(_) => return Err(library_error(ErrorCode::ModelDirectoryUnavailable)),
             Ok(_) => (),
@@ -271,8 +317,12 @@ impl ModelLibrary {
         Ok(true)
     }
     pub fn check_directory_identity(&self) -> Result<()> {
-        let directory = DirectoryGuard::open(&self.directory)?;
-        if !same_object(&directory.identity, &self.directory_identity) {
+        let directory = DirectoryGuard::open(self.configured_directory()?)?;
+        if !self
+            .directory_identity
+            .as_ref()
+            .is_some_and(|saved| same_object(&directory.identity, saved))
+        {
             return Err(library_error(ErrorCode::ModelFileChanged));
         }
         Ok(())
@@ -284,12 +334,13 @@ impl ModelLibrary {
     /// full hashing from an acquired source guard, regardless of this result.
     pub fn availability(&self, entry: &ExternalRegistration) -> Option<ErrorCode> {
         let check = || -> Result<()> {
-            let directory = DirectoryGuard::open(&self.directory)?;
-            if !same_object(&directory.identity, &self.directory_identity) {
+            let (path, saved) = self.source(entry)?;
+            let directory = DirectoryGuard::open(path)?;
+            if !same_object(&directory.identity, saved) {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let source =
-                open_read_file(&self.directory.join(&entry.manifest.relative_file), false)?;
+                open_read_file(&directory.path.join(&entry.manifest.relative_file), false)?;
             if identity(&source)? != entry.identity {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
@@ -304,7 +355,7 @@ impl ModelLibrary {
 pub fn observe_candidates(library: &ModelLibrary) -> Result<Vec<(String, FileIdentity)>> {
     library.check_directory_identity()?;
     let mut result = Vec::new();
-    for (count, entry) in fs::read_dir(&library.directory)
+    for (count, entry) in fs::read_dir(library.configured_directory()?)
         .map_err(file_error)?
         .enumerate()
     {
@@ -320,7 +371,13 @@ pub fn observe_candidates(library: &ModelLibrary) -> Result<Vec<(String, FileIde
         }
         if ["aria2", "part", "crdownload", "download"]
             .iter()
-            .any(|suffix| library.directory.join(format!("{name}.{suffix}")).exists())
+            .any(|suffix| {
+                library
+                    .configured_directory()
+                    .unwrap()
+                    .join(format!("{name}.{suffix}"))
+                    .exists()
+            })
         {
             continue;
         }
@@ -375,9 +432,9 @@ pub fn rescan_directory(
 ) -> Result<ScannedLibrary> {
     scan_directory_inner(
         root,
-        &previous.directory,
+        previous.configured_directory()?,
         Some(previous),
-        Some(&previous.directory_identity),
+        previous.directory_identity.as_ref(),
         control,
     )
 }
@@ -416,6 +473,16 @@ fn scan_directory_inner(
             .map_err(|_| library_error(ErrorCode::ModelDirectoryUnsupported))?;
         control.progress.lock().unwrap().current_file_name =
             (name.len() <= 1024).then(|| name.clone());
+        if previous.is_some_and(|old| {
+            old.models.iter().any(|entry| {
+                entry.source.as_ref().is_some_and(|source| {
+                    same_object(&source.directory_identity, &directory.identity)
+                        && file_key(&entry.manifest.relative_file) == file_key(&name)
+                })
+            })
+        }) {
+            continue;
+        }
         let metadata = fs::symlink_metadata(item.path()).map_err(file_error)?;
         if indirect(&metadata) {
             return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
@@ -447,10 +514,17 @@ fn scan_directory_inner(
     }
     candidates.sort_by_key(|name| file_key(name));
     let prior = previous.filter(|old| {
-        same_object(&old.directory_identity, &directory.identity)
-            && path_key(&old.directory) == path_key(&directory.path)
+        old.directory_identity
+            .as_ref()
+            .is_some_and(|saved| same_object(saved, &directory.identity))
+            && old
+                .directory
+                .as_ref()
+                .is_some_and(|path| path_key(path) == path_key(&directory.path))
     });
-    let directory_id = prior.map_or_else(Uuid::new_v4, |old| old.directory_id);
+    let directory_id = prior
+        .and_then(|old| old.directory_id)
+        .unwrap_or_else(Uuid::new_v4);
     let mut models = Vec::new();
     let mut sources = Vec::new();
     let mut verified_total = 0_u64;
@@ -481,9 +555,12 @@ fn scan_directory_inner(
                 continue;
             }
         };
-        let existing = prior.and_then(|old| {
+        let existing = previous.and_then(|old| {
             old.models.iter().find(|m| {
-                file_key(&m.manifest.relative_file) == file_key(&name) && m.manifest.sha256 == hash
+                old.source(m).is_ok_and(|(_, saved)| {
+                    same_object(saved, &directory.identity)
+                        && file_key(&m.manifest.relative_file) == file_key(&name)
+                }) && m.manifest.sha256 == hash
             })
         });
         let id = match existing {
@@ -519,19 +596,45 @@ fn scan_directory_inner(
         models.push(ExternalRegistration {
             manifest,
             identity: before,
+            source: existing.and_then(|entry| entry.source.clone()),
         });
         sources.push(source);
         control.progress.lock().unwrap().verified_files += 1;
     }
+    let rejected_all = models.is_empty() && !control.progress().file_errors.is_empty();
+    // Directory maintenance only owns implicit entries in the configured directory.
+    // Freeze an old configured directory before changing it, and preserve all links.
+    if let Some(previous) = previous {
+        for old in &previous.models {
+            if prior.is_some() && old.source.is_none() {
+                continue;
+            }
+            if models
+                .iter()
+                .any(|entry| entry.manifest.id == old.manifest.id)
+            {
+                continue;
+            }
+            let mut old = old.clone();
+            if old.source.is_none() {
+                let (path, saved) = previous.source(&old)?;
+                old.source = Some(ExternalSource {
+                    directory: path.to_owned(),
+                    directory_identity: saved.clone(),
+                });
+            }
+            models.push(old);
+        }
+    }
     let library = ModelLibrary {
-        schema_version: 1,
-        directory_id,
+        schema_version: 2,
+        directory_id: Some(directory_id),
         library_generation: Uuid::new_v4(),
-        directory: directory.path.clone(),
-        directory_identity: directory.identity.clone(),
+        directory: Some(directory.path.clone()),
+        directory_identity: Some(directory.identity.clone()),
         models,
     };
-    let library = if library.models.is_empty() && !control.progress().file_errors.is_empty() {
+    let library = if rejected_all {
         None
     } else {
         library.encode()?;
@@ -708,8 +811,9 @@ impl PreparedExternal {
         #[cfg(windows)]
         {
             control.check()?;
-            let directory = Arc::new(DirectoryGuard::open(&library.directory)?);
-            if !same_object(&directory.identity, &library.directory_identity) {
+            let (path, saved) = library.source(entry)?;
+            let directory = Arc::new(DirectoryGuard::open(path)?);
+            if !same_object(&directory.identity, saved) {
                 return Err(library_error(ErrorCode::ModelFileChanged));
             }
             let path = directory.path.join(&entry.manifest.relative_file);
@@ -805,7 +909,45 @@ fn local_drive_type(kind: u32) -> bool {
     // missing cannot establish the local-disk sharing contract.
     matches!(kind, 2 | 3 | 5 | 6)
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryPolicy {
+    ExternalSelected,
+    DataDirectory,
+}
+/// Lexical Windows policy, deliberately independent of the host's Path parser.
+/// Returns only the drive letter for GetDriveTypeW; never a rewritten path.
+#[cfg(any(test, windows))]
+fn windows_directory_drive(text: &str, policy: DirectoryPolicy) -> Option<u8> {
+    if text.len() > 32768 || text.contains('\0') || text.contains("://") {
+        return None;
+    }
+    let (disk, verbatim) = match text.strip_prefix(r"\\?\") {
+        Some(disk) if policy == DirectoryPolicy::DataDirectory => (disk, true),
+        Some(_) => return None,
+        None => (text, false),
+    };
+    let bytes = disk.as_bytes();
+    if bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || !(bytes[2] == b'\\' || (!verbatim && bytes[2] == b'/'))
+        || (verbatim && disk.contains('/'))
+    {
+        return None;
+    }
+    let components: Vec<_> = disk[3..]
+        .split(['\\', '/'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if components.contains(&"..") || components.len() + 2 > MAX_DIRECTORY_COMPONENTS {
+        return None;
+    }
+    Some(bytes[0])
+}
 fn validate_directory_syntax(path: &Path) -> Result<()> {
+    validate_directory_policy(path, DirectoryPolicy::ExternalSelected)
+}
+fn validate_directory_policy(path: &Path, policy: DirectoryPolicy) -> Result<()> {
     let text = path
         .to_str()
         .ok_or_else(|| library_error(ErrorCode::ModelDirectoryUnsupported))?;
@@ -813,8 +955,6 @@ fn validate_directory_syntax(path: &Path) -> Result<()> {
         || text.len() > 32768
         || path.components().count() > MAX_DIRECTORY_COMPONENTS
         || text.contains("://")
-        || text.starts_with("\\\\")
-        || text.starts_with("//")
         || text.contains('\0')
         || path.components().any(|c| matches!(c, Component::ParentDir))
     {
@@ -823,29 +963,41 @@ fn validate_directory_syntax(path: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         use std::path::Prefix;
-        let Some(Component::Prefix(prefix)) = path.components().next() else {
-            return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
+        let valid_prefix = match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::Disk(_) => true,
+                Prefix::VerbatimDisk(_) => policy == DirectoryPolicy::DataDirectory,
+                _ => false,
+            },
+            _ => false,
         };
-        let Prefix::Disk(_) = prefix.kind() else {
+        if !valid_prefix || windows_directory_drive(text, policy).is_none() {
             return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
-        };
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = policy;
+        if text.starts_with("\\\\") || text.starts_with("//") {
+            return Err(library_error(ErrorCode::ModelDirectoryUnsupported));
+        }
     }
     Ok(())
 }
 fn directory_drive_present(path: &Path) -> Result<bool> {
-    validate_directory_syntax(path)?;
+    directory_drive_present_with_policy(path, DirectoryPolicy::ExternalSelected)
+}
+fn directory_drive_present_with_policy(path: &Path, policy: DirectoryPolicy) -> Result<bool> {
+    validate_directory_policy(path, policy)?;
     #[cfg(windows)]
     {
-        use std::path::Prefix;
-        let Some(Component::Prefix(prefix)) = path.components().next() else {
-            unreachable!("validated disk prefix")
-        };
-        let Prefix::Disk(letter) = prefix.kind() else {
-            unreachable!("validated disk prefix")
-        };
+        let letter =
+            windows_directory_drive(path.to_str().unwrap(), policy).expect("validated disk prefix");
         let root: Vec<u16> = format!("{}:\\\0", char::from(letter))
             .encode_utf16()
             .collect();
+        // Query only X:\. All actual opens retain the original path, including
+        // canonical verbatim semantics and its long/trailing-space components.
         // SAFETY: this terminated root string is live for a read-only OS query.
         let kind = unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(root.as_ptr()) };
         if kind == 1 {
@@ -878,18 +1030,24 @@ fn indirect(metadata: &fs::Metadata) -> bool {
 pub fn validate_directory_candidate(path: &Path) -> Result<()> {
     DirectoryGuard::open(path).map(|_| ())
 }
-pub(crate) fn directory_object_identity(path: &Path) -> Result<(u64, u64)> {
-    let guard = DirectoryGuard::open(path)?;
+pub(crate) fn data_directory_object_identity(path: &Path) -> Result<(u64, u64)> {
+    let guard = DirectoryGuard::open_data_directory(path)?;
     Ok((guard.identity.volume, guard.identity.file))
 }
-struct DirectoryGuard {
+pub(crate) struct DirectoryGuard {
     path: PathBuf,
     identity: FileIdentity,
     _ancestors: Vec<File>,
 }
 impl DirectoryGuard {
     fn open(path: &Path) -> Result<Self> {
-        if !directory_drive_present(path)? {
+        Self::open_with_policy(path, DirectoryPolicy::ExternalSelected)
+    }
+    pub(crate) fn open_data_directory(path: &Path) -> Result<Self> {
+        Self::open_with_policy(path, DirectoryPolicy::DataDirectory)
+    }
+    fn open_with_policy(path: &Path, policy: DirectoryPolicy) -> Result<Self> {
+        if !directory_drive_present_with_policy(path, policy)? {
             return Err(library_error(ErrorCode::ModelDirectoryUnavailable));
         }
         let mut current = PathBuf::new();
@@ -1032,6 +1190,73 @@ pub(crate) fn prepared_guard_fixture(path: &Path) -> Result<PreparedExternal> {
 mod control_tests {
     use super::*;
     #[test]
+    fn windows_directory_policy_is_host_independent_and_never_rewrites() {
+        use DirectoryPolicy::{DataDirectory, ExternalSelected};
+        for (path, external, internal) in [
+            (r"C:\", true, true),
+            (r"c:\Nexa\模型", true, true),
+            ("D:/Nexa/models", true, true),
+            (r"\\?\C:\Nexa\models", false, true),
+            (r"\\?\C:\Nexa\tail. ", false, true),
+            (r"\\?\C:\", false, true),
+            (r"\\server\share\models", false, false),
+            (r"\\?\UNC\server\share", false, false),
+            (r"\\.\C:\models", false, false),
+            (r"\\?\Volume{123}\models", false, false),
+            (r"\\?\GLOBALROOT\Device\HarddiskVolume1", false, false),
+            (r"\\?\C:relative", false, false),
+            (r"\\?\C:/models", false, false),
+            (r"C:relative", false, false),
+            (r"\root-relative", false, false),
+            (r"models", false, false),
+            (r"C:\models\..\elsewhere", false, false),
+            (r"\\?\C:\models\..\elsewhere", false, false),
+            (r"1:\models", false, false),
+            ("C:\\models\0hidden", false, false),
+        ] {
+            let before = path.to_owned();
+            assert_eq!(
+                windows_directory_drive(path, ExternalSelected).is_some(),
+                external,
+                "{path:?}"
+            );
+            assert_eq!(
+                windows_directory_drive(path, DataDirectory).is_some(),
+                internal,
+                "{path:?}"
+            );
+            assert_eq!(path, before);
+        }
+        let long = format!(r"\\?\C:\{}", "x".repeat(260));
+        assert_eq!(windows_directory_drive(&long, DataDirectory), Some(b'C'));
+        assert!(
+            windows_directory_drive(&format!(r"C:\{}", "x".repeat(32769)), DataDirectory).is_none()
+        );
+        let deep = format!(r"C:\{}", vec!["x"; MAX_DIRECTORY_COMPONENTS].join("\\"));
+        assert!(windows_directory_drive(&deep, DataDirectory).is_none());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn canonical_data_directory_retains_exact_path_and_object_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temp.path()).unwrap();
+        assert!(
+            matches!(canonical.components().next(), Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_)))
+        );
+        assert!(DirectoryGuard::open(&canonical).is_err());
+        let normal = DirectoryGuard::open_data_directory(temp.path()).unwrap();
+        let verbatim = DirectoryGuard::open_data_directory(&canonical).unwrap();
+        assert_eq!(verbatim.path, canonical);
+        assert!(same_object(&normal.identity, &verbatim.identity));
+        let special = canonical.join("kept-trailing. ");
+        fs::create_dir(&special).unwrap();
+        let special_guard = DirectoryGuard::open_data_directory(&special).unwrap();
+        assert_eq!(special_guard.path, special);
+        drop(special_guard);
+        fs::remove_dir(special).unwrap();
+    }
+    #[test]
     fn directory_syntax_limits_do_not_probe_or_truncate_paths() {
         let mut path = PathBuf::from(if cfg!(windows) { r"C:\" } else { "/" });
         while path.components().count() < MAX_DIRECTORY_COMPONENTS {
@@ -1058,6 +1283,33 @@ mod control_tests {
         for kind in [2, 3, 5, 6] {
             assert!(local_drive_type(kind));
         }
+    }
+    #[test]
+    fn verification_budget_is_fixed_across_progress_and_expires_before_publication() {
+        let mut control = ScanControl::with_timeout(Duration::from_secs(30));
+        let deadline = control.deadline;
+        for phase in ["enumerating", "verifying", "testing"] {
+            control.phase(phase);
+            control.selected_count(2);
+            assert_eq!(control.deadline, deadline);
+            control.check().unwrap();
+        }
+        // Deterministic elapsed time, without delaying a test for 30 seconds.
+        control.deadline = Instant::now();
+        assert_eq!(
+            control.check().unwrap_err().code,
+            ErrorCode::ModelScanTimeout
+        );
+        assert_eq!(
+            control.begin_commit().unwrap_err().code,
+            ErrorCode::ModelScanTimeout
+        );
+        assert_ne!(control.progress().phase, "committing");
+        control.cancel();
+        assert_eq!(
+            control.check().unwrap_err().code,
+            ErrorCode::ModelScanCancelled
+        );
     }
     #[test]
     fn commit_clears_file_attribution_and_late_cancel_does_not_claim_rollback() {
@@ -1089,7 +1341,7 @@ mod saved_directory_tests {
         drop(scan);
         // No probe or filesystem access to this old letter is authorized by
         // deserialization. Current access is checked separately on use.
-        library.directory = PathBuf::from(r"Z:\external-model-fixture");
+        library.directory = Some(PathBuf::from(r"Z:\external-model-fixture"));
         fs::write(root.path().join(LIBRARY_FILE), library.encode().unwrap()).unwrap();
         let previous = ModelLibrary::read(root.path()).unwrap().unwrap();
         let replacement = scan_directory(
@@ -1099,7 +1351,10 @@ mod saved_directory_tests {
             &ScanControl::default(),
         )
         .unwrap();
-        assert_eq!(replacement.library().unwrap().directory, source.path());
+        assert_eq!(
+            replacement.library().unwrap().directory.as_deref(),
+            Some(source.path())
+        );
         assert_ne!(
             replacement.library().unwrap().directory_id,
             previous.directory_id

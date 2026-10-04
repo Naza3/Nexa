@@ -1239,7 +1239,9 @@ impl Actor {
             && self.active.is_none()
             && self.queue.is_empty()
             && self.state == ModelState::Ready
-            && (self.stopping || self.idle_since.elapsed() >= self.config.idle_unload)
+            && (self.stopping
+                || (self.config.idle_unload_enabled
+                    && self.idle_since.elapsed() >= self.config.idle_unload))
         {
             self.unload(None, None);
         }

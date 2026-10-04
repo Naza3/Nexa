@@ -1,5 +1,41 @@
 # Nexa 当前状态
 
+## 2026-10-04 Actions第二轮短路径修复（待新CI验证）
+
+[run37198513508](https://github.com/Naza3/Nexa/actions/runs/37198513508)，head `82bd70fcd40c03760d59ed9850443e1dbbd97ffb`：Ubuntu同源组件成功，Windows下载probe实际32/32通过（3数字别名为resolver提前拒绝、4非法URI为明确DEBUG解析拒绝，均不宣称socket gate执行）。Rust1.98.1、CMake4.4.4、VS2022/MSVC14.44.35207及源身份准备成功。
+
+随后Windows严格Python188项出现5fail/6error/1skip，全部为VS/CRT测试中短路径RUNNER~1与canonical长名runneradmin混用的relative_to误拒。实际来源比较修复已完成：先检查原路径及祖先，再统一真实路径表示；保留同VS/Release/x64/版本门槛，未只改fixture或跳过测试。严格Linux Python194项（190通过、4平台skip）、py_compile/diff已通过，新Windows8.3/junction用例待下一CI。日志末尾Security模块重复成员是既有隔离测试的预期诊断，不是这次失败原因。Nexa编译和整包仍未进入，继续同一分支/PR。
+
+## 2026-10-04 Actions首轮Windows探针修正（进行中）
+
+公开库标准runner已实际分配：[run37197414719](https://github.com/Naza3/Nexa/actions/runs/37197414719)，精确head `cbba057b0106b7cc65131332858c0cedc993ff93`。Ubuntu同源aria2构建成功；WindowsServer2022在早期下载组件probe失败，32case中25通过、7失败，尚未进行Nexa/Rust/CMake构建。68policy、26Request/4socket、53payload以及公开HTTPS和三类错误证书拒绝已在该Windows运行中通过，不代替整任务成功。
+
+该run三个特殊数字私有地址观测到resolver在socket gate之前失败；四个非法URI原Windows仅有resume提示，源码分析及同源Linux单例观察指向Request::parseUri后的无URI debug分支，Windows debug证据待新run。探针分类/诊断修复已完成，严格Python188项（186通过、2平台skip）及独立37项子集通过，只修改测试分类/诊断，不改生产补丁、来源锁或TLS规则，不将任意DNS/非零退出当通过；原32case仍须下一轮实际执行。继续同一开发分支及PR #7，不改main。
+
+## 2026-10-04 公开仓库恢复GitHub Actions（进行中）
+
+用户明确将仓库改为public并恢复后续GitHub Actions构建；GitHub API已确认visibility=public。此要求覆盖下文旧“不运行Actions Rust”的约束，但不授权收费runner或付费资源。继续维护codex/nexa-add-model，PR #7已经建立且在2f7478f时与main26206ef无冲突。
+
+本批功能源码464项Rust、414前端、Python153+2skip和Linux真实模型已验证，2f7478f四Windows交叉EXE与同源aria2也已完成；其完整ZIP未产生，因为微软CRT在线CRL访问被云端策略阻断，正式提权又在命令前沙箱挂载失败，用户再授权重试仍同样失败。未跳过校验，旧交叉组件保留但不能称为可交付包。现在按用户新要求适配原生Windows Actions，进行同源组件重建、完整验证和打包，不继续重试原云端受阻网络。恢复改动已完成严格Python170项（168通过、2平台skip）、YAML/py_compile/diff静态检查，见[恢复记录](docs/verification/2026-10-04-public-actions-restoration.md)。尚未触发本轮CI，实际运行/产物结果以精确head SHA后续记录，不能把静态通过称为Windows通过。
+
+## 2026-10-04 校验超时与空闲策略（源码联合回归完成）
+
+Windows本机记录/反馈修复已在同一长期分支推送 `abcb1a0a9b448915cf311e4cf33c427cf6af017b`，449项Rust加4项doc、343前端、Python153+2skip和Windows交叉检查通过。按[ADR0023](docs/decisions/0023-model-verification-and-idle-policy.md)的两设置已实现并冻结，仍在同一开发分支。父全workspace/all-targets464通过/0失败/7忽略、clippy/fmt、前端414项/typecheck/lint/build、Python153+2skip，以及Windows六crate/壳all-targets交叉check均通过；独立审查无剩余阻断。见[联合回归](docs/verification/2026-10-04-runtime-policy-and-final-regression.md)。新版Linux release与真实固定Qwen0.6B harness通过，含重复短测、停止后离线证明与取消；Windows external链路仍未运行。随后clean提交、重新捕获来源并构建一个Windows包及一个新PR；main仍为26206ef且未由开发方更改，目标Windows待用户实机验收。
+
+## 2026-10-04 Windows 本机测试记录修复（源码验证完成）
+
+本批冲突已在长期开发分支 `codex/nexa-add-model` 通过真实merge提交 `f496aac6da0f28980ceee15211ff4a8eddf0ff26` 解决并推送，父为Add206d965与main26206ef；main未由开发方改动。联合437 Rust/291前端/Python153+2skip及独立交叉回归通过，无残留文本冲突。
+
+当前在同一分支按[ADR0022](docs/decisions/0022-windows-local-validation-paths-and-feedback.md)修复Windows canonical数据根被外部路径规则误拒、本机证明错误被隐藏、本次测试结果/按钮与历史矩阵混用。原始路径不重写，外部UNC/设备/reparse限制不放宽。源码全workspace/all-targets449通过/0失败/7既有忽略（另4项doc-tests通过）、完整clippy/fmt、前端343项/typecheck/lint/build、Python153+2skip通过；Windows四crate all-targets交叉检查通过，真实Windows与本批真实GGUF仍待最终验收。详见[本轮记录](docs/verification/2026-10-04-windows-model-evidence.md)。本检查点未打包。
+
+下一步仍为可配置文件校验超时和不自动卸载，随后统一构建与新PR。用户已明确长期一个开发分支，除确需隔离不再为每功能新开；下文旧“各片独立分支”的历史安排不再适用。
+
+## 2026-10-04 本批关联功能整合（合并提交前验证快照）
+
+用户指出平行功能分支容易冲突并已关闭PR #6，要求由开发方处理；随后明确要求长期维护一个开发分支，除非确需隔离不为每个功能开分支，覆盖此前逐功能从main开分支规则。已确认main `26206ef882e0d47d506767dd683aa32e20da111d`包含LAN c216722；添加模型 `206d965cb9a40c61b94b8fe8cb9c3ea3821eb7a2`来自更早main，导致公共文件冲突。当前将最新main合入现有 `codex/nexa-add-model`，保留两套功能并统一回归，不强推、不改main、不要求用户手工选边。
+
+剩余Windows测试记录/模型按钮反馈、文件校验超时及不自动卸载，继续在本批同一开发分支按序完成，不再另拆给用户合并。已新建但无功能提交的 `codex/nexa-model-test-fix` 不再作为本批交付入口，未删除。合并冲突已解决：保留LAN与Add两边功能，新增7项交叉UI回归；联合全workspace40组437通过/0失败/7既有忽略，完整clippy/fmt、前端291项/typecheck/lint/build、Python153+2skip通过。独立bridge/store171、壳31与临时交叉验证通过；实际Windows窗口/两机LAN仍未验。详见[整合验证](docs/verification/2026-10-04-model-management-integration.md)。剩余修复完成后提供一个新的PR与一个联合Windows测试包；此前单片测试不转授合并结果。下文为各片历史快照，不覆盖本节最新工作流。
+
 ## 2026-10-04 可选局域网 API（提交前验证快照）
 
 用户已手动合并模型使用流程到 main。已实际读取最新 main `6167d07cb523cc838e6a6fb082e660d56e9d7f79`（merge PR #4，tree `311936f4989a276c934d38d9da46a80fcc34bff7`），本次新分支 `codex/nexa-lan-api` 从该提交创建；后续每个新功能从当时最新 main 建独立分支。
@@ -11,6 +47,16 @@
 - MiniCPM5-2B-abliterated问题仅完成只读定位：同名公开候选头为llama架构/minicpm5分词器，固定vendor已有对应基础支持；用户具体来源/报错尚缺，不认定为架构不支持或模板已通过。本轮不改模型兼容/推理引擎
 
 最近已交付完整Windows包为本地clean `1845f936`，18,937,607字节，SHA256 `4191ec7248a1413fed52d6ae03c43f31fd515a73271d47807ac42688f2428b40`；实际Windows新版运行待用户反馈。其52文件源码分批上传为远程 `9f836d5`，tree与本地包源完全相同，已由用户合并到上述main；分批上传成功，旧工具取消根因未确认。原包身份不改写为新remote提交，也无需重下载。未运行GitHub Actions Rust。
+
+## 2026-10-04 选中文件添加模型（提交前验证快照）
+
+用户明确选择单/多文件添加、取消默认自动全库扫描，并要求依次完成 LAN、添加模型、基础测试记录/按钮反馈、高级文件校验超时及不自动卸载。LAN源码已在独立 `codex/nexa-lan-api` 提交 `c216722fd6913208b0529cf3db247729ab7f4019`，源测试421/0/7、前端247、Python153+2skip通过，WindowsLAN尚未验；本分支不夹带该源码。
+
+当前 `codex/nexa-add-model` 从最新 main `6167d07cb523cc838e6a6fb082e660d56e9d7f79` 新建。按[ADR0021](docs/decisions/0021-selected-file-model-registration.md)实现schema2跨目录显式文件来源、原生单/多文件选择、仅选中payload校验、默认只读浏览、下载定向登记和手动全量维护；源码实现冻结；全workspace/all-targets 40组423通过/0失败/7既有忽略，完整clippy/fmt、前端230项/typecheck/lint/build、Python155项（153通过/2平台跳过）通过；独立两crate169、壳31与UI118均为各自回归子集不累加。最终Windows壳及两crate交叉检查通过，原生选择器/写删锁与真实GGUF未在目标Windows执行。详见[本轮验证](docs/verification/2026-10-04-selected-model-registration.md)，联合包待其余切片完成后构建。
+
+已知独立后续修复：Windows `ModelStore::open` 的 canonical VerbatimDisk 数据目录被旧外部目录语法拒绝，使基础测试scope/记录失败后被界面隐藏为未测；按钮也只依赖历史validated。这里只读确认，尚未修改或Windows实机复现。MiniCPM具体模型仍缺用户来源/错误码，不将文件名当作不支持结论。
+
+各片完成后统一回归、构建新Windows测试包；不在GitHub Actions编译Rust，不修改用户防火墙。最新已交付仍1845f93包（源码已由9f836d5并入main），Windows新流程待用户反馈；下文历史快照不覆盖本节最新顺序。
 
 ## 2026-10-04 模型自动登记与本机基础测试（提交前验证快照）
 

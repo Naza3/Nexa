@@ -1,6 +1,6 @@
 use crate::{
     BridgeError, ChatBatch, ChatEvent, ChatStartRequest, DesktopBridge, RequestHandle, Result,
-    Stopping, sse::Decoder,
+    Stopping, settings, sse::Decoder,
 };
 use http_body_util::BodyExt;
 use hyper::{HeaderMap, Method};
@@ -368,6 +368,7 @@ impl DesktopBridge {
                 .parse()
                 .map_err(|_| BridgeError::new("invalid_request"))?,
         );
+        let verification = settings::external_verification_budget(&self.root, &model)?;
         let response = tokio::select! {biased;
             _=session.cancelled()=>return Ok(ChatEvent::Cancelled),
             result=async {
@@ -375,7 +376,11 @@ impl DesktopBridge {
                 // No await between this send boundary and polling the fixed
                 // request. An earlier cancel never dispatches the generation.
                 session.phase.store(1,Ordering::Release);
-                connection.request(Method::POST,"/v1/chat/completions",RequestBody::fixed(body),headers).await.map_err(BridgeError::from)
+                if let Some(budget) = verification {
+                    connection.request_with_verification(Method::POST,"/v1/chat/completions",RequestBody::fixed(body),headers,budget).await.map_err(BridgeError::from)
+                } else {
+                    connection.request(Method::POST,"/v1/chat/completions",RequestBody::fixed(body),headers).await.map_err(BridgeError::from)
+                }
             }=>result?
         };
         if response.status() != 200 {

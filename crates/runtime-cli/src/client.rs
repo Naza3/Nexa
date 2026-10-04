@@ -27,6 +27,41 @@ use uuid::Uuid;
 
 const PROOF_TIMEOUT: Duration = Duration::from_secs(5);
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(750);
+/// These local operations can verify a registered external payload before the
+/// native load/generation starts. This is only a client response-header budget.
+pub fn may_verify_model(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && matches!(
+            path,
+            "/runtime/load"
+                | "/runtime/load-and-test"
+                | "/runtime/load-if-unloaded"
+                | "/v1/chat/completions"
+        )
+}
+fn request_timeout(
+    method: &Method,
+    path: &str,
+    verification: Option<Duration>,
+) -> Result<Duration> {
+    match verification {
+        None => Ok(REQUEST_TIMEOUT),
+        Some(budget)
+            if may_verify_model(method, path)
+                && (Duration::from_secs(model_store::library::MIN_VERIFICATION_TIMEOUT_SECONDS)
+                    ..=Duration::from_secs(
+                        model_store::library::MAX_VERIFICATION_TIMEOUT_SECONDS,
+                    ))
+                    .contains(&budget) =>
+        {
+            Ok(REQUEST_TIMEOUT + budget)
+        }
+        Some(_) => Err(ClientError::Connection(
+            "invalid model verification wait budget",
+        )),
+    }
+}
+
 #[derive(Debug)]
 pub enum ClientError {
     Connection(&'static str),
@@ -254,6 +289,30 @@ impl VerifiedConnection {
         body: RequestBody,
         extra: HeaderMap,
     ) -> Result<Response<Incoming>> {
+        self.request_inner(method, path, body, extra, None).await
+    }
+    /// Available only after the same-connection proof. Callers supply a budget
+    /// from validated local configuration, only for registered external models.
+    pub async fn request_with_verification(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: RequestBody,
+        extra: HeaderMap,
+        budget: Duration,
+    ) -> Result<Response<Incoming>> {
+        self.request_inner(method, path, body, extra, Some(budget))
+            .await
+    }
+    async fn request_inner(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: RequestBody,
+        extra: HeaderMap,
+        verification: Option<Duration>,
+    ) -> Result<Response<Incoming>> {
+        let response_timeout = request_timeout(&method, path, verification)?;
         if !path.starts_with('/')
             || path.starts_with("//")
             || extra.contains_key("authorization")
@@ -276,7 +335,7 @@ impl VerifiedConnection {
         // allowance was consumed by the proof, a temporarily unready dispatcher
         // rejects immediately with is_canceled even if the socket remains open.
         // Readiness and exactly one send share the original total deadline.
-        timeout(REQUEST_TIMEOUT, async {
+        timeout(response_timeout, async {
             if let Err(error) = self.sender.ready().await {
                 return Err(ClientError::Transport {
                     stage: "sender_ready",
@@ -318,13 +377,37 @@ impl VerifiedConnection {
         path: &str,
         value: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value> {
+        self.json_inner(method, path, value, None).await
+    }
+    pub async fn json_with_verification(
+        &mut self,
+        method: Method,
+        path: &str,
+        value: Option<&serde_json::Value>,
+        budget: Duration,
+    ) -> Result<serde_json::Value> {
+        self.json_inner(method, path, value, Some(budget)).await
+    }
+    async fn json_inner(
+        &mut self,
+        method: Method,
+        path: &str,
+        value: Option<&serde_json::Value>,
+        verification: Option<Duration>,
+    ) -> Result<serde_json::Value> {
         let body = value
             .map(serde_json::to_vec)
             .transpose()
             .map_err(|_| ClientError::Connection("cannot encode request"))?
             .unwrap_or_default();
         let response = self
-            .request(method, path, RequestBody::fixed(body), HeaderMap::new())
+            .request_inner(
+                method,
+                path,
+                RequestBody::fixed(body),
+                HeaderMap::new(),
+                verification,
+            )
             .await?;
         let status = response.status();
         let bytes = collect_bounded(response.into_body(), 1024 * 1024, REQUEST_TIMEOUT).await?;
@@ -418,6 +501,50 @@ mod readiness_tests {
     use super::*;
     use http_body_util::Full;
     use std::sync::{Arc, Mutex};
+    #[test]
+    fn verification_wait_is_route_method_and_budget_bounded_without_extending_defaults() {
+        for path in [
+            "/runtime/load",
+            "/runtime/load-and-test",
+            "/runtime/load-if-unloaded",
+            "/v1/chat/completions",
+        ] {
+            assert_eq!(
+                request_timeout(&Method::POST, path, None).unwrap(),
+                REQUEST_TIMEOUT
+            );
+            for seconds in [30, 300, 7200] {
+                assert_eq!(
+                    request_timeout(&Method::POST, path, Some(Duration::from_secs(seconds)))
+                        .unwrap(),
+                    Duration::from_secs(750 + seconds)
+                );
+            }
+            for seconds in [0, 29, 7201, u64::MAX] {
+                assert!(
+                    request_timeout(&Method::POST, path, Some(Duration::from_secs(seconds)))
+                        .is_err()
+                );
+            }
+            assert!(request_timeout(&Method::GET, path, Some(Duration::from_secs(300))).is_err());
+        }
+        for path in [
+            "/runtime/model-test",
+            "/runtime/status",
+            "/runtime/unload",
+            "/runtime/shutdown",
+            "/runtime/models/import",
+            "/v1/models",
+            "/runtime/load?extra=true",
+            "http://192.168.1.2/runtime/load",
+        ] {
+            assert_eq!(
+                request_timeout(&Method::POST, path, None).unwrap(),
+                REQUEST_TIMEOUT
+            );
+            assert!(request_timeout(&Method::POST, path, Some(Duration::from_secs(300))).is_err());
+        }
+    }
     #[tokio::test]
     async fn request_waits_for_same_connection_readiness() {
         // Private test construction models an already-proved connection. There

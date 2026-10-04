@@ -234,6 +234,10 @@ async fn run(
         ensure(validation.state==model_store::local_validation::ValidationState::Passed && validation.load_success && validation.generation_pass && validation.error_code.is_none())?;
         let receipts=model_store::local_validation::Receipts::read(&root).map_err(|_|Fault::new("assertion_failed"))?;
         ensure(receipts.schema_version==1 && receipts.entries.len()==1 && receipts.entries[0].scope.model_sha256==model.sha256)?;
+        let repeated=at!(stage,"repeat_model_test",bridge.model_test(LoadModelRequest{model_id:"desktop-qa".into(),context_size:2048,threads:2,batch_size:128}).await);
+        ensure(repeated.state==model_store::local_validation::ValidationState::Passed && repeated.load_success && repeated.generation_pass && repeated.error_code.is_none())?;
+        let replaced=model_store::local_validation::Receipts::read(&root).map_err(|_|Fault::new("assertion_failed"))?;
+        ensure(replaced.entries.len()==1 && replaced.entries[0].observation==repeated)?;
         let first=at!(stage,"first_chat_start",bridge.chat_start(request(32))).request_id;
         let(first_bytes,usage)=at!(stage,"first_chat_consume",consume(&bridge,first,false).await);
         ensure(first_bytes>0&&usage>0)?;
@@ -266,7 +270,7 @@ async fn run(
         let offline=at!(stage,"verify_offline_inventory",stopped.models_page(None,None).await);
         ensure(offline.source==desktop_bridge::ModelsSource::Local && offline.data.len()==1 && offline.data[0].local_validation.as_ref().is_some_and(|v|v.state==model_store::local_validation::ValidationState::Passed))?;
         let external_library = external::run(&root, &runtime, &external_model_path, &mut stage).await?;
-        Ok(json!({"external_library":external_library,"local_text_validation":true,"offline_inventory":true,"success":true,"real_model":true,"threads":2,"context_size":2048,"batch_size":128,"first_output_bytes":first_bytes,"cancel_partial_bytes":cancel_bytes,"repeat_output_bytes":repeat_bytes,"first_usage_tokens":usage,"model_size_bytes":model.size_bytes,"model_sha256":model.sha256,"data_dir_path_shape":data_shape,"runtime_path_shape":runtime_shape,"model_path_shape":model_shape,"same_instance_attach":true,"default_close_kept_runtime":true,"actual_process_exit_kept_runtime":true,"actual_process_close_runtime_reaped":true,"repeated_close":true,"close_runtime_released_instance":true,"runtime_setting_rejected_while_running":true,"runtime_setting_persisted_stopped":true}))
+        Ok(json!({"external_library":external_library,"local_text_validation":true,"repeat_text_validation":true,"offline_inventory":true,"success":true,"real_model":true,"threads":2,"context_size":2048,"batch_size":128,"first_output_bytes":first_bytes,"cancel_partial_bytes":cancel_bytes,"repeat_output_bytes":repeat_bytes,"first_usage_tokens":usage,"model_size_bytes":model.size_bytes,"model_sha256":model.sha256,"data_dir_path_shape":data_shape,"runtime_path_shape":runtime_shape,"model_path_shape":model_shape,"same_instance_attach":true,"default_close_kept_runtime":true,"actual_process_exit_kept_runtime":true,"actual_process_close_runtime_reaped":true,"repeated_close":true,"close_runtime_released_instance":true,"runtime_setting_rejected_while_running":true,"runtime_setting_persisted_stopped":true}))
     }.await;
     // Cleanup is independent evidence, never a replacement for the first cause.
     let mut cleanup = if bridge_created {

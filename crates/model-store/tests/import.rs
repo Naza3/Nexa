@@ -699,3 +699,117 @@ fn offline_inventory_generation_tracks_metadata_and_refuses_symlinks() {
         assert!(model_store::inventory::read(root.path()).is_err());
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn canonical_windows_store_inventory_no_model_regression() {
+    let (_root, store) = store();
+    assert!(matches!(store.data_directory().components().next(),
+        Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))));
+    assert!(
+        model_store::inventory::read(store.data_directory())
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+}
+
+#[test]
+fn canonical_store_inventory_evidence_roundtrip_replace_offline_and_stale() {
+    use model_store::{
+        inventory,
+        local_validation::{self, LocalValidation, Receipt, Receipts, ValidationState},
+    };
+    let (root, store) = store();
+    let manifest = import(&store, &fixture(128), "evidence-fixture").unwrap();
+    let canonical = store.data_directory().to_owned();
+    let catalog = inventory::read(&canonical).unwrap();
+    assert_eq!(catalog.entries.len(), 1);
+    assert_eq!(catalog.entries[0].manifest, manifest);
+    let options = runtime_types::LoadOptions::default();
+    let scope = local_validation::scope(&canonical, &catalog.entries[0], options, "fixture-engine")
+        .unwrap();
+    let ordinary = inventory::read(root.path()).unwrap();
+    assert_eq!(
+        scope,
+        local_validation::scope(root.path(), &ordinary.entries[0], options, "fixture-engine")
+            .unwrap()
+    );
+    let mut receipts = Receipts::default();
+    // Synthetic storage observations, not a real inference claim.
+    for (state, generation_pass) in [
+        (ValidationState::Loaded, false),
+        (ValidationState::Passed, true),
+    ] {
+        receipts
+            .record(
+                &canonical,
+                Receipt {
+                    scope: scope.clone(),
+                    observation: LocalValidation {
+                        state: state.clone(),
+                        checked_at_unix_ms: Some(local_validation::now_ms()),
+                        error_code: None,
+                        load_success: true,
+                        generation_pass,
+                    },
+                },
+            )
+            .unwrap();
+        let read = Receipts::read(root.path()).unwrap();
+        assert_eq!(read.schema_version, 1);
+        assert_eq!(read.entries.len(), 1);
+        assert_eq!(read.observation(&scope, true).state, state);
+    }
+    drop(store);
+    let offline = inventory::read(&canonical).unwrap();
+    let actual =
+        local_validation::scope(&canonical, &offline.entries[0], options, "fixture-engine")
+            .unwrap();
+    assert_eq!(actual, scope);
+    let receipts = Receipts::read(&canonical).unwrap();
+    assert_eq!(
+        receipts.observation(&actual, true).state,
+        ValidationState::Passed
+    );
+    let reopened = ModelStore::open(root.path()).unwrap();
+    assert_eq!(
+        inventory::read(reopened.data_directory())
+            .unwrap()
+            .generation,
+        offline.generation
+    );
+    for changed in [
+        local_validation::scope(
+            &canonical,
+            &offline.entries[0],
+            runtime_types::LoadOptions {
+                threads: options.threads + 1,
+                ..options
+            },
+            "fixture-engine",
+        )
+        .unwrap(),
+        local_validation::scope(&canonical, &offline.entries[0], options, "different-engine")
+            .unwrap(),
+    ] {
+        assert_eq!(
+            receipts.observation(&changed, true).state,
+            ValidationState::Stale
+        );
+    }
+    fs::write(
+        canonical.join("models/evidence-fixture/model.gguf"),
+        fixture(132),
+    )
+    .unwrap();
+    let changed = inventory::read(&canonical).unwrap();
+    assert_eq!(
+        changed.entries[0].availability_error,
+        Some(ErrorCode::ModelFileChanged)
+    );
+    assert_eq!(
+        receipts.observation(&actual, false).state,
+        ValidationState::Stale
+    );
+}

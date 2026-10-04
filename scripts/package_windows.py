@@ -56,6 +56,28 @@ def regular(path):
     return path
 
 
+def resolve_checked_path(path):
+    """Normalize filesystem aliases only after checking their original ancestry."""
+    path = Path(path).absolute()
+    missing = False
+    for part in (path, *path.parents):
+        try:
+            info = part.lstat()
+        except FileNotFoundError:
+            # Keep missing tails for the caller's layout/version diagnostics.
+            # Callers must still require the actual directory/files before use.
+            missing = True
+            continue
+        if part.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+            fail(f"symlink/reparse path is forbidden: {path.name}")
+    resolved = path.resolve()
+    if missing and resolved.exists():
+        # Non-strict resolve can erase a nonexistent "missing/.." component.
+        # Such a spelling is not an existing alias of the resulting directory.
+        fail("path does not exist before resolution")
+    return resolved
+
+
 def relative(value):
     if not isinstance(value, str) or not value or "\\" in value or ":" in value or "\x00" in value:
         fail("invalid package relative path")
@@ -333,7 +355,18 @@ def visual_studio_paths(selected, base_env):
     dev = regular(vs / "Common7/Tools/VsDevCmd.bat")
     vs = vs.resolve()
     env = devcmd_environment(dev, visual_studio_environment(base_env))
-    if not env.get("VSINSTALLDIR") or Path(env["VSINSTALLDIR"]).resolve() != vs:
+    # VsDevCmd can prepend its bundled older CMake. CI explicitly selects the
+    # Python Scripts directory where this run installed a compatible version;
+    # restore it after *every* VS initialization, including final packaging.
+    if base_env.get("NEXA_CMAKE_BIN"):
+        cmake_bin = Path(base_env["NEXA_CMAKE_BIN"])
+        if not cmake_bin.is_absolute():
+            fail("explicit CMake directory must be absolute")
+        for name in ("cmake.exe", "ctest.exe"):
+            regular(cmake_bin / name)
+        env["NEXA_CMAKE_BIN"] = str(cmake_bin)
+        env["PATH"] = str(cmake_bin) + os.pathsep + env.get("PATH", "")
+    if not env.get("VSINSTALLDIR") or resolve_checked_path(env["VSINSTALLDIR"]) != vs:
         fail("VsDevCmd initialized a different Visual Studio instance")
     version = env.get("VCTOOLSVERSION", "").strip()
     if not version:
@@ -342,7 +375,7 @@ def visual_studio_paths(selected, base_env):
     if visual_studio_version(selected)[0] == 17 and toolset != "v143":
         fail("VS2022 requires its supported v143 toolset")
     tools = vs / "VC/Tools/MSVC" / version
-    if not env.get("VCTOOLSINSTALLDIR") or Path(env["VCTOOLSINSTALLDIR"]).resolve() != tools.resolve():
+    if not env.get("VCTOOLSINSTALLDIR") or resolve_checked_path(env["VCTOOLSINSTALLDIR"]) != resolve_checked_path(tools):
         fail("MSVC tools are outside the selected Visual Studio toolset")
     for name in ("cl.exe", "link.exe", "lib.exe", "dumpbin.exe"):
         selected_msvc_tool(vs, env, name)
@@ -355,9 +388,12 @@ def visual_studio_paths(selected, base_env):
     value = env.get("VCTOOLSREDISTDIR")
     if not value:
         fail("selected VS has no VCToolsRedistDir; add its C++ redistributable tools through Visual Studio Installer > Modify")
-    redist_root = Path(value)
+    # Windows 8.3 names and long names can identify the same directory. Check
+    # original ancestors before resolving both sides, so links cannot disguise
+    # an external source as part of this VS instance.
+    redist_root = resolve_checked_path(value)
     try:
-        subpath = redist_root.relative_to(vs / "VC/Redist/MSVC")
+        subpath = redist_root.relative_to(resolve_checked_path(vs / "VC/Redist/MSVC"))
     except ValueError:
         fail("CRT source is outside the selected Visual Studio redistribution directory")
     if len(subpath.parts) != 1:
@@ -365,7 +401,7 @@ def visual_studio_paths(selected, base_env):
     redist_toolset = msvc_toolset(subpath.name)
     if tuple(map(int, subpath.name.split(".")[:2])) < tuple(map(int, version.split(".")[:2])):
         fail("selected VS CRT redistribution version is older than its compiler toolset")
-    redist_dir = redist_root / "x64" / ("Microsoft.VC" + redist_toolset[1:] + ".CRT")
+    redist_dir = resolve_checked_path(redist_root / "x64" / ("Microsoft.VC" + redist_toolset[1:] + ".CRT"))
     if not redist_dir.is_dir():
         fail("selected VS Release x64 CRT redistribution source is missing/invalid")
     redist = {}

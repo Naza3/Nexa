@@ -24,37 +24,55 @@ impl Drop for DisconnectOnDrop {
     }
 }
 impl ApiState {
-    fn probe_scope(&self, model: &ModelId, options: LoadOptions) -> Option<Scope> {
-        let executable = std::env::current_exe().ok()?;
-        let stamps = local_validation::engine_file_stamps(&executable).ok()?;
-        let (expected, build) = self.probe_build.get()?.as_ref()?;
+    fn probe_scope(&self, model: &ModelId, options: LoadOptions) -> Result<Scope, &'static str> {
+        let executable = std::env::current_exe().map_err(|_| "validation_engine_unavailable")?;
+        let stamps = local_validation::engine_file_stamps(&executable)
+            .map_err(|_| "validation_engine_unavailable")?;
+        let (expected, build) = self
+            .probe_build
+            .get()
+            .ok_or("validation_engine_unavailable")?
+            .as_ref()
+            .map_err(|code| *code)?;
         if &stamps != expected {
-            return None;
+            return Err("validation_scope_changed");
         }
-        self.store.resolve(model).ok()?;
-        let registered = self.store.get(model).ok()?;
-        let inventory = model_store::inventory::read(self.store.data_directory()).ok()?;
+        self.store
+            .resolve(model)
+            .map_err(|_| "validation_scope_unavailable")?;
+        let registered = self
+            .store
+            .get(model)
+            .map_err(|_| "validation_scope_unavailable")?;
+        let inventory = model_store::inventory::read(self.store.data_directory())
+            .map_err(|_| "validation_scope_unavailable")?;
         let entry = inventory
             .entries
             .iter()
-            .find(|entry| &entry.manifest.id == model && entry.availability_error.is_none())?;
+            .find(|entry| &entry.manifest.id == model && entry.availability_error.is_none())
+            .ok_or("validation_scope_unavailable")?;
         if registered != entry.manifest {
-            return None;
+            return Err("validation_scope_changed");
         }
-        self.store.resolve(model).ok()?;
-        local_validation::scope(self.store.data_directory(), entry, options, build).ok()
+        self.store
+            .resolve(model)
+            .map_err(|_| "validation_scope_unavailable")?;
+        local_validation::scope(self.store.data_directory(), entry, options, build)
+            .map_err(|_| "validation_scope_unavailable")
     }
-    fn save_observation(&self, scope: Scope, observation: LocalValidation) -> bool {
-        let Ok(_guard) = RECEIPT_WRITE.lock() else {
-            return false;
-        };
+    fn save_observation(
+        &self,
+        scope: Scope,
+        observation: LocalValidation,
+    ) -> Result<(), &'static str> {
+        let _guard = RECEIPT_WRITE
+            .lock()
+            .map_err(|_| "validation_record_write_failed")?;
         let root = self.store.data_directory();
-        let Ok(mut receipts) = Receipts::read(root) else {
-            return false;
-        };
+        let mut receipts = Receipts::read(root).map_err(|_| "validation_record_read_failed")?;
         receipts
             .record(root, Receipt { scope, observation })
-            .is_ok()
+            .map_err(|_| "validation_record_write_failed")
     }
     pub(crate) async fn desktop_load(
         &self,
@@ -77,20 +95,18 @@ impl ApiState {
         let state = self.clone();
         let requested = model.clone();
         let loaded_scope = tokio::task::spawn_blocking(move || {
-            let scope = state.probe_scope(&requested, options);
-            if let Some(scope) = scope.as_ref() {
-                state.save_observation(
-                    scope.clone(),
-                    LocalValidation {
-                        state: ValidationState::Loaded,
-                        checked_at_unix_ms: Some(local_validation::now_ms()),
-                        error_code: None,
-                        load_success: true,
-                        generation_pass: false,
-                    },
-                );
-            }
-            scope
+            let scope = state.probe_scope(&requested, options)?;
+            state.save_observation(
+                scope.clone(),
+                LocalValidation {
+                    state: ValidationState::Loaded,
+                    checked_at_unix_ms: Some(local_validation::now_ms()),
+                    error_code: None,
+                    load_success: true,
+                    generation_pass: false,
+                },
+            )?;
+            Ok::<_, &'static str>(scope)
         })
         .await
         .map_err(|_| ApiError::internal())?;
@@ -116,12 +132,12 @@ impl ApiState {
             let state = self.clone();
             let saved = observation.clone();
             let persisted = tokio::task::spawn_blocking(move || {
-                loaded_scope.is_some_and(|scope| state.save_observation(scope, saved))
+                loaded_scope.and_then(|scope| state.save_observation(scope, saved))
             })
             .await
             .map_err(|_| ApiError::internal())?;
-            if !persisted {
-                observation.error_code = Some("validation_record_unavailable".into());
+            if let Err(code) = persisted {
+                evidence_unavailable(&mut observation, code);
             }
         }
         Ok(observation)
@@ -168,31 +184,37 @@ impl ApiState {
         let state = self.clone();
         let observation = tokio::task::spawn_blocking(move || {
             let mut observation = consume_probe(receiver, PROBE_TIMEOUT, options.context_size);
-            if let Some(scope) = scope {
-                if state.probe_scope(&scope.model_id, scope.options).as_ref() != Some(&scope) {
-                    observation.state = ValidationState::Stale;
-                    observation.generation_pass = false;
-                    observation.error_code = Some("model_file_changed".into());
-                }
-                if !state.save_observation(scope, observation.clone()) {
-                    observation.error_code = Some("validation_record_unavailable".into());
-                    if observation.generation_pass {
-                        observation.state = ValidationState::Loaded;
-                        observation.generation_pass = false;
+            match scope {
+                Ok(scope) => {
+                    match state.probe_scope(&scope.model_id, scope.options) {
+                        Ok(current) if current == scope => (),
+                        current => {
+                            observation.state = ValidationState::Stale;
+                            observation.generation_pass = false;
+                            observation.error_code =
+                                Some(current.err().unwrap_or("validation_scope_changed").into());
+                        }
+                    }
+                    if let Err(code) = state.save_observation(scope, observation.clone()) {
+                        evidence_unavailable(&mut observation, code);
                     }
                 }
-            } else {
-                observation.error_code = Some("validation_record_unavailable".into());
-                if observation.generation_pass {
-                    observation.state = ValidationState::Loaded;
-                    observation.generation_pass = false;
-                }
+                Err(code) => evidence_unavailable(&mut observation, code),
             }
             observation
         })
         .await
         .map_err(|_| ApiError::internal())?;
         Ok(observation)
+    }
+}
+fn evidence_unavailable(observation: &mut LocalValidation, code: &'static str) {
+    observation.error_code = Some(code.into());
+    // A generation result without bound, durable evidence cannot grant Passed.
+    // Preserve the independently observed successful load.
+    if observation.generation_pass {
+        observation.state = ValidationState::Loaded;
+        observation.generation_pass = false;
     }
 }
 fn consume_probe(receiver: EventReceiver, timeout: Duration, context_size: u32) -> LocalValidation {
@@ -401,5 +423,123 @@ mod tests {
         let observation = consume_probe(receiver, Duration::from_secs(1), 4096);
         assert!(!observation.generation_pass);
         runtime.shutdown().unwrap();
+    }
+    #[test]
+    fn evidence_failures_preserve_only_observed_load_success() {
+        for code in [
+            "validation_engine_unavailable",
+            "validation_scope_unavailable",
+            "validation_scope_changed",
+            "validation_record_read_failed",
+            "validation_record_write_failed",
+        ] {
+            let mut observation = LocalValidation {
+                state: ValidationState::Passed,
+                checked_at_unix_ms: Some(1),
+                load_success: true,
+                generation_pass: true,
+                error_code: None,
+            };
+            evidence_unavailable(&mut observation, code);
+            assert_eq!(observation.state, ValidationState::Loaded);
+            assert!(observation.load_success);
+            assert!(!observation.generation_pass);
+            assert_eq!(observation.error_code.as_deref(), Some(code));
+            let encoded = serde_json::to_string(&observation).unwrap();
+            assert!(!encoded.contains("private"));
+        }
+    }
+    #[tokio::test]
+    async fn corrupt_receipts_report_read_stage_and_remain_intact() {
+        use model_store::{ModelStore, library::FileIdentity};
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(ModelStore::open(root.path()).unwrap());
+        let runtime = Runtime::spawn(
+            RuntimeConfig::default(),
+            |_: &ModelId| Err(RuntimeError::new(ErrorCode::ModelNotFound, "fixture")),
+            Fixture(Mode::Pass),
+        )
+        .unwrap();
+        let state = ApiState::new(runtime, store, crate::Config::default(), None);
+        let scope = Scope {
+            model_id: ModelId::new("fixture").unwrap(),
+            model_sha256: "0".repeat(64),
+            template_sha256: "1".repeat(64),
+            file_identity: FileIdentity {
+                volume: 1,
+                file: 2,
+                size: 3,
+                modified_seconds: 4,
+                modified_nanos: 5,
+            },
+            engine_build: "fixture".into(),
+            platform: "fixture".into(),
+            installation: "2".repeat(64),
+            options: LoadOptions::default(),
+        };
+        let observation = LocalValidation {
+            state: ValidationState::Loaded,
+            load_success: true,
+            ..LocalValidation::default()
+        };
+        state
+            .save_observation(scope.clone(), observation.clone())
+            .unwrap();
+        assert_eq!(Receipts::read(root.path()).unwrap().entries.len(), 1);
+        let mut invalid = observation.clone();
+        invalid.error_code = Some("private/path-canary".into());
+        assert_eq!(
+            state.save_observation(scope.clone(), invalid).unwrap_err(),
+            "validation_record_write_failed"
+        );
+        let path = root.path().join("local-model-validation.json");
+        std::fs::write(&path, b"private-corrupt-canary").unwrap();
+        assert_eq!(
+            state.save_observation(scope, observation).unwrap_err(),
+            "validation_record_read_failed"
+        );
+        assert_eq!(std::fs::read(path).unwrap(), b"private-corrupt-canary");
+        state.shutdown.begin();
+        state.wait_shutdown().await.unwrap();
+    }
+    #[tokio::test]
+    async fn successful_generation_without_engine_identity_cannot_claim_a_receipt() {
+        use model_store::ModelStore;
+        use std::sync::Arc;
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(ModelStore::open(root.path()).unwrap());
+        let runtime = Runtime::spawn(
+            RuntimeConfig::default(),
+            |id: &ModelId| {
+                Ok(ResolvedModel {
+                    id: id.clone(),
+                    path: "fixture.gguf".into(),
+                    context_limit: 4096,
+                    default_context: 4096,
+                    loadable: true,
+                })
+            },
+            Fixture(Mode::Pass),
+        )
+        .unwrap();
+        let model = ModelId::new("fixture").unwrap();
+        let options = LoadOptions::default();
+        runtime.handle().load(model.clone(), options).unwrap();
+        let state = ApiState::new(runtime, store, crate::Config::default(), None);
+        state
+            .probe_build
+            .set(Err("validation_engine_unavailable"))
+            .unwrap();
+        let observation = state.model_probe(model, options).await.unwrap();
+        assert_eq!(observation.state, ValidationState::Loaded);
+        assert!(observation.load_success && !observation.generation_pass);
+        assert_eq!(
+            observation.error_code.as_deref(),
+            Some("validation_engine_unavailable")
+        );
+        assert!(Receipts::read(root.path()).unwrap().entries.is_empty());
+        state.shutdown.begin();
+        state.wait_shutdown().await.unwrap();
     }
 }

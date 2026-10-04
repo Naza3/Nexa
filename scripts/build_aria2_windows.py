@@ -54,6 +54,21 @@ def source_identity(source: Path) -> dict:
     return {p.relative_to(source).as_posix(): sha(p) for p in sorted(source.rglob("*")) if p.is_file()}
 
 
+def source_commit() -> str:
+    """Do not let an environment label turn old or dirty inputs into CI evidence."""
+    expected = os.environ.get("GITHUB_SHA")
+    if expected is None:
+        return "local-uncommitted"
+    if not re.fullmatch(r"[a-f0-9]{40}", expected):
+        raise ValueError("Invalid CI source commit")
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True,
+                              encoding="utf-8").stdout.strip()
+    if git("rev-parse", "HEAD") != expected or git("status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("aria2 CI source must match its clean checkout commit")
+    return expected
+
+
 def prepare(work: Path) -> None:
     lock = json.loads(LOCK.read_text(encoding="utf-8"))
     patches = [lock["patch"], *lock.get("additional_patches", [])]
@@ -113,6 +128,7 @@ def pe_metadata(text: str) -> dict:
 
 
 def bundle(work: Path) -> None:
+    commit = source_commit()
     lock = json.loads(LOCK.read_text(encoding="utf-8"))
     source = work / lock["aria2"]["root"]
     if source_identity(source) != json.loads((work / "prepared-source.json").read_text(encoding="utf-8")):
@@ -147,11 +163,12 @@ def bundle(work: Path) -> None:
             tar.add(p, arcname="build-materials/scripts/" + p.name)
         for name in ("build_aria2_windows.py", "build_aria2_windows.sh"):
             tar.add(ROOT / "scripts" / name, arcname="build-materials/scripts/" + name)
-        tar.add(ROOT / ".github/workflows/aria2-build-probe.yml", arcname="build-materials/.github/workflows/aria2-build-probe.yml")
+        for workflow in ("aria2-build-probe.yml", "native-windows.yml"):
+            tar.add(ROOT / ".github/workflows" / workflow, arcname="build-materials/.github/workflows/" + workflow)
         tar.add(work / "build/config.h", arcname="configuration/config.h")
         tar.add(work / "build/config.status", arcname="configuration/config.status")
         tar.add(licenses, arcname="licenses")
-    manifest = {"schema_version": 1, "source_commit": os.environ.get("GITHUB_SHA", "local-uncommitted"),
+    manifest = {"schema_version": 1, "source_commit": commit,
                 "binary_name": "nexa-aria2.exe", "product_relative_path": "download/nexa-aria2.exe",
                 "aria2_version": lock["aria2"]["version"], "source_lock": lock,
                 "target": "x86_64-w64-mingw32", "win32_winnt": "0x0A00", "tls_backend": "Schannel",

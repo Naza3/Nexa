@@ -1,6 +1,8 @@
 import { DesktopError, safeError } from "./adapter";
-import { localValidationLabel, validLocalValidation } from "./localValidation";
+import { localValidationLabel, unavailableValidation, validLocalValidation, validationErrorReason } from "./localValidation";
+import { validAddOperation, validModelSelection } from "./modelSelection";
 import { lanBaseUrl, validateLanSettings } from "./lanApi";
+import { preferencesOnly, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 import type {
   CatalogEntry,
   DownloadOperation,
@@ -8,7 +10,11 @@ import type {
   ChatRequest,
   DesktopApi,
   ModelPage,
+  ModelSummary,
+  LocalValidation,
+  LoadOptions,
   DirectorySelection,
+  ModelFileSelection,
   LibraryOperation,
   LanApiSettings,
   Preferences,
@@ -34,15 +40,18 @@ export const DEFAULT_SETTINGS: Settings = {
   batch_size: 128,
   max_output_tokens: 512,
   idle_unload_seconds: 300,
+  idle_unload_enabled: true,
+  model_verification_timeout_seconds: 300,
   close_runtime_on_exit: false,
 };
 const encoder = new TextEncoder();
 export const byteLength = (value: string) => encoder.encode(value).byteLength;
 // Native responses are still validated before accepting a committed outcome.
 // New fields are optional only for the old complete/failed desktop protocol.
-function validLibraryOperation(value: LibraryOperation): boolean {
+function validLibraryOperation(value: LibraryOperation, configuring = false): boolean {
   const integer = (n: number, maximum: number) => Number.isSafeInteger(n) && n >= 0 && n <= maximum;
   const failures = value.file_errors ?? [];
+  if (configuring && (value.examined_entries !== 0 || value.candidate_files !== 0 || value.verified_files !== 0 || failures.length || value.status === "partial" || !["checking", "committing", "finished"].includes(value.phase))) return false;
   const published = value.status === "completed" || value.status === "partial";
   if (!["running", "completed", "partial", "cancelled", "failed"].includes(value.status) ||
     !["checking", "enumerating", "verifying", "committing", "finished"].includes(value.phase) ||
@@ -64,8 +73,8 @@ function validLibraryOperation(value: LibraryOperation): boolean {
     const rejected = result?.rejected_files ?? 0;
     if (!result || value.error || !result.directory_id || !result.library_generation ||
       !integer(result.registered_files, 64) || !integer(result.available_files, result.registered_files) ||
-      !integer(rejected, 64) || rejected !== failures.length || result.registered_files !== value.verified_files ||
-      value.candidate_files !== result.registered_files + rejected || value.examined_entries > 1024 ||
+      !integer(rejected, 64) || rejected !== failures.length || (!configuring && result.registered_files !== value.verified_files) ||
+      (!configuring && value.candidate_files !== result.registered_files + rejected) || value.examined_entries > 1024 ||
       (value.status === "partial" && (!result.registered_files || !rejected)) ||
       (value.status === "completed" && rejected !== 0)) return false;
   }
@@ -106,6 +115,36 @@ export type ChatPhase =
   | "streaming"
   | "stopping"
   | "recovery";
+export interface ModelTestAttempt {
+  id: number;
+  model_id: string;
+  model_signature: string;
+  mode: "load" | "test";
+  phase: "running" | "finished";
+  started_at: number;
+  finished_at: number | null;
+  result: LocalValidation | null;
+  error: SafeError | null;
+}
+interface ModelTestScope {
+  attempt: ModelTestAttempt;
+  epoch: number;
+  page_after: string | null;
+  options: LoadOptions;
+  settings: string;
+  backend: string | null;
+  connection: Snapshot["connection"] | null;
+  selected_model: string | null;
+  runtime_options: string | null;
+}
+// Local evidence may change on reread without changing the model's identity.
+function modelSignature(model: ModelSummary): string {
+  return JSON.stringify([model.id, model.sha256, model.size_bytes, model.storage, model.architecture, model.quantization,
+    model.available, model.availability_error, model.loadable, model.context_limit, model.context_size]);
+}
+function loadOptions(value: LoadOptions): string {
+  return JSON.stringify([value.context_size, value.threads, value.batch_size]);
+}
 export interface ViewState {
   catalog: CatalogEntry[];
   catalog_loading: boolean;
@@ -116,6 +155,7 @@ export interface ViewState {
   discovery: "unchecked" | "checking" | "none" | "configured" | "failed";
   reconcile_status: "idle" | "checking" | "observing" | "pending" | "failed";
   testing_model: string | null;
+  model_tests: Record<string, ModelTestAttempt>;
   snapshot: Snapshot | null;
   booting: boolean;
   error: SafeError | null;
@@ -125,6 +165,10 @@ export interface ViewState {
   page_after: string | null;
   models_loading: boolean;
   directory_selection: DirectorySelection | null;
+  model_selection: ModelFileSelection | null;
+  add_auto_test: boolean;
+  library_kind: "maintenance" | "add" | "configure";
+  library_selection: ModelFileSelection | null;
   library: LibraryOperation | null;
   library_phase: "idle" | "starting" | "running" | "stopping" | "recovery";
   messages: SessionMessage[];
@@ -193,7 +237,7 @@ export class DesktopController {
   private state: ViewState = {
     catalog: [], catalog_loading: false, catalog_loaded: false,
     download: null, download_phase: "idle", download_auto_test: false, discovery: "unchecked",
-    reconcile_status: "idle", testing_model: null,
+    reconcile_status: "idle", testing_model: null, model_tests: {},
     snapshot: null,
     booting: true,
     error: null,
@@ -203,6 +247,7 @@ export class DesktopController {
     page_after: null,
     models_loading: false,
     directory_selection: null,
+    model_selection: null, add_auto_test: false, library_kind: "maintenance", library_selection: null,
     library: null,
     library_phase: "idle",
     messages: [],
@@ -213,7 +258,6 @@ export class DesktopController {
   private poll: ReturnType<typeof setTimeout> | undefined;
   private mounted = false;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
-  private initialReconcile = false;
   private lastReconcile = -Infinity;
   private pollEpoch = 0;
   private modelsPromise: Promise<void> | null = null;
@@ -235,10 +279,16 @@ export class DesktopController {
     lastPull: number;
   } | null = null;
   private downloadTask: { id: string | null; catalog_id: string; source: Settings["download_source"]; directory_id: string; cancel: boolean; cancelSent: boolean; reading: boolean; lastPull: number } | null = null;
+  private selectionEpoch = 0;
   private modelsEpoch = 0;
   private nextMessage = 0;
   private modelsLoaded = false;
   private closing = false;
+  private modelFeedbackEpoch = 0;
+  private settingsEpoch = 0;
+  private nextTest = 0;
+  private snapshotReadError: SafeError | null = null;
+  private modelsReadError: SafeError | null = null;
   constructor(readonly api: DesktopApi) {}
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -256,19 +306,12 @@ export class DesktopController {
     this.update({ error: safeError(error) });
   }
   mount = () => {
+    ++this.settingsEpoch;
     this.mounted = true;
     const epoch = ++this.pollEpoch;
     const tick = async () => {
       if (!this.mounted || epoch !== this.pollEpoch) return;
       await this.refresh();
-      if (this.mounted && epoch === this.pollEpoch && this.state.discovery === "unchecked" && this.state.snapshot) {
-        if (this.state.snapshot.model_directory.configured) this.update({ discovery: "configured" });
-        else if (this.state.snapshot.connection === "stopped") await this.discoverDirectory();
-      }
-      if (this.mounted && epoch === this.pollEpoch && !this.initialReconcile && this.state.snapshot?.model_directory.configured) {
-        this.initialReconcile = true;
-        void this.reconcileModels();
-      }
       if (this.mounted && epoch === this.pollEpoch)
         this.poll = setTimeout(tick, 1000);
     };
@@ -276,16 +319,20 @@ export class DesktopController {
     return () => {
       if (epoch !== this.pollEpoch) return;
       this.mounted = false;
+      ++this.settingsEpoch;
+      this.leaveModelPage();
       clearTimeout(this.poll);
       clearTimeout(this.reconcileTimer);
+      void this.discardModelSelection();
       void this.cancel();
       void this.cancelLibrary();
       void this.cancelDownload();
     };
   };
-  refresh = (): Promise<void> => {
+  refresh = (modelAfter: string | null = null): Promise<void> => {
     if (this.snapshotPromise) return this.snapshotPromise;
     const epoch = this.snapshotEpoch;
+    this.snapshotReadError = null;
     this.snapshotPromise = (async () => {
       try {
         const snapshot = await this.api.snapshot();
@@ -313,9 +360,10 @@ export class DesktopController {
           !this.modelsLoaded &&
           !this.state.models_loading
         )
-          await this.loadPage(null);
+          await this.loadPage(modelAfter);
       } catch (error) {
         if (epoch !== this.snapshotEpoch) return;
+        this.snapshotReadError = safeError(error);
         this.update({
           booting: false,
           snapshot: this.state.snapshot
@@ -345,6 +393,8 @@ export class DesktopController {
     this.update({ operation: label, error: null, notice: null });
     try {
       await task();
+      // A rejected concurrent settings attempt is no longer busy after this action succeeds.
+      if (this.state.error?.code === "operation_in_progress") this.update({ error: null });
     } catch (error) {
       this.report(error);
     } finally {
@@ -362,6 +412,7 @@ export class DesktopController {
       await this.refresh();
     });
   loadPage = (after: string | null): Promise<void> => {
+    if (after !== this.state.page_after) this.leaveModelPage();
     if (this.modelsPromise) return this.modelsPromise;
     if (
       !this.state.snapshot || !["connected", "stopped"].includes(this.state.snapshot.connection) ||
@@ -372,6 +423,7 @@ export class DesktopController {
     )
       return Promise.resolve();
     const epoch = this.modelsEpoch;
+    this.modelsReadError = null;
     this.update({ models_loading: true });
     this.modelsPromise = (async () => {
       let cursor = after;
@@ -382,14 +434,18 @@ export class DesktopController {
             const models = await this.api.modelsPage(cursor, generation);
             if (epoch !== this.modelsEpoch) return;
             if (!Array.isArray(models.data) || models.data.length > 64 || !models.generation ||
-                (models.source !== undefined && !["local", "runtime"].includes(models.source)) ||
-                models.data.some((model) => model.local_validation != null && !validLocalValidation(model.local_validation)))
+                (models.source !== undefined && !["local", "runtime"].includes(models.source)))
               throw new DesktopError(
                 "invalid_model_page",
                 "模型列表缺少有效版本或超过单页上限。",
               );
+            // A damaged per-model receipt must not hide an otherwise usable inventory.
+            const data = models.data.map((model) => model.local_validation != null && !validLocalValidation(model.local_validation)
+              ? { ...model, local_validation: unavailableValidation() } : model);
+            const model_tests = Object.fromEntries(Object.entries(this.state.model_tests).filter(([id, attempt]) =>
+              data.some((model) => model.id === id && modelSignature(model) === attempt.model_signature)));
             this.modelsLoaded = true;
-            this.update({ models, page_after: cursor });
+            this.update({ models: { ...models, data }, page_after: cursor, model_tests });
             return;
           } catch (error) {
             if (epoch !== this.modelsEpoch) return;
@@ -406,7 +462,10 @@ export class DesktopController {
           }
         }
       } catch (error) {
-        if (epoch === this.modelsEpoch) this.report(error);
+        if (epoch === this.modelsEpoch) {
+          this.modelsReadError = safeError(error);
+          this.report(error);
+        }
       } finally {
         this.modelsPromise = null;
         this.update({ models_loading: false });
@@ -423,6 +482,41 @@ export class DesktopController {
     if (!this.state.operation && !this.libraryTask)
       this.update({ directory_selection: null });
   };
+  pickModels = async () => {
+    if (this.closing || this.state.operation || this.libraryTask || this.downloadTask || this.stream) return;
+    const epoch = ++this.selectionEpoch;
+    this.update({ operation: "正在选择 GGUF 文件", model_selection: null, add_auto_test: false, error: null, notice: null });
+    try {
+      const selection = await this.api.pickModels();
+      if (epoch !== this.selectionEpoch || this.closing) {
+        if (selection?.selection_id) await this.api.discardModelSelection(selection.selection_id);
+        return;
+      }
+      if (selection && !validModelSelection(selection)) {
+        if (typeof selection.selection_id === "string" && selection.selection_id.length <= 128)
+          await this.api.discardModelSelection(selection.selection_id);
+        throw new DesktopError("invalid_model_selection", "文件选择结果无效，请重新选择 GGUF 文件。");
+      }
+      this.update({ model_selection: selection, ...(selection ? {} : { notice: "已取消文件选择，现有模型索引未改变。" }) });
+    } catch (error) {
+      if (epoch === this.selectionEpoch) this.report(error);
+    } finally {
+      if (this.state.operation === "正在选择 GGUF 文件") this.update({ operation: null });
+    }
+  };
+  discardModelSelection = async () => {
+    const selection = this.state.model_selection;
+    ++this.selectionEpoch;
+    this.update({ model_selection: null, add_auto_test: false });
+    if (!selection) return;
+    try { await this.api.discardModelSelection(selection.selection_id); }
+    catch (error) { this.report(error); }
+  };
+  setAddAutoTest = (enabled: boolean) => {
+    if (this.state.operation || this.libraryTask) return;
+    this.update({ add_auto_test: enabled && this.state.model_selection?.files.length === 1 });
+  };
+  addModels = () => this.beginLibrary("add");
   discoverDirectory = async () => {
     if (this.state.snapshot?.model_directory.configured) {
       this.update({ discovery: "configured" });
@@ -432,6 +526,7 @@ export class DesktopController {
     this.update({ discovery: "checking" });
     await this.beginLibrary("discover");
   };
+  configureDirectory = () => this.beginLibrary("configure");
   applyDirectory = () => this.beginLibrary("apply");
   scanModels = () => this.beginLibrary("scan");
   reconcileModels = async (observeAgain = true) => {
@@ -447,27 +542,28 @@ export class DesktopController {
     }
   };
   refreshModels = async () => {
-    await this.reconcileModels();
     if (!this.libraryTask) await this.loadPage(null);
   };
-  private async beginLibrary(kind: "apply" | "scan" | "discover" | "reconcile") {
-    if (this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
+  private async beginLibrary(kind: "apply" | "scan" | "discover" | "reconcile" | "add" | "configure") {
+    if (this.closing || this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
     if (kind !== "reconcile" && this.state.snapshot?.connection !== "stopped") {
       this.report(
         new DesktopError(
           "runtime_running",
-          "请先显式停止运行服务，再应用目录或重新扫描。仅卸载模型不够。",
+          kind === "add" ? "请先显式停止运行服务，再添加所选模型。仅卸载模型不够。" : "请先显式停止运行服务，再保存默认目录或手动扫描。仅卸载模型不够。",
         ),
       );
       return;
     }
     const selection = this.state.directory_selection;
-    if (kind === "apply" && !selection) return;
+    const files = kind === "add" ? this.state.model_selection : null;
+    if (kind === "add" && !files) return;
+    if ((kind === "apply" || kind === "configure") && !selection) return;
     if (kind === "scan" && !this.state.snapshot?.model_directory.configured) {
       this.report(
         new DesktopError(
           "model_directory_required",
-          "请先选择并应用模型目录。",
+          "请先设置默认下载目录。",
         ),
       );
       return;
@@ -487,6 +583,8 @@ export class DesktopController {
       library_phase: "starting",
       error: null,
       notice: null,
+      library_kind: kind === "add" ? "add" : kind === "configure" ? "configure" : "maintenance",
+      library_selection: files,
       ...(kind === "reconcile" ? { reconcile_status: "checking" as const } : {}),
     });
     try {
@@ -509,7 +607,11 @@ export class DesktopController {
           return;
         }
         handle = result;
-      } else handle = kind === "discover"
+      } else handle = kind === "configure"
+          ? await this.api.configureDirectory(selection!.selection_id)
+          : kind === "add"
+          ? await this.api.addModels(files!.selection_id, this.state.add_auto_test && files!.files.length === 1)
+          : kind === "discover"
           ? await this.api.discoverDirectory()
           : kind === "apply"
           ? await this.api.applyDirectory(selection!.selection_id)
@@ -526,7 +628,8 @@ export class DesktopController {
           "模型库操作未返回有效标识。",
         );
       task.id = handle.operation_id;
-      if (kind === "apply") this.update({ directory_selection: null });
+      if (kind === "apply" || kind === "configure") this.update({ directory_selection: null });
+      if (kind === "add") this.update({ model_selection: null, add_auto_test: false });
       this.update({ library_phase: task.cancel ? "stopping" : "running" });
       if (task.cancel) void this.sendLibraryCancel();
       void this.consumeLibrary();
@@ -534,6 +637,8 @@ export class DesktopController {
       this.libraryTask = null;
       ++this.snapshotEpoch;
       this.update({ library_phase: "idle", ...(kind === "discover" ? { discovery: "failed" as const } : {}), ...(kind === "reconcile" ? { reconcile_status: "failed" as const } : {}) });
+      if (kind === "add" && ["selection_expired", "model_selection_expired", "model_selection_invalid", "model_selection_consumed"].includes(safeError(error).code))
+        this.update({ model_selection: null, add_auto_test: false });
       this.report(error);
     }
   }
@@ -580,7 +685,9 @@ export class DesktopController {
         if (this.libraryTask !== task) return;
         const terminal = progress.status !== "running";
         if (
-          !validLibraryOperation(progress) || progress.operation_id !== task.id ||
+          !(this.state.library_kind === "add" && this.state.library_selection
+            ? validAddOperation(progress, this.state.library_selection)
+            : validLibraryOperation(progress, this.state.library_kind === "configure")) || progress.operation_id !== task.id ||
           progress.terminal !== terminal ||
           (terminal && progress.phase !== "finished") ||
           ((progress.status === "completed" || progress.status === "partial") &&
@@ -612,19 +719,19 @@ export class DesktopController {
         if (progress.status === "completed" || progress.status === "partial") {
           // Scan diagnostics now supersede the historical saved-but-unregistered download notice.
           // A partial scan does not prove this particular file was accepted.
-          if (this.state.download?.status === "completed" && progress.result?.directory_id === this.state.download.directory_id)
+          if (this.state.library_kind === "maintenance" && this.state.download?.status === "completed" && progress.result?.directory_id === this.state.download.directory_id)
             this.update({ download: null });
           ++this.modelsEpoch;
           this.modelsLoaded = false;
           this.update({
             models: { data: [], next_after: null, generation: null },
             page_after: null,
-            notice: progress.status === "partial" ? null : progress.result!.registered_files === 0
-              ? "模型目录已保存，未发现直接子级 GGUF 文件；当前外部索引为空。"
-              : `模型目录已保存，登记 ${progress.result!.registered_files} 个文件，其中 ${progress.result!.available_files} 个可尝试加载（不代表已实测）。本机测试结果以模型列表记录为准。`,
+            notice: this.state.library_kind === "configure" ? "默认下载目录已保存，原有模型索引保留；未扫描新目录。" : this.state.library_kind === "add" ? null : progress.status === "partial" ? null : progress.result!.registered_files === 0
+              ? "默认目录扫描已结束，本次没有登记新的候选；已显式添加的模型保留。"
+              : `默认目录扫描完成，本次登记 ${progress.result!.registered_files} 个候选，其中 ${progress.result!.available_files} 个可尝试加载（不代表已实测）。已显式添加的模型保留，本机测试结果以模型列表记录为准。`,
           });
         } else if (progress.status === "cancelled")
-          this.update({ notice: "模型库操作已取消，原目录与索引保持不变。" });
+          this.update({ notice: this.state.library_kind === "add" ? "添加已取消，已登记结果以逐文件记录为准；源文件未改动。" : "模型库操作已取消，原目录与索引保持不变。" });
         else this.report(progress.error);
         this.update({
           library_phase: "idle",
@@ -765,8 +872,8 @@ export class DesktopController {
           this.update({ notice: `${value.result?.registered
             ? "模型文件已保存并自动登记。本机测试结果以模型列表记录为准。"
             : value.result?.registration_error
-              ? "模型文件已保存，但自动登记未完成；请勿重复下载，可检查登记诊断后重试扫描。"
-              : "模型文件已保存，尚未登记。请重新扫描目录。"}${value.result?.cleanup_warning ? "部分下载文件清理未确认，请勿重复下载。" : ""}` });
+              ? "模型文件已保存，但自动登记未完成；请勿重复下载，可检查登记诊断后用“添加模型”选择已保存文件。"
+              : "模型文件已保存，尚未登记。请用“添加模型”选择已保存文件。"}${value.result?.cleanup_warning ? "部分下载文件清理未确认，请勿重复下载。" : ""}` });
           ++this.modelsEpoch;
           this.modelsLoaded = false;
           if (this.modelsPromise) await this.modelsPromise;
@@ -790,59 +897,147 @@ export class DesktopController {
     if (this.state.snapshot)
       this.update({ snapshot: { ...this.state.snapshot, runtime } });
   }
-  private async refreshModelEvidence() {
+  /** Leaving a view invalidates feedback only; never replays or cancels native work. */
+  leaveModelPage = () => {
+    ++this.modelFeedbackEpoch;
+    this.update({ model_tests: {} });
+  };
+  private testScopeCurrent(scope: ModelTestScope): boolean {
+    const model = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id);
+    if (this.closing || scope.epoch !== this.modelFeedbackEpoch || !model ||
+        this.state.page_after !== scope.page_after || modelSignature(model) !== scope.attempt.model_signature ||
+        loadOptions(this.state.snapshot?.settings ?? DEFAULT_SETTINGS) !== scope.settings) return false;
+    const runtime = this.state.snapshot?.runtime;
+    if (scope.backend !== null && runtime && runtime.configured_backend !== scope.backend) return false;
+    return scope.attempt.mode !== "test" || this.state.snapshot?.connection === "error" ||
+      (this.state.snapshot?.connection === scope.connection && (runtime?.selected_model ?? null) === scope.selected_model &&
+        (runtime?.load_options ? loadOptions(runtime.load_options) : null) === scope.runtime_options);
+  }
+  private finishModelTest(scope: ModelTestScope, result: LocalValidation | null, error: SafeError | null = null) {
+    if (!this.testScopeCurrent(scope)) return;
+    this.update({ model_tests: { ...this.state.model_tests, [scope.attempt.model_id]: {
+      ...scope.attempt, phase: "finished", finished_at: Date.now(), result, error,
+    } } });
+    if (error) { this.report(error); return; }
+    const evidence = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id)?.local_validation;
+    this.update({ notice: result ? `${localValidationLabel(result)}${result.state !== "passed" && evidence?.state === "passed" ? "；列表中的通过标签来自此前记录。" : ""}` : "本次操作已结束，尚未取得可确认的短文本测试结果。" });
+  }
+  private async refreshModelEvidence(scope: ModelTestScope): Promise<SafeError | null> {
+    if (!this.testScopeCurrent(scope)) return null;
     ++this.modelsEpoch;
     this.modelsLoaded = false;
     if (this.modelsPromise) await this.modelsPromise;
     if (this.snapshotPromise) await this.snapshotPromise;
-    await this.refresh();
-    if (!this.modelsLoaded) await this.loadPage(null);
+    if (!this.testScopeCurrent(scope)) return null;
+    await this.refresh(scope.page_after);
+    if (this.snapshotReadError) return { code: "validation_refresh_failed", message: validationErrorReason("validation_refresh_failed") };
+    if (!this.modelsLoaded) await this.loadPage(scope.page_after);
+    if (this.modelsReadError || !this.modelsLoaded)
+      return { code: "validation_record_read_failed", message: validationErrorReason("validation_record_read_failed") };
+    const evidence = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id)?.local_validation;
+    if (evidence?.state === "unavailable" || evidence?.error_code?.startsWith("validation_")) {
+      const code = evidence.error_code ?? "validation_record_read_failed";
+      return { code, message: validationErrorReason(code) };
+    }
+    if (evidence?.state === "stale") return { code: "validation_scope_changed", message: validationErrorReason("validation_scope_changed") };
+    return null;
   }
-  loadModel = (modelId: string) =>
-    this.action("正在加载并进行本机基础测试", async () => {
-      const model = this.state.models.data.find((entry) => entry.id === modelId);
-      if (!model?.available || model.loadable !== true)
-        throw new Error("当前模型不可尝试加载，请刷新匹配版本的模型列表");
-      const snapshot = this.state.snapshot;
-      if (snapshot?.connection === "stopped") {
-        // Only this explicit load action may start the service; listing never does.
-        this.update({ snapshot: await this.api.start(!snapshot.initialized) });
-        ++this.modelsEpoch;
-        this.modelsLoaded = false;
+  private runModelTest = async (modelId: string, mode: "load" | "test") => {
+    if (this.closing) return;
+    const model = this.state.models.data.find((entry) => entry.id === modelId);
+    if (!model) { this.report(new DesktopError("model_not_ready", validationErrorReason("model_not_ready"))); return; }
+    const snapshot = this.state.snapshot;
+    const runtime = snapshot?.connection === "connected" ? snapshot.runtime : null;
+    const settings = snapshot?.settings ?? DEFAULT_SETTINGS;
+    const options = mode === "test" && runtime?.load_options ? { ...runtime.load_options } : {
+      context_size: settings.context_size, threads: settings.threads, batch_size: settings.batch_size,
+    };
+    const attempt: ModelTestAttempt = {
+      id: ++this.nextTest, model_id: modelId, model_signature: modelSignature(model), mode,
+      phase: "running", started_at: Date.now(), finished_at: null, result: null, error: null,
+    };
+    const scope: ModelTestScope = { attempt, epoch: this.modelFeedbackEpoch, page_after: this.state.page_after,
+      options, settings: loadOptions(settings), backend: runtime?.configured_backend ?? null,
+      connection: snapshot?.connection ?? null, selected_model: runtime?.selected_model ?? null,
+      runtime_options: runtime?.load_options ? loadOptions(runtime.load_options) : null };
+    if (this.state.operation || this.stream || this.libraryTask || this.downloadTask || runtime?.stopping ||
+        runtime?.registry_busy || runtime?.active_request || (runtime?.queued_jobs ?? 0) > 0 ||
+        ["loading", "generating", "unloading"].includes(runtime?.state ?? "")) {
+      if (this.state.model_tests[modelId]?.phase === "running") {
+        this.update({ notice: "此模型的本次加载或测试仍在进行，请等待本行结果；未重复启动。" });
+      } else {
+        this.finishModelTest(scope, { state: "deferred", load_success: false, generation_pass: false,
+          checked_at_unix_ms: Date.now(), error_code: "runtime_busy" });
       }
-      const settings = this.state.snapshot?.settings ?? DEFAULT_SETTINGS;
-      this.update({ testing_model: modelId });
+      return;
+    }
+    await this.action(mode === "load" ? "正在加载并进行本机基础测试" : "正在进行本机短文本测试", async () => {
+      this.update({ testing_model: modelId, model_tests: { ...this.state.model_tests, [modelId]: attempt } });
+      let result: LocalValidation | null = null;
+      let failure: SafeError | null = null;
       try {
-        this.setRuntime(await this.api.loadModel(modelId, {
-          context_size: settings.context_size,
-          threads: settings.threads,
-          batch_size: settings.batch_size,
-        }));
-        await this.refreshModelEvidence();
-        const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
-        this.update({ notice: evidence ? localValidationLabel(evidence) : "模型加载操作已结束，尚未取得本机基础测试记录，请刷新查看。" });
+        if (mode === "load") {
+          if (!model.available || model.loadable !== true)
+            throw new DesktopError("model_not_ready", "当前模型不可加载，请刷新匹配版本的模型列表。");
+          if (snapshot?.connection === "stopped") {
+            const started = await this.api.start(!snapshot.initialized);
+            // Close or navigation during startup must not launch new native work afterwards.
+            if (!this.testScopeCurrent(scope)) return;
+            this.update({ snapshot: started });
+          }
+          if (!this.testScopeCurrent(scope)) return;
+          const loaded = await this.api.loadModel(modelId, options);
+          if (!this.testScopeCurrent(scope)) return;
+          this.setRuntime(loaded);
+          result = { state: "loaded", load_success: loaded.selected_model === modelId && ["ready", "generating"].includes(loaded.state),
+            generation_pass: false, checked_at_unix_ms: Date.now(), error_code: "validation_result_missing" };
+          if (!result.load_success) result = unavailableValidation("validation_result_missing");
+        } else {
+          if (!runtime?.load_options || runtime.selected_model !== modelId || runtime.state !== "ready")
+            throw new DesktopError("model_not_ready", validationErrorReason("model_not_ready"));
+          result = await this.api.testModel(modelId, options);
+          if (!validLocalValidation(result)) {
+            result = null;
+            throw new DesktopError("invalid_local_validation", validationErrorReason("invalid_local_validation"));
+          }
+        }
       } catch (error) {
-        await this.refreshModelEvidence();
-        throw error;
-      } finally { this.update({ testing_model: null }); }
-    });
-  testModel = (modelId: string) =>
-    this.action("正在进行本机短文本测试", async () => {
-      const options = this.state.snapshot?.runtime?.load_options;
-      if (!options || this.state.snapshot?.runtime?.selected_model !== modelId)
-        throw new DesktopError("model_not_ready", "请先显式加载此模型再测试。");
-      this.update({ testing_model: modelId });
+        const code = safeError(error).code;
+        failure = { code, message: validationErrorReason(code) };
+      }
       try {
-        const result = await this.api.testModel(modelId, options);
-        if (!validLocalValidation(result)) throw new DesktopError("invalid_local_validation", "测试返回的记录无效，未按通过处理。");
-        // Never attach a late response to a changed file, page, engine or options.
-        await this.refreshModelEvidence();
-        const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
-        this.update({ notice: result.state !== "passed"
-          ? `${localValidationLabel(result)}${evidence?.state === "passed" ? "；列表中的通过标签来自此前记录。" : ""}`
-          : evidence ? localValidationLabel(evidence) : "本机测试已结束，请查看对应模型的最新本机记录。" });
-      } finally { this.update({ testing_model: null }); }
+        if (!this.testScopeCurrent(scope)) return;
+        const readError = await this.refreshModelEvidence(scope);
+        if (!failure) failure = readError;
+        if (!this.testScopeCurrent(scope)) return;
+        if (mode === "load" && !failure) {
+          const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
+          // model_load returns runtime state, not the probe's DTO. An old Passed is never this attempt's proof.
+          if (evidence && evidence.checked_at_unix_ms !== null && evidence.checked_at_unix_ms >= attempt.started_at &&
+              evidence.checked_at_unix_ms !== model.local_validation?.checked_at_unix_ms) result = evidence;
+        }
+        if (mode === "test" && result?.state === "passed" && !failure) {
+          const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
+          if (!evidence || evidence.state !== "passed" || evidence.checked_at_unix_ms !== result.checked_at_unix_ms) {
+            const code = evidence?.state === "stale" ? "validation_scope_changed" : "validation_result_unconfirmed";
+            failure = { code, message: validationErrorReason(code) };
+          }
+        }
+        this.finishModelTest(scope, result, failure);
+      } finally {
+        this.update({ testing_model: null });
+      }
     });
+    // Early returns while awaiting service startup still release UI ownership.
+    if (this.state.testing_model === modelId) this.update({ testing_model: null });
+    if (this.state.model_tests[modelId]?.id === attempt.id && this.state.model_tests[modelId].phase === "running") {
+      const model_tests = { ...this.state.model_tests };
+      delete model_tests[modelId];
+      this.update({ model_tests });
+    }
+  };
+  loadModel = (modelId: string) => this.runModelTest(modelId, "load");
+  testModel = (modelId: string) => this.runModelTest(modelId, "test");
   unload = () =>
     this.action("正在卸载模型", async () => {
       this.setRuntime(await this.api.unloadModel());
@@ -856,11 +1051,12 @@ export class DesktopController {
         const previous = this.state.snapshot?.settings;
         const optionsChanged = !previous || (["context_size", "threads", "batch_size"] as const).some((key) => previous[key] !== settings[key]);
         this.update({
-          snapshot: await this.api.saveSettings(settings),
+          snapshot: await this.api.saveSettings(preferencesOnly(settings)),
           notice:
             "偏好已保存。加载参数在下次加载时生效，输出预算用于下次发送。",
         });
         if (optionsChanged) {
+          this.leaveModelPage();
           // Old proof stays historical even if the authoritative reread fails.
           this.update({ models: { ...this.state.models, data: this.state.models.data.map((model) => ({
             ...model, ...(model.local_validation ? { local_validation: { ...model.local_validation, state: "stale" as const } } : {}),
@@ -873,18 +1069,47 @@ export class DesktopController {
       },
       true,
     );
-  saveIdle = (seconds: number) =>
-    this.action("正在应用空闲卸载设置", async () => {
-      if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 86400)
-        throw new DesktopError(
-          "invalid_settings",
-          "空闲卸载时间须为 1–86400 秒。",
-        );
-      this.update({
-        snapshot: await this.api.saveIdle(seconds),
-        notice: "空闲卸载设置已保存，下次启动运行服务时生效。",
-      });
+  private saveRuntimeSettings(label: string, save: () => Promise<Snapshot>, notice: string) {
+    if (this.closing) return Promise.resolve();
+    if (this.state.operation || this.stream || this.libraryTask || this.downloadTask) {
+      this.update({ notice: null });
+      this.report(new DesktopError("operation_in_progress", "有其他操作正在进行，请等待完成或取消后再保存设置。"));
+      return Promise.resolve();
+    }
+    return this.action(label, async () => {
+      const epoch = this.settingsEpoch;
+      const snapshot = this.state.snapshot;
+      if (!snapshot?.initialized) throw new DesktopError("not_initialized", "请先在模型页显式初始化运行服务，再停止服务后保存设置。");
+      if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先显式停止运行服务，再保存设置；不会自动中断任务。");
+      try {
+        const saved = await save();
+        if (epoch !== this.settingsEpoch || this.closing) return;
+        this.update({ snapshot: saved, notice, error: null });
+      } catch (error) {
+        if (epoch !== this.settingsEpoch || this.closing) return;
+        const code = safeError(error).code;
+        if (code === "runtime_running") throw new DesktopError(code, "运行服务已启动。请先显式停止服务，再保存设置。");
+        if (code === "settings_durability_unconfirmed") throw new DesktopError(code, "设置可能已保存，但磁盘持久化尚未确认。请重新读取并核对已保存配置后再重试；当前不代表已回滚。");
+        throw error;
+      }
     });
+  }
+  saveIdle = (seconds: number, enabled?: boolean) =>
+    this.saveRuntimeSettings("正在应用空闲卸载设置", async () => {
+      const validation = validateIdleSeconds(seconds);
+      if (validation) throw new DesktopError("invalid_settings", validation);
+      if (enabled !== undefined && (typeof enabled !== "boolean" || typeof this.state.snapshot?.settings.idle_unload_enabled !== "boolean"))
+        throw new DesktopError("idle_settings_unavailable", "当前桌面版本未提供不自动卸载设置，请更新桌面应用。");
+      return enabled === undefined ? this.api.saveIdle(seconds) : this.api.saveIdle(seconds, enabled);
+    }, "空闲卸载设置已保存，下次显式启动运行服务时生效。保存不会启动服务；关闭自动卸载不提供关机或睡眠保护。");
+  saveVerificationTimeout = (seconds: number) =>
+    this.saveRuntimeSettings("正在保存模型文件校验超时", async () => {
+      if (typeof this.state.snapshot?.settings.model_verification_timeout_seconds !== "number")
+        throw new DesktopError("verification_settings_unavailable", "当前桌面版本未提供模型文件校验超时设置，请更新桌面应用。");
+      const validation = validateVerificationSeconds(seconds);
+      if (validation) throw new DesktopError("invalid_settings", validation);
+      return this.api.saveVerificationTimeout(seconds);
+    }, "模型文件校验超时已保存，后续新校验使用此值；加载前校验在下次显式启动运行服务后使用新值。正在执行的操作不会改动计时。");
   copyToken = () =>
     this.action(
       "正在复制令牌",
@@ -965,9 +1190,15 @@ export class DesktopController {
       await this.refresh();
     });
   close = async () => {
-    if (this.closing || (this.state.operation && !this.state.testing_model)) return;
+    if (this.closing || (this.state.operation && !this.state.testing_model && this.state.operation !== "正在选择 GGUF 文件")) return;
     this.closing = true;
-    try { await this.api.close(); }
+    this.leaveModelPage();
+    try {
+      const selected = !!this.state.model_selection;
+      const discarded = this.discardModelSelection();
+      if (selected) await discarded;
+      await this.api.close();
+    }
     catch (error) { this.report(error); }
     finally { this.closing = false; }
   };

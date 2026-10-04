@@ -110,7 +110,9 @@ pub struct RuntimeConfig {
     pub queue_timeout: Duration,
     pub load_timeout: Duration,
     pub execution_timeout: Duration,
+    /// Retain the positive idle budget even when automatic unloading is disabled.
     pub idle_unload: Duration,
+    pub idle_unload_enabled: bool,
     pub slow_consumer_timeout: Duration,
     pub load_options: LoadOptions,
 }
@@ -122,6 +124,7 @@ impl Default for RuntimeConfig {
             load_timeout: Duration::from_secs(300),
             execution_timeout: Duration::from_secs(300),
             idle_unload: Duration::from_secs(300),
+            idle_unload_enabled: true,
             slow_consumer_timeout: Duration::from_secs(10),
             load_options: LoadOptions::default(),
         }
@@ -255,5 +258,12 @@ mod tests {
         config.load_timeout = Duration::ZERO;
         assert!(config.validate().is_err());
         assert_eq!(RuntimeConfig::android().max_queued_jobs, 1);
+        let mut disabled = RuntimeConfig {
+            idle_unload_enabled: false,
+            ..RuntimeConfig::default()
+        };
+        assert!(disabled.validate().is_ok());
+        disabled.idle_unload = Duration::ZERO;
+        assert!(disabled.validate().is_err());
     }
 }

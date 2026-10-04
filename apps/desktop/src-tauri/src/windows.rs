@@ -1,6 +1,7 @@
 use crate::{
     diagnostics,
     directory_selection::{AdmissionError, DirectorySelection, PickedDirectory},
+    file_selection::{FileSelection, PickedFile, PickedFiles},
     layout,
     selection::{PickedModel, Selection},
 };
@@ -23,6 +24,7 @@ struct Shell {
     data_dir: PathBuf,
     package_root: PathBuf,
     selection: Mutex<Option<Selection>>,
+    file_selection: Mutex<Option<FileSelection<desktop_bridge::SelectedFile>>>,
     directory_selection: Mutex<Option<DirectorySelection>>,
     picking: AtomicBool,
     closing: AtomicBool,
@@ -43,6 +45,12 @@ fn error(code: &str) -> BridgeError {
             "clipboard_unavailable" => "无法写入系统剪贴板，请稍后重试。",
             "token_unavailable" => "令牌文件未初始化或安全校验失败。",
             "selection_expired" => "所选项目已过期，请重新选择。",
+            "model_library_limit" => {
+                "所选文件超出数量或大小限制：最多64个、单个16 GiB、每批32 GiB。"
+            }
+            "model_file_in_use" => "所选文件正在被其他程序写入或占用，请关闭占用程序后重新选择。",
+            "model_file_changed" => "所选文件或所在目录已经变化，请重新选择。",
+            "model_file_unavailable" => "所选文件当前不可访问，请检查文件后重新选择。",
             "model_directory_unavailable" => "所选模型目录当前不可访问，请检查后重新选择。",
             "model_directory_unsupported" => {
                 "请选择支持的本地普通目录，不使用网络、设备、链接或重解析路径。"
@@ -105,6 +113,17 @@ struct LibraryRequest {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AddRequest {
+    selection_id: Uuid,
+    #[serde(default)]
+    auto_test: bool,
+}
+#[derive(Serialize)]
+struct Discarded {
+    discarded: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ImportRequest {
     selection_id: Uuid,
     model_id: String,
@@ -123,6 +142,12 @@ struct SettingsRequest {
 #[serde(deny_unknown_fields)]
 struct IdleRequest {
     idle_unload_seconds: u64,
+    idle_unload_enabled: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerificationRequest {
+    model_verification_timeout_seconds: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -182,6 +207,96 @@ async fn model_pick(
     Ok(Some(dto))
 }
 #[tauri::command]
+async fn models_pick(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<Option<PickedFiles>> {
+    guard(&window, &state)?;
+    if state.picking.swap(true, Ordering::AcqRel) {
+        return Err(error("desktop_busy"));
+    }
+    struct Picking<'a>(&'a AtomicBool);
+    impl Drop for Picking<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let _picking = Picking(&state.picking);
+    *state
+        .file_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))? = None;
+    let picked = rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .set_title("添加本地 GGUF 模型（零复制，可多选）")
+        .add_filter("GGUF 模型", &["gguf"])
+        .pick_files()
+        .await;
+    guard(&window, &state)?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    if picked.is_empty() || picked.len() > 64 {
+        return Err(error("model_library_limit"));
+    }
+    let files = picked
+        .iter()
+        .map(|file| {
+            desktop_bridge::SelectedFile::open(file.path())
+                .map_err(|cause| error(cause.code.as_str()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    desktop_bridge::validate_selection(&files).map_err(|cause| error(cause.code.as_str()))?;
+    let summaries = files
+        .iter()
+        .enumerate()
+        .map(|(selection_index, file)| PickedFile {
+            selection_index,
+            file_name: file.file_name().to_owned(),
+            size_bytes: file.size_bytes(),
+        })
+        .collect();
+    let (selection, dto) = FileSelection::new(files, summaries);
+    *state
+        .file_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))? = Some(selection);
+    Ok(Some(dto))
+}
+#[tauri::command]
+async fn models_selection_discard(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: DirectoryRequest,
+) -> Result<Discarded> {
+    guard(&window, &state)?;
+    let mut slot = state
+        .file_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))?;
+    Ok(Discarded {
+        discarded: FileSelection::discard(&mut slot, request.selection_id),
+    })
+}
+#[tauri::command]
+async fn models_add(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: AddRequest,
+) -> Result<LibraryOperationHandle> {
+    guard(&window, &state)?;
+    let mut slot = state
+        .file_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))?;
+    let selection = FileSelection::get(&mut slot, request.selection_id).map_err(error)?;
+    let handle = state
+        .bridge
+        .models_add(&mut selection.files, request.auto_test)?;
+    *slot = None;
+    Ok(handle)
+}
+#[tauri::command]
 async fn model_import(
     window: WebviewWindow,
     state: State<'_, Arc<Shell>>,
@@ -213,7 +328,7 @@ async fn model_directory_pick(
     let _picking = Picking(&state.picking);
     let picked = rfd::AsyncFileDialog::new()
         .set_parent(&window)
-        .set_title("选择现有 GGUF 目录（扫描不移动，下载会保存到此目录）")
+        .set_title("选择默认下载目录（只保存位置，不扫描模型）")
         .pick_folder()
         .await;
     guard(&window, &state)?;
@@ -222,7 +337,7 @@ async fn model_directory_pick(
     };
     desktop_bridge::validate_model_directory_path(picked.path())?;
     let (selection, dto) =
-        DirectorySelection::new(picked.path(), &state.package_root).map_err(error)?;
+        DirectorySelection::new_location(picked.path(), &state.package_root).map_err(error)?;
     *state
         .directory_selection
         .lock()
@@ -250,6 +365,34 @@ async fn model_directory_apply(
         |path| {
             desktop_bridge::validate_model_directory_path(&path)?;
             state.bridge.directory_apply(path)
+        },
+    )
+    .map_err(|failure| match failure {
+        AdmissionError::Selection(code) => error(code),
+        AdmissionError::Rejected(error) => error,
+    })
+}
+#[tauri::command]
+async fn model_directory_configure(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: DirectoryRequest,
+) -> Result<LibraryOperationHandle> {
+    guard(&window, &state)?;
+    let mut selection = state
+        .directory_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))?;
+    if state.bridge.library_active().is_some() {
+        return Err(error("desktop_busy"));
+    }
+    DirectorySelection::admit_location(
+        &mut selection,
+        request.selection_id,
+        &state.package_root,
+        |path| {
+            desktop_bridge::validate_model_directory_path(&path)?;
+            state.bridge.directory_configure(path)
         },
     )
     .map_err(|failure| match failure {
@@ -417,7 +560,22 @@ async fn runtime_idle_save(
     request: IdleRequest,
 ) -> Result<DesktopSnapshot> {
     guard(&window, &state)?;
-    state.bridge.save_idle(request.idle_unload_seconds).await
+    state
+        .bridge
+        .save_idle_policy(request.idle_unload_seconds, request.idle_unload_enabled)
+        .await
+}
+#[tauri::command]
+async fn runtime_verification_save(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: VerificationRequest,
+) -> Result<DesktopSnapshot> {
+    guard(&window, &state)?;
+    state
+        .bridge
+        .save_verification_timeout(request.model_verification_timeout_seconds)
+        .await
 }
 #[tauri::command]
 async fn runtime_lan_save(
@@ -479,6 +637,9 @@ async fn desktop_close(
 async fn close(app: tauri::AppHandle, state: Arc<Shell>) {
     if state.closing.swap(true, Ordering::AcqRel) {
         return;
+    }
+    if let Ok(mut slot) = state.file_selection.lock() {
+        *slot = None;
     }
     loop {
         match state.bridge.close().await {
@@ -589,10 +750,32 @@ pub fn run() {
         data_dir,
         package_root: layout.package_root,
         selection: Mutex::new(None),
+        file_selection: Mutex::new(None),
         directory_selection: Mutex::new(None),
         picking: AtomicBool::new(false),
         closing: AtomicBool::new(false),
         closed: AtomicBool::new(false),
+    });
+    // One shell-owned reaper, rather than one sleeping task per pick. It never
+    // holds the Shell alive or delays runtime shutdown for the lease lifetime.
+    let weak = Arc::downgrade(&state);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let Some(state) = weak.upgrade() else {
+                break;
+            };
+            if let Ok(mut slot) = state.file_selection.lock() {
+                if state.closing.load(Ordering::Acquire) {
+                    *slot = None;
+                } else {
+                    FileSelection::expire(&mut slot);
+                }
+            }
+            if state.closed.load(Ordering::Acquire) {
+                break;
+            }
+        }
     });
     let app = tauri::Builder::default()
         .manage(state)
@@ -600,9 +783,13 @@ pub fn run() {
             desktop_snapshot,
             runtime_start,
             model_pick,
+            models_pick,
+            models_add,
+            models_selection_discard,
             model_import,
             model_directory_pick,
             model_directory_apply,
+            model_directory_configure,
             model_directory_discover,
             model_catalog,
             model_download_start,
@@ -621,6 +808,7 @@ pub fn run() {
             chat_cancel,
             settings_save,
             runtime_idle_save,
+            runtime_verification_save,
             runtime_lan_save,
             lan_token_copy,
             token_copy,

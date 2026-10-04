@@ -6,14 +6,17 @@
   "windows": ["main"],
   "webviews": ["main"],
   "permissions": [
-    "allow-desktop-snapshot", "allow-runtime-start", "allow-model-pick", "allow-model-import",
+    "allow-desktop-snapshot", "allow-runtime-start", "allow-model-pick",
+    "allow-models-pick",
+    "allow-models-add",
+    "allow-models-selection-discard", "allow-model-import",
     "allow-model-directory-discover", "allow-model-catalog", "allow-model-download-start",
     "allow-model-download-next", "allow-model-download-cancel",
-    "allow-model-directory-pick", "allow-model-directory-apply", "allow-models-scan",
+    "allow-model-directory-pick", "allow-model-directory-apply", "allow-model-directory-configure", "allow-models-scan",
     "allow-model-library-next", "allow-model-library-cancel",
     "allow-models-reconcile", "allow-model-test",
     "allow-models-page", "allow-model-load", "allow-model-unload", "allow-chat-start",
-    "allow-chat-next", "allow-chat-cancel", "allow-settings-save", "allow-runtime-idle-save", "allow-token-copy",
+    "allow-chat-next", "allow-chat-cancel", "allow-settings-save", "allow-runtime-idle-save", "allow-runtime-verification-save", "allow-token-copy",
     "allow-runtime-lan-save", "allow-lan-token-copy",
     "allow-runtime-stop", "allow-desktop-close"
   ]

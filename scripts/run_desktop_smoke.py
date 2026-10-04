@@ -23,7 +23,7 @@ FAILURE_STAGES = frozenset({
     "arguments", "create_private_directory", "initialize_token", "write_config",
     "construct_bridge", "launch_initial_child", "start_after_child_exit", "read_initial_instance",
     "attach_existing", "close_attached_window", "import_model", "list_models",
-    "reject_running_idle_change", "load_model", "verify_local_validation", "verify_offline_inventory", "first_chat_start", "first_chat_consume",
+    "reject_running_idle_change", "load_model", "verify_local_validation", "repeat_model_test", "verify_offline_inventory", "first_chat_start", "first_chat_consume",
     "cancel_chat_start", "cancel_chat_consume", "wait_ready", "repeat_chat_start",
     "repeat_chat_consume", "close_window", "verify_default_close", "launch_keep_child",
     "verify_process_exit", "unload_model", "reload_model", "launch_stop_child",
@@ -32,7 +32,8 @@ FAILURE_STAGES = frozenset({
     "child_arguments", "child_construct_bridge", "child_start", "child_save_preferences",
     "child_close",
     "external_apply", "external_rescan", "external_start", "external_list", "external_direct_chat",
-    "external_cancel_prepare", "external_unload", "external_stop", "external_preexisting_writer",
+    "external_cancel_prepare", "external_unload", "external_load_and_test",
+    "external_repeat_model_test", "external_offline_validation", "external_stop", "external_preexisting_writer",
     "external_source_changed", "external_final_stop",
 })
 FAILURE_CODES = frozenset({
@@ -59,6 +60,8 @@ BRIDGE_CODES = frozenset({
     "model_library_unsupported", "model_library_limit", "model_library_changed", "model_list_changed",
     "model_scan_timeout", "model_scan_cancelled", "model_file_changed", "model_file_unavailable",
     "model_file_in_use", "model_library_write_failed",
+    "validation_record_unavailable", "validation_record_read_failed", "validation_record_write_failed",
+    "validation_record_invalid", "validation_engine_unavailable", "validation_scope_unavailable", "validation_scope_changed",
     "model_load_interrupted",
     "invalid_manifest", "invalid_argument",
 })
@@ -91,6 +94,7 @@ EXTERNAL_LIBRARY_KEYS = frozenset({
     "owned_preparation_cancelled", "write_access_blocked_while_loaded", "delete_access_blocked_while_loaded",
     "guard_retained_after_unload", "guard_released_after_stop", "preexisting_writer_rejected",
     "failed_preparation_updates_list", "changed_identity_rejected",
+    "local_text_validation", "repeat_text_validation", "offline_validation_retained",
 })
 
 
@@ -194,6 +198,7 @@ def onboarding_report(value):
     """A prior bridge smoke cannot stand in for the new onboarding assertions."""
     if (type(value) is not dict or value.get("success") is not True
             or value.get("local_text_validation") is not True
+            or value.get("repeat_text_validation") is not True
             or value.get("offline_inventory") is not True):
         raise ValueError("desktop onboarding assertions missing or not passed")
     return value

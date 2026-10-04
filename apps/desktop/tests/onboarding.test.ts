@@ -120,7 +120,7 @@ describe("offline model inventory and local evidence", () => {
     await controller.loadPage(null);
     testing.resolve(proof()); await pending;
     expect(controller.getSnapshot().models.data[0]).toMatchObject({ id: "replacement", local_validation: { state: "untested" } });
-    expect(controller.getSnapshot().notice).not.toContain("通过");
+    expect(controller.getSnapshot().notice).toBeNull();
     expect(api.testModel).toHaveBeenCalledTimes(1);
   });
 
@@ -175,17 +175,19 @@ describe("bounded directory reconciliation", () => {
     expect(api.loadModel).not.toHaveBeenCalled(); expect(api.libraryNext).not.toHaveBeenCalled();
   });
 
-  it("does not repeat reconciliation on the one-second status heartbeat", async () => {
+  it("does not reconcile on startup or the one-second status heartbeat", async () => {
     const { api, controller } = await create();
     const unmount = controller.mount();
     await vi.advanceTimersByTimeAsync(10000);
-    expect(api.reconcileModels).toHaveBeenCalledTimes(1);
+    expect(api.reconcileModels).not.toHaveBeenCalled();
+    expect(api.scanModels).not.toHaveBeenCalled();
     unmount();
   });
 
   it("cancels a scheduled observation when the app is unmounted", async () => {
     const { api, controller } = await create({ reconcileModels: vi.fn(async () => ({ status: "observing" as const, operation_id: null })) });
-    const unmount = controller.mount(); await vi.advanceTimersByTimeAsync(1); unmount();
+    const unmount = controller.mount(); await vi.advanceTimersByTimeAsync(1);
+    await controller.reconcileModels(); unmount();
     await vi.advanceTimersByTimeAsync(10000);
     expect(api.reconcileModels).toHaveBeenCalledTimes(1);
   });

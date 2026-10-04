@@ -4,6 +4,10 @@
 
 > 2026-10-04 增量：[ADR0020](decisions/0020-opt-in-lan-inference-api.md)定义用户显式启用的独立局域网推理监听，仅对已加载模型开放 models/chat；原回环管理与服务端证明不变。实施/目标机验证状态见 PROJECT_STATE。本文早期“本机API”不禁止该受限显式增量，公网服务仍非目标。
 
+> 2026-10-04 模型管理增量按 [ADR0021](decisions/0021-selected-file-model-registration.md)：原生单/多文件零复制定向登记，默认打开/刷新只读索引，不再自动全量扫描；设置下载目录只保存位置，目录扫描仅用户显式维护。schema2可表示跨目录文件来源，原schema1只读兼容；下文早期自动发现/全扫描述不覆盖此最新要求。
+
+> 2026-10-04 运行策略增量按 [ADR0023](decisions/0023-model-verification-and-idle-policy.md)：文件校验整操作超时与空闲自动卸载分别配置；关闭自动卸载只禁止TTL释放，显式卸载/切换/停服仍有效。设置由本机管理、停服持锁保存，不扩大LAN管理权限。
+
 ## 1. 产品目标与边界
 
 Nexa 是面向 Windows 桌面 CPU 的本地 LLM runtime。其他应用通过本机 API 调用；桌面 UI 管理模型与服务，聊天辅助验证。首要目标 Windows10 x64 / i5-8400 / 16GB内存，后续按实测覆盖更多 Intel/AMD 桌面 CPU 与 Windows11。

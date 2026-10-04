@@ -37,8 +37,8 @@ const cancelled: LibraryOperation = {
   operation_id: "library-1",
   status: "cancelled",
   phase: "finished",
-  examined_entries: 2,
-  candidate_files: 1,
+  examined_entries: 0,
+  candidate_files: 0,
   verified_files: 0,
   terminal: true,
   result: null,
@@ -57,10 +57,14 @@ async function setup(overrides: Partial<DesktopApi> = {}) {
   await user.click(screen.getByRole("button", { name: "设置" }));
   return { api, controller, user, ...result };
 }
-async function apply(user: ReturnType<typeof userEvent.setup>) {
+async function configure(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "选择模型目录" }));
-  await user.click(screen.getByRole("button", { name: "使用此目录" }));
-  await user.click(screen.getByRole("button", { name: "应用并核验目录" }));
+  await user.click(screen.getByRole("button", { name: "设置默认下载目录" }));
+  await user.click(screen.getByRole("button", { name: "保存默认下载目录" }));
+}
+async function scan(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "手动扫描默认目录" }));
+  await user.click(screen.getByRole("button", { name: "开始核验" }));
 }
 describe("directory settings React flow", () => {
   it("shows native read-only path and explicit stop gate with no manual model id or path input", async () => {
@@ -68,10 +72,10 @@ describe("directory settings React flow", () => {
     await user.click(screen.getByRole("button", { name: "选择模型目录" }));
     expect(screen.getByText(selection.display_path)).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "使用此目录" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "设置默认下载目录" })).toBeDisabled();
     expect(api.stop).not.toHaveBeenCalled();
     expect(screen.getByText(/卸载模型不会释放源文件保护/)).toBeInTheDocument();
-    expect(screen.getByText(/目录仅需可读/)).toBeInTheDocument();
+    expect(screen.getByText(/下载目标须可写/)).toBeInTheDocument();
     expect(screen.getByText(/1024 个条目、64 个 GGUF/)).toHaveTextContent(
       "300 秒",
     );
@@ -82,23 +86,23 @@ describe("directory settings React flow", () => {
     );
     expect(api.stop).not.toHaveBeenCalled();
   });
-  it("requires explicit apply confirmation and keeps old configured directory until terminal", async () => {
+  it("requires configure-only confirmation and keeps old configured directory until terminal", async () => {
     const terminal = deferred<LibraryOperation>();
     const { user, api, controller } = await setup({
       snapshot: vi.fn(async () => stopped()),
       libraryNext: vi.fn(() => terminal.promise),
     });
     await user.click(screen.getByRole("button", { name: "选择模型目录" }));
-    await user.click(screen.getByRole("button", { name: "使用此目录" }));
-    expect(api.applyDirectory).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "设置默认下载目录" }));
+    expect(api.configureDirectory).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toHaveTextContent(
       "不会复制或删除模型文件",
     );
-    const confirm = screen.getByRole("button", { name: "应用并核验目录" });
+    const confirm = screen.getByRole("button", { name: "保存默认下载目录" });
     fireEvent.click(confirm);
     fireEvent.click(confirm);
     await screen.findByRole("region", { name: "模型库操作" });
-    expect(api.applyDirectory).toHaveBeenCalledTimes(1);
+    expect(api.configureDirectory).toHaveBeenCalledTimes(1);
     expect(
       controller.getSnapshot().snapshot?.model_directory.configured,
     ).toEqual(identity);
@@ -115,7 +119,7 @@ describe("directory settings React flow", () => {
       snapshot: vi.fn(async () => stopped()),
       libraryNext: vi.fn(() => terminal.promise),
     });
-    await apply(user);
+    await configure(user);
     await user.click(screen.getByRole("button", { name: "模型" }));
     expect(
       screen.getByRole("region", { name: "模型库操作" }),
@@ -137,7 +141,7 @@ describe("directory settings React flow", () => {
       snapshot: vi.fn(async () => stopped()),
       libraryNext: vi.fn(() => terminal.promise),
     });
-    await apply(user);
+    await configure(user);
     await user.click(screen.getByRole("button", { name: "关闭应用" }));
     expect(api.close).toHaveBeenCalledTimes(1);
     await act(async () => terminal.resolve(cancelled));
@@ -240,7 +244,7 @@ describe("directory settings React flow", () => {
       snapshot: vi.fn(async () => stopped()),
       libraryNext: vi.fn(async () => failed),
     });
-    await apply(user);
+    await scan(user);
     await screen.findByText(failed.error.message);
     expect(screen.getByText("坏模型 中文 <标签>.gguf")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
@@ -248,7 +252,7 @@ describe("directory settings React flow", () => {
       controller.getSnapshot().snapshot?.model_directory.configured,
     ).toEqual(identity);
     expect(screen.getByRole("button", { name: "选择模型目录" })).toBeEnabled();
-    expect(screen.queryByText(/模型目录已保存，登记/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/默认目录扫描完成，本次登记/)).not.toBeInTheDocument();
   });
 });
 
@@ -274,7 +278,7 @@ it("displays post-rename durability ambiguity with the refreshed path and no rol
       .mockResolvedValue(committed),
     libraryNext: vi.fn(async () => failed),
   });
-  await apply(user);
+  await configure(user);
   await screen.findByText("模型目录持久化尚未确认");
   await waitFor(() =>
     expect(
@@ -289,7 +293,7 @@ it("displays post-rename durability ambiguity with the refreshed path and no rol
   expect(
     screen.queryByText("模型库操作已取消，原目录与索引保持不变。"),
   ).not.toBeInTheDocument();
-  expect(api.applyDirectory).toHaveBeenCalledTimes(1);
+  expect(api.configureDirectory).toHaveBeenCalledTimes(1);
   expect(api.stop).not.toHaveBeenCalled();
 });
 
@@ -303,11 +307,11 @@ it("shows partial registration and rejected basenames as text across navigation"
     ],
   };
   const { user, controller } = await setup({ snapshot: vi.fn(async () => stopped()), libraryNext: vi.fn(async () => partial) });
-  await apply(user);
+  await scan(user);
   expect(await screen.findByText("目录已部分登记：1 个已登记，2 个未登记")).toBeInTheDocument();
   expect(screen.getByText("坏 <script>.gguf")).toBeInTheDocument();
   expect(screen.getByText("缺模板 中文.gguf")).toBeInTheDocument();
-  expect(screen.queryByText(/模型目录已保存，登记/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/默认目录扫描完成，本次登记/)).not.toBeInTheDocument();
   expect(controller.getSnapshot().notice).toBeNull();
   expect(document.querySelector(".library-diagnostics script")).toBeNull();
   await user.click(screen.getByRole("button", { name: "模型" }));

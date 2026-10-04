@@ -110,7 +110,7 @@ async fn verify(directory: PathBuf, component: PathBuf) -> Result<serde_json::Va
             return Err(failure("download_poll", "verification_failed"));
         }
         let library = model_store::library::ModelLibrary::read(&private).map_err(|_| failure("verify_file", "verification_failed"))?.ok_or_else(|| failure("verify_file", "verification_failed"))?;
-        let model = library.directory.join(&item.file_name);
+        let model = library.directory.as_ref().ok_or_else(|| failure("verification", "model_directory_required"))?.join(&item.file_name);
         // Independent second pass witnesses final bytes, not merely the task counter.
         let (size, sha256) = tokio::task::spawn_blocking(move || {
             let mut file = fs::File::open(model).map_err(|_| failure("verify_file", "io"))?;

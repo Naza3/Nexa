@@ -357,7 +357,7 @@ impl ModelStore {
             .clear();
     }
     pub fn library_info(&self) -> Option<LibraryDirectoryInfo> {
-        self.library.as_ref().map(ModelLibrary::info)
+        self.library.as_ref().and_then(ModelLibrary::info)
     }
     pub fn is_external(&self, id: &ModelId) -> bool {
         self.library.as_ref().is_some_and(|l| l.entry(id).is_some())

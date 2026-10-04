@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DesktopController, ViewState } from "./controller";
 import type { DownloadSource } from "./types";
-import { localValidationLabel, localValidationReason } from "./localValidation";
+import { LocalValidationFeedback } from "./ModelTestFeedback";
 
 const sourceName = (source: DownloadSource) => source === "modelscope" ? "ModelScope" : "Hugging Face";
 const fallbackDownloadMessage = "下载未完成，请提供诊断码和当前进度以便排查。";
@@ -49,14 +49,14 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
         {task.phase === "testing" && <p>正在执行已开启的自动加载与短文本测试。加载最多 300 秒，短测最多 30 秒；若服务忙碌或已加载其他模型，将暂缓，不会切换模型或中断其他客户端。</p>}
         {task.error !== null && <DownloadError error={task.error} />}
         {task.result?.registration_error && <div className="registration-error"><strong>自动登记未完成，已保存文件仍保留</strong><DownloadError error={task.result.registration_error} /></div>}
-        {task.result?.local_validation && <div className="download-validation"><strong>{localValidationLabel(task.result.local_validation)}</strong><p>{localValidationReason(task.result.local_validation) ?? "仅证明此文件与当前引擎、设备、加载参数的加载及短文本生成；不证明回答质量、长上下文或工具调用能力。"}</p>{task.result.local_validation.error_code && <p>本机测试诊断码：{task.result.local_validation.error_code}</p>}</div>}
-        {task.status === "completed" && state.snapshot?.model_directory.configured?.directory_id !== task.directory_id && <p>当前目录已变化。请回到上方保存目标后扫描登记。</p>}
+        {task.result?.local_validation && <div className="download-validation"><LocalValidationFeedback value={task.result.local_validation} /><p className="small-note">仅证明此文件与当前引擎、设备、加载参数的加载及短文本生成；不证明回答质量、长上下文或工具调用能力。</p></div>}
+        {task.status === "completed" && state.snapshot?.model_directory.configured?.directory_id !== task.directory_id && <p>下载目录已变化，已保存文件仍在原下载位置。可使用“添加模型”选择该文件登记。</p>}
         {task.result?.cleanup_warning && <p className="warning-text">文件已保存，部分下载文件清理未确认，请勿重复下载。{task.result.cleanup_warning}</p>}
       </>}
     </div>
     {state.download_phase === "recovery" ? <button onClick={() => void controller.recoverDownload()}>重新确认下载状态</button> : active ?
       <button disabled={state.download_phase === "stopping"} onClick={() => void controller.cancelDownload()}>{state.download_phase === "stopping" ? "正在取消…" : saved ? "取消后续步骤" : "取消下载"}</button> :
-      task?.status === "completed" ? !task.result?.registered && <button disabled={state.snapshot?.connection !== "stopped" || state.snapshot.model_directory.configured?.directory_id !== task.directory_id || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.scanModels()}>扫描目录以登记</button> :
+      task?.status === "completed" ? !task.result?.registered && <button disabled={state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.pickModels()}>选择已保存文件以登记</button> :
         task && <button disabled={state.snapshot?.connection !== "stopped" || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.startDownload(task.catalog_id, state.download_auto_test)}>重新下载</button>}
   </section>;
 }
@@ -73,7 +73,7 @@ export function ModelDownloads({ state, controller, goSettings }: { state: ViewS
   return <section className="download-catalog" aria-labelledby="catalog-title">
     <div className="section-heading"><div><h2 id="catalog-title">下载 GGUF 模型</h2><p>精选下载目录不是加载白名单，仍可使用目录外的本地兼容 GGUF。</p></div><button disabled={state.catalog_loading} onClick={() => void controller.loadCatalog()}>刷新下载目录</button></div>
     <div className="directory-summary"><div><strong>已保存下载源：{sourceName(source)}</strong><p className="directory-path">下载到：{directory?.display_path ?? "尚未选择模型目录"}</p><p>在设置中更改来源并保存后生效；不会自动切换到其他下载源。</p></div><button onClick={goSettings}>目录与下载源设置</button></div>
-    {!directory && <p role="status">{state.discovery === "checking" ? "正在自动发现程序旁的 models 目录…" : state.discovery === "none" ? "未发现程序旁的 models 目录，请先选择并应用模型目录。" : "请先完成模型目录登记；已保存目录始终优先。"}</p>}
+    {!directory && <p role="status">请在设置中选择下载目录。已有 GGUF 可直接用“添加模型”登记，无需设置目录。</p>}
     {!stopped && <p className="warning-text">下载和登记前须显式停止运行服务；不会自动停止其他客户端。</p>}
     <label className="auto-test-option"><input type="checkbox" checked={autoTest} disabled={busy} onChange={(event) => setAutoTest(event.target.checked)} />下载后加载并进行基础测试（空闲时）</label>
     <p className="small-note">文件完成校验后会自动登记。启用此选项会启动本机服务，只尝试本次下载的模型；若已有模型或任务则暂缓。取消勾选后仅保存和登记。</p>

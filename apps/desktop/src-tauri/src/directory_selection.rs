@@ -111,6 +111,7 @@ pub fn preflight_directory(path: &Path, package_root: &Path) -> Result<(), &'sta
 }
 
 impl DirectorySelection {
+    #[cfg(test)]
     pub fn new(path: &Path, package_root: &Path) -> Result<(Self, PickedDirectory), &'static str> {
         #[cfg(windows)]
         if !matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), std::path::Prefix::Disk(_)))
@@ -135,6 +136,44 @@ impl DirectorySelection {
         ))
     }
 
+    /// Download-location selection does no package inventory or GGUF reads.
+    pub fn new_location(
+        path: &Path,
+        package_root: &Path,
+    ) -> Result<(Self, PickedDirectory), &'static str> {
+        supported_directory(path, package_root)?;
+        let id = Uuid::new_v4();
+        let display_path = path
+            .to_str()
+            .ok_or("model_directory_unsupported")?
+            .to_owned();
+        Ok((
+            Self {
+                id,
+                path: path.to_owned(),
+            },
+            PickedDirectory {
+                selection_id: id,
+                display_path,
+            },
+        ))
+    }
+    pub fn admit_location<T, E>(
+        slot: &mut Option<Self>,
+        id: Uuid,
+        package_root: &Path,
+        accept: impl FnOnce(PathBuf) -> Result<T, E>,
+    ) -> Result<T, AdmissionError<E>> {
+        let selection = slot
+            .as_ref()
+            .filter(|s| s.id == id)
+            .ok_or(AdmissionError::Selection("selection_expired"))?;
+        supported_directory(&selection.path, package_root).map_err(AdmissionError::Selection)?;
+        let admitted = accept(selection.path.clone()).map_err(AdmissionError::Rejected)?;
+        slot.take();
+        Ok(admitted)
+    }
+
     pub fn admit<T, E>(
         slot: &mut Option<Self>,
         id: Uuid,
@@ -157,6 +196,25 @@ impl DirectorySelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configure_location_never_checks_package_inventory_or_payloads() {
+        let package = tempfile::tempdir().unwrap();
+        fs::write(package.path().join("model.gguf"), b"invalid GGUF").unwrap();
+        // No nexa-desktop.exe or package manifest: inventory validation would fail.
+        let (selection, dto) =
+            DirectorySelection::new_location(package.path(), package.path()).unwrap();
+        let mut slot = Some(selection);
+        let admitted = DirectorySelection::admit_location(
+            &mut slot,
+            dto.selection_id,
+            package.path(),
+            Ok::<_, ()>,
+        )
+        .unwrap();
+        assert_eq!(admitted, package.path());
+        assert!(slot.is_none());
+    }
 
     #[test]
     fn arbitrary_external_and_exact_package_directories_are_supported_without_writes() {

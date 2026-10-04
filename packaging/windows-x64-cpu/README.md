@@ -24,10 +24,12 @@ Windows 10 UCRT 和 Windows 系统 DLL 由操作系统提供，不从 System32 �
 6. 在一个 PowerShell 窗口运行 `& '.\ai-runtime.exe' --data-dir $data serve`，另一个窗口执行 `status`、`load qa-small --backend cpu --context 2048 --threads 2 --batch 128`；文本生成由 HTTP `/v1/chat/completions` 或独立验收器验证，当前 CLI 没有 chat 命令
 7. 完成后运行 `& '.\ai-runtime.exe' --data-dir $data stop`；确认退出后再删除本次测试数据目录，不删除已有用户数据
 
-已实现的管理命令可以先用 `ai-runtime.exe --help` 核对。HTTP 仅监听回环地址、需要本地令牌；不开放公网、不自动下载模型或注册常驻服务。
+已实现的管理命令可以先用 `ai-runtime.exe --help` 核对。默认HTTP仅监听回环地址、需要本地令牌；可选LAN监听必须显式配置私网IP/来源名单并使用独立key，只为本机已加载模型提供models/chat。不开放公网、不自动改防火墙或注册常驻服务。
 
 ## 独立验收工具
 
 另一个 `acceptance-tools.zip` 包含 `nexa-acceptance.exe` 及它自身所需的 CRT 和许可，不属于产品包。工具接受 `--package <本包目录> --model <外部固定GGUF> --out <报告路径>`。它核对完整性与 PE 依赖、从带中文空格的独立临时目录启动包内 CLI、清理开发工具 PATH，并仅使用临时数据/凭据进行真实模型检查。工具成功不等于已经完成所有 A01–A26、Windows 10/11 或目标设备性能验收。
 
 本包没有更新器；更新时先正常 stop，保留包外用户数据，再整体替换程序目录。校验失败、缺少 DLL、未知依赖、CPU 指令不兼容或安全软件阻止时不要绕过警告，也不要从任意 DLL 下载站补文件。
+
+运行策略：idle_unload_enabled=false关闭空闲自动卸载，但显式卸载/切换/停服有效；model_verification_timeout_seconds为整次文件校验预算30..7200秒，不改变原生加载/生成计时。修改配置须先停止服务，下次启动生效。

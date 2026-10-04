@@ -13,8 +13,9 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
-pub(crate) type ProbeBuild =
-    Arc<std::sync::OnceLock<Option<(Vec<model_store::library::FileIdentity>, String)>>>;
+pub(crate) type ProbeBuild = Arc<
+    std::sync::OnceLock<Result<(Vec<model_store::library::FileIdentity>, String), &'static str>>,
+>;
 
 struct RegistrySnapshot {
     models: Vec<ModelSummary>,
@@ -78,11 +79,9 @@ impl ApiState {
         let build = self.probe_build.clone();
         tokio::task::spawn_blocking(move || {
             build.get_or_init(|| {
-                let path = std::env::current_exe().ok()?;
-                let before = model_store::local_validation::engine_file_stamps(&path).ok()?;
-                let hash = model_store::local_validation::engine_build(&path).ok()?;
-                let after = model_store::local_validation::engine_file_stamps(&path).ok()?;
-                (before == after).then_some((before, hash))
+                let path = std::env::current_exe().map_err(|_| "validation_engine_unavailable")?;
+                model_store::local_validation::engine_identity(&path)
+                    .map_err(|_| "validation_engine_unavailable")
             });
         })
         .await
@@ -216,7 +215,9 @@ impl ApiState {
                 }
             })
             .await?;
-        let control = Arc::new(model_store::library::ScanControl::default());
+        let control = Arc::new(model_store::library::ScanControl::with_timeout(
+            self.config.model_verification_timeout(),
+        ));
         let shutdown = self.shutdown.clone();
         let shutdown_control = control.clone();
         let watcher = tokio::spawn(async move {

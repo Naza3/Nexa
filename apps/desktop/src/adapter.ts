@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { DesktopApi, SafeError } from "./types";
+import { preferencesOnly } from "./runtimeSettingsValues";
 
 export class DesktopError extends Error {
   readonly code: string;
@@ -15,7 +16,7 @@ export function safeError(error: unknown): SafeError {
     "code" in error &&
     "message" in error &&
     typeof error.code === "string" &&
-    /^[a-z0-9_]{1,80}$/.test(error.code) &&
+    /^[a-z0-9_]{1,96}$/.test(error.code) &&
     typeof error.message === "string"
   ) {
     return { code: error.code, message: error.message.slice(0, 500) };
@@ -51,6 +52,10 @@ export const nativeApi: DesktopApi = {
   start: (initialize_if_missing) =>
     call("runtime_start", { initialize_if_missing }),
   pickDirectory: () => call("model_directory_pick"),
+  pickModels: () => call("models_pick"),
+  discardModelSelection: (selection_id) => call("models_selection_discard", { selection_id }),
+  addModels: (selection_id, auto_test) => call("models_add", { selection_id, ...(auto_test === undefined ? {} : { auto_test }) }),
+  configureDirectory: (selection_id) => call("model_directory_configure", { selection_id }),
   applyDirectory: (selection_id) =>
     call("model_directory_apply", { selection_id }),
   scanModels: () => call("models_scan"),
@@ -67,9 +72,11 @@ export const nativeApi: DesktopApi = {
   chatStart: (request) => call("chat_start", request),
   chatNext: (request_id) => call("chat_next", { request_id }),
   chatCancel: (request_id) => call("chat_cancel", { request_id }),
-  saveSettings: (settings) => call("settings_save", { settings }),
-  saveIdle: (idle_unload_seconds) =>
-    call("runtime_idle_save", { idle_unload_seconds }),
+  saveSettings: (settings) => call("settings_save", { settings: preferencesOnly(settings) }),
+  saveIdle: (idle_unload_seconds, idle_unload_enabled) =>
+    call("runtime_idle_save", { idle_unload_seconds, ...(idle_unload_enabled === undefined ? {} : { idle_unload_enabled }) }),
+  saveVerificationTimeout: (model_verification_timeout_seconds) =>
+    call("runtime_verification_save", { model_verification_timeout_seconds }),
   copyToken: () => call("token_copy"),
   saveLanSettings: (lan_api) => call("runtime_lan_save", { lan_api }),
   copyLanToken: () => call("lan_token_copy"),

@@ -17,6 +17,9 @@
 | [模型使用流程ADR0019](docs/decisions/0019-model-onboarding-and-local-validation.md) | 自动登记、服务关闭时浏览、本机加载/短生成证据与不抢占的自动动作；实施/验收状态见当前状态 |
 | [可选局域网API ADR0020](docs/decisions/0020-opt-in-lan-inference-api.md) | 默认关闭的独立LAN推理监听、私有范围/独立Bearer、已加载模型原子准入和本机管理隔离；实施与验证中 |
 | [局域网使用说明](docs/lan-api-usage.md) | 可信私网配置、Base URL/密钥、已加载模型和目标机验收步骤；不自动修改防火墙 |
+| [选中文件添加ADR0021](docs/decisions/0021-selected-file-model-registration.md) | 原生单/多文件零复制定向登记，schema2跨目录来源、默认不自动全扫；实施中 |
+| [本机证明修复ADR0022](docs/decisions/0022-windows-local-validation-paths-and-feedback.md) | Windows内部canonical数据路径、外部路径边界保持、本次测试反馈与历史证明分离；源码验证完成、Windows待验 |
+| [超时与空闲策略ADR0023](docs/decisions/0023-model-verification-and-idle-policy.md) | 独立的整操作文件校验deadline、显式不自动卸载、停服安全保存；源码回归完成，Windows待验 |
 | [工具契约草案](docs/windows-tools-contract.md) | 生产tools尚未实现；T0已有无模型parser观察并定位严格完整性/schema/普通文本缺口 |
 | [构建锁](docs/build-lock.md) / [模型矩阵](docs/model-matrix.md) | 固定工具链/llama与精确模型验证证据，非运行许可名单 |
 | [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |
@@ -81,3 +84,9 @@
 [Telegram摘要方案](docs/telegram-summary.md)是可选参考，不是runtime发布前置；源码规划路径未创建，不自动导入Telegram SDK、账号、数据库或定时任务。
 
 Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告仅从[历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md)进入，不放回当前推荐阅读顺序，不重新启动已暂停工作。
+
+- [Windows本机测试记录修复验证](docs/verification/2026-10-04-windows-model-evidence.md)
+
+- [运行策略与最终联合回归](docs/verification/2026-10-04-runtime-policy-and-final-regression.md) / [Windows联合验收步骤](docs/verification/2026-10-04-windows-model-management-checklist.md)
+
+- [公开仓库恢复Windows Actions](docs/verification/2026-10-04-public-actions-restoration.md)：用户最新构建授权、标准runner、同源工具链与推送前验证

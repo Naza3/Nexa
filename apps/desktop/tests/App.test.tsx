@@ -68,7 +68,7 @@ describe("desktop React interaction", () => {
       snapshot: vi.fn(async () => base),
       modelsPage: vi.fn(async () => ({ data: [value], next_after: null, generation: "generation-1" })),
     });
-    const button = screen.getByRole("button", { name: loadable ? "尝试加载" : "当前不可用" });
+    const button = screen.getByRole("button", { name: loadable ? "加载模型" : "当前不可用" });
     if (loadable) {
       expect(button).toBeEnabled();
       await user.click(button);
@@ -213,6 +213,8 @@ describe("desktop React interaction", () => {
     const saved = vi.mocked(api.saveSettings).mock.calls[0][0];
     expect(saved).toHaveProperty("threads", 4);
     expect(saved).not.toHaveProperty("idle_unload_seconds");
+    expect(saved).not.toHaveProperty("idle_unload_enabled");
+    expect(saved).not.toHaveProperty("model_verification_timeout_seconds");
     expect(
       screen.getByRole("button", { name: "应用空闲卸载设置" }),
     ).toBeDisabled();

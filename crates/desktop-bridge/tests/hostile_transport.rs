@@ -38,6 +38,7 @@ enum Mode {
     SlowLoad,
     PendingPreparation,
     PendingChatPreparation,
+    ProbeEvidenceError(&'static str),
 }
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -177,6 +178,15 @@ impl Fixture {
                         header(&request, "authorization").unwrap().as_bytes()
                     ));
                     a.fetch_add(1, Ordering::SeqCst);
+                    if request.starts_with("POST /runtime/model-test ") {
+                        let error = match mode {
+                            Mode::ProbeEvidenceError(code) => Some(code),
+                            _ => None,
+                        };
+                        let body = json!({"state":if error.is_some() { "loaded" } else { "passed" }, "load_success":true, "generation_pass":error.is_none(), "checked_at_unix_ms":1, "error_code":error}).to_string();
+                        let _ = socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                        return;
+                    }
                     if request.starts_with("GET /runtime/status ")
                         || (request.starts_with("POST /runtime/load ")
                             || request.starts_with("POST /runtime/load-and-test "))
@@ -684,4 +694,47 @@ async fn close_during_chat_preparation_drops_stream_and_waits_for_registry_relea
     assert_eq!(f.disconnected.load(Ordering::SeqCst), 1);
     assert!(f.bridge.chat_next(id).await.unwrap().terminal);
     assert_eq!(f.chats.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn manual_test_does_not_hide_evidence_errors_in_successful_http_responses() {
+    for code in [
+        "validation_record_unavailable",
+        "validation_record_read_failed",
+        "validation_record_write_failed",
+        "validation_engine_unavailable",
+        "validation_scope_unavailable",
+        "validation_scope_changed",
+    ] {
+        let fixture = Fixture::new(Mode::ProbeEvidenceError(code)).await;
+        let error = fixture
+            .bridge
+            .model_test(desktop_bridge::LoadModelRequest {
+                model_id: "a".into(),
+                context_size: 2048,
+                threads: 2,
+                batch_size: 128,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, code);
+        assert_eq!(fixture.auth.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.chats.load(Ordering::SeqCst), 0);
+    }
+    let fixture = Fixture::new(Mode::Valid).await;
+    let result = fixture
+        .bridge
+        .model_test(desktop_bridge::LoadModelRequest {
+            model_id: "a".into(),
+            context_size: 2048,
+            threads: 2,
+            batch_size: 128,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result.state,
+        model_store::local_validation::ValidationState::Passed
+    );
+    assert!(result.load_success && result.generation_pass && result.error_code.is_none());
 }
