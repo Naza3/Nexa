@@ -36,6 +36,12 @@ impl BridgeError {
             }
             "desktop_busy" => "This window already has an operation in progress.",
             "desktop_closing" => "This window is closing.",
+            "lan_settings_invalid" => {
+                "LAN 设置需具体私有 IPv4 地址和 1–65535 端口；启用时需 1–16 条 /24–/32 规范私网 CIDR，不能重复、重叠或带主机位。"
+            }
+            "lan_token_unavailable" => {
+                "请先显式启用 LAN 并成功启动服务，再复制独立 LAN 密钥。现有密钥仍需通过安全文件校验。"
+            }
             "runtime_running" => "Stop the runtime before applying this runtime setting.",
             "not_initialized" => "Initialize and start the runtime explicitly first.",
             "runtime_not_running" => "Start the runtime first.",

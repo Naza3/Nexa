@@ -316,6 +316,29 @@ mod tests {
         r
     }
     #[test]
+    fn lan_credential_never_authenticates_local_management_or_server_proof() {
+        let c = context();
+        let lan = SecretToken::generate().unwrap();
+        let mut r = request(&c);
+        r.headers_mut()
+            .insert("authorization", lan.bearer_header_value());
+        assert_eq!(
+            validate(&c, &r).unwrap_err().status,
+            StatusCode::UNAUTHORIZED
+        );
+        // Local health proof remains anonymous by design, but its HMAC cannot
+        // be authenticated with the independent LAN key.
+        *r.uri_mut() = "/healthz".parse().unwrap();
+        r.headers_mut().insert(
+            "x-nexa-server-challenge",
+            HeaderValue::from_str(&"00".repeat(32)).unwrap(),
+        );
+        let challenge = validate(&c, &r).unwrap().unwrap();
+        let proof = proof::create_server_proof(&c.token, &challenge);
+        assert!(proof::verify_server_proof(&c.token, &challenge, &proof));
+        assert!(!proof::verify_server_proof(&lan, &challenge, &proof));
+    }
+    #[test]
     fn trusted_origins_are_exact_valid_authorities() {
         for good in [
             "http://localhost:1420",

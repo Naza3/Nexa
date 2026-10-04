@@ -407,6 +407,12 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a Heade
     Ok(first)
 }
 pub async fn chat(State(state): State<ApiState>, request: Request) -> Response {
+    chat_response(state, request, false).await
+}
+pub async fn lan_chat(State(state): State<ApiState>, request: Request) -> Response {
+    chat_response(state, request, true).await
+}
+async fn chat_response(state: ApiState, request: Request, loaded_only: bool) -> Response {
     let id = (|| match one_header(request.headers(), "x-request-id")? {
         Some(value) => {
             let value = value
@@ -427,7 +433,7 @@ pub async fn chat(State(state): State<ApiState>, request: Request) -> Response {
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
-    let mut response = match chat_request(state, request, id).await {
+    let mut response = match chat_request(state, request, id, loaded_only).await {
         Ok(response) => response,
         Err(error) => error.into_response(),
     };
@@ -441,6 +447,7 @@ async fn chat_request(
     state: ApiState,
     request: Request,
     id: RequestId,
+    loaded_only: bool,
 ) -> Result<Response, ApiError> {
     let content_type = one_header(request.headers(), "content-type")?
         .and_then(|v| v.to_str().ok())
@@ -481,7 +488,12 @@ async fn chat_request(
         model: validated.request.model.to_string(),
     };
     drop(bytes);
-    let mut pump = EventPump::new(state.submit(validated.request).await?);
+    let events = if loaded_only {
+        state.submit_loaded(validated.request).await?
+    } else {
+        state.submit(validated.request).await?
+    };
+    let mut pump = EventPump::new(events);
     loop {
         let event = pump.next().await.ok_or_else(ApiError::internal)?;
         if let Some(error) = event_error(&event.kind, false) {

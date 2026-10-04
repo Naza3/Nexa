@@ -27,6 +27,7 @@ pub struct ApiState {
     pub config: Arc<Config>,
     pub shutdown: ServiceShutdown,
     pub diagnostics: Option<ProcessDiagnostics>,
+    lan_listening: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) store: Arc<ModelStore>,
     pub(crate) probe_build: ProbeBuild,
     registry: Arc<RwLock<RegistrySnapshot>>,
@@ -50,6 +51,7 @@ impl ApiState {
             config: Arc::new(config),
             shutdown: ServiceShutdown::new(runtime, import_cancel.clone()),
             diagnostics,
+            lan_listening: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             store,
             probe_build: Arc::new(std::sync::OnceLock::new()),
             registry: Arc::new(RwLock::new(RegistrySnapshot {
@@ -298,6 +300,25 @@ impl ApiState {
         } else {
             None
         }
+    }
+    /// Called by the serving owner only after the configured LAN socket is bound.
+    pub fn mark_lan_listening(&self, listening: bool) {
+        self.lan_listening
+            .store(listening, std::sync::atomic::Ordering::Release);
+    }
+    pub fn lan_is_listening(&self) -> bool {
+        self.lan_listening
+            .load(std::sync::atomic::Ordering::Acquire)
+            && !self.shutdown.is_stopping()
+    }
+    pub async fn submit_loaded(
+        &self,
+        request: GenerationRequest,
+    ) -> Result<EventReceiver, ApiError> {
+        self.ensure_running()?;
+        // No prepare_external, filesystem scan/hash, registry reservation or load.
+        self.execute(move |runtime| runtime.submit_loaded(request))
+            .await
     }
     pub async fn submit(&self, request: GenerationRequest) -> Result<EventReceiver, ApiError> {
         self.ensure_running()?;

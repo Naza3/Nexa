@@ -474,6 +474,12 @@ fn a11_idle_unload_retains_selection_and_next_request_reloads() {
     pending.complete();
     terminal(&receiver);
     wait(|| h.handle.status().unwrap().state == ModelState::Unloaded);
+    assert!(h.handle.status().unwrap().selected_model.is_some());
+    assert_eq!(
+        h.handle.submit_loaded(request()).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert!(h.commands.try_recv().is_err());
     let receiver = h.handle.submit(request()).unwrap();
     let pending = h.pending();
     pending.prepared();
@@ -1534,5 +1540,51 @@ fn onboarding_competing_loads_have_one_atomic_winner() {
         h.handle.status().unwrap().selected_model.unwrap().as_str(),
         winner
     );
+    h.finish();
+}
+
+#[test]
+fn loaded_only_submission_never_resolves_or_loads_and_preserves_fifo() {
+    let h = Harness::new(config(), true);
+    assert_eq!(
+        h.handle.submit_loaded(request()).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert!(h.commands.try_recv().is_err());
+    h.handle
+        .load(request().model, LoadOptions::default())
+        .unwrap();
+    let mut other = request();
+    other.model = ModelId::new("other").unwrap();
+    assert_eq!(
+        h.handle.submit_loaded(other).err().unwrap().code,
+        ErrorCode::ModelConflict
+    );
+    let first = h.handle.submit_loaded(request()).unwrap();
+    let job = h.pending();
+    job.prepared();
+    let next_request = request();
+    let next_id = next_request.request_id;
+    let next = h.handle.submit_loaded(next_request).unwrap();
+    assert_eq!(h.handle.status().unwrap().queued_jobs, 1);
+    job.complete();
+    assert!(matches!(
+        terminal(&first),
+        RequestEventKind::Completed { .. }
+    ));
+    let job = h.pending();
+    assert_eq!(job.id(), next_id);
+    job.prepared();
+    job.complete();
+    assert!(matches!(
+        terminal(&next),
+        RequestEventKind::Completed { .. }
+    ));
+    h.handle.unload().unwrap();
+    assert_eq!(
+        h.handle.submit_loaded(request()).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert!(h.commands.try_recv().is_err());
     h.finish();
 }

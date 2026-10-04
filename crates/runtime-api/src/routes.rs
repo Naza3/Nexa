@@ -47,6 +47,37 @@ pub fn router(state: ApiState, security: Arc<SecurityContext>) -> Router {
         ))
         .layer(axum::Extension(body_limit))
 }
+/// A distinct router: no management, health, discovery or proof handlers.
+pub fn lan_router(state: ApiState, security: Arc<crate::lan::LanSecurityContext>) -> Router {
+    let body_limit = crate::security::BodyLimit(state.config.api.max_body_bytes);
+    Router::new()
+        .route("/v1/models", get(loaded_models))
+        .route("/v1/chat/completions", post(crate::chat::lan_chat))
+        .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
+        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            security,
+            crate::lan::enforce,
+        ))
+        .layer(axum::Extension(body_limit))
+}
+async fn loaded_models(State(state): State<ApiState>) -> Result<Json<Value>, ApiError> {
+    // Observation only; submit_loaded performs the independent atomic admission.
+    // LAN reads never compete for the reserved local management control slots.
+    let status = state.execute(|runtime| runtime.status()).await?;
+    let data: Vec<_> =
+        if matches!(status.state, ModelState::Ready | ModelState::Generating) && !status.stopping {
+            status
+                .selected_model
+                .into_iter()
+                .map(|id| json!({"id":id,"object":"model","owned_by":"local"}))
+                .collect()
+        } else {
+            Vec::new()
+        };
+    Ok(Json(json!({"object":"list","data":data})))
+}
 async fn health() -> Json<Value> {
     Json(json!({"status":"ok"}))
 }
@@ -140,6 +171,7 @@ fn status_json(state: &ApiState, status: RuntimeStatus) -> Value {
     let available = std::thread::available_parallelism().ok().map(|n| n.get());
     let threads = status.load_options.map(|options| options.threads);
     json!({
+        "lan_api":{"enabled":state.config.lan_api.enabled,"listen":state.config.lan_api.listen,"running":state.lan_is_listening()},
         "state":state_name(status.state), "selected_model_display_name":state.selected_display_name(status.selected_model.as_ref()), "selected_model":status.selected_model,
         "model_library":{"supported":true,"directory":state.model_library_info()},
         "load_options":status.load_options, "active_request":status.active_request,

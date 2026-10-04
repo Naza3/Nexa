@@ -437,6 +437,7 @@ mod tests {
     use super::*;
     fn status(library: Option<ModelLibraryObservation>) -> RuntimeStatus {
         RuntimeStatus {
+            lan_api: None,
             state: RuntimeState::Unloaded,
             selected_model: None,
             selected_model_display_name: None,

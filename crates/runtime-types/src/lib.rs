@@ -244,6 +244,7 @@ pub enum ErrorCode {
     #[serde(rename = "native_protocol_error")]
     NativeProtocol,
     ModelNotFound,
+    ModelNotLoaded,
     InvalidManifest,
     Io,
     IntegrityFailure,
@@ -290,6 +291,7 @@ impl ErrorCode {
             Self::ConsumerStopped => "consumer_stopped",
             Self::NativeProtocol => "native_protocol_error",
             Self::ModelNotFound => "model_not_found",
+            Self::ModelNotLoaded => "model_not_loaded",
             Self::InvalidManifest => "invalid_manifest",
             Self::Io => "io",
             Self::IntegrityFailure => "integrity_failure",

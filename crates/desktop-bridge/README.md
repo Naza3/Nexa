@@ -16,7 +16,7 @@
 
 壳只把原生选择器得到的路径传给 `import_model`，前端只持一次性选择 ID；自由路径输入与Token不通过bridge DTO暴露；已授权目录可有只读display_path/target_display_path展示，不赋予JS自由路径权限。Windows 原始普通盘符路径在 canonicalize 后受控移除 `\\?\` 盘符前缀，再交现有 API，UNC/URL/最终 symlink 不支持。真实导入 API 返回包装对象，bridge 核对外层与 `model` 内层的 ID、大小和 SHA-256。
 
-Token 复制属于原生壳按钮：调用现有私有 Token 读取校验，直接写系统剪贴板；本 crate 没有 Token getter。
+Token 复制属于原生壳按钮：调用现有私有 Token 读取校验，直接写系统剪贴板；本 crate 不提供可序列化 Token getter。LAN 的 lan_token_for_copy 仅供原生壳显式复制，返回不可序列化 SecretToken，不经过 invoke 返回值。
 
 ## 混合模型目录（43ad5c2已交付，目标机待验）
 
@@ -83,3 +83,7 @@ Harness 仅新建唯一临时目录、临时凭据与 listen=0 配置，使用�
 Windows 首次load或直接chat自动加载前，在blocking准备任务取得只读共享文件/目录guard并完整核验SHA与身份。启动只读索引/元数据，不重hash整库。API断流与关停取消准备；registry lease保留到blocking任务实际结束。guard一直保留到runtime/worker确认停止，卸载不释放。未知cleanup会保留有界guard到进程退出并永久禁止本进程重建catalog；产品CLI每进程只serve一次。普通写入/替换保护与预存可写mapping观察分开验收，不能称任意写者下绝对不可修改。Linux外部推理明确unsupported，仅开发扫描/契约回归。
 
 模型分页generation来自实际服务，旧服务缺字段提示重启匹配版本；snapshot区分configured/effective且stale/unsupported优先于missing。rename已成功但目录fsync失败保留settings_durability_unconfirmed，必须刷新真实generation后再决定下一步。失败文件名只在原生授权UI显示受控basename，不写harness/CI报告。
+
+## 可选 LAN 设置
+
+DesktopSnapshot.lan_api 为保存的 enabled/listen/allowed_cidrs；RuntimeStatus.lan_api 的 running 是服务实际监听观测。save_lan 只在已初始化、已停服、无残留未确认清理且持实例锁时原子写 config.toml，不创建密钥或启停服务；运行时修改返回 runtime_running。runtime_lan_save 是对应固定 invoke 命令。lan_token_copy 只把已启用且启动生成过的独立 LAN token 经原生直接写剪贴板，返回 copied 布尔，不向JS返回key。详细限制见[ADR0020](../../docs/decisions/0020-opt-in-lan-inference-api.md)。

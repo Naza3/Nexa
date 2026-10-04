@@ -17,13 +17,15 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
     net::TcpListener,
-    sync::Semaphore,
+    sync::{OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
     time::{Sleep, sleep},
 };
 
 pub const WRITE_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
 pub const MAX_CONNECTIONS: usize = 64;
+/// LAN cannot consume the sixteen connection slots reserved for local control.
+pub const MAX_LAN_CONNECTIONS: usize = 48;
 // Separately bounded connection teardown scratch/traffic. This is not generated
 // text and must never be counted as part of the core's 256 KiB output ledger.
 const LINGER_BYTE_LIMIT: usize = 1024 * 1024 + 64 * 1024;
@@ -159,32 +161,109 @@ pub async fn serve(
     app: Router,
     shutdown: ServiceShutdown,
 ) -> io::Result<()> {
-    if !crate::proof::normalize_endpoint(listener.local_addr()?)
-        .ip()
-        .is_loopback()
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "only loopback listeners are permitted",
-        ));
-    }
+    serve_with_lan(listener, app, None, shutdown).await
+}
+/// Both sockets must already be bound before discovery is published. Any serving
+/// failure stops the shared runtime and both listeners, then waits for cleanup.
+pub async fn serve_with_lan(
+    listener: TcpListener,
+    app: Router,
+    lan: Option<(TcpListener, Router, crate::LanApiConfig)>,
+    shutdown: ServiceShutdown,
+) -> io::Result<()> {
+    let checked = (|| {
+        if !crate::proof::normalize_endpoint(listener.local_addr()?)
+            .ip()
+            .is_loopback()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "only loopback management listeners are permitted",
+            ));
+        }
+        match lan {
+            Some((listener, app, config)) => {
+                let policy = config.policy().map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "invalid LAN listener policy",
+                    )
+                })?;
+                if listener.local_addr()? != policy.listen {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "LAN listener must match its configured private address",
+                    ));
+                }
+                Ok(Some((listener, app, policy)))
+            }
+            None => Ok(None),
+        }
+    })();
+    let lan = match checked {
+        Ok(lan) => lan,
+        Err(error) => {
+            shutdown.begin();
+            let _ = shutdown.wait().await;
+            return Err(error);
+        }
+    };
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let local = serve_listener(listener, app, shutdown.clone(), slots.clone(), None);
+    if let Some((listener, app, policy)) = lan {
+        let remote = serve_listener(listener, app, shutdown, slots, Some(policy));
+        let (local, remote) = tokio::join!(local, remote);
+        local.and(remote)
+    } else {
+        local.await
+    }
+}
+struct ConnectionPermits {
+    _total: OwnedSemaphorePermit,
+    _lan: Option<OwnedSemaphorePermit>,
+}
+fn take_connection_slots(
+    total: &Arc<Semaphore>,
+    lan: Option<&Arc<Semaphore>>,
+) -> Option<ConnectionPermits> {
+    let lan = match lan {
+        Some(lan) => Some(lan.clone().try_acquire_owned().ok()?),
+        None => None,
+    };
+    Some(ConnectionPermits {
+        _total: total.clone().try_acquire_owned().ok()?,
+        _lan: lan,
+    })
+}
+async fn serve_listener(
+    listener: TcpListener,
+    app: Router,
+    shutdown: ServiceShutdown,
+    slots: Arc<Semaphore>,
+    lan: Option<crate::lan::LanAccessPolicy>,
+) -> io::Result<()> {
+    let lan_slots = lan
+        .as_ref()
+        .map(|_| Arc::new(Semaphore::new(MAX_LAN_CONNECTIONS)));
     let mut connections = JoinSet::new();
-    loop {
+    let serving_result = loop {
         tokio::select! {
             biased;
-            _=shutdown.requested()=>break,
+            _=shutdown.requested()=>break Ok(()),
             Some(_)=connections.join_next(),if !connections.is_empty()=>{},
             incoming=listener.accept()=>{
-                let (stream,client)=incoming?;
-                if !crate::proof::normalize_endpoint(client).ip().is_loopback(){continue;}
-                let Ok(permit)=slots.clone().try_acquire_owned() else{continue;};
-                let endpoints=PeerEndpoints{client,server:stream.local_addr()?};
-                stream.set_nodelay(true)?;
+                let (stream,client)=match incoming { Ok(value)=>value, Err(error)=>break Err(error) };
+                let server=match stream.local_addr() { Ok(value)=>value, Err(error)=>break Err(error) };
+                let endpoints=PeerEndpoints{client,server};
+                if let Some(policy)=&lan {
+                    if !policy.allows(endpoints) { continue; }
+                } else if !crate::proof::normalize_endpoint(client).ip().is_loopback() { continue; }
+                let Some(permits)=take_connection_slots(&slots,lan_slots.as_ref()) else{continue;};
+                if let Err(error)=stream.set_nodelay(true) { break Err(error); }
                 let service=TowerToHyperService::new(app.clone().layer(Extension(endpoints)));
                 let stop=shutdown.clone();
                 connections.spawn(async move {
-                    let _permit=permit;
+                    let _permits=permits;
                     let mut builder=http1::Builder::new();
                     builder.writev(true).pipeline_flush(false).half_close(false).max_buf_size(16*1024).max_headers(64).timer(TokioTimer::new()).header_read_timeout(Duration::from_secs(10));
                     let mut connection=builder.serve_connection(TokioIo::new(ProgressIo::new(stream,WRITE_PROGRESS_TIMEOUT)),service);
@@ -212,18 +291,47 @@ pub async fn serve(
                 });
             }
         }
-    }
+    };
     drop(listener);
+    // Also runs for accept/socket failures; the other listener observes this
+    // immediately and retains its own JoinSet until connection cleanup completes.
+    shutdown.begin();
     let result = shutdown
         .wait()
         .await
         .map_err(|_| io::Error::other("runtime cleanup failed"));
     while connections.join_next().await.is_some() {}
-    result
+    result.and(serving_result)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lan_connection_quota_preserves_local_reserve_and_all_permits_return() {
+        let total = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let lan = Arc::new(Semaphore::new(MAX_LAN_CONNECTIONS));
+        let remote: Vec<_> = (0..MAX_LAN_CONNECTIONS)
+            .map(|_| take_connection_slots(&total, Some(&lan)).unwrap())
+            .collect();
+        assert!(take_connection_slots(&total, Some(&lan)).is_none());
+        assert_eq!(total.available_permits(), 16);
+        let local: Vec<_> = (0..16)
+            .map(|_| take_connection_slots(&total, None).unwrap())
+            .collect();
+        assert!(take_connection_slots(&total, None).is_none());
+        drop(remote);
+        assert_eq!(total.available_permits(), 48);
+        assert_eq!(lan.available_permits(), 48);
+        drop(local);
+        assert_eq!(total.available_permits(), 64);
+        let local: Vec<_> = (0..64)
+            .map(|_| take_connection_slots(&total, None).unwrap())
+            .collect();
+        assert!(take_connection_slots(&total, Some(&lan)).is_none());
+        assert_eq!(lan.available_permits(), 48);
+        drop(local);
+        assert_eq!(total.available_permits(), 64);
+    }
     #[tokio::test]
     async fn pending_writes_time_out_but_idle_prefill_does_not() {
         use tokio::io::AsyncWriteExt;

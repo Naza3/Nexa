@@ -47,6 +47,7 @@ impl Drop for RegistryLease {
 }
 enum Command {
     Submit(GenerationRequest, Reply<EventReceiver>),
+    SubmitLoaded(GenerationRequest, Reply<EventReceiver>),
     Load(ModelId, LoadOptions, Reply<()>),
     LoadIfUnloaded(ModelId, LoadOptions, Reply<()>),
     SubmitIfIdle(GenerationRequest, LoadOptions, Reply<EventReceiver>),
@@ -116,6 +117,13 @@ impl RuntimeHandle {
     pub fn submit(&self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
         request.validate()?;
         self.ask(|reply| Command::Submit(request, reply))
+    }
+    /// Admit inference only for an already loaded model, atomically in the
+    /// scheduler. Unlike submit, this can never resolve or start loading a model.
+    /// A running request may still accept bounded FIFO work for the same model.
+    pub fn submit_loaded(&self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
+        request.validate()?;
+        self.ask(|reply| Command::SubmitLoaded(request, reply))
     }
     pub fn load(&self, model: ModelId, options: LoadOptions) -> Result<(), RuntimeError> {
         options.validate()?;
@@ -426,6 +434,22 @@ impl Actor {
             }
             Command::Submit(request, reply) => {
                 let result = self.submit(request);
+                let _ = reply.send(result);
+            }
+            Command::SubmitLoaded(request, reply) => {
+                let result = if !matches!(self.state, ModelState::Ready | ModelState::Generating)
+                    || self.selected.is_none()
+                {
+                    Err(error(ErrorCode::ModelNotLoaded))
+                } else if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|model| model.id != request.model)
+                {
+                    Err(error(ErrorCode::ModelConflict))
+                } else {
+                    self.submit(request)
+                };
                 let _ = reply.send(result);
             }
             Command::Load(id, options, reply) => self.explicit_load(id, options, reply),

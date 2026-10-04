@@ -42,6 +42,7 @@ export function runtime(): RuntimeStatus {
 }
 export function snapshot(): Snapshot {
   return {
+    lan_api: { enabled: false, listen: null, allowed_cidrs: [] },
     initialized: true,
     connection: "connected",
     api_address: "http://127.0.0.1:12345",
@@ -132,6 +133,8 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
     saveSettings: vi.fn(async () => snapshot()),
     saveIdle: vi.fn(async () => snapshot()),
     copyToken: vi.fn(async () => ({ copied: true as const })),
+    saveLanSettings: vi.fn(async (lan_api) => ({ ...snapshot(), connection: "stopped" as const, runtime: null, lan_api })),
+    copyLanToken: vi.fn(async () => ({ copied: true as const })),
     stop: vi.fn(async () => ({ stopped: true as const })),
     close: vi.fn(async () => {}),
     ...overrides,

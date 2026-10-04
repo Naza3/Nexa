@@ -7,6 +7,8 @@
 
 > 本文定义Windows runtime契约与后续验收，不代表所有规划已经实现。ADR0015开放模型字段/行为已由50c9d41 WindowsCI固定GGUF回归并发送，用户目标机待验；ADR0016混合目录与诊断源码已冻结、本机合成回归/独立审查通过，WindowsCI/整包及交付仍待完成。35bfd85/389eeef不能追溯获得新行为。实现/真实模型/CI/目标设备结果见当前状态；旧混合平台v1.3保留于历史快照，不再作为当前要求。
 
+> 2026-10-04：局域网推理增量按 [ADR0020](docs/decisions/0020-opt-in-lan-inference-api.md)，默认关闭、独立凭据/监听，只服务本机已加载模型；下面原回环约束仍完整适用于本机管理。实施与验收见当前状态。
+
 本文负责runtime具体契约；[架构](docs/architecture.md)负责职责，[ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)负责范围，[路线](docs/roadmap.md)负责W00–W05依赖，[当前状态](PROJECT_STATE.md)记录事实。deepseek harness接入新增门槛见[harness契约](docs/windows-harness-contract.md)。
 
 ## 1. 目标与冻结决策
@@ -357,7 +359,7 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 
 T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。35bfd85基线`/v1/models`仅列旧准入模型；ADR0015增量改按当前available/loadable筛选，未有历史validated的合法候选也可列出，列表不承诺实际load必成功；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
 
-所有 `/v1/*` 和 `/runtime/*` 使用 `Authorization: Bearer <token>`。只接受本机回环连接；v0.1 不提供 `0.0.0.0` 监听开关。令牌由 init 生成，日志不得输出，读取权限限当前用户。
+所有 `/v1/*` 和 `/runtime/*` 使用 `Authorization: Bearer <token>`。本机管理监听只接受回环连接，不提供 `0.0.0.0` 监听开关；用户显式启用的独立LAN推理监听遵循ADR0020，不放宽本段管理接口约束。令牌由 init 生成，日志不得输出，读取权限限当前用户。
 
 healthz可选HMAC-SHA256 challenge/proof headers用于CLI在发送Bearer前认证服务端；MAC绑定版本域、实际instance UUID、随机32字节nonce及accept socket实际client/server端点，CLI必须在同一固定HTTP/1连接恒时验证，不能依赖公开nonce、重连或重定向。health正文仍仅表存活。详见[T04决策](docs/decisions/0005-t04-loopback-http-and-management.md)。
 

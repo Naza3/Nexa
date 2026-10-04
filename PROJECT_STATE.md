@@ -1,5 +1,17 @@
 # Nexa 当前状态
 
+## 2026-10-04 可选局域网 API（提交前验证快照）
+
+用户已手动合并模型使用流程到 main。已实际读取最新 main `6167d07cb523cc838e6a6fb082e660d56e9d7f79`（merge PR #4，tree `311936f4989a276c934d38d9da46a80fcc34bff7`），本次新分支 `codex/nexa-lan-api` 从该提交创建；后续每个新功能从当时最新 main 建独立分支。
+
+- 新增方向见[ADR0020](docs/decisions/0020-opt-in-lan-inference-api.md)：默认关闭、独立LAN凭据/监听、具体私有IPv4与有限客户端CIDR名单，仅允许已本机加载模型的 models/chat。回环管理/proof不放宽，不自动修改防火墙、不提供公网/TLS服务
+- Rust双监听/认证/调度与桌面设置实现并冻结。父全workspace/all-targets 40组421通过/0失败/7既有忽略，完整clippy/fmt、前端247项/typecheck/lint/build、Python155项（153通过/2平台skip）通过；独立审查22项为其中子集不累加，无剩余阻断。真实TCP只在loopback、私网peer为模拟，Windows网卡/两机LAN/原生剪贴板未验。详见[本轮记录](docs/verification/2026-10-04-lan-api.md)，联合功能包随后构建
+- 用户另已授权“添加模型”按钮：选择单/多个GGUF仅校验并零复制登记所选文件，可选加载测试；属于后续独立main分支，不混入当前LAN提交。既有自动发现轻量跳过未变文件，但真正扫描仍全目录hash，此事实已向用户说明
+- 用户另报告基础测试后仍全部无记录、按钮持续“尝试加载”：代码审查已定位Windows canonical VerbatimDisk数据目录被外部目录校验拒绝，scope错误又被吞成无记录；按钮还只依赖旧historical validated。独立修复排在模型添加之后，不混入LAN提交；另外已批准高级文件校验超时与“不自动卸载”设置，按顺序独立分支实现、最终统一回归
+- MiniCPM5-2B-abliterated问题仅完成只读定位：同名公开候选头为llama架构/minicpm5分词器，固定vendor已有对应基础支持；用户具体来源/报错尚缺，不认定为架构不支持或模板已通过。本轮不改模型兼容/推理引擎
+
+最近已交付完整Windows包为本地clean `1845f936`，18,937,607字节，SHA256 `4191ec7248a1413fed52d6ae03c43f31fd515a73271d47807ac42688f2428b40`；实际Windows新版运行待用户反馈。其52文件源码分批上传为远程 `9f836d5`，tree与本地包源完全相同，已由用户合并到上述main；分批上传成功，旧工具取消根因未确认。原包身份不改写为新remote提交，也无需重下载。未运行GitHub Actions Rust。
+
 ## 2026-10-04 模型自动登记与本机基础测试（提交前验证快照）
 
 本节为最新状态，覆盖下文历史“当前/待交付”安排。用户确认已交付 `688fe5c` 完整交叉测试包可以下载模型；未给出具体模型/源/hash，不能扩展为全部下载源或 Windows 完整验收通过。此前包为 18,674,810 字节，SHA256 `f7edd5c8ab204d0a326905aca5d98d0cb97eef5706350d94a6e65f6ffea1bd6e`。
