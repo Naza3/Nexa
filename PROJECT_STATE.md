@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-04 Actions第二轮短路径修复（待新CI验证）
+
+[run37198513508](https://github.com/Naza3/Nexa/actions/runs/37198513508)，head `82bd70fcd40c03760d59ed9850443e1dbbd97ffb`：Ubuntu同源组件成功，Windows下载probe实际32/32通过（3数字别名为resolver提前拒绝、4非法URI为明确DEBUG解析拒绝，均不宣称socket gate执行）。Rust1.98.1、CMake4.4.4、VS2022/MSVC14.44.35207及源身份准备成功。
+
+随后Windows严格Python188项出现5fail/6error/1skip，全部为VS/CRT测试中短路径RUNNER~1与canonical长名runneradmin混用的relative_to误拒。实际来源比较修复已完成：先检查原路径及祖先，再统一真实路径表示；保留同VS/Release/x64/版本门槛，未只改fixture或跳过测试。严格Linux Python194项（190通过、4平台skip）、py_compile/diff已通过，新Windows8.3/junction用例待下一CI。日志末尾Security模块重复成员是既有隔离测试的预期诊断，不是这次失败原因。Nexa编译和整包仍未进入，继续同一分支/PR。
+
 ## 2026-10-04 Actions首轮Windows探针修正（进行中）
 
 公开库标准runner已实际分配：[run37197414719](https://github.com/Naza3/Nexa/actions/runs/37197414719)，精确head `cbba057b0106b7cc65131332858c0cedc993ff93`。Ubuntu同源aria2构建成功；WindowsServer2022在早期下载组件probe失败，32case中25通过、7失败，尚未进行Nexa/Rust/CMake构建。68policy、26Request/4socket、53payload以及公开HTTPS和三类错误证书拒绝已在该Windows运行中通过，不代替整任务成功。

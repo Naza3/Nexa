@@ -36,3 +36,15 @@ Windows标准runner测试仍不等于用户Windows10/i5-8400/16GB真实窗口、
 后续修复仅限探针判定和诊断：精确区分解析器、resolver提前拒绝和实际socket policy拒绝；通用DNS/超时/非零退出或证书错误不能泛化作成功。保持零字节、实际无连接、公开正例和三类TLS负例门槛，新增错误输入/错误host/假日志反例。Linux观察/分类回归不自动改写这次Windows失败，须新run实际验收。
 
 探针修复推送前验证：严格全Python188项，186通过、2Windows平台skip；Ubuntu通配test_aria2_build*.py聚焦37项通过（原19加18），含完整32case合成编排与公网/三证书/listener任一失败总报告必失败。py_compile/diff检查和独立37项子集通过。只修改probe与新增回归，不改生产补丁/来源锁/TLS；旧失败报告不变，回放时旧4个URI日志仍不满足新明确证据要求。
+
+## 第二轮实际Windows检查
+
+[run37198513508](https://github.com/Naza3/Nexa/actions/runs/37198513508)，head `82bd70fcd40c03760d59ed9850443e1dbbd97ffb`。Ubuntujob111425206537成功；Windowsjob111425917825通过下载组件与准备闭包。artifact11301837379中的实际probe报告32/32、passed=true；三个numeric别名为resolver_rejected_before_socket，四URI为request_uri_rejected_before_socket，均socket_gate_rejection_observed=false。这回才有真实Windows DEBUG证据，原首轮失败报告不改写。
+
+实际工具身份：rustc1.98.1，host x86_64-pc-windows-msvc，LLVM22.1.8；CMake4.4.4；Visual Studio17/2022、MSVC14.44.35207。兼容CMake路径跨VsDevCmd的准备检查已在Windows通过。
+
+失败发生在之后严格Python：188tests，5fail、6error、1skip。共同原因是fixture的CRT路径保留Windows8.3父名RUNNER~1，而VS根已resolve成runneradmin；relative_to将同一目录误判越界，其他5个负例因此先得到错误阶段。该路径比较也属于实际packager，不能靠规范化fixture来掩盖。后续应先检查原路径祖先，再统一真实目录表示并继续保留来源/版本/架构/Release边界。
+
+Security模块重复成员输出来自既有真实验签隔离测试的inherited污染诊断，并非这次fail/error；不扩大修改其安全策略。Nexa/Rust编译、模型推理、最终ZIP仍未执行。
+
+短路径修复推送前验证：共享packager先对原始路径/祖先做reparse检查，再解析既有别名并比较canonical根，返回canonical CRT来源给两个打包器；不存在的missing/../existing写法不冒充已有别名。增加6项回归，未改变实际fixture路径。严格全Python194项190通过/4平台skip、专用49项45通过/4skip、py_compile与diff检查通过。Windows真实8.3和junction用例在Linux跳过，必须交下一次Actions执行。

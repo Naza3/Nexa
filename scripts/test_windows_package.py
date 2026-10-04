@@ -58,8 +58,8 @@ class PackageTests(unittest.TestCase):
                 with mock.patch.dict(pack.os.environ, {"PROGRAMFILES(X86)": folder}, clear=True), mock.patch.object(pack, "command", side_effect=run), mock.patch.object(pack, "devcmd_environment", return_value=env) as dev:
                     actual, vs, child, folded, crt = pack.selected_visual_studio()
                 self.assertEqual(actual, selected)
-                self.assertEqual(vs, Path(selected["installationPath"]))
-                self.assertEqual(dev.call_args.args[0], vs / "Common7/Tools/VsDevCmd.bat")
+                self.assertEqual(vs, Path(selected["installationPath"]).resolve())
+                self.assertEqual(dev.call_args.args[0], Path(selected["installationPath"]) / "Common7/Tools/VsDevCmd.bat")
                 self.assertEqual(child, folded)
                 self.assertIsNot(child, folded)
                 self.assertEqual(set(crt), {"vcruntime140.dll"})
@@ -84,6 +84,111 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(env["PATH"].split(os.pathsep)[0], str(selected_bin))
                 for name in ("cmake.exe", "ctest.exe"):
                     self.assertEqual(pack.shutil.which(name, path=env["PATH"], mode=os.F_OK), str(selected_bin / name))
+
+    def test_resolved_directory_aliases_preserve_vs_tools_and_crt_identity(self):
+        # This is a real filesystem alias on Linux too, not a mocked 8.3 map.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            selected, env = self.vs_fixture(root)
+            (root / "existing parent").mkdir()
+            alias = root / "existing parent" / ".."
+            fields = ("installationPath", "VSINSTALLDIR", "VCTOOLSINSTALLDIR", "VCTOOLSREDISTDIR", "PATH")
+            for changed in (*[(field,) for field in fields], fields):
+                candidate, child_env = selected.copy(), env.copy()
+                for field in changed:
+                    target = candidate if field == "installationPath" else child_env
+                    target[field] = str(alias / Path(target[field]).relative_to(root))
+                with self.subTest(changed=changed), mock.patch.object(pack, "devcmd_environment", return_value=child_env):
+                    _, vs, _, _, crt = pack.visual_studio_paths(candidate, {})
+                self.assertEqual(vs, Path(selected["installationPath"]))
+                self.assertEqual(crt["vcruntime140.dll"], Path(env["VCTOOLSREDISTDIR"]) / "x64/Microsoft.VC145.CRT/vcruntime140.dll")
+                self.assertEqual(crt["vcruntime140.dll"].relative_to(vs).parts[:3], ("VC", "Redist", "MSVC"))
+
+    def test_missing_parent_is_not_an_existing_directory_alias(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            selected, env = self.vs_fixture(root)
+            for field in ("VSINSTALLDIR", "VCTOOLSINSTALLDIR", "VCTOOLSREDISTDIR"):
+                child_env = env.copy()
+                child_env[field] = str(root / "missing parent" / ".." / Path(env[field]).relative_to(root))
+                with self.subTest(field=field), mock.patch.object(pack, "devcmd_environment", return_value=child_env), self.assertRaisesRegex(ValueError, "does not exist before resolution"):
+                    pack.visual_studio_paths(selected, {})
+
+    def test_external_existing_crt_remains_outside_after_alias_resolution(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            selected, env = self.vs_fixture(root)
+            _, external = self.vs_fixture(root / "other installation")
+            (root / "existing parent").mkdir()
+            for source in (Path(external["VCTOOLSREDISTDIR"]), root / "existing parent" / ".." / Path(external["VCTOOLSREDISTDIR"]).relative_to(root)):
+                with self.subTest(source=source), mock.patch.object(pack, "devcmd_environment", return_value=dict(env, VCTOOLSREDISTDIR=str(source))), self.assertRaisesRegex(ValueError, "outside the selected Visual Studio redistribution"):
+                    pack.visual_studio_paths(selected, {})
+
+    @unittest.skipUnless(os.name == "nt", "requires real Windows 8.3 filesystem aliases")
+    def test_real_windows_short_and_long_directory_aliases(self):
+        import ctypes
+        from ctypes import wintypes
+        get_short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+        get_short_path.restype = wintypes.DWORD
+        def short_path(path):
+            needed = get_short_path(str(path), None, 0)
+            if not needed:
+                raise ctypes.WinError(ctypes.get_last_error())
+            result = ctypes.create_unicode_buffer(needed)
+            written = get_short_path(str(path), result, needed)
+            if not written or written >= needed:
+                raise ctypes.WinError(ctypes.get_last_error())
+            return Path(result.value)
+        with tempfile.TemporaryDirectory(prefix="nexa long directory alias-") as folder:
+            root = Path(folder).resolve()
+            selected, env = self.vs_fixture(root)
+            if short_path(root) == root:
+                self.skipTest("filesystem does not provide a distinct 8.3 name for the test directory")
+            self.assertTrue(short_path(root).samefile(root))
+            for mode in ("selected-short", "environment-short", "crt-short", "all-short"):
+                candidate, child_env = selected.copy(), env.copy()
+                if mode in ("selected-short", "all-short"):
+                    candidate["installationPath"] = str(short_path(Path(candidate["installationPath"])))
+                fields = ("VCTOOLSREDISTDIR",) if mode == "crt-short" else ("VSINSTALLDIR", "VCTOOLSINSTALLDIR", "VCTOOLSREDISTDIR", "WINDOWSSDKDIR", "PATH")
+                if mode != "selected-short":
+                    for field in fields:
+                        child_env[field] = str(short_path(Path(child_env[field])))
+                with self.subTest(mode=mode), mock.patch.object(pack, "devcmd_environment", return_value=child_env):
+                    _, vs, _, _, crt = pack.visual_studio_paths(candidate, {})
+                self.assertEqual(vs, Path(selected["installationPath"]))
+                self.assertTrue(crt["vcruntime140.dll"].is_relative_to(vs))
+                self.assertEqual(crt["vcruntime140.dll"], Path(env["VCTOOLSREDISTDIR"]) / "x64/Microsoft.VC145.CRT/vcruntime140.dll")
+
+    def assert_linked_directory_sources_rejected(self, make_link):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            selected, env = self.vs_fixture(root)
+            for field in ("installationPath", "VSINSTALLDIR", "VCTOOLSINSTALLDIR", "VCTOOLSREDISTDIR"):
+                candidate, child_env = selected.copy(), env.copy()
+                target = candidate if field == "installationPath" else child_env
+                link = root / "linked directory"
+                make_link(link, Path(target[field]))
+                target[field] = str(link)
+                try:
+                    with self.subTest(field=field), mock.patch.object(pack, "devcmd_environment", return_value=child_env), self.assertRaisesRegex(ValueError, "symlink/reparse"):
+                        pack.visual_studio_paths(candidate, {})
+                finally:
+                    if link.is_symlink():
+                        link.unlink()
+                    else:
+                        link.rmdir()
+
+    @unittest.skipIf(os.name == "nt", "real Windows junction coverage does not require symlink privileges")
+    def test_original_symlink_directory_aliases_are_rejected_before_resolution(self):
+        self.assert_linked_directory_sources_rejected(lambda link, target: link.symlink_to(target, target_is_directory=True))
+
+    @unittest.skipUnless(os.name == "nt", "requires real Windows junctions")
+    def test_real_windows_junction_directory_aliases_are_rejected_before_resolution(self):
+        def junction(link, target):
+            host = Path(os.environ["SYSTEMROOT"]) / "System32/cmd.exe"
+            pack.command([host, "/d", "/c", "mklink", "/J", link, target])
+        self.assert_linked_directory_sources_rejected(junction)
 
     def test_explicit_cmake_directory_is_absolute_and_contains_both_tools(self):
         with tempfile.TemporaryDirectory() as folder:
