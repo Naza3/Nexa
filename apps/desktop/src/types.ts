@@ -17,7 +17,20 @@ export interface SafeError {
   code: string;
   message: string;
 }
+/** Public configuration only. LAN credentials never cross the JavaScript bridge. */
+export interface LanApiSettings {
+  enabled: boolean;
+  listen: string | null;
+  allowed_cidrs: string[];
+}
+export interface LanApiStatus {
+  enabled: boolean;
+  listen: string | null;
+  running: boolean;
+}
 export interface RuntimeStatus {
+  /** Missing on older services; never infer an active listener from configuration. */
+  lan_api?: LanApiStatus;
   state:
     | "unloaded"
     | "loading"
@@ -52,6 +65,8 @@ export interface RuntimeStatus {
   };
 }
 export interface Snapshot {
+  /** Missing on older bridges, which cannot configure LAN access. */
+  lan_api?: LanApiSettings;
   initialized: boolean;
   connection: "stopped" | "connecting" | "connected" | "error";
   api_address: string | null;
@@ -243,6 +258,8 @@ export interface DesktopApi {
   saveSettings(settings: Preferences): Promise<Snapshot>;
   saveIdle(idle_unload_seconds: number): Promise<Snapshot>;
   copyToken(): Promise<{ copied: true }>;
+  saveLanSettings(lan_api: LanApiSettings): Promise<Snapshot>;
+  copyLanToken(): Promise<{ copied: true }>;
   stop(): Promise<{ stopped: true }>;
   close(): Promise<void>;
 }

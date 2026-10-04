@@ -11,6 +11,8 @@ import type { ViewState } from "./controller";
 import type { Preferences, RuntimeStatus, Settings } from "./types";
 import { ModelDownloads, DownloadProgress } from "./ModelDownloads";
 import { modelCompatibility } from "./modelCompatibility";
+import { Modal } from "./Modal";
+import { LanApiSettings } from "./LanApiSettings";
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -124,77 +126,6 @@ function formatSize(bytes: number) {
   return bytes >= 1024 ** 3
     ? `${(bytes / 1024 ** 3).toFixed(2)} GiB`
     : `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
-}
-function Modal({
-  title,
-  children,
-  confirm,
-  onConfirm,
-  onCancel,
-  danger = false,
-}: {
-  title: string;
-  children: ReactNode;
-  confirm: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  danger?: boolean;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    const handle = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCancel();
-      }
-      if (event.key === "Tab") {
-        const items = ref.current?.querySelectorAll<HTMLButtonElement>(
-          "button:not(:disabled)",
-        );
-        if (!items?.length) return;
-        const first = items[0],
-          last = items[items.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", handle);
-    return () => {
-      document.removeEventListener("keydown", handle);
-      previous?.focus();
-    };
-  }, [onCancel]);
-  return (
-    <div className="modal-backdrop">
-      <div
-        ref={ref}
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="dialog-title"
-      >
-        <span className="eyebrow">请确认</span>
-        <h2 id="dialog-title">{title}</h2>
-        <div className="modal-copy">{children}</div>
-        <div className="modal-actions">
-          <button onClick={onCancel}>取消</button>
-          <button
-            className={danger ? "danger-button" : "primary"}
-            onClick={onConfirm}
-          >
-            {confirm}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 function RuntimeBanner({
   state,
@@ -1374,6 +1305,7 @@ function SettingsPage({
           </button>
         </div>
       </section>
+      <LanApiSettings key={JSON.stringify(state.snapshot?.lan_api ?? null)} state={state} controller={controller} />
       <section className="settings-card service-card">
         <div>
           <h2>运行服务</h2>

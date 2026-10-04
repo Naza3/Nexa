@@ -1,6 +1,7 @@
 /** Explicit DEV preview only. This module is excluded from production builds. */
 import { DEFAULT_SETTINGS, wait } from "./controller";
 import { DesktopError } from "./adapter";
+import { DEFAULT_LAN_SETTINGS, validateLanSettings } from "./lanApi";
 import type {
   ChatEvent,
   DesktopApi,
@@ -33,6 +34,7 @@ export function createPreviewApi(): DesktopApi {
     },
   };
   let snapshot: Snapshot = {
+    lan_api: { ...DEFAULT_LAN_SETTINGS },
     initialized: scenario !== "initial",
     connection:
       scenario === "initial" || scenario === "stopped"
@@ -128,6 +130,7 @@ export function createPreviewApi(): DesktopApi {
         throw new DesktopError("initialization_required", "请先初始化。");
       snapshot.initialized = true;
       snapshot.connection = "connected";
+      runtime.lan_api = { enabled: !!snapshot.lan_api?.enabled, listen: snapshot.lan_api?.listen ?? null, running: !!snapshot.lan_api?.enabled };
       snapshot.runtime = runtime;
       snapshot.model_directory.effective = snapshot.model_directory.configured;
       snapshot.model_directory.state = snapshot.model_directory.configured
@@ -300,6 +303,17 @@ export function createPreviewApi(): DesktopApi {
         throw new DesktopError("runtime_running", "请先停止运行服务。");
       snapshot.settings.idle_unload_seconds = idle_unload_seconds;
       return clone();
+    },
+    saveLanSettings: async (lan_api) => {
+      if (!snapshot.initialized) throw new DesktopError("not_initialized", "请先显式初始化。");
+      if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先显式停止运行服务。");
+      const validation = validateLanSettings(lan_api);
+      if (validation) throw new DesktopError("lan_settings_invalid", validation);
+      snapshot.lan_api = structuredClone(lan_api);
+      return clone();
+    },
+    copyLanToken: async () => {
+      throw new DesktopError("preview_only", "开发预览不生成或复制真实局域网密钥。");
     },
     copyToken: async () => {
       throw new DesktopError(

@@ -151,6 +151,7 @@ impl DesktopBridge {
                 api_address: None,
                 runtime: None,
                 settings: settings::preferences(&self.root)?.with_idle(300),
+                lan_api: Default::default(),
                 model_directory: library::directory_snapshot(&self.root, None)?,
             });
         }
@@ -162,6 +163,7 @@ impl DesktopBridge {
             api_address: Some(format!("http://{}", config.api.listen)),
             runtime: None,
             settings: preferences.with_idle(config.runtime.idle_unload_seconds),
+            lan_api: config.lan_api.clone(),
             model_directory: library::directory_snapshot(&self.root, None)?,
         };
         if self.library.lock().unwrap().owns_instance() || self.download_holds_instance() {
@@ -539,6 +541,65 @@ impl DesktopBridge {
         )?;
         drop(lock);
         self.snapshot_inner().await
+    }
+    /// This configuration publication never starts/stops a service or creates a
+    /// LAN credential. The instance lock arbitrates against other windows/CLI.
+    pub async fn save_lan(&self, lan_api: runtime_api::LanApiConfig) -> Result<DesktopSnapshot> {
+        self.open()?;
+        let _work = self
+            .work
+            .try_lock()
+            .map_err(|_| BridgeError::new("desktop_busy"))?;
+        self.open()?;
+        if !self.root.join("config.toml").exists() {
+            return Err(BridgeError::new("not_initialized"));
+        }
+        let lock = InstanceLock::try_acquire(&self.root)
+            .map_err(|_| BridgeError::new("instance_unavailable"))?
+            .ok_or_else(|| BridgeError::new("runtime_running"))?;
+        if lock.has_discovery() {
+            return Err(BridgeError::new("runtime_stop_unconfirmed"));
+        }
+        let mut config = settings::require_initialized(&self.root)?;
+        lan_api
+            .validate()
+            .map_err(|_| BridgeError::new("lan_settings_invalid"))?;
+        config.lan_api = lan_api;
+        config
+            .validate()
+            .map_err(|_| BridgeError::new("lan_settings_invalid"))?;
+        settings::atomic_replace(
+            &self.root.join("config.toml"),
+            config
+                .to_toml()
+                .map_err(|_| BridgeError::new("configuration_invalid"))?
+                .as_bytes(),
+        )?;
+        drop(lock);
+        self.snapshot_inner().await
+    }
+    /// Native-shell-only explicit copy operation. SecretToken is intentionally
+    /// not serializable; never use this from a snapshot, status or normal DTO.
+    pub async fn lan_token_for_copy(&self) -> Result<runtime_api::token::SecretToken> {
+        self.open()?;
+        let _work = self
+            .work
+            .try_lock()
+            .map_err(|_| BridgeError::new("desktop_busy"))?;
+        self.open()?;
+        let config = settings::require_initialized(&self.root)
+            .map_err(|_| BridgeError::new("lan_token_unavailable"))?;
+        if !config.lan_api.enabled {
+            return Err(BridgeError::new("lan_token_unavailable"));
+        }
+        let lan_token = runtime_api::token::load_private_lan_token(&self.root)
+            .map_err(|_| BridgeError::new("lan_token_unavailable"))?;
+        let local_token = runtime_api::token::load_private_token(&self.root)
+            .map_err(|_| BridgeError::new("lan_token_unavailable"))?;
+        if lan_token.matches_authorization(local_token.bearer_header_value().as_bytes()) {
+            return Err(BridgeError::new("lan_token_unavailable"));
+        }
+        Ok(lan_token)
     }
     pub async fn stop(&self) -> Result<Stopped> {
         self.open()?;

@@ -221,3 +221,112 @@ async fn source_preference_persists_before_runtime_initialization() {
     );
     assert!(!root.join("secrets/api-token").exists());
 }
+
+#[tokio::test]
+async fn lan_settings_are_stopped_only_atomic_and_never_create_or_expose_credentials() {
+    let (_temp, root, bridge) = initialized();
+    let original = std::fs::read(root.join("config.toml")).unwrap();
+    let management_token = std::fs::read(root.join("secrets/api-token")).unwrap();
+    assert_eq!(
+        bridge.snapshot().await.unwrap().lan_api,
+        runtime_api::LanApiConfig::default()
+    );
+    assert!(!root.join("secrets/lan-api-token").exists());
+    assert_eq!(
+        bridge.lan_token_for_copy().await.unwrap_err().code,
+        "lan_token_unavailable"
+    );
+    let config = runtime_api::LanApiConfig {
+        enabled: true,
+        listen: Some("192.168.1.2:18081".parse().unwrap()),
+        allowed_cidrs: vec!["192.168.1.3/32".into()],
+    };
+    let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    assert_eq!(
+        bridge.save_lan(config.clone()).await.unwrap_err().code,
+        "runtime_running"
+    );
+    assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), original);
+    drop(lock);
+    let snapshot = bridge.save_lan(config.clone()).await.unwrap();
+    assert_eq!(snapshot.lan_api, config);
+    assert!(snapshot.runtime.is_none());
+    assert!(!root.join("secrets/lan-api-token").exists());
+    assert_eq!(
+        bridge.lan_token_for_copy().await.unwrap_err().code,
+        "lan_token_unavailable"
+    );
+    let saved = std::fs::read(root.join("config.toml")).unwrap();
+    let mut invalid = config;
+    invalid.allowed_cidrs = vec!["0.0.0.0/0".into()];
+    assert_eq!(
+        bridge.save_lan(invalid).await.unwrap_err().code,
+        "lan_settings_invalid"
+    );
+    assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), saved);
+    let fixture = runtime_api::token::init_private_lan_token(&root).unwrap();
+    assert_eq!(
+        fixture.bearer_header_value(),
+        bridge
+            .lan_token_for_copy()
+            .await
+            .unwrap()
+            .bearer_header_value()
+    );
+    let json = serde_json::to_string(&bridge.snapshot().await.unwrap()).unwrap();
+    let raw = fixture.bearer_header_value();
+    let secret = raw.to_str().unwrap().strip_prefix("Bearer ").unwrap();
+    assert!(!json.contains(secret));
+    assert!(
+        !std::fs::read_to_string(root.join("config.toml"))
+            .unwrap()
+            .contains(secret)
+    );
+    // Even a private but misconfigured duplicate must never be copied as a LAN key.
+    std::fs::write(root.join("secrets/lan-api-token"), &management_token).unwrap();
+    assert_eq!(
+        bridge.lan_token_for_copy().await.unwrap_err().code,
+        "lan_token_unavailable"
+    );
+    bridge.save_lan(Default::default()).await.unwrap();
+    assert_eq!(
+        bridge.lan_token_for_copy().await.unwrap_err().code,
+        "lan_token_unavailable"
+    );
+    assert_eq!(
+        std::fs::read(root.join("secrets/api-token")).unwrap(),
+        management_token
+    );
+}
+
+#[tokio::test]
+async fn lan_save_rejects_uninitialized_and_unclean_instance_without_side_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing");
+    let bridge = DesktopBridge::new(
+        missing.clone(),
+        temp.path().join(if cfg!(windows) {
+            "ai-runtime.exe"
+        } else {
+            "ai-runtime"
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        bridge.save_lan(Default::default()).await.unwrap_err().code,
+        "not_initialized"
+    );
+    assert!(!missing.exists());
+    let (_temp, root, bridge) = initialized();
+    let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    lock.publish(&Discovery::current(Uuid::new_v4(), "127.0.0.1:1".parse().unwrap()).unwrap())
+        .unwrap();
+    drop(lock);
+    let original = std::fs::read(root.join("config.toml")).unwrap();
+    assert_eq!(
+        bridge.save_lan(Default::default()).await.unwrap_err().code,
+        "runtime_stop_unconfirmed"
+    );
+    assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), original);
+    assert!(!root.join("secrets/lan-api-token").exists());
+}

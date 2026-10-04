@@ -71,6 +71,8 @@ export const nativeApi: DesktopApi = {
   saveIdle: (idle_unload_seconds) =>
     call("runtime_idle_save", { idle_unload_seconds }),
   copyToken: () => call("token_copy"),
+  saveLanSettings: (lan_api) => call("runtime_lan_save", { lan_api }),
+  copyLanToken: () => call("lan_token_copy"),
   stop: () => call("runtime_stop"),
   close: () => call("desktop_close"),
 };

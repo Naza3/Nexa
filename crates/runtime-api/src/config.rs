@@ -10,6 +10,7 @@ pub const MAX_NONSTREAM_RESPONSE_BYTES: usize = 96 * 1024;
 pub struct Config {
     pub schema_version: u32,
     pub api: ApiConfig,
+    pub lan_api: crate::lan::LanApiConfig,
     pub runtime: SchedulingConfig,
     pub inference: InferenceConfig,
 }
@@ -18,6 +19,7 @@ impl Default for Config {
         Self {
             schema_version: 1,
             api: ApiConfig::default(),
+            lan_api: crate::lan::LanApiConfig::default(),
             runtime: SchedulingConfig::default(),
             inference: InferenceConfig::default(),
         }
@@ -107,6 +109,7 @@ impl Config {
             .map_err(|_| RuntimeError::invalid("cannot encode configuration"))
     }
     pub fn validate(&self) -> Result<(), RuntimeError> {
+        self.lan_api.validate()?;
         if self.schema_version != 1
             || !self.api.listen.ip().is_loopback()
             || self.api.max_body_bytes == 0
