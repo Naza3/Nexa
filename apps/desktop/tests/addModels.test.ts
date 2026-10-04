@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DesktopController } from "../src/controller";
+import { canDismissAddResult, DesktopController } from "../src/controller";
 import { validAddOperation, validModelSelection } from "../src/modelSelection";
 import type { DesktopApi, LibraryOperation, ModelFileSelection } from "../src/types";
 import { deferred, makeApi, model, snapshot } from "./fixtures";
@@ -168,4 +168,145 @@ it("accepts native committing and testing progress with published rows and no ea
   await controller.cancelLibrary(); await vi.advanceTimersByTimeAsync(1000);
   expect(controller.getSnapshot().library_phase).toBe("idle"); expect(controller.getSnapshot().library?.status).toBe("completed");
   expect(controller.getSnapshot().library?.files?.[0].status).toBe("registered"); expect(api.libraryCancel).toHaveBeenCalledTimes(1);
+});
+
+describe("dismissal of confirmed add results", () => {
+  const apiCalls = (api: DesktopApi) => Object.fromEntries(Object.entries(api).map(([name, call]) => [name, vi.isMockFunction(call) ? call.mock.calls.length : 0]));
+
+  it.each(["completed", "partial", "cancelled", "failed"] as const)("only clears the %s result and its captured selection, without native calls", async (status) => {
+    const published = status === "completed" || status === "partial";
+    const registered = status === "completed" ? 3 : status === "partial" ? 2 : 0;
+    const result = progress({ status, examined_entries: 3, candidate_files: 3, verified_files: registered,
+      error: status === "failed" ? { code: "model_scan_timeout", message: "校验超时。" } : null,
+      result: published ? { directory_id: null, library_generation: "new", registered_files: registered, available_files: registered, rejected_files: 3 - registered } : null,
+      files: batch.files.map((file, index) => index < registered ? { ...file, status: "registered", model_id: `model-${index}` } : { ...file, status: published ? "rejected" : "not_processed", error_code: "unsupported_model" }),
+    });
+    const evidence = { state: "passed" as const, load_success: true, generation_pass: true, checked_at_unix_ms: 1234, error_code: null };
+    const { api, controller } = await create({ pickModels: vi.fn(async () => batch), libraryNext: vi.fn(async () => result), modelsPage: vi.fn(async () => ({ data: [{ ...model, local_validation: evidence }], generation: "new", next_after: null })) });
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    const before = controller.getSnapshot(); const calls = apiCalls(api); const listener = vi.fn(); const unsubscribe = controller.subscribe(listener);
+    expect(canDismissAddResult(before)).toBe(true);
+    controller.dismissAddResult(result);
+    const dismissed = controller.getSnapshot();
+    expect(dismissed).toEqual({ ...before, library: null, library_selection: null });
+    expect(dismissed.models).toBe(before.models);
+    expect(dismissed.models.data[0].local_validation).toEqual(evidence);
+    controller.dismissAddResult(result);
+    expect(controller.getSnapshot()).toBe(dismissed); expect(listener).toHaveBeenCalledTimes(1);
+    expect(apiCalls(api)).toEqual(calls); unsubscribe();
+  });
+
+  it("preserves a newer file selection, auto-test choice and unrelated error and notice", async () => {
+    const { api, controller } = await create({ modelsPage: vi.fn().mockResolvedValue({ data: [model], generation: "g", next_after: null }) });
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    const result = controller.getSnapshot().library!;
+    await controller.pickModels(); controller.setAddAutoTest(true);
+    await controller.copyToken();
+    vi.mocked(api.modelsPage).mockRejectedValueOnce({ code: "model_page_unavailable", message: "模型列表暂不可读。" });
+    await controller.refreshModels();
+    const before = controller.getSnapshot(); const calls = apiCalls(api);
+    expect(before.model_selection).toEqual(selection); expect(before.add_auto_test).toBe(true);
+    expect(before.error?.code).toBe("model_page_unavailable"); expect(before.notice).toBeTruthy();
+    controller.dismissAddResult(result);
+    expect(controller.getSnapshot()).toEqual({ ...before, library: null, library_selection: null });
+    expect(apiCalls(api)).toEqual(calls);
+  });
+
+  it("keeps an authoritative post-terminal refresh running after the card is dismissed", async () => {
+    const reread = deferred<ReturnType<typeof snapshot>>();
+    const { api, controller } = await create({ snapshot: vi.fn().mockResolvedValueOnce({ ...snapshot(), connection: "stopped", runtime: null }).mockImplementationOnce(() => reread.promise) });
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    const before = controller.getSnapshot(); const calls = apiCalls(api);
+    expect(before.library_phase).toBe("idle"); expect(before.operation).toBe("正在重新读取模型目录");
+    controller.dismissAddResult(before.library!);
+    expect(controller.getSnapshot()).toEqual({ ...before, library: null, library_selection: null });
+    expect(apiCalls(api)).toEqual(calls);
+    await controller.pickModels(); await controller.addModels();
+    expect(api.pickModels).toHaveBeenCalledTimes(1); expect(api.addModels).toHaveBeenCalledTimes(1);
+    reread.resolve({ ...snapshot(), connection: "stopped", runtime: null }); await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().library).toBeNull(); expect(controller.getSnapshot().operation).toBeNull();
+    expect(controller.getSnapshot().models.data).toEqual([model]); expect(api.modelsPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not revive a dismissed result when its pending authoritative reread fails", async () => {
+    const reread = deferred<ReturnType<typeof snapshot>>();
+    const { controller } = await create({ snapshot: vi.fn().mockResolvedValueOnce({ ...snapshot(), connection: "stopped", runtime: null }).mockImplementationOnce(() => reread.promise) });
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    controller.dismissAddResult(controller.getSnapshot().library!);
+    reread.reject({ code: "desktop_unavailable", message: "连接中断。" }); await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().library).toBeNull(); expect(controller.getSnapshot().library_selection).toBeNull();
+    expect(controller.getSnapshot().error?.code).toBe("desktop_unavailable"); expect(controller.getSnapshot().operation).toBeNull();
+  });
+
+  it.each(["checking", "verifying", "committing", "testing"] as const)("keeps a running %s operation owned and cancellable", async (phase) => {
+    const pending = progress({ status: "running", phase, terminal: false, result: null, verified_files: 0, files: [] });
+    const { api, controller } = await create({ libraryNext: vi.fn(async () => pending) });
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    const before = controller.getSnapshot(); const calls = apiCalls(api);
+    controller.dismissAddResult(pending); controller.dismissAddResult(progress());
+    expect(controller.getSnapshot()).toBe(before); expect(canDismissAddResult(before)).toBe(false); expect(apiCalls(api)).toEqual(calls);
+    await controller.cancelLibrary(); expect(api.libraryCancel).toHaveBeenCalledExactlyOnceWith("library-1");
+  });
+
+  it("cannot dismiss pending admission, cancellation or recovery, even with a forged terminal result", async () => {
+    const admitted = deferred<{ operation_id: string }>(); const pending = deferred<LibraryOperation>();
+    const { api, controller } = await create({ addModels: vi.fn(() => admitted.promise), libraryNext: vi.fn(() => pending.promise) });
+    await controller.pickModels(); const adding = controller.addModels();
+    const assertNotDismissed = () => { const before = controller.getSnapshot(); controller.dismissAddResult(progress()); expect(controller.getSnapshot()).toBe(before); expect(canDismissAddResult(before)).toBe(false); };
+    expect(controller.getSnapshot().library_phase).toBe("starting"); assertNotDismissed();
+    await controller.cancelLibrary(); expect(controller.getSnapshot().library_phase).toBe("stopping"); assertNotDismissed();
+    admitted.resolve({ operation_id: "library-1" }); await adding; await vi.advanceTimersByTimeAsync(1);
+    pending.reject({ code: "desktop_unavailable", message: "连接中断。" }); await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().library_phase).toBe("recovery"); assertNotDismissed();
+    expect(api.addModels).toHaveBeenCalledTimes(1); expect(api.libraryCancel).toHaveBeenCalledExactlyOnceWith("library-1");
+  });
+
+  it("recovers an unconfirmed outcome before permitting explicit dismissal", async () => {
+    const { api, controller } = await create({ libraryNext: vi.fn().mockRejectedValueOnce({ code: "desktop_unavailable", message: "连接中断。" }).mockResolvedValueOnce(progress()) });
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    controller.dismissAddResult(progress()); expect(controller.getSnapshot().library_phase).toBe("recovery");
+    await controller.recoverLibrary(); await vi.advanceTimersByTimeAsync(1000);
+    expect(canDismissAddResult(controller.getSnapshot())).toBe(true);
+    controller.dismissAddResult(controller.getSnapshot().library!);
+    expect(controller.getSnapshot().library).toBeNull(); expect(api.addModels).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("ignores a late cancellation acknowledgement (failure=%s) and an old close after the next add", async (failure) => {
+    const cancelled = deferred<{ operation_id: string; status: "stopping" }>();
+    const first = deferred<LibraryOperation>(); const second = deferred<LibraryOperation>();
+    const { api, controller } = await create({ libraryCancel: vi.fn(() => cancelled.promise), libraryNext: vi.fn().mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise) });
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    const cancelling = controller.cancelLibrary(); const oldResult = progress(); first.resolve(oldResult); await vi.advanceTimersByTimeAsync(1);
+    controller.dismissAddResult(oldResult);
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    const running = controller.getSnapshot(); controller.dismissAddResult(oldResult); expect(controller.getSnapshot()).toBe(running);
+    // Reused fixture IDs deliberately verify object identity, not merely the native ID.
+    const newResult = progress(); second.resolve(newResult); await vi.advanceTimersByTimeAsync(1);
+    const before = controller.getSnapshot(); controller.dismissAddResult(oldResult); expect(controller.getSnapshot()).toBe(before);
+    if (failure) cancelled.reject({ code: "late_cancel_failure", message: "旧取消确认失败。" });
+    else cancelled.resolve({ operation_id: "library-1", status: "stopping" });
+    await cancelling; await vi.advanceTimersByTimeAsync(1000);
+    expect(controller.getSnapshot()).toBe(before); expect(controller.getSnapshot().library).toBe(newResult);
+    controller.dismissAddResult(newResult); expect(controller.getSnapshot().library).toBeNull();
+    expect(api.addModels).toHaveBeenCalledTimes(2); expect(api.libraryCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("never dismisses maintenance or configuration results", async () => {
+    const { controller } = await create(); await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    const state = controller.getSnapshot();
+    for (const library_kind of ["maintenance", "configure"] as const) expect(canDismissAddResult({ ...state, library_kind })).toBe(false);
+    for (const library of [null, { ...state.library!, terminal: false }, { ...state.library!, status: "running" as const }, { ...state.library!, phase: "testing" as const }])
+      expect(canDismissAddResult({ ...state, library })).toBe(false);
+  });
+
+  it.each(["close", "unmount"] as const)("does not cancel or restore a dismissed result during %s and remount", async (exit) => {
+    const { api, controller } = await create(); const unmount = controller.mount(); await vi.advanceTimersByTimeAsync(1);
+    await controller.pickModels(); await controller.addModels(); await vi.advanceTimersByTimeAsync(1);
+    controller.dismissAddResult(controller.getSnapshot().library!);
+    if (exit === "close") await controller.close();
+    unmount(); const remount = controller.mount(); await vi.advanceTimersByTimeAsync(1001);
+    expect(controller.getSnapshot().library).toBeNull(); expect(controller.getSnapshot().library_selection).toBeNull();
+    expect(controller.getSnapshot().models.data).toEqual([model]); expect(api.libraryCancel).not.toHaveBeenCalled();
+    expect(api.close).toHaveBeenCalledTimes(exit === "close" ? 1 : 0); remount();
+  });
 });

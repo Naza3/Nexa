@@ -6,7 +6,7 @@ type Props = { state: ViewState; controller: DesktopController };
 function settingsAccess(state: ViewState) {
   const busy = !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle";
   const reason = !state.snapshot?.initialized
-    ? "请先在模型页显式初始化运行服务，再停止服务后配置；保存不会初始化或启动服务。"
+    ? "请先通过左侧服务按钮显式初始化运行服务，再停止服务后配置；保存不会初始化或启动服务。"
     : state.snapshot.connection !== "stopped"
       ? "请先显式停止运行服务再修改；不会自动中断当前任务。"
       : busy ? "有其他操作正在进行，请等待完成或取消后再修改。" : null;

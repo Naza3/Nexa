@@ -6,7 +6,10 @@ use crate::{
 use model_store::{ImportCancellation, ImportRequest, ModelManifest, ModelSource, ModelStore};
 use process_host::ProcessDiagnostics;
 use runtime_core::{EventReceiver, Runtime, RuntimeHandle};
-use runtime_types::{ErrorCode, GenerationRequest, LoadOptions, ModelId, RuntimeError};
+use runtime_types::{
+    ErrorCode, GenerationOptions, GenerationRequest, LoadOptions, Message, ModelId, RequestId,
+    RuntimeError,
+};
 use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -325,6 +328,18 @@ impl ApiState {
         self.ensure_running()?;
         self.prepare_external(request.model.clone()).await?;
         self.execute(move |runtime| runtime.submit(request)).await
+    }
+    pub async fn submit_current(
+        &self,
+        request_id: RequestId,
+        messages: Vec<Message>,
+        options: GenerationOptions,
+    ) -> Result<(ModelId, EventReceiver), ApiError> {
+        self.ensure_running()?;
+        // Current-model inference must not prepare external files or infer a
+        // load target from a separate, potentially stale status observation.
+        self.execute(move |runtime| runtime.submit_current(request_id, messages, options))
+            .await
     }
     pub async fn execute<T, F>(&self, action: F) -> Result<T, ApiError>
     where

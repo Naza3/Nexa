@@ -1,6 +1,6 @@
 use crate::{Config, errors::ApiError};
 use model_store::ModelManifest;
-use runtime_types::{GenerationRequest, LoadOptions, ModelId, RequestId};
+use runtime_types::{GenerationOptions, LoadOptions, Message, ModelId, RequestId};
 use serde::{
     Deserialize, Serialize,
     de::{self, MapAccess, SeqAccess, Visitor},
@@ -114,7 +114,11 @@ fn optional<T: de::DeserializeOwned>(
 }
 
 pub struct ValidatedChat {
-    pub request: GenerationRequest,
+    pub request_id: RequestId,
+    /// None requests atomic binding to an already loaded model in the actor.
+    pub model: Option<ModelId>,
+    pub messages: Vec<Message>,
+    pub options: GenerationOptions,
     pub stream: bool,
     pub include_usage: bool,
 }
@@ -204,12 +208,11 @@ pub fn parse_chat(
             ));
         }
     }
-    let model: ModelId = decoded(
-        root.get("model")
-            .cloned()
-            .ok_or_else(|| ApiError::invalid("model", "Model ID is required."))?,
-        "model",
-    )?;
+    let model = match root.get("model") {
+        None => None,
+        Some(Value::String(value)) if value.trim().is_empty() => None,
+        Some(value) => Some(decoded::<ModelId>(value.clone(), "model")?),
+    };
     let messages = root
         .get("messages")
         .and_then(Value::as_array)
@@ -285,12 +288,10 @@ pub fn parse_chat(
     })?;
     runtime_types::validate_messages(&messages).map_err(|_| ApiError::invalid("messages", "Messages must alternate user/assistant after an optional first system and end with user."))?;
     Ok(ValidatedChat {
-        request: GenerationRequest {
-            request_id,
-            model,
-            messages,
-            options,
-        },
+        request_id,
+        model,
+        messages,
+        options,
         stream,
         include_usage,
     })
@@ -480,6 +481,46 @@ mod tests {
             r#", "stream_options":{"include_usage":true}"#,
         ] {
             assert!(chat(extra).is_err(), "{extra}");
+        }
+    }
+    #[test]
+    fn current_model_selection_accepts_only_missing_or_blank_strings() {
+        for model in [None, Some(""), Some(" \t\r\n"), Some("\u{2003}")] {
+            let mut body = serde_json::json!({"messages":[{"role":"user","content":"hello"}]});
+            if let Some(model) = model {
+                body["model"] = Value::String(model.into());
+            }
+            let parsed = parse_chat(
+                &serde_json::to_vec(&body).unwrap(),
+                RequestId::new(),
+                &Config::default(),
+            )
+            .unwrap();
+            assert!(parsed.model.is_none(), "{model:?}");
+        }
+        assert_eq!(chat("").unwrap().model.unwrap().as_str(), "qa-small");
+        for model in [
+            Value::Null,
+            serde_json::json!(0),
+            serde_json::json!(false),
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!(" qa-small"),
+            serde_json::json!("qa-small "),
+            serde_json::json!("../qa-small"),
+            serde_json::json!("UNKNOWN"),
+        ] {
+            let body =
+                serde_json::json!({"model":model,"messages":[{"role":"user","content":"hello"}]});
+            let error = parse_chat(
+                &serde_json::to_vec(&body).unwrap(),
+                RequestId::new(),
+                &Config::default(),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.error.code, "invalid_request", "{model}");
+            assert_eq!(error.error.param.as_deref(), Some("model"));
         }
     }
     #[test]

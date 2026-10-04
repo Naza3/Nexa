@@ -587,6 +587,14 @@ async fn runtime_lan_save(
     state.bridge.save_lan(request.lan_api).await
 }
 #[tauri::command]
+async fn runtime_lan_addresses(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<LanIpv4Addresses> {
+    guard(&window, &state)?;
+    state.bridge.lan_addresses().await
+}
+#[tauri::command]
 async fn lan_token_copy(window: WebviewWindow, state: State<'_, Arc<Shell>>) -> Result<Copied> {
     guard(&window, &state)?;
     let token = state.bridge.lan_token_for_copy().await?;
@@ -810,6 +818,7 @@ pub fn run() {
             runtime_idle_save,
             runtime_verification_save,
             runtime_lan_save,
+            runtime_lan_addresses,
             lan_token_copy,
             token_copy,
             runtime_stop,

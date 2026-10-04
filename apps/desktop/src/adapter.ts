@@ -78,6 +78,7 @@ export const nativeApi: DesktopApi = {
   saveVerificationTimeout: (model_verification_timeout_seconds) =>
     call("runtime_verification_save", { model_verification_timeout_seconds }),
   copyToken: () => call("token_copy"),
+  lanAddresses: () => call("runtime_lan_addresses"),
   saveLanSettings: (lan_api) => call("runtime_lan_save", { lan_api }),
   copyLanToken: () => call("lan_token_copy"),
   stop: () => call("runtime_stop"),

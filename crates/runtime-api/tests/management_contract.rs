@@ -348,3 +348,86 @@ async fn dropped_import_future_cancels_only_that_copy_and_releases_after_cleanup
     assert_eq!(status, StatusCode::OK, "{model}");
     harness.close().await;
 }
+
+#[tokio::test]
+async fn current_model_submission_never_prepares_an_external_registration() {
+    use model_store::library::{LIBRARY_FILE, ScanControl, scan_directory};
+    use runtime_types::{
+        GenerationOptions, GenerationRequest, LoadOptions, Message, RequestId, ResolvedModel, Role,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let file = source.path().join("external.gguf");
+    std::fs::write(&file, synthetic_gguf()).unwrap();
+    let outcome =
+        scan_directory(root.path(), source.path(), None, &ScanControl::default()).unwrap();
+    let library = outcome.library().unwrap();
+    let model = library.models[0].manifest.id.clone();
+    std::fs::write(root.path().join(LIBRARY_FILE), library.encode().unwrap()).unwrap();
+    drop(outcome);
+    let store = ApiState::open_store(root.path().to_path_buf())
+        .await
+        .unwrap();
+    assert!(store.needs_external_preparation(&model).unwrap());
+    // Synthetic loaded executor state is deliberately independent of storage:
+    // a current request must not hash/open/prepare the registered file at all.
+    let runtime = Runtime::spawn(
+        Config::default().runtime_config(),
+        |id: &ModelId| {
+            Ok(ResolvedModel {
+                id: id.clone(),
+                path: "not-read".into(),
+                context_limit: 4096,
+                default_context: 4096,
+                loadable: true,
+            })
+        },
+        NoInference,
+    )
+    .unwrap();
+    let state = ApiState::new(runtime, store.clone(), Config::default(), None);
+    state.initialize_registry().await.unwrap();
+    let selected = model.clone();
+    state
+        .control(move |runtime| runtime.load(selected, LoadOptions::default()))
+        .await
+        .unwrap();
+    // If current admission accidentally uses the explicit prepare path, this
+    // unavailable external source must fail before any request is accepted.
+    std::fs::remove_file(file).unwrap();
+    let request = GenerationRequest {
+        request_id: RequestId::new(),
+        model: model.clone(),
+        messages: vec![Message::new(Role::User, "synthetic")],
+        options: GenerationOptions::default(),
+    };
+    let (actual, events) = state
+        .submit_current(
+            request.request_id,
+            request.messages.clone(),
+            request.options.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(actual, model);
+    tokio::task::spawn_blocking(move || {
+        assert!(matches!(
+            events.recv().unwrap().kind,
+            runtime_types::RequestEventKind::Accepted
+        ));
+        while let Some(event) = events.recv() {
+            if event.kind.is_terminal() {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(store.needs_external_preparation(&model).unwrap());
+    assert!(
+        state.submit(request).await.is_err(),
+        "explicit admission must still prepare external files"
+    );
+    state.shutdown.begin();
+    state.shutdown.wait().await.unwrap();
+}

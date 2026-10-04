@@ -4,6 +4,7 @@ mod chat;
 mod download;
 pub mod dto;
 mod error;
+mod lan_addresses;
 mod library;
 mod onboarding;
 mod settings;

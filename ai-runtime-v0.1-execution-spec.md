@@ -381,7 +381,7 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 
 | 字段 | 第一版规则 |
 |---|---|
-| `model` | 必填，已注册 ID |
+| `model` | 非空时为严格已注册ID；缺省/空串/全空白使用准入时当前已加载模型，详见ADR0024；null及其他类型仍400 |
 | `messages` | 必填，1–128 条；role 为 system/user/assistant；content 为字符串 |
 | 消息顺序 | 至多一个 system 且在首位；随后 user/assistant 交替；最后为 user |
 | `stream` | 默认 false |
@@ -394,6 +394,8 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 | `n` | 仅允许省略或 1 |
 | `stream_options.include_usage` | 允许；只对 stream=true 有效 |
 | `user` | 可接收的标识，长度限制 128 字符；不写入默认日志，不参与调度 |
+
+空ID选择是[ADR0024](docs/decisions/0024-current-loaded-model-chat-default.md)的Nexa便利扩展，由actor原子绑定当前Ready/Generating模型；没有已加载模型时明确失败，不自动加载。显式ID不匹配时不回退或切换；LAN始终只用本机已加载模型。SSE/非流式响应返回实际绑定ID。实施与交付状态见当前状态，不追溯改变旧包行为。
 
 不支持的已知功能字段（如 tools、tool_choice、response_format、logprobs、非零 penalties、多模态 content）返回 400 `unsupported_parameter`，不得静默忽略。frequency_penalty/presence_penalty=0、logprobs=false、tool_choice="none" 可作为兼容空操作接受。其他未知字段返回 400，并指明字段名。
 

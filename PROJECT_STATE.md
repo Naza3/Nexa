@@ -1,5 +1,17 @@
 # Nexa 当前状态
 
+## 2026-10-04 四项修复统一提交与Windows构建（进行中）
+
+用户13:28明确要求“修复完成后再提交，在GitHub上构建”，解除下文13:01起暂缓安排。添加结果关闭、LAN网卡候选选择、侧栏统一服务主控、空model默认当前加载模型四项源码与独立审查已完成；联合Rust482通过/0失败/7既有忽略、前端508项、严格Python190通过/4平台skip、clippy/fmt及必要Windows交叉检查通过。现在在 `codex/dev` 统一提交并使用公开仓库标准Actions原生Windows构建；确切run与产物按提交后结果记录，尚不宣称新Windows包已通过。最后交付仍为e0ff1e6。main未自动合并；HTTPS、GPU和复制API ID不在本批。
+
+## 2026-10-04 空模型ID默认当前加载模型（源码验证完成、暂缓构建）
+
+用户明确确认“空模型ID就使用当前加载的模型”。按[ADR0024](docs/decisions/0024-current-loaded-model-chat-default.md)实现缺省/空串/全空白选择当前Ready/Generating模型，actor原子绑定并返回实际响应ID；无模型不加载，显式ID不回退/自动切换，null与其他类型仍非法。现有本机首次显式加载/同selected重载及LAN只允许本机已加载模型保持。仍按用户要求暂缓提交推送触发CI及新包，仅进行本地源码实现/验证。复制ID按钮仅为建议，未加入本轮实现。最终联合Rust482通过/0失败/7既有忽略、完整clippy/fmt通过；core/API独立133项子集审查通过，无阻断。详见[本轮验证](docs/verification/2026-10-04-current-model-api-default.md)。尚未重新运行真实GGUF/原生Windows，不将本地通过称为新包已交付。
+
+## 2026-10-04 桌面控制与本机网卡选择（源码验证完成、暂缓构建）
+
+在长期 `codex/dev` 按用户最新反馈改进三处交互：添加结果可关闭、局域网IPv4自动列出网卡供选择、左导航栏底部统一启动/停止服务主按钮。HTTPS明确暂缓；地址发现是本机只读操作，不自动启用服务或放宽网络配置。联合前端508项、Rust全workspace/all-targets472通过/7既有忽略、完整clippy/fmt、严格Python190通过/4平台skip及Windows交叉check通过；独立Rust/UI审查无阻断。原生Windows与新包尚未执行，详见[本轮记录](docs/verification/2026-10-04-desktop-controls-and-lan-discovery.md)。最后已交付仍为下文e0ff1e6包，不将开发中的功能称为已交付。用户随后反馈API缺失模型ID返回400，要求先不着急构建；当前暂停新包/Actions触发，仅继续本地回归及只读行为诊断，未改空ID或自动切换语义。
+
 ## 2026-10-04 本批交付完成与长期分支切换
 
 最终源码 `e0ff1e6cbb03fde6ae91a5f7272cd73d62b3f1ce` 的[Windows Actions37199537016](https://github.com/Naza3/Nexa/actions/runs/37199537016)已全部success。原生Windows真实模型、HTTP/CLI、模型下载自动登记、managed/external加载与重复短测、停服离线记录及完整提取包验收通过。54证据文件和最终包独立字节/PE/许可/对应源码复核通过；Win10用户GUI/选择器/剪贴板、两机LAN、干净机器/离线/长期稳定性仍独立待验。

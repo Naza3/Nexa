@@ -32,6 +32,7 @@ fn main() {
                 "runtime_idle_save",
                 "runtime_verification_save",
                 "runtime_lan_save",
+                "runtime_lan_addresses",
                 "lan_token_copy",
                 "token_copy",
                 "runtime_stop",

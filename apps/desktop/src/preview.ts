@@ -332,6 +332,7 @@ export function createPreviewApi(): DesktopApi {
       snapshot.settings.model_verification_timeout_seconds = model_verification_timeout_seconds;
       return clone();
     },
+    lanAddresses: async () => ({ status: "unsupported", addresses: [] }),
     saveLanSettings: async (lan_api) => {
       if (!snapshot.initialized) throw new DesktopError("not_initialized", "请先显式初始化。");
       if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先显式停止运行服务。");

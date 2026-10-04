@@ -148,6 +148,25 @@ pub struct LanApiStatus {
     pub listen: Option<String>,
     pub running: bool,
 }
+/// An ephemeral local-interface observation, never a persisted LAN setting.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LanIpv4Address {
+    pub interface_index: u32,
+    pub interface_name: String,
+    pub address: String,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LanAddressDiscoveryStatus {
+    Available,
+    Empty,
+    Unsupported,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LanIpv4Addresses {
+    pub status: LanAddressDiscoveryStatus,
+    pub addresses: Vec<LanIpv4Address>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerStatus {
     pub pid: Option<u32>,

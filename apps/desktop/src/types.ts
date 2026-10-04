@@ -27,6 +27,16 @@ export interface LanApiSettings {
   listen: string | null;
   allowed_cidrs: string[];
 }
+export interface LanAddress {
+  interface_index: number;
+  interface_name: string;
+  address: string;
+}
+/** Read-only OS observation, never a trust or reachability guarantee. */
+export interface LanAddressDiscovery {
+  status: "available" | "empty" | "unsupported";
+  addresses: LanAddress[];
+}
 export interface LanApiStatus {
   enabled: boolean;
   listen: string | null;
@@ -282,6 +292,7 @@ export interface DesktopApi {
   saveIdle(idle_unload_seconds: number, idle_unload_enabled?: boolean): Promise<Snapshot>;
   saveVerificationTimeout(model_verification_timeout_seconds: number): Promise<Snapshot>;
   copyToken(): Promise<{ copied: true }>;
+  lanAddresses(): Promise<LanAddressDiscovery>;
   saveLanSettings(lan_api: LanApiSettings): Promise<Snapshot>;
   copyLanToken(): Promise<{ copied: true }>;
   stop(): Promise<{ stopped: true }>;

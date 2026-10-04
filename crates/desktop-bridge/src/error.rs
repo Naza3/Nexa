@@ -54,6 +54,13 @@ impl BridgeError {
             "lan_token_unavailable" => {
                 "请先显式启用 LAN 并成功启动服务，再复制独立 LAN 密钥。现有密钥仍需通过安全文件校验。"
             }
+            "lan_address_discovery_failed" => "无法读取本机 IPv4 网卡地址，可刷新重试或手动填写。",
+            "lan_address_discovery_busy" => "上次本机地址读取尚未结束，请稍后刷新或手动填写。",
+            "lan_address_discovery_timeout" => "读取本机网卡地址超时，可稍后刷新或手动填写。",
+            "lan_address_discovery_invalid" => {
+                "系统返回的网卡信息无法安全读取，可刷新重试或手动填写。"
+            }
+            "lan_address_discovery_limit" => "本机网卡信息超过读取上限，请手动填写 IPv4 地址。",
             "runtime_running" => "Stop the runtime before applying this runtime setting.",
             "not_initialized" => "Initialize and start the runtime explicitly first.",
             "runtime_not_running" => "Start the runtime first.",

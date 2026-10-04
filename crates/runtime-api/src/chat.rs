@@ -479,19 +479,32 @@ async fn chat_request(
         .await
         .map_err(|_| too_large())?;
     let validated = parse_chat(&bytes, id, &state.config)?;
+    drop(bytes);
+    let (model, events) = if let Some(model) = validated.model {
+        let request = runtime_types::GenerationRequest {
+            request_id: validated.request_id,
+            model: model.clone(),
+            messages: validated.messages,
+            options: validated.options,
+        };
+        let events = if loaded_only {
+            state.submit_loaded(request).await?
+        } else {
+            state.submit(request).await?
+        };
+        (model, events)
+    } else {
+        state
+            .submit_current(validated.request_id, validated.messages, validated.options)
+            .await?
+    };
     let meta = Metadata {
         id: format!("chatcmpl-{id}"),
         created: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
-        model: validated.request.model.to_string(),
-    };
-    drop(bytes);
-    let events = if loaded_only {
-        state.submit_loaded(validated.request).await?
-    } else {
-        state.submit(validated.request).await?
+        model: model.to_string(),
     };
     let mut pump = EventPump::new(events);
     loop {

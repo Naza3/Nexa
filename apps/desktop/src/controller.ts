@@ -1,7 +1,7 @@
 import { DesktopError, safeError } from "./adapter";
 import { localValidationLabel, unavailableValidation, validLocalValidation, validationErrorReason } from "./localValidation";
 import { validAddOperation, validModelSelection } from "./modelSelection";
-import { lanBaseUrl, validateLanSettings } from "./lanApi";
+import { lanBaseUrl, validateLanSettings, validLanAddresses } from "./lanApi";
 import { preferencesOnly, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 import type {
   CatalogEntry,
@@ -17,6 +17,7 @@ import type {
   ModelFileSelection,
   LibraryOperation,
   LanApiSettings,
+  LanAddressDiscovery,
   Preferences,
   RuntimeStatus,
   SafeError,
@@ -146,6 +147,9 @@ function loadOptions(value: LoadOptions): string {
   return JSON.stringify([value.context_size, value.threads, value.batch_size]);
 }
 export interface ViewState {
+  lan_addresses: LanAddressDiscovery | null;
+  lan_addresses_loading: boolean;
+  lan_addresses_error: SafeError | null;
   catalog: CatalogEntry[];
   catalog_loading: boolean;
   catalog_loaded: boolean;
@@ -174,6 +178,11 @@ export interface ViewState {
   messages: SessionMessage[];
   chat_phase: ChatPhase;
   clear_pending: boolean;
+}
+export function canDismissAddResult(state: ViewState): boolean {
+  return state.library_kind === "add" && state.library_phase === "idle" &&
+    state.library?.terminal === true && state.library.phase === "finished" &&
+    ["completed", "partial", "cancelled", "failed"].includes(state.library.status);
 }
 export const wait = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -235,6 +244,7 @@ export function checkSubmission(
 /** Owns exactly one stream across page changes. No transcript is persisted. */
 export class DesktopController {
   private state: ViewState = {
+    lan_addresses: null, lan_addresses_loading: false, lan_addresses_error: null,
     catalog: [], catalog_loading: false, catalog_loaded: false,
     download: null, download_phase: "idle", download_auto_test: false, discovery: "unchecked",
     reconcile_status: "idle", testing_model: null, model_tests: {},
@@ -261,6 +271,7 @@ export class DesktopController {
   private lastReconcile = -Infinity;
   private pollEpoch = 0;
   private modelsPromise: Promise<void> | null = null;
+  private lanAddressesPromise: Promise<void> | null = null;
   private snapshotPromise: Promise<void> | null = null;
   private snapshotEpoch = 0;
   private stream: {
@@ -404,7 +415,13 @@ export class DesktopController {
   }
   start = (initialize: boolean) =>
     this.action(initialize ? "正在初始化并启动" : "正在启动服务", async () => {
-      this.update({ snapshot: await this.api.start(initialize) });
+      if (this.state.booting || this.state.snapshot?.connection !== "stopped") return;
+      let started: Snapshot;
+      try { started = await this.api.start(initialize); }
+      catch (error) { this.markServiceUnknown(); throw error; }
+      ++this.snapshotEpoch;
+      this.update({ snapshot: started });
+      if (this.snapshotPromise) await this.snapshotPromise;
       ++this.modelsEpoch;
       this.modelsLoaded = false;
       if (this.modelsPromise) await this.modelsPromise;
@@ -517,6 +534,12 @@ export class DesktopController {
     this.update({ add_auto_test: enabled && this.state.model_selection?.files.length === 1 });
   };
   addModels = () => this.beginLibrary("add");
+  dismissAddResult = (result: LibraryOperation) => {
+    // Bind dismissal to the rendered result, so a stale click cannot clear a newer add.
+    // Keep native ownership, inventory, new selections and unrelated feedback untouched.
+    if (this.libraryTask || this.state.library !== result || !canDismissAddResult(this.state)) return;
+    this.update({ library: null, library_selection: null });
+  };
   discoverDirectory = async () => {
     if (this.state.snapshot?.model_directory.configured) {
       this.update({ discovery: "configured" });
@@ -1079,7 +1102,7 @@ export class DesktopController {
     return this.action(label, async () => {
       const epoch = this.settingsEpoch;
       const snapshot = this.state.snapshot;
-      if (!snapshot?.initialized) throw new DesktopError("not_initialized", "请先在模型页显式初始化运行服务，再停止服务后保存设置。");
+      if (!snapshot?.initialized) throw new DesktopError("not_initialized", "请先通过左侧服务按钮显式初始化运行服务，再停止服务后保存设置。");
       if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先显式停止运行服务，再保存设置；不会自动中断任务。");
       try {
         const saved = await save();
@@ -1122,6 +1145,27 @@ export class DesktopController {
       },
       true,
     );
+  refreshLanAddresses = (): Promise<void> => {
+    if (this.lanAddressesPromise) return this.lanAddressesPromise;
+    this.update({ lan_addresses_loading: true, lan_addresses_error: null });
+    this.lanAddressesPromise = Promise.resolve().then(async () => {
+      try {
+        const result = await this.api.lanAddresses();
+        if (!validLanAddresses(result)) throw new DesktopError("lan_address_discovery_invalid", "检测结果无效。");
+        this.update({ lan_addresses: result });
+      } catch (error) {
+        const code = safeError(error).code;
+        this.update({ lan_addresses: null, lan_addresses_error: {
+          code: /^lan_address_discovery_(failed|busy|timeout|invalid|limit)$/.test(code) ? code : "lan_address_discovery_failed",
+          message: "未能检测本机局域网地址。可以刷新重试，或手动填写此电脑的私有 IPv4。",
+        } });
+      } finally {
+        this.lanAddressesPromise = null;
+        this.update({ lan_addresses_loading: false });
+      }
+    });
+    return this.lanAddressesPromise;
+  };
   saveLanSettings = (lan_api: LanApiSettings) =>
     this.action("正在保存局域网 API 设置", async () => {
       const snapshot = this.state.snapshot;
@@ -1171,9 +1215,22 @@ export class DesktopController {
       catch { throw new DesktopError("clipboard_unavailable", "无法写入剪贴板，请手动复制页面显示的客户端 Base URL。"); }
       this.update({ notice: "局域网客户端 Base URL 已复制。服务实际监听后，白名单内客户端才可连接。" });
     }, true);
+  private markServiceUnknown() {
+    ++this.snapshotEpoch;
+    this.update({ snapshot: this.state.snapshot ? { ...this.state.snapshot, connection: "error", runtime: null, api_address: null } : null });
+  }
+  checkService = () => this.action("正在检查服务", async () => {
+    if (this.snapshotPromise) await this.snapshotPromise;
+    await this.refresh();
+  });
   stop = () =>
     this.action("正在停止运行服务", async () => {
-      await this.api.stop();
+      if (this.state.snapshot?.connection !== "connected" || this.state.snapshot.runtime?.stopping) return;
+      try {
+        const result = await this.api.stop();
+        if (result?.stopped !== true) throw new DesktopError("runtime_stop_unconfirmed", "尚未确认运行服务已停止，请重新检查服务状态。不会自动重试停止。");
+      } catch (error) { this.markServiceUnknown(); throw error; }
+      ++this.snapshotEpoch;
       ++this.modelsEpoch;
       this.modelsLoaded = false;
       this.update({
@@ -1187,7 +1244,9 @@ export class DesktopController {
           : null,
         notice: "运行服务已停止。",
       });
+      if (this.snapshotPromise) await this.snapshotPromise;
       await this.refresh();
+      if (this.getSnapshot().snapshot?.connection !== "stopped") this.update({ notice: null });
     });
   close = async () => {
     if (this.closing || (this.state.operation && !this.state.testing_model && this.state.operation !== "正在选择 GGUF 文件")) return;

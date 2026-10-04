@@ -90,3 +90,9 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [运行策略与最终联合回归](docs/verification/2026-10-04-runtime-policy-and-final-regression.md) / [Windows联合验收步骤](docs/verification/2026-10-04-windows-model-management-checklist.md)
 
 - [公开仓库恢复Windows Actions](docs/verification/2026-10-04-public-actions-restoration.md)：用户最新构建授权、标准runner、同源工具链与推送前验证
+
+- [桌面控制与网卡选择验证](docs/verification/2026-10-04-desktop-controls-and-lan-discovery.md)：添加结果关闭、统一服务主控与只读本机IPv4发现；实现/验证进展见报告
+
+- [空ID默认当前模型ADR0024](docs/decisions/0024-current-loaded-model-chat-default.md)：用户确认的文本API便利扩展，actor原子选择、不隐式加载/切换，本地源码验证通过、统一Windows构建待验
+
+- [空ID当前模型验证](docs/verification/2026-10-04-current-model-api-default.md)：DTO、actor原子准入和SSE/非流式实际模型身份，Windows新包待验

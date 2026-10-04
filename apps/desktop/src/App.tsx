@@ -133,95 +133,41 @@ function formatSize(bytes: number) {
     ? `${(bytes / 1024 ** 3).toFixed(2)} GiB`
     : `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
 }
-function RuntimeBanner({
-  state,
-  controller,
-}: {
-  state: ViewState;
-  controller: DesktopController;
-}) {
+function RuntimeBanner({ state }: { state: ViewState }) {
   const snapshot = state.snapshot;
-  if (state.booting)
-    return (
-      <div className="notice-band">
-        <Spinner />
-        正在检查本机运行服务…
-      </div>
-    );
-  if (!snapshot)
-    return (
-      <div className="notice-band warning">
-        <div>
-          <strong>尚未连接到桌面服务</strong>
-          <p>请在 Nexa 桌面应用中打开，或重新检查连接。</p>
-        </div>
-        <button onClick={() => void controller.refresh()}>
-          <Icon name="refresh" size={16} />
-          重新检查
-        </button>
-      </div>
-    );
-  if (!snapshot.initialized)
-    return (
-      <div className="notice-band">
-        <div>
-          <strong>第一次使用 Nexa</strong>
-          <p>初始化本机数据目录，再启动运行服务。已有凭据不会被轮换。</p>
-        </div>
-        <button
-          className="primary"
-          disabled={!!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle"}
-          onClick={() => void controller.start(true)}
-        >
-          {state.operation ? <Spinner /> : <Icon name="power" size={16} />}
-          初始化并启动
-        </button>
-      </div>
-    );
-  if (snapshot.connection !== "connected")
-    return (
-      <div
-        className={`notice-band ${snapshot.connection === "error" ? "warning" : ""}`}
-      >
-        <div>
-          <strong>
-            {snapshot.connection === "error"
-              ? "与运行服务的连接失效"
-              : "运行服务尚未就绪"}
-          </strong>
-          <p>
-            {snapshot.connection === "error"
-              ? "先重新检查连接。无法验证的现有实例不会被替换，请检查后重试。"
-              : "可直接浏览已登记的本地模型。点击加载会启动本机服务，并进行基础测试。"}
-          </p>
-        </div>
-        <button
-          className="primary"
-          disabled={!!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle"}
-          onClick={() =>
-            void (snapshot.connection === "error"
-              ? controller.refresh()
-              : controller.start(false))
-          }
-        >
-          {state.operation ? <Spinner /> : <Icon name="power" size={16} />}
-          {snapshot.connection === "error" ? "重新检查连接" : "启动运行服务"}
-        </button>
-      </div>
-    );
-  if (snapshot.runtime?.state === "faulted")
-    return (
-      <div className="notice-band warning">
-        <div>
-          <strong>模型运行故障</strong>
-          <p>
-            {snapshot.runtime.last_error?.message ??
-              "请在模型页显式重新加载，恢复后再发送。已有请求不会重放。"}
-          </p>
-        </div>
-      </div>
-    );
+  if (state.booting) return <div className="notice-band"><Spinner />正在检查本机运行服务…</div>;
+  if (!snapshot) return <div className="notice-band warning"><div><strong>尚未连接到桌面服务</strong><p>请在 Nexa 桌面应用中打开，或使用左侧按钮重新检查服务。</p></div></div>;
+  if (snapshot.connection === "error") return <div className="notice-band warning"><div><strong>与运行服务的连接失效</strong><p>请使用左侧按钮重新检查服务。无法验证的现有实例不会被替换，请检查后重试。</p></div></div>;
+  if (!snapshot.initialized) return <div className="notice-band"><div><strong>第一次使用 Nexa</strong><p>点击左侧“初始化并启动”，初始化本机数据目录并启动运行服务。已有凭据不会被轮换。</p></div></div>;
+  if (snapshot.connection !== "connected") return <div className="notice-band"><div><strong>运行服务尚未就绪</strong><p>{snapshot.connection === "connecting" ? "正在连接运行服务，请等待状态确认。" : "可直接浏览已登记的本地模型。点击左侧按钮启动服务；点击加载也会启动本机服务，并进行基础测试。"}</p></div></div>;
+  if (snapshot.runtime?.state === "faulted") return <div className="notice-band warning"><div><strong>模型运行故障</strong><p>{snapshot.runtime.last_error?.message ?? "请在模型页显式重新加载，恢复后再发送。已有请求不会重放。"}</p></div></div>;
   return null;
+}
+function ServiceControl({ state, controller, onStop }: { state: ViewState; controller: DesktopController; onStop: () => void }) {
+  const snapshot = state.snapshot;
+  const operation = state.operation;
+  const starting = operation === "正在启动服务" || operation === "正在初始化并启动";
+  const stopping = operation === "正在停止运行服务" || !!snapshot?.runtime?.stopping;
+  const checking = operation === "正在检查服务";
+  const stopped = snapshot?.connection === "stopped";
+  const connected = snapshot?.connection === "connected";
+  const connecting = snapshot?.connection === "connecting";
+  const busy = !!operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle";
+  const pending = state.booting || starting || stopping || checking || connecting;
+  const label = state.booting || checking ? "正在检查服务…" : stopping ? "正在停止服务…" : starting || connecting ? "正在启动服务…"
+    : stopped ? snapshot.initialized ? "启动运行服务" : "初始化并启动" : connected ? "停止运行服务" : "重新检查服务";
+  const status = state.booting || checking ? "正在确认状态" : stopping ? "正在停止，等待清理确认" : starting || connecting ? "正在启动，等待连接"
+    : stopped ? "服务已停止" : connected ? snapshot.runtime?.state === "faulted" ? "服务运行中 · 模型故障" : "服务运行中" : "服务状态待确认";
+  return <section className="service-control" aria-label="运行服务控制">
+    <div className={`service-control-status ${connected && !stopping ? "running" : ""}`} role="status">
+      {pending ? <Spinner /> : <span className="status-dot" />}<span>{status}</span>
+    </div>
+    <button className={connected ? "danger-outline service-main-button" : "primary service-main-button"} disabled={pending || busy}
+      onClick={() => { if (stopped) void controller.start(!snapshot.initialized); else if (connected) onStop(); else void controller.checkService(); }}>
+      {pending ? <Spinner /> : <Icon name={connected ? "stop" : stopped ? "power" : "refresh"} size={17} />}{label}
+    </button>
+    <p>{busy && !pending ? "请先完成或取消当前操作" : connected ? "停止会中断其他应用的调用" : stopped ? "启动后可供其他应用调用" : "确认状态后再启动或停止"}</p>
+  </section>;
 }
 function DirectoryStateNotice({ state }: { state: ViewState }) {
   const directory = state.snapshot?.model_directory;
@@ -349,8 +295,7 @@ function DirectorySettings({
   const directory = state.snapshot!.model_directory;
   const stopped = state.snapshot?.connection === "stopped";
   const running =
-    state.snapshot?.connection === "connected" ||
-    state.snapshot?.connection === "connecting";
+    state.snapshot?.connection === "connected" && !state.snapshot.runtime?.stopping;
   const busy =
     !!state.operation ||
     state.library_phase !== "idle" ||
@@ -476,7 +421,7 @@ function DirectorySettings({
         >
           {confirm === "stop" ? (
             <p>
-              将停止运行服务及所有客户端任务，确认实例与 worker
+              将停止运行服务及所有客户端任务，可能中断其他应用的调用；确认实例与 worker
               清理后才可保存默认目录或手动扫描。原文件不会移动或删除。
             </p>
           ) : (
@@ -1079,11 +1024,8 @@ function SettingsPage({
     close_runtime_on_exit: settings.close_runtime_on_exit,
     download_source: settings.download_source,
   }));
-  const [modal, setModal] = useState<"token" | "stop" | null>(null);
+  const [modal, setModal] = useState<"token" | null>(null);
   const runtime = state.snapshot?.runtime;
-  const running =
-    state.snapshot?.connection === "connected" ||
-    state.snapshot?.connection === "connecting";
   const validation = validatePreferences(draft);
   const fields: {
     key: "context_size" | "threads" | "batch_size" | "max_output_tokens";
@@ -1267,56 +1209,11 @@ function SettingsPage({
           </button>
         </div>
       </section>
-      <LanApiSettings key={JSON.stringify(state.snapshot?.lan_api ?? null)} state={state} controller={controller} />
-      <section className="settings-card service-card">
-        <div>
-          <h2>运行服务</h2>
-          <p>停止服务会影响所有连接到 Nexa 的客户端。</p>
-        </div>
-        <button
-          className="danger-outline"
-          disabled={
-            !running ||
-            !!state.operation ||
-            state.library_phase !== "idle" ||
-            state.download_phase !== "idle" ||
-            state.chat_phase !== "idle"
-          }
-          onClick={() => setModal("stop")}
-        >
-          <Icon name="power" size={16} />
-          停止运行服务
-        </button>
-      </section>
-      {modal && (
-        <Modal
-          title={
-            modal === "token"
-              ? "将令牌复制到系统剪贴板？"
-              : "停止所有客户端的运行任务？"
-          }
-          confirm={modal === "token" ? "确认复制" : "停止运行服务"}
-          danger={modal === "stop"}
-          onCancel={() => setModal(null)}
-          onConfirm={() => {
-            const action = modal;
-            setModal(null);
-            void (action === "token"
-              ? controller.copyToken()
-              : controller.stop());
-          }}
-        >
-          {modal === "token" ? (
-            <p>
-              其他应用或剪贴板历史可能读取这份凭据。请仅粘贴到你信任的本机客户端，使用后及时清除。
-            </p>
-          ) : (
-            <p>
-              这会停止本机运行服务，终止所有客户端的任务并卸载模型。收到清理确认后才会显示已停止。
-            </p>
-          )}
-        </Modal>
-      )}
+      <LanApiSettings state={state} controller={controller} />
+      {modal && <Modal title="将令牌复制到系统剪贴板？" confirm="确认复制" onCancel={() => setModal(null)}
+        onConfirm={() => { setModal(null); void controller.copyToken(); }}>
+        <p>其他应用或剪贴板历史可能读取这份凭据。请仅粘贴到你信任的本机客户端，使用后及时清除。</p>
+      </Modal>}
     </>
   );
 }
@@ -1334,11 +1231,13 @@ export default function App({
   const [page, setPage] = useState<"models" | "chat" | "settings">("models");
   const [draft, setDraft] = useState("");
   const [confirmAddStop, setConfirmAddStop] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
   useEffect(() => controller.mount(), [controller]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.altKey && ["1", "2", "3"].includes(event.key)) {
         event.preventDefault();
+        setConfirmStop(false);
         setPage(
           (["models", "chat", "settings"] as const)[Number(event.key) - 1],
         );
@@ -1358,6 +1257,7 @@ export default function App({
   return (
     <div className="app-shell">
       <aside className="sidebar">
+        <div className="sidebar-navigation">
         <div className="brand">
           <Brand />
           <div>
@@ -1374,7 +1274,7 @@ export default function App({
               aria-label={item.title}
               title={`${item.title}（Alt + ${index + 1}）`}
               className={`nav-item ${page === item.id ? "active" : ""}`}
-              onClick={() => setPage(item.id)}
+              onClick={() => { setConfirmStop(false); setPage(item.id); }}
             >
               <Icon name={item.icon} />
               <span>
@@ -1387,6 +1287,7 @@ export default function App({
             </button>
           ))}
         </nav>
+        </div>
         <div className="sidebar-bottom">
           <div className="local-card">
             <Icon name="shield" size={18} />
@@ -1397,6 +1298,7 @@ export default function App({
               聊天不会保存到磁盘
             </p>
           </div>
+          <ServiceControl state={state} controller={controller} onStop={() => setConfirmStop(true)} />
           <div className="sidebar-footer">
             <span>Windows · CPU</span>
             <button
@@ -1439,7 +1341,7 @@ export default function App({
             page === "chat" ? "main-content chat-content" : "main-content"
           }
         >
-          <RuntimeBanner state={state} controller={controller} />
+          <RuntimeBanner state={state} />
           {(["stale", "unsupported"].includes(
             state.snapshot?.model_directory.state ?? "",
           ) ||
@@ -1529,7 +1431,11 @@ export default function App({
               controller={controller}
             />
           )}
-          {confirmAddStop && <Modal title="停止所有客户端的运行任务？" confirm="停止运行服务" danger onCancel={() => setConfirmAddStop(false)} onConfirm={() => { setConfirmAddStop(false); void controller.stop(); }}><p>将终止所有客户端任务并卸载当前模型。确认停止后，所选文件保留，请再次点击添加；不会自动开始登记。</p></Modal>}
+          {confirmStop && <Modal title="停止所有客户端的运行任务？" confirm="停止运行服务" danger onCancel={() => setConfirmStop(false)}
+            onConfirm={() => { setConfirmStop(false); void controller.stop(); }}>
+            <p>这会停止本机运行服务，终止所有客户端的任务并卸载模型，可能中断其他应用正在进行的调用。收到清理确认后才会显示已停止。</p>
+          </Modal>}
+          {confirmAddStop && <Modal title="停止所有客户端的运行任务？" confirm="停止运行服务" danger onCancel={() => setConfirmAddStop(false)} onConfirm={() => { setConfirmAddStop(false); void controller.stop(); }}><p>将终止所有客户端任务并卸载当前模型，可能中断其他应用的调用。确认停止后，所选文件保留，请再次点击添加；不会自动开始登记。</p></Modal>}
         </main>
       </div>
     </div>

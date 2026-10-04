@@ -1519,3 +1519,22 @@ h3 {
   gap: 10px;
   flex-wrap: wrap;
 }
+
+/* The global service control stays below independently scrollable navigation. */
+.sidebar-navigation { min-height: 0; overflow-y: auto; }
+.sidebar-bottom { flex-shrink: 0; }
+.service-control { margin: 16px 0; padding: 14px 0 0; border-top: 1px solid var(--border); }
+.service-control-status { display: flex; align-items: center; gap: 7px; margin-bottom: 11px; font-size: 12px; color: #6b7586; }
+.service-control-status.running { color: #27755b; }
+.service-control-status.running .status-dot { background: #34846a; }
+.service-main-button { width: 100%; min-height: 42px; justify-content: center; }
+.service-control p { font-size: 11px; line-height: 1.6; margin: 8px 0 0; color: #6b7586; }
+.lan-discovery { padding: 15px; border: 1px solid var(--border); border-radius: 10px; background: #f7f8fb; }
+.lan-discovery-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.lan-discovery .setting-field { margin-top: 12px; }
+.lan-discovery select { width: 100%; min-width: 0; }
+@media (max-height: 700px) {
+  .sidebar { padding-top: 20px; }
+  .sidebar .brand { padding-bottom: 18px; }
+  .sidebar .local-card { display: none; }
+}

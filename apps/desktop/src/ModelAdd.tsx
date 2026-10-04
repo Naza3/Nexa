@@ -1,5 +1,6 @@
 import type { ModelFileResult } from "./types";
 import type { DesktopController, ViewState } from "./controller";
+import { canDismissAddResult } from "./controller";
 import { LocalValidationFeedback } from "./ModelTestFeedback";
 
 function size(bytes: number) {
@@ -42,6 +43,7 @@ export function AddModelProgress({ state, controller }: { state: ViewState; cont
   return <section className="settings-card model-add-progress" aria-label="添加模型结果">
     <div className="card-heading"><div role="status"><h2>{title}</h2>{operation && <p>已检查 {operation.examined_entries} / {operation.candidate_files} 个所选文件 · 校验通过 {operation.verified_files} 个</p>}</div>
       {active && (state.library_phase === "recovery" ? <button onClick={() => void controller.recoverLibrary()}>重新确认添加结果</button> : <button disabled={state.library_phase === "stopping" && !state.error} onClick={() => void controller.cancelLibrary()}>{state.library_phase === "stopping" ? "等待取消确认" : operation?.phase === "testing" ? "取消后续测试" : "取消添加"}</button>)}
+      {operation && canDismissAddResult(state) && <button onClick={() => controller.dismissAddResult(operation)}>关闭添加结果</button>}
     </div>
     <p>{state.library_phase === "recovery" ? "连接或状态读取中断，尚未确认结果。不会重放添加，请重新确认后再操作。" : "只处理所选文件，零复制，保留现有索引。登记结果与加载、测试结果分别记录。"}</p>
     {operation?.phase === "testing" && <p>加载最多 300 秒，基础短测最多 30 秒。取消或测试失败不撤销已经登记的模型。</p>}
@@ -52,6 +54,6 @@ export function AddModelProgress({ state, controller }: { state: ViewState; cont
         {file.local_validation ? <LocalValidationFeedback value={file.local_validation} /> : (file.status === "registered" || file.status === "already_registered") && <p className="small-note">本次未取得加载或测试通过记录，可在模型列表显式加载与测试。</p>}
       </div>
     </li>)}</ol>
-    {!active && <p className="small-note">以上是本次操作结果。源文件未移动或删除；已有本机测试历史以模型列表为准。</p>}
+    {!active && <p className="small-note">关闭仅收起本次结果，不影响已登记模型。源文件未移动或删除；已有本机测试历史以模型列表为准。</p>}
   </section>;
 }

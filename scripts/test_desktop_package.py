@@ -163,7 +163,7 @@ class DesktopPackageTests(unittest.TestCase):
         self.assertTrue(capability["local"])
         self.assertNotIn("remote", capability)
         commands = {"desktop_snapshot", "runtime_start", "model_pick", "model_import", "model_directory_pick", "model_directory_apply", "models_scan", "model_library_next", "model_library_cancel", "models_page", "model_load", "model_unload", "chat_start", "chat_next", "chat_cancel", "settings_save", "runtime_idle_save", "token_copy", "runtime_stop", "desktop_close"}
-        commands.update({"runtime_verification_save", "models_pick", "models_add", "models_selection_discard", "model_directory_configure", "runtime_lan_save", "lan_token_copy", "models_reconcile", "model_test", "model_directory_discover", "model_catalog", "model_download_start", "model_download_next", "model_download_cancel"})
+        commands.update({"runtime_verification_save", "models_pick", "models_add", "models_selection_discard", "model_directory_configure", "runtime_lan_save", "runtime_lan_addresses", "lan_token_copy", "models_reconcile", "model_test", "model_directory_discover", "model_catalog", "model_download_start", "model_download_next", "model_download_cancel"})
         self.assertEqual(set(capability["permissions"]), {"allow-" + name.replace("_", "-") for name in commands})
         native = (pack.SHELL / "src/windows.rs").read_text(encoding="utf-8")
         import re

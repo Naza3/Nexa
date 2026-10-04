@@ -48,6 +48,12 @@ impl Drop for RegistryLease {
 enum Command {
     Submit(GenerationRequest, Reply<EventReceiver>),
     SubmitLoaded(GenerationRequest, Reply<EventReceiver>),
+    SubmitCurrent(
+        RequestId,
+        Vec<Message>,
+        GenerationOptions,
+        Reply<(ModelId, EventReceiver)>,
+    ),
     Load(ModelId, LoadOptions, Reply<()>),
     LoadIfUnloaded(ModelId, LoadOptions, Reply<()>),
     SubmitIfIdle(GenerationRequest, LoadOptions, Reply<EventReceiver>),
@@ -124,6 +130,19 @@ impl RuntimeHandle {
     pub fn submit_loaded(&self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
         request.validate()?;
         self.ask(|reply| Command::SubmitLoaded(request, reply))
+    }
+    /// Bind to the currently loaded model and admit the request in one actor
+    /// command. Never resolves, loads, reloads, or switches a model. The returned
+    /// identity is the concrete model bound to this request, including FIFO work.
+    pub fn submit_current(
+        &self,
+        request_id: RequestId,
+        messages: Vec<Message>,
+        options: GenerationOptions,
+    ) -> Result<(ModelId, EventReceiver), RuntimeError> {
+        validate_messages(&messages)?;
+        options.validate()?;
+        self.ask(|reply| Command::SubmitCurrent(request_id, messages, options, reply))
     }
     pub fn load(&self, model: ModelId, options: LoadOptions) -> Result<(), RuntimeError> {
         options.validate()?;
@@ -449,6 +468,22 @@ impl Actor {
                     Err(error(ErrorCode::ModelConflict))
                 } else {
                     self.submit(request)
+                };
+                let _ = reply.send(result);
+            }
+            Command::SubmitCurrent(request_id, messages, options, reply) => {
+                let result = if matches!(self.state, ModelState::Ready | ModelState::Generating)
+                    && let Some(model) = self.selected.as_ref().map(|model| model.id.clone())
+                {
+                    self.submit(GenerationRequest {
+                        request_id,
+                        model: model.clone(),
+                        messages,
+                        options,
+                    })
+                    .map(|events| (model, events))
+                } else {
+                    Err(error(ErrorCode::ModelNotLoaded))
                 };
                 let _ = reply.send(result);
             }

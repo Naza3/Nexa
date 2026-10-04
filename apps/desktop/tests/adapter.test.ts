@@ -47,6 +47,8 @@ describe("native-only adapter", () => {
     await nativeApi.saveVerificationTimeout(7200);
     expect(invoke).toHaveBeenLastCalledWith("runtime_verification_save", { request: { model_verification_timeout_seconds: 7200 } });
     const lan_api = { enabled: true, listen: "192.168.1.20:18081", allowed_cidrs: ["192.168.1.30/32"] };
+    await nativeApi.lanAddresses();
+    expect(invoke).toHaveBeenLastCalledWith("runtime_lan_addresses", undefined);
     await nativeApi.saveLanSettings(lan_api);
     expect(invoke).toHaveBeenLastCalledWith("runtime_lan_save", { request: { lan_api } });
     await nativeApi.copyLanToken();

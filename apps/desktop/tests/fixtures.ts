@@ -138,6 +138,7 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
     saveIdle: vi.fn(async () => snapshot()),
     saveVerificationTimeout: vi.fn(async () => snapshot()),
     copyToken: vi.fn(async () => ({ copied: true as const })),
+    lanAddresses: vi.fn(async () => ({ status: "empty" as const, addresses: [] })),
     saveLanSettings: vi.fn(async (lan_api) => ({ ...snapshot(), connection: "stopped" as const, runtime: null, lan_api })),
     copyLanToken: vi.fn(async () => ({ copied: true as const })),
     stop: vi.fn(async () => ({ stopped: true as const })),
