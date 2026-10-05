@@ -34,6 +34,73 @@ describe("bounded private LAN configuration", () => {
 });
 
 describe("LAN controller isolation and races", () => {
+  it.each(["before acknowledgement", "in the acknowledgement turn", "after action completion"] as const)("preserves the saved LAN snapshot when an older read completes %s", async (order) => {
+    const pending = deferred<Snapshot>();
+    const staleRead = deferred<Snapshot>();
+    let current = stopped();
+    const old = current;
+    const api = makeApi({ snapshot: vi.fn(async () => current), saveLanSettings: vi.fn(() => pending.promise) });
+    const controller = new DesktopController(api);
+    await controller.refresh();
+    const saving = controller.saveLanSettings(enabled);
+    await controller.saveLanSettings(enabled);
+    expect(api.saveLanSettings).toHaveBeenCalledExactlyOnceWith(enabled);
+    vi.mocked(api.snapshot).mockReturnValueOnce(staleRead.promise);
+    const refreshing = controller.refresh();
+    expect(controller.getSnapshot().snapshot?.lan_api).toEqual(old.lan_api);
+    expect(controller.getSnapshot().notice).toBeNull();
+    expect(controller.getSnapshot().operation?.kind).toBe("configuration");
+    if (order === "before acknowledgement") {
+      staleRead.resolve(old);
+      await refreshing;
+      expect(controller.getSnapshot().snapshot?.lan_api).toEqual(old.lan_api);
+      expect(controller.getSnapshot().notice).toBeNull();
+    }
+    current = { ...current, lan_api: enabled };
+    pending.resolve(current);
+    if (order === "after action completion") await saving;
+    // With no await here, refresh can run between the save update and action's finally.
+    if (order !== "before acknowledgement") staleRead.resolve(old);
+    await Promise.all([saving, refreshing]);
+    expect(controller.getSnapshot().snapshot?.lan_api).toEqual(enabled);
+    expect(controller.getSnapshot().operation).toBeNull();
+    expect(controller.getSnapshot().error).toBeNull();
+    await controller.refresh();
+    expect(controller.getSnapshot().snapshot?.lan_api).toEqual(enabled);
+    // A genuinely newer backend change must still be observed after the save.
+    current = { ...current, lan_api: { ...enabled, enabled: false } };
+    await controller.refresh();
+    expect(controller.getSnapshot().snapshot?.lan_api).toEqual(current.lan_api);
+    expect(api.saveLanSettings).toHaveBeenCalledTimes(1);
+    expect(api.start).not.toHaveBeenCalled();
+    expect(api.stop).not.toHaveBeenCalled();
+  });
+  it.each(["before acknowledgement", "in the acknowledgement turn", "after action completion"] as const)("handles an older read failure %s without losing the LAN save acknowledgement", async (order) => {
+    const pending = deferred<Snapshot>();
+    const staleRead = deferred<Snapshot>();
+    const api = makeApi({ snapshot: vi.fn(async () => stopped()), saveLanSettings: vi.fn(() => pending.promise) });
+    const controller = new DesktopController(api);
+    await controller.refresh();
+    const saving = controller.saveLanSettings(enabled);
+    vi.mocked(api.snapshot).mockReturnValueOnce(staleRead.promise);
+    const refreshing = controller.refresh();
+    const saved = { ...stopped(), lan_api: enabled };
+    const failure = { code: "runtime_unavailable", message: "Old read failed" };
+    if (order === "before acknowledgement") {
+      staleRead.reject(failure);
+      await refreshing;
+      // A failure observed before the acknowledgement is still a valid diagnostic.
+      expect(controller.getSnapshot().error?.code).toBe(failure.code);
+      expect(controller.getSnapshot().notice).toBeNull();
+    }
+    pending.resolve(saved);
+    if (order === "after action completion") await saving;
+    if (order !== "before acknowledgement") staleRead.reject(failure);
+    await Promise.all([saving, refreshing]);
+    expect(controller.getSnapshot().snapshot).toEqual(saved);
+    if (order !== "before acknowledgement") expect(controller.getSnapshot().error).toBeNull();
+    expect(controller.getSnapshot().notice).toMatch(/局域网 API 设置已保存/);
+  });
   it("saves without starting, stopping, generating credentials or changing offline inventory", async () => {
     const api = makeApi({ snapshot: vi.fn(async () => stopped()) });
     const controller = new DesktopController(api);

@@ -117,3 +117,5 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [手动停止加载ADR0027](docs/decisions/0027-owned-model-load-cancellation.md) / [本轮验证](docs/verification/2026-10-05-model-load-cancellation.md)：按次UUID、hash/切换/native/probe、回执恢复与worker回收；状态以当前状态为准
 
 - [Tag 发行开发验证](docs/verification/2026-10-05-tag-release.md)：版本、封闭资产、精确 tag/commit 与无覆盖发布反例；Windows 安装器结果分层记录
+
+- [LAN保存CI时序修复](docs/verification/2026-10-05-lan-save-ci-race.md)：mock持久状态与旧读取微任务竞争的确定性对照，安装器CI重跑前置

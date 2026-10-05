@@ -18,7 +18,7 @@ async function setup(state = stopped(), overrides: Partial<DesktopApi> = {}) {
   await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "API 接入" }));
-  return { api, controller, user, ...rendered };
+  return { api, controller, user, ...rendered, setSnapshot: (next: Snapshot) => { current = next; } };
 }
 async function enableDraft(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("switch", { name: "启用局域网 API" }));
@@ -114,15 +114,32 @@ describe("LAN settings explicit consent and lifecycle", () => {
   });
   it("deduplicates save and does not replace saved status before completion", async () => {
     const pending = deferred<Snapshot>();
-    const { user, api } = await setup(stopped(), { saveLanSettings: vi.fn(() => pending.promise) });
+    const { user, api, controller, setSnapshot } = await setup(stopped(), { saveLanSettings: vi.fn(() => pending.promise) });
     await enableDraft(user); await fillDraft(user);
     const save = screen.getByRole("button", { name: "保存局域网 API 设置" });
     fireEvent.click(save); fireEvent.click(save);
     expect(api.saveLanSettings).toHaveBeenCalledTimes(1);
     expect(screen.getByText("已保存配置：关闭")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "启用局域网 API" })).toBeDisabled();
-    await act(async () => pending.resolve({ ...stopped(), lan_api: enabled }));
+    // Exercise the polling path while the native save is still pending.
+    await act(async () => controller.refresh());
+    expect(screen.getByText("已保存配置：关闭")).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "启用局域网 API" })).toBeDisabled();
+    const saved = { ...stopped(), lan_api: enabled };
+    // Native publication precedes its acknowledgement and subsequent snapshots.
+    setSnapshot(saved);
+    await act(async () => pending.resolve(saved));
     expect(screen.getByText("已保存配置：启用 · 192.168.1.20:18081")).toBeInTheDocument();
+    for (let poll = 0; poll < 2; poll++) {
+      await act(async () => controller.refresh());
+      expect(screen.getByText("已保存配置：启用 · 192.168.1.20:18081")).toBeInTheDocument();
+    }
+    expect(screen.getByRole("switch", { name: "启用局域网 API" })).toBeEnabled();
+    expect(api.saveLanSettings).toHaveBeenCalledExactlyOnceWith(enabled);
+    expect(api.start).not.toHaveBeenCalled();
+    expect(api.stop).not.toHaveBeenCalled();
+    expect(api.copyLanToken).not.toHaveBeenCalled();
   });
   it("cancels copy on Escape or navigation, and copying never displays or retains a secret", async () => {
     const { user, api, controller } = await setup({ ...stopped(), lan_api: enabled });

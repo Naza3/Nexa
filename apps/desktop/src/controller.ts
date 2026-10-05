@@ -1417,6 +1417,9 @@ export class DesktopController {
         if (code === "settings_durability_unconfirmed") throw new DesktopError(code, "局域网设置可能已保存，但磁盘持久化尚未确认。请刷新并核对已保存配置后再重试，当前不代表已回滚。");
         throw error;
       }
+      // Invalidate pre-acknowledgement reads before publishing the saved snapshot.
+      // action()'s finally runs in a later microtask, after a queued read may settle.
+      ++this.snapshotEpoch;
       this.update({
         snapshot: saved,
         notice: lan_api.enabled

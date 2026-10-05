@@ -1,5 +1,9 @@
 # Nexa 当前状态
 
+## 2026-10-05 安装器第二轮CI被LAN回归拦截（修复后待重跑）
+
+`8ff6447` 的[第二轮37288485584](https://github.com/Naza3/Nexa/actions/runs/37288485584)已通过版本门禁、同源组件与安装器早期编译/路径检查，但前端695项中一项LAN保存测试失败，尚未进入安装生命周期，不能判断MSI候选修正效果。确定性红测分别证实测试mock保存后未更新后端状态，以及兼容LAN保存ACK与action finally之间旧读取可覆盖新快照的微任务窗口。仅在该ACK写入前同步推进snapshotEpoch，保留保存后的新后端读取权威性；统一configuration路径不改。完整前端701项、typecheck/lint/build通过，10轮60项聚焦回归及独立Node微任务8组对照通过，见[LAN时序验证](docs/verification/2026-10-05-lan-save-ci-race.md)。安装器与13项门槛不变，等待新精确提交原生CI；移动清理继续后置。
+
 ## 2026-10-05 Tag 三格式自动发行（进行中）
 
 用户要求 GitHub tag 自动构建便携版、MSI，并追加 Setup 安装包。本轮在 `codex/dev` 的精确 `9a3de0317129d0c09f6986a0e758022f2f83ea21` 基线上保留已有原生 Windows 全门禁，增加严格稳定 tag/版本一致性验证、同一已验证 payload 的三格式打包与安装生命周期，以及仅 tag push 可进入的隔离 Release 发布。见[发行说明](docs/windows-releases.md)。 用户已于07:32:53 UTC合并[PR8](https://github.com/Naza3/Nexa/pull/8)，main为`4c40a0d0f969dfb6d10a295bb7b7922f741c9643`且tree与9a3完全一致；开发分支已快进同步该main后继续本批，不重写用户合并。不自行选择发行版本，不创建 tag、合并 main、修改仓库安全设置或新增签名服务。
