@@ -29,6 +29,8 @@ class WindowsInstallerTests(unittest.TestCase):
         tables = pack.author_tables(files(), "0.1.0")
         pack.validate_tables(tables)
         self.assertNotIn("ALLUSERS", dict(tables["Property"]))
+        self.assertEqual(dict(tables["Property"])["LIMITUI"], "1")
+        self.assertEqual(dict(tables["Property"])["ARPNOMODIFY"], "1")
         self.assertEqual(dict(tables["Property"])["MSIRESTARTMANAGERCONTROL"], "Disable")
         self.assertEqual(len(tables["NexaPayload"]), len(files()))
         self.assertTrue(all(row[2] is None and row[4] == 2 for row in tables["RemoveFile"]))
@@ -99,6 +101,9 @@ class WindowsInstallerTests(unittest.TestCase):
         for forbidden in ("TerminateProcess(", "ShellExecute", "URLDownload", "WinHttp", "system(", "taskkill"):
             self.assertNotIn(forbidden, guard + setup)
         self.assertIn("GetFinalPathNameByHandleW", guard)
+        self.assertIn("GetLongPathNameW", guard)
+        self.assertIn("!same_target_path(root, expected)", guard)
+        self.assertIn("!same_target_path(path, expected)", guard)
         self.assertIn("FILE_ATTRIBUTE_REPARSE_POINT", (pack.AUTHORING / "native.h").read_text(encoding="utf-8"))
         self.assertIn("NEXA_MSI_SHA256", setup)
         self.assertIn("ERROR_SUCCESS_REBOOT_REQUIRED", setup)

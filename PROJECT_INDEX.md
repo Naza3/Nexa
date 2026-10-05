@@ -49,6 +49,7 @@
 ## Windows 接口、发行与原生窗口
 
 - [Tag 自动发行](docs/windows-releases.md)：同一精确源码/payload 的便携 ZIP、MSI、Setup EXE、版本与对应源码闭包；分支构建不发布，平台/目标机验收分层
+- [Windows 安装器](docs/windows-installers.md) / [ADR0028](docs/decisions/0028-tagged-windows-installers.md)：当前用户 MSI 与同载荷 Setup、数据保留、生命周期与目标机验收边界
 
 - [HTTP/管理 ADR0005](docs/decisions/0005-t04-loopback-http-and-management.md)：鉴权、同连接proof、原子导入/输出预算与关停
 - [worker ADR0004](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md)：进程隔离、单一信用账本与消费lease

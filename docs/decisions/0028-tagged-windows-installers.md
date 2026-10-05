@@ -26,6 +26,7 @@
 - [升级表版本比较](https://learn.microsoft.com/en-us/windows/win32/msi/upgrade-table)
 - [RemoveExistingProducts 事务顺序](https://learn.microsoft.com/en-us/windows/win32/msi/removeexistingproducts-action)
 - [每用户不提升的 Summary 位](https://learn.microsoft.com/en-us/windows/win32/msi/word-count-summary)
+- [LIMITUI 与系统 Basic UI](https://learn.microsoft.com/en-us/windows/win32/msi/limitui)
 - [完整 UI 的执行序列](https://learn.microsoft.com/en-us/windows/win32/msi/installuisequence-table)
 - [Windows 10 的 MSI VersionNT 仍为 603](https://learn.microsoft.com/en-us/troubleshoot/windows-client/application-management/versionnt-value-for-windows-10-server)
 - [WiX 维护费与显式 EULA](https://docs.firegiant.com/wix/osmf/)

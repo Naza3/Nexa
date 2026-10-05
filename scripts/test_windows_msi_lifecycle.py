@@ -18,6 +18,14 @@ import time
 
 import package_windows_msi as pack
 from windows_msi_api import Msi
+from windows_installer_diagnostics import Trace
+
+_TRACE = None
+
+
+def trace(stage, state, **details):
+    if _TRACE is not None:
+        _TRACE.event(stage, state, **details)
 
 CHECKS = ("install", "repair", "upgrade", "rollback", "downgrade_rejected", "uninstall", "user_data_preserved",
           "running_process_blocked", "setup_install", "setup_repair", "setup_uninstall", "setup_exit_codes", "setup_wizard")
@@ -39,21 +47,25 @@ def next_version(version):
     raise ValueError("maximum MSI version has no upgrade fixture; release needs a new explicit test strategy")
 
 
-def invoke(command, accepted=(0,), timeout=240):
+def invoke(command, accepted=(0,), timeout=240, *, stage, log=None):
     # No shell and no untrusted property/argument forwarding.
+    trace(stage, "start", expected=accepted)
     process = subprocess.Popen([str(value) for value in command], stdin=subprocess.DEVNULL)
     try:
         code = process.wait(timeout=timeout)
     except subprocess.TimeoutExpired as error:
+        trace(stage, "timeout", expected=accepted, log=log, pid=process.pid)
         # Do not force-kill the installer midway through its transaction.
-        raise ValueError("installer did not finish within the acceptance deadline") from error
-    require(code in accepted, f"unexpected installer exit code {code}; expected {accepted}")
+        raise ValueError("installer stage " + stage + " did not finish within the acceptance deadline") from error
+    trace(stage, "complete" if code in accepted else "error", exit_code=code, expected=accepted, log=log, pid=process.pid)
+    require(code in accepted, f"installer stage {stage} returned {code}; expected {accepted}")
     return code
 
 
 def msi_command(msi, operation, log, *properties, accepted=(0,)):
     executable = Path(os.environ["SYSTEMROOT"]) / "System32/msiexec.exe"
-    return invoke([executable, operation, msi, "/qn", "/norestart", "/l*v", log, "REBOOT=ReallySuppress", *properties], accepted)
+    return invoke([executable, operation, msi, "/qn", "/norestart", "/l*v", log, "REBOOT=ReallySuppress", *properties], accepted,
+                  stage="msi_" + log.stem.replace("-", "_"), log=log)
 
 
 def installed_payload(root, files):
@@ -92,6 +104,8 @@ def wizard_check(setup):
     user.PostMessageW.argtypes = [P, U, ctypes.c_size_t, ctypes.c_ssize_t]
     observed = []
     for mode, selected in (([], 1001), (["/repair"], 1002), (["/uninstall"], 1003)):
+        stage = "wizard_cancel_" + {1001: "install", 1002: "repair", 1003: "uninstall"}[selected]
+        trace(stage, "start", expected=(1602,))
         process = subprocess.Popen([str(setup), *mode], stdin=subprocess.DEVNULL)
         hwnd = None
         try:
@@ -115,6 +129,7 @@ def wizard_check(setup):
             require(user.SendMessageW(user.GetDlgItem(hwnd, selected), 0xF0, 0, 0) == 1, "wizard lost action after Back")
             user.SendMessageW(user.GetDlgItem(hwnd, 1005), 0xF5, 0, 0)  # Cancel before changes
             require(process.wait(timeout=30) == 1602, "wizard cancel did not return 1602")
+            trace(stage, "complete", exit_code=1602, expected=(1602,))
             observed.append(selected)
         finally:
             if process.poll() is None and hwnd:
@@ -134,6 +149,7 @@ def wizard_apply(setup):
     user.IsWindowEnabled.argtypes = [P]; user.IsWindowEnabled.restype = ctypes.c_int
     user.GetWindowTextW.argtypes = [P, ctypes.c_wchar_p, ctypes.c_int]
     user.GetWindowThreadProcessId.argtypes = [P, ctypes.POINTER(U)]
+    trace("setup_gui_install", "start", expected=(0,))
     process = subprocess.Popen([str(setup)], stdin=subprocess.DEVNULL)
     deadline, hwnd = time.monotonic() + 30, None
     while time.monotonic() < deadline and process.poll() is None:
@@ -171,8 +187,10 @@ def wizard_apply(setup):
             require("completed successfully" in text.value, "wizard did not display installation success")
             user.SendMessageW(user.GetDlgItem(hwnd, 1004), 0xF5, 0, 0)
             require(process.wait(timeout=30) == 0, "wizard Finish returned a failure")
+            trace("setup_gui_install", "complete", exit_code=0, expected=(0,))
             return
         time.sleep(0.05)
+    trace("setup_gui_install", "timeout", expected=(0,), pid=process.pid)
     raise ValueError("wizard Apply did not reach its final result")
 
 
@@ -185,6 +203,7 @@ def add_reboot_fixture(msi):
 
 
 def lifecycle(msi, setup, payload, report):
+    global _TRACE
     require(sys.platform == "win32" and os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_OS") == "Windows",
             "lifecycle acceptance is restricted to disposable GitHub Windows runners")
     api = Msi()
@@ -207,18 +226,21 @@ def lifecycle(msi, setup, payload, report):
               "setup_sha256": pack.base.digest(setup), "product_code": pack.product_code(version), "upgrade_code": pack.UPGRADE_CODE,
               "unsigned": True, "checks": checks, "windows10_target_hardware": "not_run", "ice_validation": "not_run; table schema/readback and lifecycle are separate checks"}
     future = next_version(version)
+    _TRACE = Trace(report.with_name("windows-msi-diagnostics.json"), manifest["project_commit"], version)
+    trace("preflight", "complete")
     try:
         with tempfile.TemporaryDirectory(prefix="nexa-msi-acceptance-") as temporary:
             work = Path(temporary)
             result["wizard_actions"] = wizard_check(setup)
             require(not root.exists() and not data.exists(), "canceling Setup modified the product or data")
-            invoke([setup, "/S", "/unknown"], (87,))
-            invoke([setup, "/S", "/repair", "/install"], (87,))
-            invoke([setup, "/S", "/uninstall"], (1605,))
-            # Default /i is the double-click MSI full-UI path; do not test only /qn.
+            invoke([setup, "/S", "/unknown"], (87,), stage="setup_invalid_option")
+            invoke([setup, "/S", "/repair", "/install"], (87,), stage="setup_conflicting_actions")
+            invoke([setup, "/S", "/uninstall"], (1605,), stage="setup_uninstall_absent")
+            # Default /i is the double-click entry; LIMITUI selects native Basic UI.
             invoke([Path(os.environ["SYSTEMROOT"]) / "System32/msiexec.exe", "/i", msi,
-                    "/norestart", "/l*v", logs / "install-full-ui.log", "REBOOT=ReallySuppress"])
-            result["msi_default_ui_installed"] = True
+                    "/norestart", "/l*v", logs / "default-ui-install.log", "REBOOT=ReallySuppress"],
+                   stage="msi_default_ui_install", log=logs / "default-ui-install.log")
+            result["msi_default_basic_ui_installed"] = True
             require(state(api, version) == 5, "per-user product not registered")
             installed_payload(root, files)
             checks["install"] = True
@@ -236,16 +258,21 @@ def lifecycle(msi, setup, payload, report):
             msi_command(msi, "/fa", logs / "repair.log")
             installed_payload(root, files); same_sentinels(sentinels)
             checks["repair"] = True
+            alias_directory = short_path(root)
+            result["install_short_path_alias_available"] = str(alias_directory).casefold() != str(root).casefold()
+            msi_command(msi, "/fa", logs / "alias-directory.log", "INSTALLFOLDER=" + str(alias_directory))
+            installed_payload(root, files); same_sentinels(sentinels)
             (root / "README.md").unlink()
-            invoke([setup, "/S", "/repair"])
+            invoke([setup, "/S", "/repair"], stage="setup_repair")
             installed_payload(root, files); same_sentinels(sentinels)
             checks["setup_repair"] = True
             # A real installed runtime is stopped through its own management API.
             runtime = root / "runtime/ai-runtime.exe"
             runtime_data = work / "runtime-data"
-            invoke([runtime, "--data-dir", runtime_data, "init"])
+            invoke([runtime, "--data-dir", runtime_data, "init"], stage="runtime_init")
             alias = short_path(runtime)
             result["runtime_short_path_alias_available"] = str(alias).casefold() != str(runtime).casefold()
+            trace("runtime_ready", "start")
             service = subprocess.Popen([str(alias), "--data-dir", str(runtime_data), "serve"], stdin=subprocess.DEVNULL,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
@@ -258,17 +285,20 @@ def lifecycle(msi, setup, payload, report):
                     time.sleep(0.2)
                 else:
                     raise ValueError("installed runtime did not become ready")
+                trace("runtime_ready", "complete")
                 for operation in ("/fa", "/x"):
                     msi_command(msi, operation, logs / ("busy-" + operation[1:] + ".log"), accepted=(1603,))
-                invoke([setup, "/S", "/repair"], (1603,))
+                invoke([setup, "/S", "/repair"], (1603,), stage="setup_busy_repair")
                 require(service.poll() is None, "installer force-stopped a live runtime")
                 installed_payload(root, files); same_sentinels(sentinels)
                 checks["running_process_blocked"] = True
             finally:
                 if service.poll() is None:
+                    trace("runtime_stop", "start")
                     stopped = subprocess.run([str(runtime), "--data-dir", str(runtime_data), "stop"], capture_output=True, timeout=30)
                     require(stopped.returncode == 0, "test runtime graceful stop failed")
                     service.wait(timeout=30)
+                    trace("runtime_stop", "complete", exit_code=stopped.returncode)
             # All install-owned locations must reject redirection/extra scope.
             msi_command(msi, "/fa", logs / "wrong-scope.log", "ALLUSERS=1", accepted=(1603,))
             msi_command(msi, "/fa", logs / "wrong-directory.log", "INSTALLFOLDER=" + str(work / "wrong-directory"), accepted=(1603,))
@@ -287,12 +317,14 @@ def lifecycle(msi, setup, payload, report):
                 if original.exists(): os.rmdir(original)
                 saved.rename(original)
             result["path_redirection_rejected"] = True
+            trace("fixture_build", "start")
             guard, _ = pack.compile_native(work)
             cab = pack.make_cabinet(payload, files, work)
             broken = work / "rollback.msi"
             upgraded = work / "upgrade.msi"
             pack.write_msi(files, future, cab, guard, broken, rollback_fixture=True)
             pack.write_msi(files, future, cab, guard, upgraded)
+            trace("fixture_build", "complete")
             msi_command(broken, "/i", logs / "rollback.log", accepted=(1603,))
             require(state(api, version) == 5 and state(api, future) == -1, "failed upgrade did not restore previous product")
             installed_payload(root, files); same_sentinels(sentinels)
@@ -316,21 +348,23 @@ def lifecycle(msi, setup, payload, report):
             require(state(api, version) == 5, "Setup did not install the same MSI product")
             installed_payload(root, files); same_sentinels(sentinels)
             checks["setup_install"] = True
-            invoke([setup, "/S", "/uninstall"])
+            invoke([setup, "/S", "/uninstall"], stage="setup_uninstall")
             require(state(api, version) == -1, "Setup uninstall kept MSI registration")
             same_sentinels(sentinels)
             checks["setup_uninstall"] = True
             # Also install silently through the unmodified shipped Setup.
-            invoke([setup, "/S"])
+            invoke([setup, "/S"], stage="setup_silent_install")
             installed_payload(root, files); same_sentinels(sentinels)
-            invoke([setup, "/S", "/uninstall"])
+            invoke([setup, "/S", "/uninstall"], stage="setup_silent_uninstall")
             require(state(api, version) == -1, "silent Setup cycle left product registered")
             # Test real msiexec 3010 propagation without rebooting the runner.
+            trace("reboot_fixture_build", "start")
             reboot = work / "reboot.msi"
             pack.write_msi(files, future, cab, guard, reboot)
             add_reboot_fixture(reboot)
             reboot_setup, _ = pack.compile_native(work, reboot)
-            invoke([reboot_setup, "/S"], (3010,))
+            trace("reboot_fixture_build", "complete")
+            invoke([reboot_setup, "/S"], (3010,), stage="setup_reboot")
             require(state(api, future) == 5, "3010 fixture did not install")
             msi_command(reboot, "/x", logs / "reboot-fixture-remove.log", accepted=(0, 3010))
             same_sentinels(sentinels)
@@ -341,7 +375,11 @@ def lifecycle(msi, setup, payload, report):
     finally:
         # A failed check is evidence, never a successful report. Do not recursively
         # remove install/user trees: preserved sentinels are intentional evidence.
+        if result["status"] != "pass" and _TRACE.document["status"] != "failed":
+            trace(_TRACE.document["last_stage"], "error")
+        _TRACE.finish(result["status"] == "pass")
         pack.base.write_json(report, result)
+        _TRACE = None
     require(all(checks.values()), "incomplete installer lifecycle acceptance")
     return result
 

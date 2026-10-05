@@ -44,13 +44,17 @@ Windows 工具链准备后先编译安装器辅助程序与资源，提前发现
 - `release-manifest.json`
 - `SHA256SUMS`
 
-MSI 和 Setup 使用同一个 MSI payload；安装、修复、升级、失败回滚、降级拒绝、运行中进程保护、卸载及用户数据保留均由一次性 Windows runner 验证。Setup 另验证安装/修复/卸载、退出码和向导控制流。测试用升级/失败 fixture 不进入发行资产。具体安装语义见 [安装器说明](windows-msi.md)。
+MSI 和 Setup 使用同一个 MSI payload；安装、修复、升级、失败回滚、降级拒绝、运行中进程保护、卸载及用户数据保留均由一次性 Windows runner 验证。Setup 另验证安装/修复/卸载、退出码和向导控制流。测试用升级/失败 fixture 不进入发行资产。具体安装语义见 [安装器说明](windows-installers.md)。
 
 对应的修改后 aria2 源码、构建材料及第三方许可继续完整位于便携/安装后的 `download/` 闭包中，且同字节源码额外作为 Release 附件供获取。桌面、runtime、下载组件的原生身份和完整许可门禁保持；不会用GitHub自动源码快照代替 aria2 对应源码。
 
 `release-manifest.json` 绑定精确 commit、版本、payload manifest、文件数量、每个资产的大小/SHA256及安装器验证结果。`SHA256SUMS` 覆盖四个分发资产和 release manifest。发布 job 下载同一 run 的精确 SHA artifact，再核验封闭库存及对应源码一致性。
 
 ## 失败、重跑与防覆盖
+
+安装生命周期在执行过程中写入独立的脱敏诊断 sidecar。工作流在成功或失败后都尝试通过封闭 schema 校验，再上传固定的 `nexa-windows-installer-evidence-<commit>` artifact；只含预先审核的阶段、动作/窗口类别、退出码和计数。报告缺失也明确标记缺失，不伪造完成。未知字段、任意文字、用户路径或不一致 commit 被拒绝，校验失败不上传；原始 msiexec 日志和构建输出目录不进入该 artifact。runner 整体退出或任务超时导致后续步骤不能执行时，不能保证保留诊断。
+
+若正式 MSI/Setup 构建已经成功而生命周期未成功，另保留 `nexa-windows-installers-UNVERIFIED-<commit>` 开发诊断 artifact，仅含当次正式 MSI、Setup EXE 和不含用户路径的 build report。它不是通过验收的发行包，不能作为验收通过或正式交付的依据；不含测试 fixture、原始日志、用户数据或整个 dist 目录。Release job 永不消费该 artifact，仍只接收完整验证后的 release 资产。
 
 构建和验证通过后，发布脚本先通过 GitHub API 解析轻量/附注 tag，确认最终 commit 仍等于事件提交。缺失 tag 或移动 tag 均失败，不创建或修复 tag。
 

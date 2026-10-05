@@ -336,6 +336,39 @@ class ReleaseTests(unittest.TestCase):
             with mock.patch.object(api, "request", return_value=value), self.assertRaises(ValueError):
                 api.require_tag("v" + VERSION, COMMIT)
 
+    def test_installer_failure_upload_uses_only_validated_sanitized_sidecar(self):
+        workflow = (release.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
+        stage = workflow.split("      - name: Stage only validated sanitized installer diagnostics\n", 1)[1]
+        stage, remainder = stage.split("      - name: Preserve sanitized installer diagnostics on success or failure\n", 1)
+        upload = remainder.split("      - name: Preserve unverified installer binaries only for failed lifecycle diagnosis\n", 1)[0]
+        self.assertIn("        if: always()", stage)
+        self.assertIn("        timeout-minutes: 2", stage)
+        self.assertIn("windows_installer_diagnostics.py --input dist/windows-msi-diagnostics.json --output artifacts/upload-installer-evidence --commit $env:GITHUB_SHA", stage)
+        self.assertIn("if ($LASTEXITCODE -ne 0)", stage)
+        self.assertIn("always() && steps.installer_evidence.outcome == 'success'", upload)
+        self.assertIn("          path: artifacts/upload-installer-evidence/", upload)
+        self.assertIn("          if-no-files-found: error", upload)
+        self.assertNotIn("dist/", upload)
+        self.assertNotIn("windows-msi-logs", upload)
+        self.assertNotIn("*.log", upload)
+        self.assertLess(workflow.index("id: installer_acceptance"), workflow.index("id: installer_evidence"))
+        self.assertLess(workflow.index("id: installer_evidence"), workflow.index("Stage closed three-format release assets"))
+
+    def test_failed_lifecycle_binary_artifact_is_closed_unverified_and_not_a_release_input(self):
+        workflow = (release.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
+        upload = workflow.split("      - name: Preserve unverified installer binaries only for failed lifecycle diagnosis\n", 1)[1].split("      - name: Preserve desktop package\n", 1)[0]
+        self.assertIn("always() && steps.windows_installers.outcome == 'success' && steps.installer_acceptance.outcome != 'success'", upload)
+        self.assertIn("name: nexa-windows-installers-UNVERIFIED-${{ github.sha }}", upload)
+        paths = upload.split("          path: |\n", 1)[1].split("          if-no-files-found:", 1)[0]
+        self.assertEqual([line.strip() for line in paths.splitlines()], [
+            "dist/Nexa-${{ env.NEXA_RELEASE_VERSION }}-windows-x64-setup.msi",
+            "dist/Nexa-${{ env.NEXA_RELEASE_VERSION }}-windows-x64-setup.exe",
+            "dist/windows-msi-build-report.json"])
+        self.assertNotIn("*", paths)
+        publishing = workflow.split("\n  release:\n", 1)[1]
+        self.assertNotIn("UNVERIFIED", publishing)
+        self.assertIn("name: nexa-windows-release-${{ github.sha }}", publishing)
+
     def test_all_workflow_actions_are_sha_pinned_and_release_is_isolated(self):
         text = (release.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
         import re

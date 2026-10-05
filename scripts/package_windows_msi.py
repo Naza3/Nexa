@@ -135,7 +135,7 @@ def author_tables(files, version, *, rollback_fixture=False):
     props = {
         "ProductCode": product_code(version), "UpgradeCode": UPGRADE_CODE,
         "ProductName": "Nexa", "ProductVersion": version, "ProductLanguage": "1033",
-        "Manufacturer": "Nexa", "INSTALLLEVEL": "1", "ARPNOMODIFY": "1",
+        "Manufacturer": "Nexa", "INSTALLLEVEL": "1", "ARPNOMODIFY": "1", "LIMITUI": "1",
         "ARPHELPLINK": "https://github.com/Naza3/Nexa", "ARPCONTACT": "https://github.com/Naza3/Nexa/issues",
         "SecureCustomProperties": "NEXA_OLDER;NEXA_NEWER", "MSIRESTARTMANAGERCONTROL": "Disable",
         "REBOOT": "ReallySuppress", "MSIFASTINSTALL": "0",
@@ -248,7 +248,7 @@ def validate_tables(tables):
         base.fail("duplicate MSI component GUID")
 
 
-def compile_native(work, msi=None):
+def compile_native(work, msi=None, *, path_test=False):
     for name in ("CL", "_CL_", "LINK", "_LINK_", "CFLAGS", "CXXFLAGS"):
         if os.environ.get(name):
             base.fail("installer refuses implicit " + name)
@@ -257,8 +257,9 @@ def compile_native(work, msi=None):
     dumpbin = base.selected_msvc_tool(vs, env, "dumpbin.exe")
     common = [compiler, "/nologo", "/W4", "/WX", "/O1", "/GS-", "/Zl", "/DUNICODE", "/D_UNICODE", "/D_WIN32_WINNT=0x0A00", "/I" + str(AUTHORING)]
     if msi is None:
-        output = work / "nexa-installer-guard.dll"
-        base.command([*common, "/LD", AUTHORING / "guard.c", "/Fo" + str(work / "guard.obj"),
+        output = work / ("nexa-installer-path-test.dll" if path_test else "nexa-installer-guard.dll")
+        source = AUTHORING / ("path_test.c" if path_test else "guard.c")
+        base.command([*common, "/LD", source, "/Fo" + str(work / "guard.obj"),
                       "/link", "/NODEFAULTLIB", "/NOENTRY", "/MACHINE:X64", "/DYNAMICBASE", "/NXCOMPAT",
                       "/OUT:" + str(output), "/IMPLIB:" + str(work / "guard.lib"), "kernel32.lib", "user32.lib", "msi.lib", "shell32.lib", "ole32.lib", "uuid.lib", "version.lib"], env, cwd=work)
     else:
@@ -280,6 +281,40 @@ def compile_native(work, msi=None):
     if not set(imports) <= allowed:
         base.fail("installer has non-inbox/CRT dependencies: " + str(imports))
     return output, {"visual_studio": selected["installationVersion"], "msvc": env["VCTOOLSVERSION"], "windows_sdk": env["WINDOWSSDKVERSION"].rstrip("\\/"), "imports": imports}
+
+
+def check_native_paths(work):
+    """Exercise the real guard helper without installing a test product."""
+    dll, _ = compile_native(work, path_test=True)
+    helper = ctypes.WinDLL(str(dll), use_last_error=True)
+    check = helper.NexaTestSameTarget
+    check.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+    check.restype = ctypes.c_int
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetShortPathNameW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
+    kernel.GetShortPathNameW.restype = ctypes.c_uint
+    kernel.FreeLibrary.argtypes = [ctypes.c_void_p]
+    root = work / "Guard path with spaces"
+    root.mkdir()
+    alias = ctypes.create_unicode_buffer(32768)
+    size = kernel.GetShortPathNameW(str(root), alias, len(alias))
+    if not 0 < size < len(alias): base.fail("native guard short-path fixture unavailable")
+    external, junction = work / "guard-external", work / "guard-junction"
+    external.mkdir()
+    results = {}
+    try:
+        results["existing_alias"] = bool(check(str(root), alias.value))
+        results["missing_tail_alias"] = bool(check(str(root / "missing/Programs/Nexa"), str(Path(alias.value) / "missing/Programs/Nexa")))
+        results["dot_tail_rejected"] = not check(str(root / "missing/../Nexa"), str(root / "Nexa"))
+        results["wrong_target_rejected"] = not check(str(root / "Nexa"), str(external / "Nexa"))
+        cmd = base.regular(Path(os.environ["SYSTEMROOT"]) / "System32/cmd.exe")
+        base.command([cmd, "/d", "/c", "mklink", "/J", junction, external], cwd=work)
+        results["junction_rejected"] = not check(str(junction / "missing/Nexa"), str(external / "missing/Nexa"))
+        if not all(results.values()): base.fail("native guard path regression failed: " + json.dumps(results, sort_keys=True))
+    finally:
+        if junction.exists(): os.rmdir(junction)
+        kernel.FreeLibrary(helper._handle)
+    return {"checks": results, "short_alias_available": str(root).casefold() != alias.value.casefold()}
 
 
 def make_cabinet(payload, files, work):
@@ -414,10 +449,11 @@ def main():
             with tempfile.TemporaryDirectory(prefix="nexa-installer-compile-", dir=args.report.parent) as temporary:
                 work = Path(temporary).resolve()
                 _, guard_tools = compile_native(work)
+                guard_path_checks = check_native_paths(work)
                 fixture = work / "compile-only-resource.bin"
                 fixture.write_bytes(b"Nexa compile-only resource. This is not an MSI package.")
                 _, setup_tools = compile_native(work, fixture)
-                base.write_json(args.report, {"schema_version": 1, "status": "compile-pass", "guard": guard_tools, "setup": setup_tools, "installation_tested": False})
+                base.write_json(args.report, {"schema_version": 1, "status": "compile-pass", "guard": guard_tools, "setup": setup_tools, "guard_path_checks": guard_path_checks, "installation_tested": False})
             print("Installer helpers compiled; no MSI installation or payload validation was performed")
             return 0
         result = build(args.payload, args.version, args.output, args.setup_output, args.report)

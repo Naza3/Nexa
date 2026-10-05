@@ -462,6 +462,36 @@ jobs:
           $prefix = "dist/Nexa-${env:NEXA_RELEASE_VERSION}-windows-x64-setup"
           python -X warn_default_encoding -W error::EncodingWarning scripts/test_windows_msi_lifecycle.py --msi "$prefix.msi" --setup "$prefix.exe" --payload dist/desktop-windows --report dist/windows-msi-lifecycle-report.json
           if ($LASTEXITCODE -ne 0) { throw 'MSI/Setup lifecycle or user-data preservation failed' }
+      - name: Stage only validated sanitized installer diagnostics
+        id: installer_evidence
+        if: always()
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The closed-schema sidecar contains only reviewed enums/counts/codes.
+          # Raw msiexec logs, window text, user paths and dist/ are never uploaded.
+          python scripts/windows_installer_diagnostics.py --input dist/windows-msi-diagnostics.json --output artifacts/upload-installer-evidence --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Installer diagnostic schema validation failed; raw evidence will not be uploaded' }
+      - name: Preserve sanitized installer diagnostics on success or failure
+        if: ${{ always() && steps.installer_evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-windows-installer-evidence-${{ github.sha }}
+          path: artifacts/upload-installer-evidence/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve unverified installer binaries only for failed lifecycle diagnosis
+        if: ${{ always() && steps.windows_installers.outcome == 'success' && steps.installer_acceptance.outcome != 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # Diagnostic-only: the release job never downloads this artifact.
+          name: nexa-windows-installers-UNVERIFIED-${{ github.sha }}
+          path: |
+            dist/Nexa-${{ env.NEXA_RELEASE_VERSION }}-windows-x64-setup.msi
+            dist/Nexa-${{ env.NEXA_RELEASE_VERSION }}-windows-x64-setup.exe
+            dist/windows-msi-build-report.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Preserve desktop package
         if: ${{ success() && steps.desktop_acceptance.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

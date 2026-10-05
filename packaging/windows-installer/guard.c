@@ -105,6 +105,53 @@ static BOOL windows10_kernel(void) {
     return result;
 }
 
+/* Expand only existing ancestors, preserving a missing destination tail. Never
+   normalize away dot segments or follow a reparse point to compare scope. */
+static BOOL expanded_path(const WCHAR *input, WCHAR *output) {
+    WCHAR *work;
+    DWORD length = (DWORD)lstrlenW(input), cut, part = 3, i;
+    BOOL result = FALSE;
+    if (length < 3 || length >= 32768 || input[1] != L':' || input[2] != L'\\' || !safe_path(input)) return FALSE;
+    for (i = 3; i <= length; ++i) {
+        if (input[i] == L'/' || input[i] == L':') return FALSE;
+        if (input[i] == L'\\' || input[i] == 0) {
+            DWORD size = i - part;
+            if ((size == 1 && input[part] == L'.') || (size == 2 && input[part] == L'.' && input[part+1] == L'.') || (!size && i < length)) return FALSE;
+            part = i + 1;
+        }
+    }
+    work = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, (length + 1) * sizeof(WCHAR));
+    if (!work) return FALSE;
+    lstrcpyW(work, input);
+    cut = length;
+    while (cut > 3 && work[cut-1] == L'\\') work[--cut] = 0;
+    for (;;) {
+        DWORD size = GetLongPathNameW(work, output, 32768), error = GetLastError();
+        if (size > 0 && size < 32768) {
+            result = append_text(output, 32768, input + cut);
+            if (result) {
+                size = (DWORD)lstrlenW(output);
+                while (size > 3 && output[size-1] == L'\\') output[--size] = 0;
+            }
+            break;
+        }
+        if (size || (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) || cut <= 3) break;
+        while (cut > 3 && work[cut-1] != L'\\') --cut;
+        if (cut > 3) --cut;
+        work[cut] = 0;
+    }
+    HeapFree(GetProcessHeap(), 0, work);
+    return result;
+}
+static BOOL same_target_path(const WCHAR *left, const WCHAR *right) {
+    WCHAR *buffer = (WCHAR *)HeapAlloc(GetProcessHeap(), 0, 2 * 32768 * sizeof(WCHAR));
+    BOOL result;
+    if (!buffer) return FALSE;
+    result = expanded_path(left, buffer) && expanded_path(right, buffer + 32768) && !lstrcmpiW(buffer, buffer + 32768);
+    HeapFree(GetProcessHeap(), 0, buffer);
+    return result;
+}
+
 static UINT check_session(MSIHANDLE session, WCHAR *root, WCHAR *expected, WCHAR *path) {
     WCHAR scope[16];
     PWSTR local = NULL;
@@ -125,7 +172,7 @@ static UINT check_session(MSIHANDLE session, WCHAR *root, WCHAR *expected, WCHAR
     if (!get_property(session, L"INSTALLFOLDER", root, 32768))
         return refuse(session, L"Cannot resolve the installation directory.");
     length = (DWORD)lstrlenW(root);
-    if (!length || (root[length-1] != L'\\' && !append_text(root, 32768, L"\\")) || lstrcmpiW(root, expected))
+    if (!length || (root[length-1] != L'\\' && !append_text(root, 32768, L"\\")) || !same_target_path(root, expected))
         return refuse(session, L"Nexa must be installed in the current user's LocalAppData\\Programs\\Nexa directory.");
     if (!safe_path(root))
         return refuse(session, L"Nexa installation path is inaccessible or contains a symbolic link/reparse point. No files were changed.");
@@ -158,7 +205,7 @@ static UINT check_session(MSIHANDLE session, WCHAR *root, WCHAR *expected, WCHAR
     if (!get_property(session, L"NexaMenuFolder", path, 32768))
         return refuse(session, L"Cannot resolve the Nexa Start Menu directory.");
     length = (DWORD)lstrlenW(path);
-    if (!length || (path[length-1] != L'\\' && !append_text(path, 32768, L"\\")) || lstrcmpiW(path, expected) ||
+    if (!length || (path[length-1] != L'\\' && !append_text(path, 32768, L"\\")) || !same_target_path(path, expected) ||
         !safe_path(path) || !append_text(path, 32768, L"Nexa.lnk") || !safe_path(path))
         return refuse(session, L"Nexa Start Menu path is inaccessible, outside the user profile or redirected by a link. No files were changed.");
     if (!stopped(root))
