@@ -1,0 +1,210 @@
+{
+  "description": "Synthetic shared Python/Rust format fixture; CRLF, UTF-8 and marker-like text; not upstream license text or a distribution.",
+  "index": {
+    "schema_version": 1,
+    "format": "nexa-license-bundle-v1",
+    "documents": [
+      {
+        "original_path": "licenses/COPYING",
+        "sha256": "c91eb459c823aba1a98026318ce84402d4e85d30c1fff1d94de3454b36c78083",
+        "size_bytes": 85,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 314,
+        "attributions": [
+          {
+            "component": "LLVM/MinGW runtime",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/COPYING.MinGW-w64-runtime.txt",
+        "sha256": "0e6788335370f80c6620c6c39023b457d2dc54c6b0902fd86df3357c20fcf387",
+        "size_bytes": 107,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 579,
+        "attributions": [
+          {
+            "component": "LLVM/MinGW runtime",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/COPYING.MinGW-w64.txt",
+        "sha256": "b983e1858417f029ac8c0ce36e950af3033af5772d73cb7d34804b0355cad53d",
+        "size_bytes": 99,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 857,
+        "attributions": [
+          {
+            "component": "LLVM/MinGW runtime",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/COPYING.winpthreads.txt",
+        "sha256": "3c1b475612321e55a9d29b4b0d3d7339e2a5a563358be083ad3f36a4fdc3f119",
+        "size_bytes": 101,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 1130,
+        "attributions": [
+          {
+            "component": "LLVM/MinGW runtime",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/COPYING.winstorecompat.txt",
+        "sha256": "85f4ea01e83e30764b09d897dc3b12e577d1c4c452c916194cf2ee6b81797e0f",
+        "size_bytes": 104,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 1408,
+        "attributions": [
+          {
+            "component": "LLVM/MinGW runtime",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/aria2-COPYING",
+        "sha256": "536bb6ee6a3b8af3c244f62f319e812efa75a339a6d5ca72fbe83705d51190c2",
+        "size_bytes": 91,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 1675,
+        "attributions": [
+          {
+            "component": "aria2",
+            "version": "1.37.0",
+            "source": "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.xz"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/compiler-rt-LICENSE.TXT",
+        "sha256": "55429e9da64d2a40258ce6594d85fb4c9f5a4b28782e5057bb50a142232ea5e0",
+        "size_bytes": 101,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 1940,
+        "attributions": [
+          {
+            "component": "compiler-rt",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/compiler-rt/LICENSE.TXT"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/libcxx-LICENSE.TXT",
+        "sha256": "9f9609745b53f3c74de4a035e3d9ba57c92460f5dc4bef5815a6a07b9550dd1e",
+        "size_bytes": 96,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 2209,
+        "attributions": [
+          {
+            "component": "libcxx",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libcxx/LICENSE.TXT"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/libcxxabi-LICENSE.TXT",
+        "sha256": "41436473fe97add88b02c0cfa42dba07bfa825510858fedb141426f545fdb5ea",
+        "size_bytes": 99,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 2476,
+        "attributions": [
+          {
+            "component": "libcxxabi",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libcxxabi/LICENSE.TXT"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/libunwind-LICENSE.TXT",
+        "sha256": "63e30b4b95ed61452732de2f5236420c4f05788c7059cfc53ccae734c2a6f939",
+        "size_bytes": 99,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 2746,
+        "attributions": [
+          {
+            "component": "libunwind",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libunwind/LICENSE.TXT"
+          }
+        ]
+      },
+      {
+        "original_path": "licenses/llvm-mingw-LICENSE.TXT",
+        "sha256": "3d0f6a00137dffe1e0b176309468cd6b39cc9be9ff7aa6afaa320381024a8324",
+        "size_bytes": 100,
+        "stored_path": "licenses/THIRD_PARTY_LICENSES.txt",
+        "offset_bytes": 3018,
+        "attributions": [
+          {
+            "component": "LLVM/MinGW runtime",
+            "version": "llvm-mingw-20240619/LLVM-18.1.8/UCRT",
+            "source": "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          }
+        ]
+      }
+    ]
+  },
+  "bundle": "Nexa third-party license bundle (format 1)\nOriginal license and notice bytes are preserved without modification.\nComponent, version and source mappings are in index.json.\n\n===== ORIGINAL FILE: licenses/COPYING =====\nSHA256: c91eb459c823aba1a98026318ce84402d4e85d30c1fff1d94de3454b36c78083\nBytes: 85\nBEGIN ORIGINAL\nSynthetic license fixture for COPYING.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/COPYING.MinGW-w64-runtime.txt =====\nSHA256: 0e6788335370f80c6620c6c39023b457d2dc54c6b0902fd86df3357c20fcf387\nBytes: 107\nBEGIN ORIGINAL\nSynthetic license fixture for COPYING.MinGW-w64-runtime.txt.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/COPYING.MinGW-w64.txt =====\nSHA256: b983e1858417f029ac8c0ce36e950af3033af5772d73cb7d34804b0355cad53d\nBytes: 99\nBEGIN ORIGINAL\nSynthetic license fixture for COPYING.MinGW-w64.txt.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/COPYING.winpthreads.txt =====\nSHA256: 3c1b475612321e55a9d29b4b0d3d7339e2a5a563358be083ad3f36a4fdc3f119\nBytes: 101\nBEGIN ORIGINAL\nSynthetic license fixture for COPYING.winpthreads.txt.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/COPYING.winstorecompat.txt =====\nSHA256: 85f4ea01e83e30764b09d897dc3b12e577d1c4c452c916194cf2ee6b81797e0f\nBytes: 104\nBEGIN ORIGINAL\nSynthetic license fixture for COPYING.winstorecompat.txt.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/aria2-COPYING =====\nSHA256: 536bb6ee6a3b8af3c244f62f319e812efa75a339a6d5ca72fbe83705d51190c2\nBytes: 91\nBEGIN ORIGINAL\nSynthetic license fixture for aria2-COPYING.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/compiler-rt-LICENSE.TXT =====\nSHA256: 55429e9da64d2a40258ce6594d85fb4c9f5a4b28782e5057bb50a142232ea5e0\nBytes: 101\nBEGIN ORIGINAL\nSynthetic license fixture for compiler-rt-LICENSE.TXT.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/libcxx-LICENSE.TXT =====\nSHA256: 9f9609745b53f3c74de4a035e3d9ba57c92460f5dc4bef5815a6a07b9550dd1e\nBytes: 96\nBEGIN ORIGINAL\nSynthetic license fixture for libcxx-LICENSE.TXT.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/libcxxabi-LICENSE.TXT =====\nSHA256: 41436473fe97add88b02c0cfa42dba07bfa825510858fedb141426f545fdb5ea\nBytes: 99\nBEGIN ORIGINAL\nSynthetic license fixture for libcxxabi-LICENSE.TXT.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/libunwind-LICENSE.TXT =====\nSHA256: 63e30b4b95ed61452732de2f5236420c4f05788c7059cfc53ccae734c2a6f939\nBytes: 99\nBEGIN ORIGINAL\nSynthetic license fixture for libunwind-LICENSE.TXT.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n\n===== ORIGINAL FILE: licenses/llvm-mingw-LICENSE.TXT =====\nSHA256: 3d0f6a00137dffe1e0b176309468cd6b39cc9be9ff7aa6afaa320381024a8324\nBytes: 100\nBEGIN ORIGINAL\nSynthetic license fixture for llvm-mingw-LICENSE.TXT.\r\nNot an upstream license. 版权\nEND ORIGINAL\n\nEND ORIGINAL\n",
+  "build_files": {
+    "licenses/COPYING": {
+      "sha256": "c91eb459c823aba1a98026318ce84402d4e85d30c1fff1d94de3454b36c78083",
+      "bytes": 85
+    },
+    "licenses/COPYING.MinGW-w64-runtime.txt": {
+      "sha256": "0e6788335370f80c6620c6c39023b457d2dc54c6b0902fd86df3357c20fcf387",
+      "bytes": 107
+    },
+    "licenses/COPYING.MinGW-w64.txt": {
+      "sha256": "b983e1858417f029ac8c0ce36e950af3033af5772d73cb7d34804b0355cad53d",
+      "bytes": 99
+    },
+    "licenses/COPYING.winpthreads.txt": {
+      "sha256": "3c1b475612321e55a9d29b4b0d3d7339e2a5a563358be083ad3f36a4fdc3f119",
+      "bytes": 101
+    },
+    "licenses/COPYING.winstorecompat.txt": {
+      "sha256": "85f4ea01e83e30764b09d897dc3b12e577d1c4c452c916194cf2ee6b81797e0f",
+      "bytes": 104
+    },
+    "licenses/aria2-COPYING": {
+      "sha256": "536bb6ee6a3b8af3c244f62f319e812efa75a339a6d5ca72fbe83705d51190c2",
+      "bytes": 91
+    },
+    "licenses/compiler-rt-LICENSE.TXT": {
+      "sha256": "55429e9da64d2a40258ce6594d85fb4c9f5a4b28782e5057bb50a142232ea5e0",
+      "bytes": 101
+    },
+    "licenses/libcxx-LICENSE.TXT": {
+      "sha256": "9f9609745b53f3c74de4a035e3d9ba57c92460f5dc4bef5815a6a07b9550dd1e",
+      "bytes": 96
+    },
+    "licenses/libcxxabi-LICENSE.TXT": {
+      "sha256": "41436473fe97add88b02c0cfa42dba07bfa825510858fedb141426f545fdb5ea",
+      "bytes": 99
+    },
+    "licenses/libunwind-LICENSE.TXT": {
+      "sha256": "63e30b4b95ed61452732de2f5236420c4f05788c7059cfc53ccae734c2a6f939",
+      "bytes": 99
+    },
+    "licenses/llvm-mingw-LICENSE.TXT": {
+      "sha256": "3d0f6a00137dffe1e0b176309468cd6b39cc9be9ff7aa6afaa320381024a8324",
+      "bytes": 100
+    }
+  }
+}

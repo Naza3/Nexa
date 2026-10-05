@@ -4,7 +4,9 @@
 
 ## Rust 与原生组件
 
-`licenses/index.json` 记录每份原文的组件、来源及 SHA-256。`licenses/rust-crates/` 包含实际 Windows 产品依赖图的 normal/build 闭包（保守保留过程宏等构建依赖的原文）；`licenses/rust-std/` 保留锁定 Rust 工具链提供的标准库版权和许可原文。`licenses/llama.cpp/` 保留固定 vendor 的 llama.cpp、nlohmann/json、cpp-httplib、hash 组件及 sheredom/subprocess.h 头文件内的原始 Unlicense 块。具体上游 commit 和包版本见 manifest。
+`licenses/index.json` 记录每份原文的原始路径、组件/来源、SHA-256、字节数和存储位置。`licenses/THIRD_PARTY_LICENSES.txt` 逐字节保留实际 Windows 产品依赖图的 normal/build 闭包（保守保留过程宏等构建依赖）、锁定 Rust 工具链许可、固定 vendor 的 llama.cpp、nlohmann/json、cpp-httplib、hash 组件及 sheredom/subprocess.h 头文件内的原始 Unlicense 块；原 JSON 库存也完整保留。旧 `licenses/rust-crates/`、`licenses/rust-std/`、`licenses/llama.cpp/` 路径是索引中的原文标识，不再各占一个文件。Rust 标准库版权 HTML 原件单独保留为 `licenses/COPYRIGHT.html`，可直接打开阅读。具体上游 commit 和包版本见 manifest。
+
+原生构建中，本说明加上上述三份文件共四份许可相关文件。交叉构建若另有 Microsoft DOCX/PDF 等非文本原件，则原格式单独保存在 `licenses/ORIGINAL-<原文件名>`，本说明的完整原字节收入文本索引以腾出文件位置。独立 runtime 自带完整原文，不依赖桌面外层文件。原文不转码、不改换行，也不删减版权或 NOTICE。
 
 ## Microsoft Visual C++ Release x64 runtime
 

@@ -22,7 +22,7 @@ describe("persistent sidebar service control", () => {
       await user.click(screen.getByRole("button", { name: page }));
       expect(control().getByRole("button", { name: "停止运行服务" })).toBeEnabled();
       expect(screen.getAllByRole("button", { name: "停止运行服务" })).toHaveLength(1);
-      expect(control().getByText("服务运行中")).toBeInTheDocument();
+      expect(within(screen.getByLabelText("应用状态栏")).getByText("服务运行中")).toBeInTheDocument();
     }
     expect(api.start).not.toHaveBeenCalled(); expect(api.stop).not.toHaveBeenCalled();
   });
@@ -69,7 +69,7 @@ describe("persistent sidebar service control", () => {
     const api = makeApi({ snapshot: vi.fn().mockResolvedValueOnce(current).mockImplementationOnce(() => pending.promise).mockImplementation(async () => current) });
     const controller = new DesktopController(api); render(<App initialPage="models" controller={controller} />);
     await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
-    expect(control().getByText("服务状态待确认")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("应用状态栏")).getByText("服务连接失效")).toBeInTheDocument();
     const check = control().getByRole("button", { name: "重新检查服务" }); fireEvent.click(check); fireEvent.click(check);
     expect(control().getByRole("button", { name: "正在检查服务…" })).toBeDisabled();
     current = { ...stopped(), initialized }; await act(async () => pending.resolve(current));
@@ -94,7 +94,7 @@ describe("persistent sidebar service control", () => {
       await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "停止运行服务" }));
     }
     expect(control().getByRole("button", { name: "重新检查服务" })).toBeEnabled();
-    expect(control().getByText("服务状态待确认")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("应用状态栏")).getByText("服务连接失效")).toBeInTheDocument();
     expect(control().queryByText("服务已停止")).not.toBeInTheDocument();
     expect(api[action]).toHaveBeenCalledTimes(1);
   });

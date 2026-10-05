@@ -99,7 +99,7 @@ describe("offline model inventory and local evidence", () => {
     const { controller } = await create({ snapshot: vi.fn(async () => snapshot()), testModel: vi.fn(async () => result), modelsPage: vi.fn(async () => page(proof(), "runtime")) });
     await controller.testModel(model.id);
     expect(controller.getSnapshot().models.data[0].local_validation?.state).toBe("passed");
-    expect(controller.getSnapshot().notice).toBe("本机测试已暂缓；列表中的通过标签来自此前记录。");
+    expect(controller.getSnapshot().notice).toBe("本机测试已暂缓；历史本机通过记录仍保留，不代表本次通过。");
   });
 
   it("reloads authoritative failed receipts when native load rejects", async () => {

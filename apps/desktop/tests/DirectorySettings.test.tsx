@@ -1,3 +1,4 @@
+import { openModelDetails } from "./navigation";
 import {
   act,
   fireEvent,
@@ -176,16 +177,17 @@ describe("directory settings React flow", () => {
         }),
     });
     await user.click(screen.getByRole("button", { name: "模型库" }));
-    expect(screen.getAllByRole("heading", { name: display })).toHaveLength(2);
-    expect(screen.getByText("原有管理模型")).toBeInTheDocument();
-    expect(screen.getByText(`API ID：${external.id}`)).toBeVisible();
+    expect(screen.getAllByRole("heading", { name: display })).toHaveLength(1);
+    expect(screen.getByLabelText("应用状态栏")).toHaveTextContent(`驻留：${display}`);
+    expect(screen.queryByText(`API ID：${external.id}`)).not.toBeInTheDocument();
+    await openModelDetails(display); expect(screen.getByText(`API ID：${external.id}`)).toBeVisible(); await user.click(screen.getByRole("button", { name: /返回模型库/ }));
     await user.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() =>
-      expect(screen.getAllByRole("heading", { name: display })).toHaveLength(1),
+      expect(screen.queryAllByRole("heading", { name: display })).toHaveLength(0),
     );
     await user.click(screen.getByRole("button", { name: "模型库" }));
     await user.click(screen.getByRole("button", { name: "聊天测试" }));
-    expect(screen.getByText(new RegExp(display))).toBeInTheDocument();
+    expect(screen.getByLabelText("应用状态栏")).toHaveTextContent(display);
   });
   it("shows duplicate names with source and short id without renaming files", async () => {
     const { user } = await setup({
@@ -199,9 +201,9 @@ describe("directory settings React flow", () => {
       })),
     });
     await user.click(screen.getByRole("button", { name: "模型库" }));
-    expect(screen.getByText("同名区分：目录 · 12345678")).toBeInTheDocument();
+    expect(screen.getByText("12345678")).toBeInTheDocument();
     expect(
-      screen.getByText(`同名区分：管理 · ${model.id}`),
+      screen.getByText(model.id),
     ).toBeInTheDocument();
   });
   it("clearly separates configured and effective paths and blocks generation when stale", async () => {

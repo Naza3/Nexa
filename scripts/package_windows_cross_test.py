@@ -216,7 +216,8 @@ def write_crt_licenses(stage, provenance):
     records = []
     for index, record in enumerate(provenance["licenses"]):
         path = check_file_record(record)
-        # Originals are included as text/license files, never executable tooling.
+        # Originals retain their native format, including DOCX/PDF. Consolidation
+        # keeps non-text originals standalone; it never extracts or converts them.
         name = f"original-{index + 1}-{path.name}"
         if path.suffix.lower() not in {".txt", ".rtf", ".html", ".htm", ".md", ".pdf", ".docx"}:
             base.fail("unsupported CRT original-license file type")
@@ -317,6 +318,7 @@ def package(args):
         dependencies = base.collect_dependencies(runtime, redist, inspect, copy_crt)
         base.copy_licenses(runtime, metadata, env)
         write_crt_licenses(runtime, provenance)
+        base.consolidate_licenses(runtime)
         manifest = {**common, "product": "nexa-runtime", "crt": "MD", "architecture": "x86_64", "protocol_version": 1,
                     "worker_protocol_version": 2, "shim_version": 3, "project_tree": source["tree"],
                     "llama_commit": base.LLAMA_COMMIT, "cargo_lock_sha256": base.digest(ROOT / "Cargo.lock"),
@@ -331,6 +333,7 @@ def package(args):
         dependencies = base.collect_dependencies(helper, redist, inspect, copy_crt, ("nexa-acceptance.exe",))
         base.copy_licenses(helper, metadata, env, roots=("xtask",))
         write_crt_licenses(helper, provenance)
+        base.consolidate_licenses(helper)
         seal(helper, base.sanitize({**common, "product": "nexa-acceptance-tools", "dependencies": dependencies,
              "crt_sources": copied.copy(), "native_inference_linkage": False,
              "helper_without_native": {"verified": True, "method": "locked-normal-dependency-graph", "dependencies": graphs["acceptance_tools"]}}, replacements), base.verify_package)
@@ -350,6 +353,7 @@ def package(args):
         desktop.copy_rust_licenses(stage, shell_metadata, env)
         desktop.npm_licenses(stage)
         write_crt_licenses(stage, provenance)
+        base.consolidate_licenses(stage)
         seal(stage, base.sanitize({**common, "product": "nexa-desktop", "dependencies": dependencies, "crt_sources": copied.copy(),
              "runtime_manifest_sha256": base.digest(runtime / "manifest.json"), "desktop_cargo_lock_sha256": base.digest(ROOT / "apps/desktop/src-tauri/Cargo.lock"),
              "npm_lock_sha256": base.digest(ROOT / "apps/desktop/package-lock.json"),

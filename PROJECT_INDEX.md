@@ -102,3 +102,11 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [统一档案与配置ADR0025](docs/decisions/0025-unified-model-profiles-and-configuration.md)：schema2、CAS迁移、共享解析、会话快照和前后端命令合同，实施中
 
 - [整体体验实施验证](docs/verification/2026-10-04-unified-product-experience.md)：档案/CAS、状态、任务、独立反例与真实GGUF分层证据
+
+- [许可无损整合ADR0026](docs/decisions/0026-lossless-license-bundles.md)：完整桌面含runtime/download至多10份许可文件，保留全部原文、版权HTML、Microsoft原件与原库存映射
+
+- [许可整合验证](docs/verification/2026-10-05-lossless-license-bundles.md)：Python/Rust共享合同、77项针对性Rust回归、748/760份原文旧包语料逐字节恢复和未验证的Windows边界
+
+- [精简桌面产品体验](docs/product/compact-desktop-experience.md)：全局状态条、分组摘要和按需展开设置的整体设计
+
+- [本轮精简桌面验证](docs/verification/2026-10-05-compact-desktop-experience.md)：前端回归、独立审查与原生Windows验证边界

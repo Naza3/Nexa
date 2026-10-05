@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import type { ReactNode } from "react";
 
 export function Modal({
@@ -17,13 +17,14 @@ export function Modal({
   danger?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const cancel = useEffectEvent(onCancel);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
     const handle = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onCancel();
+        cancel();
       }
       if (event.key === "Tab") {
         const items = ref.current?.querySelectorAll<HTMLButtonElement>(
@@ -44,9 +45,13 @@ export function Modal({
     document.addEventListener("keydown", handle);
     return () => {
       document.removeEventListener("keydown", handle);
-      previous?.focus();
+      if (previous?.isConnected) previous.focus();
+      else {
+        const heading = document.querySelector<HTMLElement>(".workspace-pages h1");
+        if (heading) { heading.tabIndex = -1; heading.focus(); }
+      }
     };
-  }, [onCancel]);
+  }, []);
   return (
     <div className="modal-backdrop">
       <div

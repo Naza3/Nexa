@@ -1,3 +1,4 @@
+import { openGroup } from "./navigation";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import App from "../src/App";
@@ -8,10 +9,10 @@ import type { Snapshot } from "../src/types";
 describe("audit J01–J06 corrected product journeys (React mock, not Windows validation)", () => {
   it("J01 unloaded real actor retains selection without a current-residency claim", async () => {
     const value = snapshot(); value.runtime!.state = "unloaded"; render(<App initialPage="models" controller={new DesktopController(makeApi({ snapshot: vi.fn(async () => value) }))} />);
-    const region = await screen.findByRole("region", { name: "模型运行状态" }); await waitFor(() => expect(within(region).getByText(/上次选择：Qwen 测试模型/)).toBeVisible()); expect(within(region).queryByRole("heading", { name: model.display_name })).not.toBeInTheDocument(); expect(within(region).queryByText(/上下文 2048/)).not.toBeInTheDocument();
+    const region = screen.getByLabelText("应用状态栏"); await waitFor(() => expect(region).toHaveTextContent("无驻留模型")); expect(region).not.toHaveTextContent(`驻留：${model.display_name}`); expect(region).not.toHaveTextContent("上下文 2048");
   });
   it("J02 directory guidance reflects the saved verification budget", async () => {
-    const value = snapshot(); value.settings.model_verification_timeout_seconds = 600; render(<App initialPage="settings" controller={new DesktopController(makeApi({ snapshot: vi.fn(async () => value) }))} />); expect(await screen.findByText(/总核验时间 600 秒/)).toBeVisible();
+    const value = snapshot(); value.settings.model_verification_timeout_seconds = 600; render(<App initialPage="settings" controller={new DesktopController(makeApi({ snapshot: vi.fn(async () => value) }))} />); await screen.findByText(/总核验时间 600 秒/); openGroup("模型目录与维护"); expect(screen.getByText(/总核验时间 600 秒/)).toBeVisible();
   });
   it("J03 the first-use settings page exposes an offline initialization action", async () => {
     const value = snapshot(); value.initialized = false; value.connection = "stopped"; value.runtime = null; const api = makeApi({ snapshot: vi.fn(async () => value), initialize: vi.fn(async () => ({ ...value, initialized: true })) }); render(<App initialPage="settings" controller={new DesktopController(api)} />); fireEvent.click(await screen.findByRole("button", { name: "仅初始化配置" })); await waitFor(() => expect(api.initialize).toHaveBeenCalledTimes(1)); expect(api.start).not.toHaveBeenCalled();

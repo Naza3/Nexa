@@ -2,17 +2,19 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   byteLength,
-  DEFAULT_SETTINGS,
   DesktopController,
   LIMITS,
   validatePreferences,
 } from "./controller";
 import type { ViewState } from "./controller";
-import type { Preferences, RuntimeStatus, Settings } from "./types";
+import type { ModelSummary, Preferences, Settings } from "./types";
 import { ModelDownloads, DownloadProgress } from "./ModelDownloads";
 import { ModelSelectionPanel, AddModelProgress } from "./ModelAdd";
 import { modelCompatibility } from "./modelCompatibility";
-import { localValidationReason } from "./localValidation";
+import { localValidationLabel, localValidationReason } from "./localValidation";
+import { modelTestStatus } from "./modelTestStatus";
+import { StatusBar } from "./StatusBar";
+import { DetailsGroup } from "./DetailsGroup";
 import { LocalValidationFeedback, ModelTestFeedback } from "./ModelTestFeedback";
 import { Modal } from "./Modal";
 import { GlobalConfiguration, RequestDefaultsForm, UiPreferencesForm, ModelProfile } from "./Configuration";
@@ -103,17 +105,6 @@ function Brand({ small = false }: { small?: boolean }) {
 function Spinner() {
   return <span className="spinner" aria-hidden="true" />;
 }
-const stateNames: Record<RuntimeStatus["state"], string> = {
-  unloaded: "未加载模型",
-  loading: "正在加载",
-  ready: "模型就绪",
-  generating: "正在生成",
-  unloading: "正在卸载",
-  faulted: "模型运行故障",
-};
-function statusLabel(state: ViewState) {
-  return state.booting ? "正在确认服务" : runtimeView(state.snapshot).serviceLabel;
-}
 function formatSize(bytes: number) {
   return bytes >= 1024 ** 3
     ? `${(bytes / 1024 ** 3).toFixed(2)} GiB`
@@ -121,11 +112,11 @@ function formatSize(bytes: number) {
 }
 function RuntimeBanner({ state }: { state: ViewState }) {
   const snapshot = state.snapshot;
-  if (state.booting) return <div className="notice-band"><Spinner />正在检查本机运行服务…</div>;
+  if (state.booting) return null;
   if (!snapshot) return <div className="notice-band warning"><div><strong>尚未连接到桌面服务</strong><p>请在 Nexa 桌面应用中打开，或使用左侧按钮重新检查服务。</p></div></div>;
   if (snapshot.connection === "error") return <div className="notice-band warning"><div><strong>与运行服务的连接失效</strong><p>请使用左侧按钮重新检查服务。无法验证的现有实例不会被替换，请检查后重试。</p></div></div>;
   if (!snapshot.initialized) return <div className="notice-band"><div><strong>第一次使用 Nexa</strong><p>可先在设置中“仅初始化配置”，再调整运行选项；也可点击左侧“初始化并启动”。已有凭据不会被轮换。</p></div></div>;
-  if (snapshot.connection !== "connected") return <div className="notice-band"><div><strong>运行服务尚未就绪</strong><p>{snapshot.connection === "connecting" ? "正在连接运行服务，请等待状态确认。" : "可直接浏览已登记的本地模型。点击左侧按钮启动服务；点击加载也会启动本机服务，并进行基础测试。"}</p></div></div>;
+  if (snapshot.connection !== "connected") return null;
   if (snapshot.runtime?.state === "faulted") return <div className="notice-band warning"><div><strong>模型运行故障</strong><p>{snapshot.runtime.last_error?.message ?? "请在模型页显式重新加载，恢复后再发送。已有请求不会重放。"}</p></div></div>;
   return null;
 }
@@ -142,12 +133,7 @@ function ServiceControl({ state, controller, onStop }: { state: ViewState; contr
   const pending = state.booting || starting || stopping || checking || connecting;
   const label = state.booting || checking ? "正在检查服务…" : stopping ? "正在停止服务…" : starting || connecting ? "正在启动服务…"
     : stopped ? snapshot.initialized ? "启动运行服务" : "初始化并启动" : connected ? "停止运行服务" : "重新检查服务";
-  const status = state.booting || checking ? "正在确认状态" : stopping ? "正在停止，等待清理确认" : starting || connecting ? "正在启动，等待连接"
-    : stopped ? "服务已停止" : connected ? snapshot.runtime?.state === "faulted" ? "服务运行中 · 模型故障" : "服务运行中" : "服务状态待确认";
   return <section className="service-control" aria-label="运行服务控制">
-    <div className={`service-control-status ${connected && !stopping ? "running" : ""}`} role="status">
-      {pending ? <Spinner /> : <span className="status-dot" />}<span>{status}</span>
-    </div>
     <button className={connected ? "danger-outline service-main-button" : "primary service-main-button"} disabled={pending || busy}
       onClick={() => { if (stopped) void controller.start(!snapshot.initialized); else if (connected) onStop(); else void controller.checkService(); }}>
       {pending ? <Spinner /> : <Icon name={connected ? "stop" : stopped ? "power" : "refresh"} size={17} />}{label}
@@ -422,199 +408,92 @@ function DirectorySettings({
     </section>
   );
 }
-function ModelsPage({
-  state,
-  controller,
-  goChat,
-  goSettings,
-}: {
-  state: ViewState;
-  controller: DesktopController;
-  goChat: () => void;
-  goSettings: () => void;
+function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavigation, downloadFilter, setDownloadFilter }: {
+  state: ViewState; controller: DesktopController; goChat: () => void; goSettings: () => void;
+  navigation: { view: "local" | "download"; detailId: string | null }; setNavigation: (value: { view: "local" | "download"; detailId: string | null }) => void; downloadFilter: string; setDownloadFilter: (value: string) => void;
 }) {
-  const [view, setView] = useState<"local" | "download">("local");
+  const { view, detailId } = navigation;
+  const setView = (view: "local" | "download") => setNavigation({ view, detailId: null });
+  const setDetailId = (detailId: string | null) => setNavigation({ ...navigation, detailId });
   const [switchTo, setSwitchTo] = useState<string | null>(null);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const listHeading = useRef<HTMLHeadingElement>(null);
+  const lastDetail = useRef<string | null>(null);
+  const detailButtons = useRef(new Map<string, HTMLButtonElement>());
+  const detailAvailable = state.models.data.some((model) => model.id === detailId);
   const projection = runtimeView(state.snapshot);
   useEffect(() => () => controller.leaveModelPage(), [controller, view]);
-  const runtime = state.snapshot?.connection === "connected" ? state.snapshot.runtime : null;
-  const settings = state.snapshot?.settings ?? DEFAULT_SETTINGS;
+  useEffect(() => {
+    if (detailId) detailHeading.current?.focus();
+    else if (lastDetail.current) (detailButtons.current.get(lastDetail.current) ?? listHeading.current)?.focus();
+    lastDetail.current = detailId;
+  }, [detailId]);
+  useEffect(() => {
+    if (detailId && !detailAvailable && document.activeElement === document.body) detailHeading.current?.focus();
+  }, [detailId, detailAvailable]);
+  const runtime = projection.runtime;
   const connected = state.snapshot?.connection === "connected";
   const browsable = connected || state.snapshot?.connection === "stopped";
-  const busy =
-    !!state.operation ||
-    state.library_phase !== "idle" ||
-    state.download_phase !== "idle" ||
-    ["stale", "unsupported"].includes(
-      state.snapshot?.model_directory.state ?? "",
-    ) ||
-    state.chat_phase !== "idle" ||
-    !!runtime?.registry_busy ||
-    !!runtime?.stopping ||
-    !!runtime?.active_request ||
-    (runtime?.queued_jobs ?? 0) > 0 ||
-    ["loading", "generating", "unloading"].includes(runtime?.state ?? "");
   const loaded = projection.resident;
-  const different = state.snapshot?.configuration ? !!ownRecord(state.model_configurations, projection.residentId ?? "")?.pending_apply :
-    runtime?.load_options &&
-    (["context_size", "threads", "batch_size"] as const).some(
-      (key) => runtime.load_options![key] !== settings[key],
-    );
-  return (
-    <>
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">本机模型库</span>
-          <h1>模型库</h1>
-          <p>选择一个或多个本地 GGUF，零复制添加到模型库。</p>
-        </div>
-        <button className="primary" disabled={!browsable || !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle"} onClick={() => void controller.pickModels()}>
-          <Icon name="plus" size={18} />添加模型
-        </button>
-      </div>
-      <button className="text-button auxiliary-chat" onClick={goChat}>聊天测试</button>
-      <div className="model-view-switch" role="group" aria-label="模型视图"><button aria-pressed={view === "local"} onClick={() => setView("local")}>本地模型</button><button aria-pressed={view === "download"} onClick={() => setView("download")}>下载模型</button></div>
-      {view === "download" ? <ModelDownloads state={state} controller={controller} goSettings={goSettings} /> : <>
-      <section className="runtime-card" aria-label="模型运行状态">
-        <div className="model-emblem">
-          <Icon name="models" size={26} />
-        </div>
-        <div className="runtime-card-main">
-          <span className="overline">当前驻留</span>
-          <h2>
-            {projection.residentName ?? projection.modelLabel}
-          </h2>
-          <p>
-            {projection.residentOptions
-              ? `上下文 ${projection.residentOptions.context_size} · ${projection.residentOptions.threads} 线程 · 批次 ${projection.residentOptions.batch_size}`
-              : "从下方选择模型，显式加载并短测后可供应用调用"}
-          </p>
-          {!projection.resident && projection.lastSelectedName && <p>上次选择：{projection.lastSelectedName}（不代表当前驻留）</p>}
-          {loaded && different && (
-            <p className="warning-text">
-              当前加载参数与已保存偏好不同，新参数将在下次加载时生效。
-            </p>
-          )}
-        </div>
-        <div className="runtime-card-actions">
-          <span
-            className={`status-pill ${runtime?.state === "ready" ? "healthy" : ""}`}
-          >
-            <span className="status-dot" />
-            {runtime ? stateNames[runtime.state] : "未连接"}
-          </span>
-          {loaded && (
-            <button disabled={busy} onClick={() => void controller.unload()}>
-              卸载模型
-            </button>
-          )}
-          {runtime?.state === "ready" && (
-            <button className="primary" disabled={busy} onClick={goChat}>
-              验证驻留模型
-              <Icon name="chevron" size={16} />
-            </button>
-          )}
-        </div>
-      </section>
-      <section className="directory-summary" aria-label="模型来源目录">
-        <div className="import-icon">
-          <Icon name="file" size={26} />
-        </div>
-        <div className="import-copy">
-          <h2>下载目录与维护</h2>
-          <p className="directory-path">
-            {state.snapshot?.model_directory.configured?.display_path ??
-              "尚未设置下载目录，不影响添加已有模型"}
-          </p>
-          <p>刷新仅读取已登记列表。扫描默认目录须在设置中手动执行。</p>
-        </div>
-        <button onClick={goSettings}>
-          前往目录设置
-          <Icon name="chevron" size={16} />
-        </button>
-      </section>
-      <DirectoryStateNotice state={state} />
-      {state.snapshot?.configuration?.schema_version === 1 && <div className="notice-band warning"><p>旧配置尚未升级为统一档案。请先在设置确认来源，再加载模型。</p><button onClick={goSettings}>处理配置迁移</button></div>}
-      {state.snapshot?.configuration?.pending_restart && <p className="warning-text">已保存配置尚未被运行实例采用，请显式停止并重启后加载。</p>}
-      {state.snapshot?.connection !== "connected" &&
-        state.models.data.length > 0 && (
-          <p className="stale-models-note" role="status">
-            {state.models.source === "local"
-              ? "本地已登记模型列表。测试标签是此前的本机记录，不表示模型当前驻留内存。"
-              : "以下为上次读取的列表；刷新可重新读取本地索引，加载时仍须核验文件。"}
-          </p>
-        )}
-      {state.reconcile_status === "observing" && <p role="status" className="small-note">检测到目录变化，等待文件稳定后登记。未完成下载的文件不会作为测试通过；稍后可刷新。</p>}
-      {state.reconcile_status === "pending" && <p role="status" className="warning-text">发现待登记文件。运行服务使用固定索引，请在方便时显式停止服务后刷新；不会自动中断当前模型或其他客户端。</p>}
-      {state.testing_model && <p role="status" className="local-test-progress">正在加载或进行本机短文本测试。加载最多 300 秒；短文本测试最多 30 秒，取消清理可能稍后完成。测试不会写入聊天；可按已保存策略关闭应用。</p>}
-      <section className="library" aria-labelledby="library-title">
-        <div className="section-heading">
-          <h2 id="library-title">
-            可查看模型 <span className="count">{state.models.data.length}</span>
-          </h2>
-          <button
-            className="text-button"
-            disabled={!browsable || state.models_loading || busy}
-            onClick={() => void controller.refreshModels()}
-          >
-            <Icon name="refresh" size={15} />
-            刷新
-          </button>
-        </div>
-        {state.models_loading && (
-          <div className="loading-line" role="status">
-            <Spinner />
-            正在读取模型列表…
-          </div>
-        )}
-        {!state.models_loading && state.models.data.length === 0 ? (
-          <div className="empty-models">
-            <Icon name="models" size={32} />
-            <h3>你的模型库还是空的</h3>
-            <p>
-              点击右上方“添加模型”选择已有 GGUF，或前往“下载模型”。不会自动扫描模型目录。
-            </p>
-            <span>可一次选择多个完整 GGUF 文件；分片模型暂不支持</span>
-          </div>
-        ) : (
-          <div className="model-list">
-            {state.models.data.map((model) => {
-              const current = model.id === runtime?.selected_model && loaded;
-              const switching = loaded && !current;
-              const compatibility = modelCompatibility(model);
-              const attempt = ownRecord(state.model_tests, model.id);
-              return (
-                <article
-                  key={model.id}
-                  className={`model-row ${current ? "selected" : ""}`}
-                >
-                  <div className="model-file">
-                    <Icon name="models" size={23} />
-                  </div>
-                  <div className="model-description">
-                    <div className="model-title">
-                      <h3>{model.display_name}</h3>
-                      {current && <span className="mini-label">已加载</span>}
-                    </div>
-                    <p className="model-source">
-                      {model.storage === "external"
-                        ? "本地文件 · 直接读取"
-                        : "原有管理模型"}
-                    </p>
-                    <div className="model-meta">
-                      <span>{model.quantization || "量化未知"}</span>
-                      <span>{model.architecture || "架构未知"}</span>
-                      <span>{formatSize(model.size_bytes)}</span>
-                      <span>登记时已识别 GGUF</span>
-                      {state.testing_model === model.id ? <span>正在进行本机基础测试</span> : !model.local_validation && <span>{compatibility.admission}</span>}
-                    </div>
-                    <div className="model-id-row"><span className="hash">API ID：{model.id}</span><button aria-label={`复制 ${model.display_name} 的模型 ID`} onClick={() => void controller.copyModelId(model.id)}>复制 ID</button></div>
+  const busy = !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" ||
+    ["stale", "unsupported"].includes(state.snapshot?.model_directory.state ?? "") || state.chat_phase !== "idle" || projection.busy;
+  const detail = state.models.data.find((model) => model.id === detailId);
+  const actions = (model: ModelSummary, expanded = false) => {
+    const current = model.id === projection.residentId;
+    const switching = loaded && !current;
+    const compatibility = modelCompatibility(model);
+    const attempt = ownRecord(state.model_tests, model.id);
+    return <div className="model-row-actions"><button
+                    className={current ? "loaded-button" : ""}
+                    disabled={
+                      !browsable ||
+                      !!state.snapshot?.configuration_error ||
+                      state.snapshot?.configuration?.schema_version === 1 ||
+                      state.snapshot?.configuration?.pending_restart ||
+                      busy ||
+                      current ||
+                      !model.available ||
+                      model.loadable !== true
+                    }
+                    onClick={() => switching ? setSwitchTo(model.id) : void controller.loadModel(model.id)}
+                  >
+                    {current
+                      ? "已加载"
+                      : state.testing_model === model.id && attempt?.mode === "load"
+                        ? "加载与测试中…"
+                        : runtime?.selected_model === model.id && runtime.state === "loading"
+                          ? "加载中…"
+                          : !model.available ||
+                      model.loadable !== true
+                        ? compatibility.unavailableLabel
+                        : runtime?.state === "faulted" &&
+                            model.id === runtime.selected_model
+                          ? "重新加载"
+                          : switching ? "切换并测试" : "加载模型"}
+                  </button>
+                  {expanded && current && <><button disabled={busy} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>{state.testing_model === model.id ? "测试中…" : "基础测试"}</button>{busy && state.testing_model !== model.id && <span className="small-note">当前有任务进行中，空闲后可基础测试</span>}<button disabled={busy} onClick={() => void controller.unload()}>卸载模型</button></>}
+
+                  </div>;
+  };
+  const status = (model: ModelSummary) => {
+    const test = modelTestStatus(model.local_validation, ownRecord(state.model_tests, model.id));
+    return <span className={`model-test-status ${test.tone}`} role="status" aria-label={`${model.display_name}：${test.label}`}>
+      {test.running ? <Spinner /> : <span aria-hidden="true">{test.tone === "passed" ? "✓" : test.tone === "failed" ? "!" : "·"}</span>}{test.label}
+    </span>;
+  };
+  const details = (model: ModelSummary) => {
+    const attempt = ownRecord(state.model_tests, model.id);
+    const compatibility = modelCompatibility(model);
+    return <article className="model-detail" aria-label={`${model.display_name} 的详情`}>
+      <div className="page-heading"><div><span className="eyebrow">模型详情</span><h1 tabIndex={-1} ref={detailHeading}>{model.display_name}</h1><div className="model-detail-status">{status(model)}<span>{projection.residentId === model.id ? "当前驻留" : "未确认驻留"}</span></div></div>{actions(model, true)}</div>
+      <section className="settings-card model-detail-content"><div className="card-heading"><h2>模型信息与测试</h2><button onClick={goChat}>聊天测试</button></div><div className="model-meta"><span>{model.quantization || "量化未知"}</span><span>{model.architecture || "架构未知"}</span><span>{formatSize(model.size_bytes)}</span><span>登记时已识别 GGUF</span><span>{model.storage === "external" ? "本地文件 · 直接读取" : "原有管理模型"}</span></div>
+      <div className="model-id-row"><span className="hash">API ID：{model.id}</span><button aria-label={`复制 ${model.display_name} 的模型 ID`} onClick={() => void controller.copyModelId(model.id)}>复制 ID</button></div>
                     <p className="small-note">{compatibility.architecture}</p>
-                    {attempt && <ModelTestFeedback attempt={attempt} />}
+                    {attempt && <ModelTestFeedback attempt={attempt} currentEvidence={model.local_validation} />}
                     {model.local_validation ? <LocalValidationFeedback value={model.local_validation} history /> : <p className="small-note">本机记录未提供，尚未取得本机测试证明。</p>}
                     <ModelProfile modelId={model.id} state={state} controller={controller} />
                     <details>
-                      <summary>模型信息</summary>
+                      <summary>验证条件与能力边界</summary><p>加载最多 300 秒；短文本测试最多 30 秒，取消清理可能稍后完成。</p>
 
                       <p className="hash">登记时 SHA-256：{model.sha256}</p>
                       <p>历史矩阵验证记录：{model.validated ? "有精确模型验证记录" : "未实测"} · 历史验证上下文：{model.context_size ?? "未实测"}</p>
@@ -645,86 +524,46 @@ function ModelsPage({
                         {model.id.slice(-8)}
                       </p>
                     )}
-                    {switching && (
-                      <p className="small-note">空闲时可显式切换；将释放当前模型，失败不自动恢复</p>
-                    )}
-                  </div>
-                  <div className="model-row-actions"><button
-                    className={current ? "loaded-button" : ""}
-                    disabled={
-                      !browsable ||
-                      !!state.snapshot?.configuration_error ||
-                      state.snapshot?.configuration?.schema_version === 1 ||
-                      state.snapshot?.configuration?.pending_restart ||
-                      busy ||
-                      current ||
-                      !model.available ||
-                      model.loadable !== true
-                    }
-                    onClick={() => switching ? setSwitchTo(model.id) : void controller.loadModel(model.id)}
-                  >
-                    {current
-                      ? "已加载"
-                      : state.testing_model === model.id && attempt?.mode === "load"
-                        ? "加载与测试中…"
-                        : runtime?.selected_model === model.id && runtime.state === "loading"
-                          ? "加载中…"
-                          : !model.available ||
-                      model.loadable !== true
-                        ? compatibility.unavailableLabel
-                        : runtime?.state === "faulted" &&
-                            model.id === runtime.selected_model
-                          ? "重新加载"
-                          : switching ? "切换并测试" : "加载模型"}
-                  </button>
-                  {current && <><button disabled={busy} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>{state.testing_model === model.id ? "测试中…" : "基础测试"}</button>{busy && state.testing_model !== model.id && <span className="small-note">当前有任务进行中，空闲后可基础测试</span>}</>}
-                  {!connected && model.available && model.loadable === true && <span className="small-note">加载将启动服务并短测</span>}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-        <div className="pagination">
-          <span>每页最多 64 个模型 · 仅保留当前页</span>
-          <div>
-            <button
-              className="text-button"
-              disabled={
-                !state.page_after || state.models_loading || !browsable || busy
-              }
-              onClick={() => void controller.loadPage(null)}
-            >
-              回到首页
-            </button>
-            <button
-              disabled={
-                !state.models.next_after ||
-                state.models_loading ||
-                !browsable ||
-                busy
-              }
-              onClick={() => void controller.loadPage(state.models.next_after)}
-            >
-              下一页
-              <Icon name="chevron" size={14} />
-            </button>
-          </div>
-        </div>
+
+      {!connected && model.available && model.loadable === true && <p className="small-note">加载将启动服务并短测</p>}
+      {loaded && projection.residentId !== model.id && <p className="small-note">空闲时可显式切换；将释放当前模型，失败不自动恢复</p>}
+      <p className="small-note">配置后端：CPU · 原生后端观测：{runtime?.backend ?? "unavailable"} · 内存观测：{runtime?.memory?.observation ?? "unavailable"}</p>
       </section>
-      {switchTo && <Modal title="切换驻留模型？" confirm="切换并测试" onCancel={() => setSwitchTo(null)} onConfirm={() => { const id = switchTo; setSwitchTo(null); void controller.loadModel(id); }}><p>将释放当前模型，加载所选模型并进行短文本测试。忙碌时服务会拒绝切换；加载失败不会自动恢复旧模型，请查看真实状态后显式重载。</p></Modal>}
-      <div className="footnote">
-        <Icon name="shield" size={16} />
-        <p>
-          配置后端：CPU · 原生后端观测：{runtime?.backend ?? "unavailable"} ·
-          内存观测：{runtime?.memory?.observation ?? "unavailable"}
-          <br />
-          {state.snapshot?.configuration ? "加载参数由后端按已保存的全局默认与模型档案解析，不代表硬件性能保证。" : "旧版本加载参数来自桌面偏好；逐模型统一档案需要更新应用。"}
-        </p>
-      </div>
+    </article>;
+  };
+  return <>
+    {detailId ? <>
+      <button className="text-button back-to-models" onClick={() => setDetailId(null)}>← 返回模型库</button>
+      {detail ? details(detail) : <section className="settings-card"><h1 tabIndex={-1} ref={detailHeading}>模型已不在当前列表</h1><p>返回模型库并刷新，核对最新登记状态。</p></section>}
+    </> : <>
+      <div className="page-heading"><div><span className="eyebrow">本机模型库</span><h1 tabIndex={-1} ref={listHeading}>模型库</h1></div><div className="workspace-actions"><button onClick={goChat}>聊天测试</button><button className="primary" disabled={!browsable || !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle"} onClick={() => void controller.pickModels()}><Icon name="plus" size={18} />添加模型</button></div></div>
+      <div className="model-view-switch" role="group" aria-label="模型视图"><button aria-pressed={view === "local"} onClick={() => setView("local")}>本地模型</button><button aria-pressed={view === "download"} onClick={() => setView("download")}>下载模型</button></div>
+      {view === "download" ? <ModelDownloads state={state} controller={controller} goSettings={goSettings} initialFilter={downloadFilter} onFilterChange={setDownloadFilter} /> : <>
+        {state.snapshot?.configuration?.schema_version === 1 && <div className="notice-band warning"><p>请先确认旧配置迁移，再加载模型。</p><button onClick={goSettings}>处理配置迁移</button></div>}
+        {state.snapshot?.configuration?.pending_restart && <p className="warning-text">已保存配置尚未被运行实例采用，请显式停止并重启后加载。</p>}
+        {state.snapshot?.connection !== "connected" && state.models.data.length > 0 && <p className="small-note" role="status">{state.models.source === "local" ? "本地已登记模型 · 测试状态来自本机记录" : "上次读取的列表 · 可刷新核对"}</p>}
+        {state.reconcile_status === "observing" && <p role="status" className="small-note">发现目录变化，等待文件稳定后登记</p>}
+        {state.reconcile_status === "pending" && <p role="status" className="warning-text">有待登记文件，请显式停止服务后刷新</p>}
+        <section className="library" aria-labelledby="library-title">
+          {!connected && browsable && state.models.data.length > 0 && <p className="small-note">加载会启动服务并进行基础测试</p>}
+          {busy && <p className="small-note">当前有任务，空闲后可加载或切换模型</p>}
+          <div className="section-heading"><h2 id="library-title">本地模型 <span className="count">{state.models.data.length}</span></h2><button className="text-button" disabled={!browsable || state.models_loading || busy} onClick={() => void controller.refreshModels()}><Icon name="refresh" size={15} />刷新</button></div>
+          {state.models_loading && <div className="loading-line" role="status"><Spinner />正在读取模型列表…</div>}
+          {!state.models_loading && state.models.data.length === 0 ? <div className="empty-models"><Icon name="models" size={32} /><h3>你的模型库还是空的</h3><p>添加已有 GGUF 文件，或前往下载模型</p></div> : <div className="model-list compact-model-list">{state.models.data.map((model) => {
+            const current = model.id === projection.residentId;
+            const test = modelTestStatus(model.local_validation, ownRecord(state.model_tests, model.id));
+            return <article key={model.id} className={`model-row compact-model-row test-${test.tone}`} aria-label={model.display_name}>
+              <div className="model-file"><Icon name="models" size={23} /></div>
+              <div className="model-description"><div className="model-title"><h3>{model.display_name}</h3>{current && <span className="model-residency">当前驻留</span>}</div><div className="model-meta"><span>{model.quantization || "量化未知"}</span><span>{formatSize(model.size_bytes)}</span>{(!model.available || model.loadable !== true) && <span>{{ model_file_changed: "文件已变化", model_file_unavailable: "文件不可读", model_file_in_use: "文件被占用", model_directory_unavailable: "源目录不可读", unsupported_model: "引擎不支持" }[model.availability_error ?? ""] ?? "当前不可用"}</span>}{state.models.data.filter((entry) => entry.display_name === model.display_name).length > 1 && <span>{model.id.slice(-8)}</span>}</div></div>
+              {status(model)}{actions(model)}<button className="text-button model-detail-button" ref={(button) => { if (button) detailButtons.current.set(model.id, button); else detailButtons.current.delete(model.id); }} aria-label={`查看 ${model.display_name} 的详情`} onClick={() => setDetailId(model.id)}>详情<Icon name="chevron" size={15} /></button>
+            </article>;
+          })}</div>}
+          {(state.page_after || state.models.next_after) && <div className="pagination"><span>每页最多 64 个模型</span><div><button className="text-button" disabled={!state.page_after || state.models_loading || !browsable || busy} onClick={() => void controller.loadPage(null)}>回到首页</button><button disabled={!state.models.next_after || state.models_loading || !browsable || busy} onClick={() => void controller.loadPage(state.models.next_after)}>下一页<Icon name="chevron" size={14} /></button></div></div>}
+        </section>
       </>}
-    </>
-  );
+    </>}
+    {switchTo && <Modal title="切换驻留模型？" confirm="切换并测试" onCancel={() => setSwitchTo(null)} onConfirm={() => { const id = switchTo; setSwitchTo(null); void controller.loadModel(id); }}><p>将释放“{projection.residentName ?? "当前模型"}”，加载“{state.models.data.find((model) => model.id === switchTo)?.display_name ?? switchTo}”并进行短文本测试。忙碌时服务会拒绝切换；加载失败不会自动恢复旧模型，请查看真实状态后显式重载。</p></Modal>}
+  </>;
 }
 function ChatPage({
   state,
@@ -732,12 +571,14 @@ function ChatPage({
   draft,
   setDraft,
   goModels,
+  goBack,
 }: {
   state: ViewState;
   controller: DesktopController;
   draft: string;
   setDraft: (value: string) => void;
   goModels: () => void;
+  goBack: () => void;
 }) {
   const projection = runtimeView(state.snapshot);
   const requestDefaults = state.snapshot?.configuration?.runtime_effective?.values.request_defaults;
@@ -777,6 +618,7 @@ function ChatPage({
   };
   return (
     <div className="chat-page">
+      <button className="text-button back-to-models" onClick={goBack}>← 返回上一页</button>
       <div className="page-heading chat-heading">
         <div>
           <span className="eyebrow">本地推理会话</span>
@@ -785,8 +627,8 @@ function ChatPage({
             {projection.residentName ?? (projection.lastSelectedName ? `上次选择：${projection.lastSelectedName}（当前未确认驻留）` : projection.modelLabel)}
             <span className="inline-dot">·</span>会话仅保留在当前窗口
           </p>
-          <p aria-label="辅助测试实际参数">实际上下文：{projection.residentOptions?.context_size ?? "未报告驻留参数"} · 本次输出预算：{outputBudget ?? "未知"} tokens（服务默认）</p>
-          <p className="small-note">temperature：{requestDefaults?.temperature ?? "未报告"} · top_p：{requestDefaults?.top_p ?? "未报告"}（使用服务请求默认值，不覆盖已受理的请求）</p>
+          <details className="chat-parameters"><summary>测试参数</summary><p aria-label="辅助测试实际参数">实际上下文：{projection.residentOptions?.context_size ?? "未报告驻留参数"} · 本次输出预算：{outputBudget ?? "未知"} tokens（服务默认）</p>
+          <p className="small-note">temperature：{requestDefaults?.temperature ?? "未报告"} · top_p：{requestDefaults?.top_p ?? "未报告"}（使用服务请求默认值，不覆盖已受理的请求）</p></details>
         </div>
         <button
           disabled={!state.messages.length || state.clear_pending}
@@ -1008,10 +850,12 @@ function SettingsPage({
   settings,
   state,
   controller,
+  returnToDownloads,
 }: {
   settings: Settings;
   state: ViewState;
   controller: DesktopController;
+  returnToDownloads?: () => void;
 }) {
   const form = useConfigDraft(preferencesOnly(settings), undefined, "legacy_preferences");
   const { draft, setDraft } = form;
@@ -1055,19 +899,20 @@ function SettingsPage({
   ];
   return (
     <>
+      {returnToDownloads && <button className="text-button back-to-models" onClick={returnToDownloads}>← 返回下载</button>}
       <div className="page-heading">
         <div>
           <span className="eyebrow">运行与偏好</span>
           <h1>设置</h1>
-          <p>未保存草稿切页保留，并尽力保存非秘密恢复副本；重开须明确恢复。保存后再按字段说明显式应用。</p>
+          <p>按需调整，修改后单独保存各组设置。</p>
         </div>
       </div>
-      <DirectorySettings state={state} controller={controller} />
+      <DetailsGroup title="模型目录与维护" description={["missing", "unavailable", "unsupported", "stale"].includes(state.snapshot?.model_directory.state ?? "") ? "目录配置需检查" : "下载位置、手动扫描"} status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} initialOpen={!!returnToDownloads || !!state.directory_selection}><DirectorySettings state={state} controller={controller} /></DetailsGroup>
       {form.conflict && <div className="notice-band warning" role="alert"><div><strong>已保存配置发生变化</strong><p>保留了你的未保存草稿。请先重新读取新配置，再决定如何修改，避免覆盖其他窗口的更新。</p></div><button onClick={form.reset}>丢弃草稿并读取新配置</button></div>}
       {!state.snapshot?.initialized && state.snapshot?.connection === "stopped" && <section className="settings-card"><h2>先准备配置</h2><p>初始化本机配置与管理凭据，不启动服务、监听端口或扫描模型。</p><button disabled={!!state.operation} onClick={() => void controller.initialize()}>仅初始化配置</button></section>}
-      {state.snapshot?.configuration && <><GlobalConfiguration state={state} controller={controller} /><RequestDefaultsForm state={state} controller={controller} /></>}
-      {state.snapshot?.ui_preferences && <UiPreferencesForm state={state} controller={controller} />}
-      {!state.snapshot?.configuration && !state.snapshot?.configuration_error && <form
+      {state.snapshot?.configuration && <><DetailsGroup title="运行默认值" description="全局加载参数" status={state.snapshot?.configuration?.pending_restart ? "待重启" : state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["global_defaults"]} initialOpen={state.snapshot.configuration.schema_version === 1}><GlobalConfiguration state={state} controller={controller} /></DetailsGroup><DetailsGroup title="请求参数" description="输出预算与采样" draftKeys={["request_defaults"]}><RequestDefaultsForm state={state} controller={controller} /></DetailsGroup></>}
+      {state.snapshot?.ui_preferences && <DetailsGroup title="界面与下载偏好" description="下载源、关闭窗口行为" draftKeys={["ui_preferences"]} initialOpen={!!returnToDownloads}><UiPreferencesForm state={state} controller={controller} /></DetailsGroup>}
+      {!state.snapshot?.configuration && !state.snapshot?.configuration_error && <DetailsGroup title="运行与界面偏好" description="旧版配置" draftKeys={["legacy_preferences"]} initialOpen={!!returnToDownloads}><form
         onSubmit={(event) => {
           event.preventDefault();
           if (!form.conflict) void controller.saveSettings(draft);
@@ -1169,9 +1014,8 @@ function SettingsPage({
             {state.operation?.label === "正在保存偏好" && <Spinner />}保存偏好
           </button>
         </div>
-      </form>}
-      <IdleUnloadSettings state={state} controller={controller} />
-      <VerificationTimeoutSettings state={state} controller={controller} />
+      </form></DetailsGroup>}
+      <DetailsGroup title="资源与校验" description="空闲卸载、文件校验超时" status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["idle_policy", "verification_policy"]}><IdleUnloadSettings state={state} controller={controller} /><VerificationTimeoutSettings state={state} controller={controller} /></DetailsGroup>
 
     </>
   );
@@ -1190,6 +1034,17 @@ export default function App({
     controller.getSnapshot,
   );
   const [page, setPage] = useState(initialPage);
+  const [modelNavigation, setModelNavigation] = useState<{ view: "local" | "download"; detailId: string | null }>({ view: "local", detailId: null });
+  const [downloadFilter, setDownloadFilter] = useState("");
+  const [settingsFromDownloads, setSettingsFromDownloads] = useState(false);
+  const [chatReturn, setChatReturn] = useState(initialPage);
+  const enterChat = () => { setChatReturn(page === "chat" ? "overview" : page); setPage("chat"); };
+  const pageContent = useRef<HTMLFieldSetElement>(null);
+  useEffect(() => {
+    if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+    const heading = pageContent.current?.querySelector<HTMLElement>("h1");
+    if (heading) { heading.tabIndex = -1; heading.focus(); }
+  }, [page]);
   const [configDrafts] = useState(createDraftStore);
   const [confirmClose, setConfirmClose] = useState(false);
   const [draftEpoch, setDraftEpoch] = useState(0);
@@ -1201,9 +1056,15 @@ export default function App({
   useEffect(() => controller.mount(), [controller]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (event.isComposing || target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable)) return;
       if (event.altKey && ["1", "2", "3", "4", "5"].includes(event.key)) {
         event.preventDefault();
         setConfirmStop(false);
+        setConfirmClose(false);
+        setConfirmAddStop(false);
+        setConfirmRecoveryStop(false);
+        setSettingsFromDownloads(false);
         setPage(
           (["overview", "models", "api", "activity", "settings"] as const)[Number(event.key) - 1],
         );
@@ -1218,9 +1079,10 @@ export default function App({
     { id: "api", title: "API 接入", detail: "连接你的应用", icon: "copy" },
     { id: "activity", title: "活动", detail: "任务与结果", icon: "refresh" },
   ] as const;
-  const healthy =
-    state.snapshot?.connection === "connected" &&
-    state.snapshot.runtime?.state !== "faulted";
+  const latestModelAttempt = Object.values(state.model_tests).sort((a, b) => b.id - a.id)[0];
+  const noticeInDetail = page === "models" && modelNavigation.detailId === latestModelAttempt?.model_id &&
+    latestModelAttempt?.phase === "finished" && latestModelAttempt.result && !latestModelAttempt.error &&
+    state.notice?.startsWith(localValidationLabel(latestModelAttempt.result));
   return (
     <ConfigDraftContext.Provider value={configDrafts}><div className="app-shell">
       <aside className="sidebar">
@@ -1232,7 +1094,7 @@ export default function App({
             <span>你的本地推理空间</span>
           </div>
         </div>
-        <div className="nav-label">工作空间</div>
+
         <nav aria-label="主导航">
           {nav.map((item, index) => (
             <button
@@ -1241,12 +1103,12 @@ export default function App({
               aria-label={item.title}
               title={`${item.title}（Alt + ${index + 1}）`}
               className={`nav-item ${page === item.id ? "active" : ""}`}
-              onClick={() => { setConfirmStop(false); setPage(item.id); }}
+              onClick={() => { setConfirmStop(false); setSettingsFromDownloads(false); setPage(item.id); }}
             >
               <Icon name={item.icon} />
               <span>
                 <strong>{item.title}</strong>
-                <small>{item.detail}</small>
+
               </span>
               {item.id === "activity" && (state.chat_phase !== "idle" || !!state.testing_model) && (
                 <span className="nav-live" />
@@ -1256,16 +1118,7 @@ export default function App({
         </nav>
         </div>
         <div className="sidebar-bottom">
-          <button className={`nav-item ${page === "settings" ? "active" : ""}`} aria-label="设置" aria-current={page === "settings" ? "page" : undefined} title="设置（Alt + 5）" onClick={() => setPage("settings")}><Icon name="settings" /><span><strong>设置</strong><small>全局默认与偏好</small></span></button>
-          <div className="local-card">
-            <Icon name="shield" size={18} />
-            <strong>留在你的设备上</strong>
-            <p>
-              模型在本机运行
-              <br />
-              聊天不会保存到磁盘
-            </p>
-          </div>
+          <button className={`nav-item ${page === "settings" ? "active" : ""}`} aria-label="设置" aria-current={page === "settings" ? "page" : undefined} title="设置（Alt + 5）" onClick={() => { setSettingsFromDownloads(false); setPage("settings"); }}><Icon name="settings" /><span><strong>设置</strong></span></button>
           <ServiceControl state={state} controller={controller} onStop={() => setConfirmStop(true)} />
           <div className="sidebar-footer">
             <span>Windows · CPU</span>
@@ -1287,17 +1140,6 @@ export default function App({
             Nexa <span className="breadcrumb-slash">/</span>{" "}
             {nav.find((item) => item.id === page)?.title ?? (page === "settings" ? "设置" : "聊天测试")}
           </span>
-          <div
-            className={`connection ${healthy ? "connected" : ""}`}
-            role="status"
-          >
-            {state.operation || state.booting ? (
-              <Spinner />
-            ) : (
-              <span className="status-dot" />
-            )}
-            {statusLabel(state)}
-          </div>
         </header>
         {preview && (
           <div className="preview-banner">
@@ -1370,26 +1212,28 @@ export default function App({
                 </button>
               </div>
             )}
-          <DownloadProgress state={state} controller={controller} />
           <ModelSelectionPanel state={state} controller={controller} onStop={() => setConfirmAddStop(true)} />
-          <AddModelProgress state={state} controller={controller} />
-          <LibraryProgress state={state} controller={controller} />
-          <LibraryDiagnostics state={state} />
-          {state.notice && (
-            <div className="success-notice" role="status">
-              {state.notice}
+          {state.download_phase !== "idle" && <div className="task-quick-actions"><button disabled={state.download_phase === "stopping"} onClick={() => void (state.download_phase === "recovery" ? controller.recoverDownload() : controller.cancelDownload())}>{state.download_phase === "recovery" ? "核对下载结果" : state.download_phase === "stopping" ? "等待下载取消确认" : "取消当前下载任务"}</button></div>}
+          {state.library_phase !== "idle" && <div className="task-quick-actions"><button disabled={state.library_phase === "stopping" && !state.error} onClick={() => void (state.library_phase === "recovery" ? controller.recoverLibrary() : controller.cancelLibrary())}>{state.library_phase === "recovery" ? "核对模型库结果" : state.library_phase === "stopping" ? "等待模型库取消确认" : "取消当前模型库任务"}</button></div>}
+          {(state.download || state.download_phase !== "idle") && <DetailsGroup title={state.download_phase === "recovery" ? "下载结果待确认" : state.download_phase === "stopping" ? "下载取消中 · 等待确认" : state.download_phase !== "idle" ? "模型下载进行中" : state.download?.status === "completed" ? state.download.result?.registered ? "下载完成 · 已登记" : "文件已保存 · 登记未完成" : state.download?.status === "cancelled" ? "下载已取消" : "下载未完成"} description="查看进度、结果或取消"><DownloadProgress state={state} controller={controller} /></DetailsGroup>}
+          {(state.library || state.library_phase !== "idle") && <DetailsGroup title={state.library_phase === "recovery" ? "模型库结果待确认" : state.library_phase === "stopping" ? "模型库取消中 · 等待确认" : state.library_phase !== "idle" ? "模型库操作进行中" : state.library?.status === "partial" ? "模型库操作部分完成" : state.library?.status === "completed" ? "模型库操作已完成" : state.library?.status === "cancelled" ? "模型库操作已取消" : "模型库操作未完成"} description="查看进度、逐文件结果或取消"><AddModelProgress state={state} controller={controller} /><LibraryProgress state={state} controller={controller} /><LibraryDiagnostics state={state} /></DetailsGroup>}
+          {state.notice && !noticeInDetail && (
+            <div className="success-notice terminal-notice" role={/失败|无法|未确认|不可用|未完成|待确认/.test(state.notice) ? "alert" : "status"}>
+              <span>{state.notice}</span>
+              <button className="text-button" aria-label="收起操作结果" onClick={() => controller.dismissNotice(state.notice!)}>收起</button>
             </div>
           )}
-          <fieldset className="workspace-pages" disabled={configDrafts.pending.size > 0}>
-          {page === "overview" && <OverviewPage state={state} controller={controller} goModels={() => setPage("models")} goApi={() => setPage("api")} goActivity={() => setPage("activity")} goChat={() => setPage("chat")} />}
-          {page === "api" && <ApiPage state={state} controller={controller} goChat={() => setPage("chat")} />}
-          {page === "activity" && <ActivityPage state={state} controller={controller} goChat={() => setPage("chat")} />}
+          <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0}>
+          {page === "overview" && <OverviewPage state={state} controller={controller} goModels={() => setPage("models")} goApi={() => setPage("api")} goActivity={() => setPage("activity")} goChat={enterChat} />}
+          {page === "api" && <ApiPage state={state} controller={controller} goChat={enterChat} />}
+          {page === "activity" && <ActivityPage state={state} controller={controller} goChat={enterChat} />}
           {page === "models" && (
             <ModelsPage
               state={state}
               controller={controller}
-              goChat={() => setPage("chat")}
-              goSettings={() => setPage("settings")}
+              goChat={enterChat}
+              goSettings={() => { setSettingsFromDownloads(modelNavigation.view === "download"); setPage("settings"); }}
+              navigation={modelNavigation} setNavigation={setModelNavigation} downloadFilter={downloadFilter} setDownloadFilter={setDownloadFilter}
             />
           )}
           {page === "chat" && (
@@ -1399,6 +1243,7 @@ export default function App({
               draft={draft}
               setDraft={setDraft}
               goModels={() => setPage("models")}
+              goBack={() => setPage(chatReturn)}
             />
           )}
           {page === "settings" && state.snapshot && (
@@ -1406,6 +1251,7 @@ export default function App({
               settings={state.snapshot.settings}
               state={state}
               controller={controller}
+              returnToDownloads={settingsFromDownloads ? () => { setSettingsFromDownloads(false); setPage("models"); } : undefined}
             />
           )}
           </fieldset>
@@ -1417,6 +1263,7 @@ export default function App({
           </Modal>}
           {confirmAddStop && <Modal title="停止所有客户端的运行任务？" confirm="停止运行服务" danger onCancel={() => setConfirmAddStop(false)} onConfirm={() => { setConfirmAddStop(false); void controller.stop(); }}><p>将终止所有客户端任务并卸载当前模型，可能中断其他应用的调用。确认停止后，所选文件保留，请再次点击添加；不会自动开始登记。</p></Modal>}
         </main>
+        <StatusBar state={state} goActivity={() => setPage("activity")} />
       </div>
     </div></ConfigDraftContext.Provider>
   );

@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { openModelDetails, openSettingsGroups } from "./navigation";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { DesktopController } from "../src/controller";
@@ -10,6 +11,8 @@ async function setup(initial = configuredSnapshot(true), overrides: Partial<Desk
   const api = makeApi({ snapshot: vi.fn(async () => structuredClone(value)), configurationGet: vi.fn(async () => structuredClone(value.configuration!)), configurationModelGet: vi.fn(async () => modelConfiguration()),
     configurationSave: vi.fn(async (request) => { const config = structuredClone(value.configuration!); config.revision = revision("b"); if (request.update.kind === "global_defaults") config.saved.global_defaults = request.update.global_defaults; if (request.update.kind === "request_defaults") { config.saved.request_defaults = request.update.request_defaults; if (config.runtime_effective) config.runtime_effective.values.request_defaults = request.update.request_defaults; } value = { ...value, configuration: config }; return config; }), ...overrides });
   const controller = new DesktopController(api); const ui = render(<App initialPage={page} controller={controller} />); await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
+  if (page === "settings") openSettingsGroups();
+  if (page === "models") await openModelDetails(model.display_name);
   return { api, controller, ...ui, setSnapshot: (next: Snapshot) => { value = next; } };
 }
 describe("canonical configuration UI", () => {
@@ -107,7 +110,7 @@ describe("configuration sequencing and degraded capability", () => {
     const value = configuredSnapshot(); const config = modelConfiguration(); const api = makeApi({ snapshot: vi.fn(async () => value), configurationGet: vi.fn(async () => value.configuration!), configurationModelGet: vi.fn(async () => config),
       configurationSave: vi.fn(async (request) => { value.configuration!.revision = revision("b"); if (request.update.kind === "model_profile") { config.load_overrides = request.update.load_overrides; config.configuration_revision = revision("b"); } return value.configuration!; }),
       loadModelProfile: vi.fn(async () => { throw { code: "model_load_failed", message: "load failed" }; }) });
-    const controller = new DesktopController(api); render(<App initialPage="models" controller={controller} />); fireEvent.click(await screen.findByText("运行档案与当前参数")); fireEvent.change(await screen.findByRole("spinbutton", { name: /模型线程数/ }), { target: { value: "3" } }); fireEvent.click(screen.getByRole("button", { name: "保存并重新加载" })); fireEvent.click(screen.getByRole("button", { name: "加载并测试" }));
+    const controller = new DesktopController(api); render(<App initialPage="models" controller={controller} />); await openModelDetails(model.display_name); fireEvent.click(await screen.findByText("运行档案与当前参数")); fireEvent.change(await screen.findByRole("spinbutton", { name: /模型线程数/ }), { target: { value: "3" } }); fireEvent.click(screen.getByRole("button", { name: "保存并重新加载" })); fireEvent.click(screen.getByRole("button", { name: "加载并测试" }));
     await waitFor(() => expect(api.loadModelProfile).toHaveBeenCalledExactlyOnceWith(model.id)); expect(config.load_overrides.threads).toBe(3); expect(controller.getSnapshot().snapshot?.configuration?.revision).toBe(revision("b")); expect(api.configurationSave).toHaveBeenCalledTimes(1);
   });
 });
@@ -115,14 +118,15 @@ describe("configuration sequencing and degraded capability", () => {
 describe("window-owned unsaved configuration drafts", () => {
   it("preserves a dirty group while navigating and requires comparison after an external revision changed off-page", async () => {
     const { api, controller, setSnapshot } = await setup(); fireEvent.change(screen.getByRole("spinbutton", { name: "默认上下文长度" }), { target: { value: "8192" } }); fireEvent.click(screen.getByRole("button", { name: "活动" }));
-    const next = configuredSnapshot(true); next.configuration!.revision = revision("b"); next.configuration!.saved.global_defaults.context_size = 16384; setSnapshot(next); await act(async () => controller.refresh()); fireEvent.click(screen.getByRole("button", { name: "设置" })); expect(screen.getByRole("spinbutton", { name: "默认上下文长度" })).toHaveValue(8192); expect(screen.getByRole("button", { name: "保存全局默认值" })).toBeDisabled();
+    const next = configuredSnapshot(true); next.configuration!.revision = revision("b"); next.configuration!.saved.global_defaults.context_size = 16384; setSnapshot(next); await act(async () => controller.refresh()); fireEvent.click(screen.getByRole("button", { name: "设置" })); openSettingsGroups(); expect(screen.getByRole("spinbutton", { name: "默认上下文长度" })).toHaveValue(8192); expect(screen.getByRole("button", { name: "保存全局默认值" })).toBeDisabled();
     fireEvent.click(screen.getByText("比较草稿与最新已保存")); expect(screen.getByText(/最新已保存：.*16384/)).toBeVisible(); expect(api.configurationSave).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole("button", { name: "确认保留草稿，下次保存覆盖此组" })); fireEvent.click(screen.getByRole("button", { name: "保存全局默认值" })); await waitFor(() => expect(api.configurationSave).toHaveBeenCalledWith(expect.objectContaining({ expected_revision: revision("b"), update: { kind: "global_defaults", global_defaults: { context_size: 8192, threads: null, batch_size: 512 } } })));
   });
   it("keeps model A and B drafts isolated across opening another model and leaving the page", async () => {
     const second = { ...model, id: "second", display_name: "Second model" }; const { api } = await setup(configuredSnapshot(), { modelsPage: vi.fn(async () => ({ data: [model, second], generation: "g", next_after: null })), configurationModelGet: vi.fn(async (id) => ({ ...modelConfiguration(), model_id: id })) }, "models");
-    const row = (name: string) => within(screen.getByRole("heading", { name, level: 3 }).closest("article")!);
-    fireEvent.click(row(model.display_name).getByText("运行档案与当前参数")); fireEvent.change(await row(model.display_name).findByRole("spinbutton", { name: /模型线程数/ }), { target: { value: "3" } });
-    fireEvent.click(row(second.display_name).getByText("运行档案与当前参数")); const secondInput = await row(second.display_name).findByRole("spinbutton", { name: /模型线程数/ }); expect(secondInput).toHaveValue(null); fireEvent.change(secondInput, { target: { value: "5" } }); fireEvent.click(screen.getByRole("button", { name: "API 接入" })); fireEvent.click(screen.getByRole("button", { name: "模型库" }));
-    fireEvent.click(row(model.display_name).getByText("运行档案与当前参数")); fireEvent.click(row(second.display_name).getByText("运行档案与当前参数")); expect(await row(model.display_name).findByRole("spinbutton", { name: /模型线程数/ })).toHaveValue(3); expect(await row(second.display_name).findByRole("spinbutton", { name: /模型线程数/ })).toHaveValue(5); expect(api.configurationSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("运行档案与当前参数")); fireEvent.change(await screen.findByRole("spinbutton", { name: /模型线程数/ }), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: /返回模型库/ })); await openModelDetails(second.display_name);
+    fireEvent.click(screen.getByText("运行档案与当前参数")); const secondInput = await screen.findByRole("spinbutton", { name: /模型线程数/ }); expect(secondInput).toHaveValue(null); fireEvent.change(secondInput, { target: { value: "5" } }); fireEvent.click(screen.getByRole("button", { name: "API 接入" })); fireEvent.click(screen.getByRole("button", { name: "模型库" }));
+    fireEvent.click(screen.getByText("运行档案与当前参数")); expect(await screen.findByRole("spinbutton", { name: /模型线程数/ })).toHaveValue(5);
+    fireEvent.click(screen.getByRole("button", { name: /返回模型库/ })); await openModelDetails(model.display_name); fireEvent.click(screen.getByText("运行档案与当前参数")); expect(await screen.findByRole("spinbutton", { name: /模型线程数/ })).toHaveValue(3); expect(api.configurationSave).not.toHaveBeenCalled();
   });
 });

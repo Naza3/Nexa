@@ -84,7 +84,8 @@ it("walks labelled mock initialization, explicit stop, configure-only directory 
     const load = await readyButton("加载模型");
     expect(screen.getByRole("heading", { name: "Qwen3 中文 0.6B Q8_0" })).toBeInTheDocument();
     await user.click(load);
-    await user.click(await readyButton("验证驻留模型"));
+    await user.click(await readyButton("聊天测试"));
+    await untilPreview("聊天输入已可用", () => expect(screen.getByRole("textbox", { name: "输入消息" })).toBeEnabled());
     await user.type(screen.getByRole("textbox", { name: "输入消息" }), "你好");
     await user.click(await readyButton("发送"));
     await untilPreview("收到模拟流式回复", () => expect(screen.getByText(/这是显式开发预览中的模拟回复/)).toBeInTheDocument());

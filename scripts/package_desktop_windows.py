@@ -29,7 +29,22 @@ DOWNLOAD_LICENSES = {"COPYING", "COPYING.MinGW-w64-runtime.txt", "COPYING.MinGW-
     "compiler-rt-LICENSE.TXT", "libcxx-LICENSE.TXT", "libcxxabi-LICENSE.TXT",
     "libunwind-LICENSE.TXT", "llvm-mingw-LICENSE.TXT"}
 DOWNLOAD_SOURCE = "aria2-1.37.0-nexa-corresponding-source.tar.gz"
-DOWNLOAD_FILES = {"nexa-aria2.exe", DOWNLOAD_SOURCE, "build-manifest.json"} | {"licenses/" + name for name in DOWNLOAD_LICENSES}
+DOWNLOAD_ORIGINAL_FILES = {"nexa-aria2.exe", DOWNLOAD_SOURCE, "build-manifest.json"} | {"licenses/" + name for name in DOWNLOAD_LICENSES}
+DOWNLOAD_FILES = {"nexa-aria2.exe", DOWNLOAD_SOURCE, "build-manifest.json", base.LICENSE_INDEX, base.LICENSE_TEXT}
+
+
+def download_attributions(lock):
+    records = {}
+    runtime_licenses = {item["filename"]: item for item in lock["runtime_licenses"]}
+    for name in sorted(DOWNLOAD_LICENSES):
+        if name == "aria2-COPYING":
+            record = {"component": "aria2", "version": lock["aria2"]["version"], "source": lock["aria2"]["url"]}
+        elif name in runtime_licenses:
+            record = {"component": name.removesuffix("-LICENSE.TXT"), "version": lock["toolchain"]["version"], "source": runtime_licenses[name]["url"]}
+        else:
+            record = {"component": "LLVM/MinGW runtime", "version": lock["toolchain"]["version"], "source": lock["toolchain"]["url"]}
+        records["licenses/" + name] = [record]
+    return records
 
 
 def verify_download(stage, commit, dirty):
@@ -53,8 +68,18 @@ def verify_download(stage, commit, dirty):
     if (build.get("features", {}).get("SECURITY_WIN32") is not True or build.get("features", {}).get("ENABLE_SSL") is not True or
             any(build.get("features", {}).get(name) is not False for name in aria2_build.FORBIDDEN)):
         base.fail("download build feature profile mismatch")
+    if (base.regular(stage / base.LICENSE_INDEX).stat().st_size > 2 * 1024 * 1024 or
+            base.regular(stage / base.LICENSE_TEXT).stat().st_size > 32 * 1024 * 1024):
+        base.fail("download license bundle exceeds bounded validator limits")
+    originals = base.verify_license_bundle(stage, supplied=download_attributions(lock))
+    if set(originals) != {"licenses/" + name for name in DOWNLOAD_LICENSES}:
+        base.fail("download original license closure mismatch")
+    for name, item in originals.items():
+        document = item["document"]
+        if build["files"].get(name) != {"sha256": document["sha256"], "bytes": document["size_bytes"]}:
+            base.fail("download license bytes differ from source-build artifact")
     for item in payload:
-        if item["path"] == "build-manifest.json":
+        if item["path"] in {"build-manifest.json", base.LICENSE_INDEX, base.LICENSE_TEXT}:
             continue
         expected = build["files"].get(item["path"])
         if expected != {"sha256": item["sha256"], "bytes": item["size_bytes"]}:
@@ -76,10 +101,11 @@ def prepare_download(artifact, destination, commit, dirty):
     if records != build["files"]:
         base.fail("original download build artifact closure mismatch")
     destination.mkdir(parents=True)
-    for name in sorted(DOWNLOAD_FILES):
+    for name in sorted(DOWNLOAD_ORIGINAL_FILES):
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(base.regular(artifact / name), target)
+    base.consolidate_licenses(destination, supplied=download_attributions(build["source_lock"]))
     base.write_json(destination / "manifest.json", {"schema_version": 1, "product": "nexa-download",
         "project_commit": commit, "project_dirty": dirty, "files": base.entries(destination)})
     (destination / "SHA256SUMS").write_text("".join(f"{item['sha256']}  {item['path']}\n" for item in base.entries(destination)), encoding="utf-8")
@@ -228,10 +254,15 @@ def verify(stage, manifest):
     payload = [item for item in actual if item["path"] not in ("manifest.json", "SHA256SUMS")]
     if manifest["product"] != "nexa-desktop" or manifest["files"] != payload:
         base.fail("desktop manifest inventory/hash/size mismatch")
-    required = {"nexa-desktop.exe", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/index.json", "licenses/npm-index.json", "runtime/manifest.json", "runtime/SHA256SUMS", "download/manifest.json", "download/SHA256SUMS", "download/nexa-aria2.exe"}
+    required = {"nexa-desktop.exe", "README.md", base.LICENSE_INDEX, base.LICENSE_TEXT, "runtime/manifest.json", "runtime/SHA256SUMS", "download/manifest.json", "download/SHA256SUMS", "download/nexa-aria2.exe"}
     names = {item["path"] for item in payload}
     if not required <= names:
         base.fail("required desktop package files missing")
+    originals = base.verify_license_bundle(stage)
+    if base.LICENSE_NOTICES not in names and base.LICENSE_NOTICES not in originals:
+        base.fail("required desktop notices missing from both standalone and bundled roles")
+    if len(base.license_related_files(stage)) > 10:
+        base.fail("desktop distribution exceeds ten license/notice files")
     runtime_root = stage / "runtime"
     runtime = json.loads(base.regular(runtime_root / "manifest.json").read_text(encoding="utf-8"))
     base.verify_package(runtime_root, runtime)
@@ -345,11 +376,12 @@ def build(executable, component):
             notices.write("\n\n## Nexa download component\n\n"
                           "The separately executed nexa-aria2.exe is a modified aria2 1.37.0, licensed under GPL-2.0-or-later. "
                           "The exact corresponding patched source, build materials and dependency license originals accompany it under download/. "
-                          "See download/licenses/aria2-COPYING and download/" + DOWNLOAD_SOURCE + ". "
+                          "See download/licenses/THIRD_PARTY_LICENSES.txt (aria2-COPYING section) and download/" + DOWNLOAD_SOURCE + ". "
                           "LLVM/MinGW runtime notices are included in download/licenses/.\n")
         dependencies = collect_dependencies(stage, redist, inspect, copy_crt)
         copy_rust_licenses(stage, metadata, env)
         npm_licenses(stage)
+        base.consolidate_licenses(stage)
         manifest = {"schema_version": 1, "product": "nexa-desktop", "package_version": "0.1.0", "platform": "windows-x64", "backend": "cpu", "target": base.TARGET, "configuration": "Release",
                     "project_commit": source["commit"], "project_dirty": source["dirty"], "source": source,
                     "desktop_cargo_lock_sha256": base.digest(SHELL / "Cargo.lock"), "npm_lock_sha256": base.digest(ROOT / "apps/desktop/package-lock.json"),

@@ -1,0 +1,30 @@
+{
+  "verification": "temporary source-level corpus fixture; no new binaries or distribution",
+  "input_sha256": "f01da636f5a2b87ae89c70f7b2f9ebf94d350931343f6cc275fe75e601c14492",
+  "input_project_commit": "a14eb6fdb1858baf507c8b9a8509b0ca30df1316",
+  "input_desktop_prefix": "desktop-windows/",
+  "input_total_files": 766,
+  "input_license_notice_files": 748,
+  "recovered_original_files": 748,
+  "original_license_files_by_role": {
+    "desktop": 548,
+    "runtime": 187,
+    "download": 11
+  },
+  "fixture_license_notice_files": [
+    "THIRD_PARTY_NOTICES.md",
+    "download/licenses/THIRD_PARTY_LICENSES.txt",
+    "download/licenses/index.json",
+    "licenses/COPYRIGHT.html",
+    "licenses/THIRD_PARTY_LICENSES.txt",
+    "licenses/index.json",
+    "runtime/THIRD_PARTY_NOTICES.md",
+    "runtime/licenses/COPYRIGHT.html",
+    "runtime/licenses/THIRD_PARTY_LICENSES.txt",
+    "runtime/licenses/index.json"
+  ],
+  "fixture_total_files": 28,
+  "unchanged_non_license_payload_files": 12,
+  "corresponding_source_sha256": "940db370d442ee1b433d35a543a15e8ed3d3eeb04e20ae4a0f3c5e1ebaa2cf2f",
+  "source_build_manifest_sha256": "16e9fafcf9455d7e211dffffa650fff42c267b16c995305525f9eb41cffd77b8"
+}

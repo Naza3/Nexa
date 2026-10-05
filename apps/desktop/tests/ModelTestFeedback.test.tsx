@@ -1,3 +1,4 @@
+import { openModelDetails } from "./navigation";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
@@ -11,8 +12,7 @@ async function mount(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi({ modelsPage: vi.fn(async () => ({ data: [{ ...model, validated: false, local_validation: proof() }], generation: "generation-1", next_after: null })), ...overrides });
   const controller = new DesktopController(api);
   const rendered = render(<App initialPage="models" controller={controller} />);
-  const heading = await screen.findByRole("heading", { name: model.display_name, level: 3 });
-  const article = heading.closest("article")!;
+  const article = await openModelDetails(model.display_name);
   return { api, controller, article, row: within(article), ...rendered };
 }
 afterEach(() => vi.useRealTimers());
@@ -37,7 +37,7 @@ describe("visible current-attempt feedback", () => {
     expect(row.queryByRole("button", { name: "尝试加载" })).not.toBeInTheDocument();
   });
 
-  it("shows each repeated test's new running feedback and completion time directly on its row", async () => {
+  it("shows each repeated test's new running feedback and completion time on its detail page", async () => {
     let evidence = proof(); let next = deferred<LocalValidation>();
     const { row, article, api } = await mount({ modelsPage: vi.fn(async () => ({ data: [{ ...model, local_validation: evidence }], generation: "g", next_after: null })), testModel: vi.fn(() => next.promise) });
     const seen = [];
@@ -113,7 +113,7 @@ describe("visible current-attempt feedback", () => {
     const { row, controller, unmount } = await mount({ testModel: vi.fn(() => next.promise) });
     fireEvent.click(row.getByRole("button", { name: `测试 ${model.display_name}` }));
     if (destination === "settings") fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    if (destination === "download") fireEvent.click(screen.getByRole("button", { name: "下载模型" }));
+    if (destination === "download") { fireEvent.click(screen.getByRole("button", { name: /返回模型库/ })); fireEvent.click(screen.getByRole("button", { name: "下载模型" })); }
     if (destination === "close") fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" }));
     if (destination === "unmount") unmount();
     await act(async () => next.resolve(proof()));

@@ -1,3 +1,4 @@
+import { reveal } from "./navigation";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -45,7 +46,7 @@ describe("adding models from native file selection", () => {
     fireEvent.click(screen.getByRole("button", { name: "设置" })); fireEvent.click(screen.getByRole("button", { name: "模型库" }));
     fireEvent.click(screen.getByRole("button", { name: "刷新" })); await waitFor(() => expect(api.modelsPage).toHaveBeenCalledTimes(2));
     for (const call of [api.discoverDirectory, api.reconcileModels, api.scanModels, api.start, api.stop]) expect(call).not.toHaveBeenCalled();
-    expect(screen.getByText("原有管理模型")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: model.display_name, level: 3 })).toBeInTheDocument();
   });
   it("requires explicit service stop, preserves the selection, and never auto-adds after stopping", async () => {
     let value = snapshot();
@@ -101,7 +102,7 @@ describe("explicitly closing add results", () => {
     const { api, controller } = await mount({ libraryNext: vi.fn(async () => result) });
     fireEvent.click(screen.getByRole("button", { name: "添加模型" })); fireEvent.click(await screen.findByRole("button", { name: "确认添加 3 个模型" }));
     const close = await screen.findByRole("button", { name: "关闭添加结果" });
-    expect(close).toBeEnabled(); expect(within(screen.getByRole("region", { name: "添加模型结果" })).getByText(/关闭仅收起本次结果，不影响已登记模型/)).toBeVisible();
+    reveal(close); expect(close).toBeEnabled(); expect(within(screen.getByRole("region", { name: "添加模型结果" })).getByText(/关闭仅收起本次结果，不影响已登记模型/)).toBeVisible();
     const user = userEvent.setup(); close.focus(); expect(close).toHaveFocus(); await user.keyboard("{Enter}");
     expect(screen.queryByRole("region", { name: "添加模型结果" })).not.toBeInTheDocument();
     expect(controller.getSnapshot().library).toBeNull(); expect(controller.getSnapshot().library_selection).toBeNull();
@@ -123,7 +124,7 @@ describe("explicitly closing add results", () => {
     const state: ViewState = { ...controller.getSnapshot(), library_kind: "add", library_phase, library_selection: selection,
       library: phase ? { ...partial, status: "running", phase, terminal: false, result: null } : null };
     render(<AddModelProgress state={state} controller={controller} />);
-    expect(screen.getByRole("region", { name: "添加模型结果" })).toBeVisible();
+    expect(reveal(screen.getByRole("region", { name: "添加模型结果" }))).toBeVisible();
     expect(screen.queryByRole("button", { name: "关闭添加结果" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: control })).toBeVisible();
     if (library_phase === "stopping") expect(screen.getByRole("button", { name: control })).toBeDisabled();
@@ -134,7 +135,7 @@ describe("explicitly closing add results", () => {
     const controller = new DesktopController(makeApi());
     const state: ViewState = { ...controller.getSnapshot(), library_kind: "add", library: { ...partial, status: "running", phase: "testing", terminal: false, result: null } };
     render(<AddModelProgress state={state} controller={controller} />);
-    expect(screen.getByRole("region", { name: "添加模型结果" })).toBeVisible();
+    expect(reveal(screen.getByRole("region", { name: "添加模型结果" }))).toBeVisible();
     expect(screen.queryByRole("button", { name: "关闭添加结果" })).not.toBeInTheDocument();
   });
 
@@ -149,7 +150,7 @@ describe("explicitly closing add results", () => {
     fireEvent.click(screen.getByRole("button", { name: "关闭添加结果" }));
     expect(chosen).toBeVisible(); expect(controller.getSnapshot().model_selection).toEqual(selection);
     fireEvent.click(within(chosen).getByRole("button", { name: "确认添加 3 个模型" }));
-    expect(screen.getByRole("region", { name: "添加模型结果" })).toBeVisible();
+    expect(reveal(screen.getByRole("region", { name: "添加模型结果" }))).toBeVisible();
     expect(screen.queryByRole("button", { name: "关闭添加结果" })).not.toBeInTheDocument();
     await waitFor(() => expect(api.libraryNext).toHaveBeenCalledTimes(2));
     await act(async () => second.resolve({ ...partial, operation_id: "library-1" }));

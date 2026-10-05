@@ -343,6 +343,9 @@ export class DesktopController {
     this.listeners.forEach((listener) => listener());
   }
   dismissError = () => this.update({ error: null });
+  dismissNotice = (notice: string) => {
+    if (this.state.notice === notice) this.update({ notice: null });
+  };
   private report(error: unknown) {
     const safe = safeError(error);
     const messages: Record<string, string> = {
@@ -1004,7 +1007,7 @@ export class DesktopController {
     } } });
     if (error) { this.report(error); return; }
     const evidence = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id)?.local_validation;
-    this.update({ notice: result ? `${localValidationLabel(result)}${result.state !== "passed" && evidence?.state === "passed" ? "；列表中的通过标签来自此前记录。" : ""}` : "本次操作已结束，尚未取得可确认的短文本测试结果。" });
+    this.update({ notice: result ? `${localValidationLabel(result)}${result.state !== "passed" && evidence?.state === "passed" ? "；历史本机通过记录仍保留，不代表本次通过。" : ""}` : "本次操作已结束，尚未取得可确认的短文本测试结果。" });
   }
   private async refreshModelEvidence(scope: ModelTestScope): Promise<SafeError | null> {
     await this.awaitCloseDecision();

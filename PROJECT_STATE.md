@@ -1,5 +1,13 @@
 # Nexa 当前状态
 
+## 2026-10-05 许可无损整合与整体桌面精简（进行中）
+
+当前源码基线为`codex/dev`的`a14eb6fdb1858baf507c8b9a8509b0ca30df1316`；最后实际交付仍为a14原Windows包，[Actions37216837409](https://github.com/Naza3/Nexa/actions/runs/37216837409)已成功。本节更新当前状态，下文保留各阶段历史，不将旧包CI证据转授本次源码。
+
+L01许可整合源码及针对性验证已完成：完整桌面目录含嵌套runtime/download至多10份许可文件，原生与已有交叉库存均为4+4+2，全部原文/NOTICE/版权HTML/原库存字节和来源映射保留。Microsoft原DOCX/PDF独立保留时，只把本层root notice完整并入文本。两份旧ZIP临时语料分别恢复748/760份原文，12个非许可payload及对应源码完全不变；未生成新ZIP。严格Python212项（208通过/4平台skip），Rust download-engine与xtask针对性77通过/1既有忽略、同范围clippy及格式检查通过；独立审查发现的验收器归属校验缺口已修复并实际执行反例回归。见[ADR0026](docs/decisions/0026-lossless-license-bundles.md)及[验证记录](docs/verification/2026-10-05-lossless-license-bundles.md)。
+
+整体桌面精简源码已冻结，前端654项测试、typecheck/lint/Vite构建通过；独立UI审查14项反例及88项永久回归子集通过，四处焦点/跨页失败反馈/过期证明状态问题均已修复。许可独立审查的伪归属与超界整数精度反例亦已关闭，无剩余源码阻断。产品方案见[精简桌面体验](docs/product/compact-desktop-experience.md)，本轮过程见[桌面验证记录](docs/verification/2026-10-05-compact-desktop-experience.md)。用户02:34:54 UTC最新要求“这批修改完成后github构建”，覆盖此前暂缓构建：本批源码验证及独立审查已收口，现在由主代理统一提交、推送并运行标准GitHub原生Windows构建；本次尚无新CI或新包结论。Win10窗口、两机LAN及离线/长期测试仍独立待验。
+
 ## 2026-10-04 整体产品体验实施（进行中）
 
 四项修复6aa0e1f已通过[Actions37206035656](https://github.com/Naza3/Nexa/actions/runs/37206035656)并交付完整Windows包；[PR8](https://github.com/Naza3/Nexa/pull/8)仍未合并。随后完成整体流程审查与12页设计，用户15:05 UTC明确批准按方案实施。当前在同一codex/dev落实[整体体验契约](docs/product/experience-implementation.md)，先状态/配置/CAS与模型档案，再页面及任务流程，保持单actor、安全边界与原接口兼容。本批源码已冻结，联合Rust507/0/7、前端610、Python190/4skip、clippy/fmt及Windows交叉check通过；独立前后端审查无剩余阻断，Linux固定真实GGUF的档案/CAS/重载/空闲恢复/空model/SSE及坏配置停服13项通过。详见[实施验证](docs/verification/2026-10-04-unified-product-experience.md)。现在进入统一提交与GitHub原生Windows构建，尚不宣称新Windows包已通过。main仍e3c5，无自动合并或新功能分支。

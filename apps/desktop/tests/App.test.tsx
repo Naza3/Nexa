@@ -1,3 +1,4 @@
+import { openModelDetails } from "./navigation";
 import {
   act,
   fireEvent,
@@ -46,8 +47,9 @@ describe("desktop React interaction", () => {
         generation: "generation-1",
       })),
     });
+    await openModelDetails(model.display_name);
     expect(screen.getByText("登记时已识别 GGUF")).toBeInTheDocument();
-    expect(screen.getByText("未实测")).toBeInTheDocument();
+    expect(screen.getByText("未测试")).toBeInTheDocument();
     expect(screen.getByText("当前引擎报告不支持此架构")).toBeInTheDocument();
     expect(screen.getByText(/源文件已变动/)).toBeInTheDocument();
     expect(screen.queryByText("尚未校验")).not.toBeInTheDocument();
@@ -55,7 +57,7 @@ describe("desktop React interaction", () => {
     expect(load).toBeDisabled();
     await user.click(load);
     expect(api.loadModel).not.toHaveBeenCalled();
-    await user.click(screen.getByText("模型信息"));
+    await user.click(screen.getByText("验证条件与能力边界"));
     expect(screen.getByText(/不代表当前文件完整性/)).toBeVisible();
     expect(screen.getByText(`登记时 SHA-256：${model.sha256}`)).toBeVisible();
   });
@@ -82,6 +84,7 @@ describe("desktop React interaction", () => {
 
   it("shows three pages and unknown backend honestly, including keyboard navigation", async () => {
     const { user } = await mount();
+    await openModelDetails(model.display_name);
     expect(screen.getByText(/原生后端观测：unavailable/)).toBeInTheDocument();
     await chat(user);
     expect(screen.getByRole("heading", { name: "聊天测试" })).toBeInTheDocument();
