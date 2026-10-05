@@ -13,8 +13,8 @@ import tempfile
 import package_windows as base
 from release_version import validate_version
 
-STAGES = frozenset("preflight wizard_cancel_install wizard_cancel_repair wizard_cancel_uninstall setup_invalid_option setup_conflicting_actions setup_uninstall_absent msi_default_ui_install msi_repair msi_alias_directory setup_repair runtime_init runtime_ready msi_busy_fa msi_busy_x setup_busy_repair runtime_stop msi_wrong_scope msi_wrong_directory msi_junction_rejected fixture_build msi_rollback msi_upgrade msi_downgrade msi_uninstall setup_gui_install setup_uninstall setup_silent_install setup_silent_uninstall reboot_fixture_build setup_reboot msi_reboot_fixture_remove complete".split())
-ACTIONS = frozenset("INSTALL FindRelatedProducts LaunchConditions CostInitialize FileCost CostFinalize NexaGuard InstallValidate InstallInitialize RemoveExistingProducts ProcessComponents UnpublishFeatures RemoveRegistryValues RemoveShortcuts RemoveFiles RemoveFolders CreateFolders InstallFiles CreateShortcuts WriteRegistryValues RegisterUser RegisterProduct PublishFeatures PublishProduct InstallFinalize ExecuteAction ValidateProductID ResolveSource InstallExecute InstallExecuteAgain ScheduleReboot NexaTestRollback".split())
+STAGES = frozenset("installer_guard_preflight preflight wizard_cancel_install wizard_cancel_repair wizard_cancel_uninstall setup_invalid_option setup_conflicting_actions setup_uninstall_absent msi_default_ui_install msi_repair msi_alias_directory setup_repair runtime_init runtime_ready msi_busy_fa msi_busy_x setup_busy_repair runtime_stop msi_wrong_scope msi_wrong_directory msi_junction_rejected fixture_build msi_rollback msi_upgrade msi_downgrade msi_uninstall setup_gui_install setup_uninstall setup_silent_install setup_silent_uninstall reboot_fixture_build setup_reboot msi_reboot_fixture_remove complete".split())
+ACTIONS = frozenset("INSTALL FindRelatedProducts LaunchConditions CostInitialize FileCost CostFinalize NexaOsGuard NexaLegacyOsProbe NexaGuard InstallValidate InstallInitialize RemoveExistingProducts ProcessComponents UnpublishFeatures RemoveRegistryValues RemoveShortcuts RemoveFiles RemoveFolders CreateFolders InstallFiles CreateShortcuts WriteRegistryValues RegisterUser RegisterProduct PublishFeatures PublishProduct InstallFinalize ExecuteAction ValidateProductID ResolveSource InstallExecute InstallExecuteAgain ScheduleReboot NexaTestRollback".split())
 REASON_TEXT = {
     "guard_scope": "only supports a current-user", "guard_os": "requires windows 10",
     "guard_install_root": "must be installed in the current user's", "guard_known_folder": "cannot resolve the current user's",
@@ -37,7 +37,7 @@ def reason_codes(text):
 
 
 def empty_log():
-    return {"present": False, "actions": [], "error_codes": [], "reason_codes": []}
+    return {"present": False, "actions": [], "error_codes": [], "reason_codes": [], "legacy_os": []}
 
 
 def summarize_log(path):
@@ -61,6 +61,11 @@ def summarize_log(path):
     result["actions"] = result["actions"][-32:]
     result["error_codes"] = sorted({int(value) for value in re.findall(r"(?:Error\s+|Note: 1: )([0-9]{3,5})\b", text)})[:32]
     result["reason_codes"] = [value for value in reason_codes(text) if value != "unclassified"]
+    for values in re.findall(r"NexaLegacyOsProbe stage=([0-7]) success=([01]) major=([0-9]{1,5}) minor=([0-9]{1,5}) build=([0-9]{1,5}) error=([0-9]{1,10})", text):
+        stage, success, major, minor, build, error = map(int, values)
+        if max(major, minor, build) <= 65535 and error <= 2**32 - 1:
+            result["legacy_os"].append({"stage": stage, "success": bool(success), "major": major, "minor": minor, "build": build, "win32_error": error})
+    result["legacy_os"] = result["legacy_os"][-4:]
     return result
 
 
@@ -162,7 +167,7 @@ def validate_document(document, commit):
             raise ValueError("installer expected-code list invalid")
         for code in event["expected_exit_codes"]: bounded_integer(code, 0, 65535)
         log = event["msi_log"]
-        exact_keys(log, ("present", "actions", "error_codes", "reason_codes"))
+        exact_keys(log, ("present", "actions", "error_codes", "reason_codes", "legacy_os"))
         if type(log["present"]) is not bool or type(log["actions"]) is not list or len(log["actions"]) > 32:
             raise ValueError("installer action log invalid")
         for action in log["actions"]:
@@ -175,6 +180,14 @@ def validate_document(document, commit):
         for code in log["error_codes"]: bounded_integer(code, 0, 65535)
         if type(log["reason_codes"]) is not list or len(log["reason_codes"]) > len(REASONS) or not set(log["reason_codes"]) <= REASONS:
             raise ValueError("installer log reason invalid")
+        if type(log["legacy_os"]) is not list or len(log["legacy_os"]) > 4:
+            raise ValueError("installer OS observation count invalid")
+        for observation in log["legacy_os"]:
+            exact_keys(observation, ("stage", "success", "major", "minor", "build", "win32_error"))
+            bounded_integer(observation["stage"], 0, 7)
+            if type(observation["success"]) is not bool: raise ValueError("installer OS success flag invalid")
+            for key in ("major", "minor", "build"): bounded_integer(observation[key], 0, 65535)
+            bounded_integer(observation["win32_error"], 0, 2**32 - 1)
         if type(event["windows"]) is not list or len(event["windows"]) > 16:
             raise ValueError("installer window list invalid")
         for window in event["windows"]:

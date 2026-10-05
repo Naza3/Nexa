@@ -85,26 +85,6 @@ static BOOL stopped(const WCHAR *root) {
     HeapFree(GetProcessHeap(), 0, buffer);
     return result;
 }
-/* MSI's VersionNT is 603 even on Windows 10. Read the inbox kernel32 version
-   resource instead of relying on that compatibility-virtualized property. */
-static BOOL windows10_kernel(void) {
-    WCHAR system_file[512];
-    DWORD length = GetSystemDirectoryW(system_file, 480), ignored = 0, size;
-    BYTE *data;
-    VS_FIXEDFILEINFO *info = NULL;
-    UINT info_size = 0;
-    BOOL result = FALSE;
-    if (!length || length >= 480 || !append_text(system_file, 512, L"\\kernel32.dll")) return FALSE;
-    size = GetFileVersionInfoSizeW(system_file, &ignored);
-    if (!size) return FALSE;
-    data = (BYTE *)HeapAlloc(GetProcessHeap(), 0, size);
-    if (!data) return FALSE;
-    if (GetFileVersionInfoW(system_file, 0, size, data) && VerQueryValueW(data, L"\\", (LPVOID *)&info, &info_size) &&
-        info_size >= sizeof(VS_FIXEDFILEINFO) && info->dwSignature == 0xFEEF04BD && HIWORD(info->dwFileVersionMS) >= 10) result = TRUE;
-    HeapFree(GetProcessHeap(), 0, data);
-    return result;
-}
-
 /* Expand only existing ancestors, preserving a missing destination tail. Never
    normalize away dot segments or follow a reparse point to compare scope. */
 static BOOL expanded_path(const WCHAR *input, WCHAR *output) {
@@ -158,7 +138,6 @@ static UINT check_session(MSIHANDLE session, WCHAR *root, WCHAR *expected, WCHAR
     MSIHANDLE database = 0, view = 0, row = 0;
     UINT code;
     DWORD length;
-    if (!windows10_kernel()) return refuse(session, L"Nexa requires Windows 10 or later (64-bit). Windows version could not be confirmed.");
     if (!get_property(session, L"ALLUSERS", scope, 16) || scope[0])
         return refuse(session, L"Nexa only supports a current-user installation.");
     if (FAILED(SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DONT_VERIFY, NULL, &local)))

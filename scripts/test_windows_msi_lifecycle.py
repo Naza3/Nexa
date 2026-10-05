@@ -319,6 +319,7 @@ def lifecycle(msi, setup, payload, report):
             result["path_redirection_rejected"] = True
             trace("fixture_build", "start")
             guard, _ = pack.compile_native(work)
+            pack.compile_native(work, os_check=True)
             cab = pack.make_cabinet(payload, files, work)
             broken = work / "rollback.msi"
             upgraded = work / "upgrade.msi"

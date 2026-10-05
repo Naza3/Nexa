@@ -33,7 +33,7 @@ EXE 不是另一套安装器。用任一安装格式安装，另一格式操作�
 
 Microsoft Edge WebView2 Evergreen Runtime 必须已经安装。安装器不捆绑、不下载、不安装 WebView2，不接受其新的许可条款；向导显示说明，应用沿用原有缺失诊断。缺失时由用户通过 [Microsoft 官方 WebView2 页面](https://developer.microsoft.com/microsoft-edge/webview2/) 获取并自行安装。CLI runtime 不依赖 WebView2。应用本身的 CPU 指令集、内存和模型许可要求保持不变。
 
-Setup 与 MSI guard 由同一既有 MSVC/Windows SDK 构建，使用 Windows inbox API，没有动态或静态 CRT 依赖；构建通过 `dumpbin /dependents` 的受限白名单检查。MSI 保留完整便携版许可闭包和 aria2 对应源码，不添加另一组重复许可文件。没有引入新 WiX/NSIS 运行依赖、EULA 自动接受、付费工具或签名证书。
+Setup、独立 OS 检查 EXE 与 MSI 目录/进程 guard 由同一既有 MSVC/Windows SDK 构建，使用 Windows inbox API，没有动态或静态 CRT 依赖；构建通过 `dumpbin /dependents` 的受限白名单检查。MSI 保留完整便携版许可闭包和 aria2 对应源码，不添加另一组重复许可文件。没有引入新 WiX/NSIS 运行依赖、EULA 自动接受、付费工具或签名证书。
 
 ## 命令行
 
@@ -72,7 +72,7 @@ python scripts/test_windows_msi_lifecycle.py --payload dist/desktop-windows --ms
 
 第二步只允许一次性 GitHub Windows runner，且拒绝已有 Nexa 安装或数据目录。真实运行不带 `/q` 的默认 MSI 入口（`LIMITUI=1` 明确使用系统 Basic UI）、逐字节安装校验、MSI/EXE 修复、运行中拒绝、scope/path/junction 拒绝、失败升级回滚、升级、降级拒绝、卸载、模型/配置/密钥/外部文件保留、Setup 三动作向导的前进/后退/取消、真实 GUI 安装的 Apply→受保护进度→Finish，以及实际 MSI `3010` 的 EXE 返回传播。私有升级/故障/请求重启测试 MSI 不进入 Release。
 
-`--check-toolchain --report <路径>` 仅提前编译原生辅助程序、检查 inbox DLL 依赖，不生成真实安装器、不执行安装，不能作为生命周期通过证据。表结构/外键/读回校验也不冒称 Windows SDK ICE 验证；当前报告明确记录 ICE 未运行。尚未执行的 Windows 测试不得因为测试脚本存在而写成通过。
+`--check-toolchain --report <路径>` 提前编译原生辅助程序并检查 inbox DLL 依赖；还通过真正的 `System32\msiexec.exe` 执行私有 MSI 的只读 OS/目录/进程门禁，60 秒内未完成即失败。私有 MSI 使用随机产品身份，没有 InstallInitialize、InstallFiles、WriteRegistryValues、RegisterProduct、PublishProduct 等动作，前后检查产品未登记、Nexa 程序与用户数据目录未创建。Installer 自身的临时提取/日志允许；这不是应用安装、载荷或完整生命周期通过证据。表结构/外键/读回校验也不冒称 Windows SDK ICE 验证；当前报告明确记录 ICE 未运行。尚未执行的 Windows 测试不得因为测试脚本存在而写成通过。
 
 
 ## 失败诊断
@@ -82,3 +82,12 @@ python scripts/test_windows_msi_lifecycle.py --payload dist/desktop-windows --ms
 失败时工作流只上传严格 schema/来源校验后的独立诊断目录；未知字段、重复 JSON 键、非 JSON 数值、路径/自由文本、超界数据和输入/输出祖先的 reparse 均拒绝。缺失报告明确记录 missing，不标成通过；通过全量校验后才原子发布证据目录。
 
 首轮 `51d2d50` 的 Windows CI 已实际完成辅助程序编译和真实 MSI/Setup 字节绑定，在生命周期极早的一次动作等候 240 秒后失败；因当时缺少阶段诊断，不能确定具体 MSI 模态框或动作。后续 Basic UI 契约明确化、目标长短路径归一化和失败诊断属于针对源码缺口的限定修正，不宣称已证实首轮根因；完整安装、修复、升级、回滚与用户数据保留仍须新 CI 实测。
+
+
+## MSI 宿主中的 OS 识别
+
+第三轮 `2bbd72d` 的原生诊断明确定位：默认 MSI 入口停在旧 DLL 的 `NexaGuard` OS 拒绝窗口。Setup 的三种取消导航、参数拒绝和不存在产品的静默卸载已经执行通过；后续安装尚未进入。旧 `kernel32.dll` 文件版本查询究竟是 API 失败还是 MSI 兼容层返回旧版本，原报告没有数值，不能把其中一种推断当成实测结论。
+
+OS 门禁现迁至自带 Windows 10 supportedOS manifest 的只读 EXE，和已在该 runner 实际运行过的 Setup 共用同一 `VerifyVersionInfoW` 谓词。MSI 的 `NexaOsGuard` 是同步、检查退出码的 Type 2 动作，必须在目录/进程 guard 和安装事务之前成功；`VersionNT64` 架构限制保留。不在 DLL 内改用同样可能受宿主兼容影响的版本查询，也不因诊断困难而跳过 OS 门禁。
+
+早期私有 MSI 与生产 MSI 使用相同 OS EXE 和完整目录/进程 guard；日志必须出现它们的成功结束动作，不能仅凭 msiexec 返回 0。旧文件查询仅保留在不会分发的诊断 DLL，输出固定阶段码、是否成功、major/minor/build 和 Win32 错误码六个数值，由封闭 schema 过滤后共享。新门禁和完整生命周期仍须下一次 Windows CI 验证。

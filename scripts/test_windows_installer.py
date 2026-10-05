@@ -41,6 +41,54 @@ class WindowsInstallerTests(unittest.TestCase):
         self.assertNotIn("ServiceInstall", tables)
         self.assertIn(["ExecuteAction", None, 1300], tables["InstallUISequence"])
 
+    def test_os_guard_is_mandatory_and_precedes_all_mutation(self):
+        tables = pack.production_tables(files(), "0.1.0", Path("guard.dll"), Path("os-check.exe"))
+        pack.validate_tables(tables)
+        self.assertIn(["NexaOsGuard", 2, "NexaOsGuardBinary", None], tables["CustomAction"])
+        self.assertEqual(tables["Binary"], [["NexaGuardBinary", Path("guard.dll")], ["NexaOsGuardBinary", Path("os-check.exe")]])
+        for name in ("InstallExecuteSequence", "InstallUISequence"):
+            rows = {row[0]: row for row in tables[name]}
+            self.assertIsNone(rows["NexaOsGuard"][1])
+            self.assertLess(rows["NexaOsGuard"][2], rows["NexaGuard"][2])
+        self.assertLess(dict((row[0], row[2]) for row in tables["InstallExecuteSequence"])["NexaOsGuard"], 1500)
+        self.assertNotIn("NexaLegacyOsProbe", str(tables))
+        self.assertNotIn("path_test", str(tables))
+
+    def test_private_preflight_runs_only_read_only_actions_with_new_identity(self):
+        production = pack.production_tables(files(), "0.1.0", Path("guard.dll"), Path("os-check.exe"))
+        probe = pack.preflight_tables(production, Path("legacy-probe.dll"))
+        pack.validate_tables(probe)
+        self.assertEqual(tuple(row[0] for row in probe["InstallExecuteSequence"]), pack.PREFLIGHT_ACTIONS)
+        self.assertEqual(probe["InstallUISequence"], [])
+        self.assertEqual(probe["Upgrade"], [])
+        for name in ("InstallInitialize", "InstallFinalize", "InstallFiles", "WriteRegistryValues", "RegisterProduct", "PublishProduct"):
+            self.assertNotIn(name, [row[0] for row in probe["InstallExecuteSequence"]])
+        before, after = dict(production["Property"]), dict(probe["Property"])
+        self.assertNotEqual(before["ProductCode"], after["ProductCode"])
+        self.assertNotEqual(before["UpgradeCode"], after["UpgradeCode"])
+        self.assertEqual(production["CustomAction"], probe["CustomAction"][:-1])
+        self.assertEqual(production["Binary"], probe["Binary"][:-1])
+        self.assertEqual(len({row[1] for row in production["Component"]} & {row[1] for row in probe["Component"]}), 0)
+
+    def test_version_check_uses_shared_manifested_exe_and_msi_probe(self):
+        setup = (pack.AUTHORING / "setup.c").read_text(encoding="utf-8")
+        os_check = (pack.AUTHORING / "os_check.c").read_text(encoding="utf-8")
+        header = (pack.AUTHORING / "os_version.h").read_text(encoding="utf-8")
+        guard = (pack.AUTHORING / "guard.c").read_text(encoding="utf-8")
+        source = Path(pack.__file__).read_text(encoding="utf-8")
+        self.assertIn('#include "os_version.h"', setup)
+        self.assertIn('#include "os_version.h"', os_check)
+        self.assertIn("VerifyVersionInfoW", header)
+        self.assertIn("version.dwMajorVersion = 10", header)
+        self.assertIn("VER_SERVICEPACKMAJOR | VER_SERVICEPACKMINOR", header)
+        self.assertIn("ERROR_OLD_WIN_VERSION", os_check)
+        self.assertNotIn("GetFileVersionInfo", guard)
+        self.assertNotIn("RtlGetVersion", guard)
+        self.assertIn('"System32/msiexec.exe"', source)
+        self.assertIn('process.wait(timeout=60)', source)
+        self.assertIn('"NexaLegacyOsProbe", "NexaOsGuard", "NexaGuard"', source)
+        self.assertIn('item["return_code"] == 1', source)
+
     def test_upgrade_is_transactional_and_downgrade_blocked(self):
         tables = pack.author_tables(files(), "2.0.1")
         order = {name: sequence for name, _, sequence in tables["InstallExecuteSequence"]}

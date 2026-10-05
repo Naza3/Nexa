@@ -1,6 +1,7 @@
 /* Small offline wizard around one embedded MSI. Windows Installer owns the
    entire install/repair/remove transaction. No copied application files here. */
 #include "native.h"
+#include "os_version.h"
 #include "setup_identity.h"
 #include <bcrypt.h>
 #include <commctrl.h>
@@ -21,16 +22,6 @@ static int action = ID_INSTALL, page = 0;
 static BOOL running = FALSE, silent = FALSE;
 static HINSTANCE instance;
 
-static BOOL windows10_or_later(void) {
-    OSVERSIONINFOEXW version;
-    ULONGLONG mask = 0;
-    zero_bytes(&version, sizeof(version));
-    version.dwOSVersionInfoSize = sizeof(version);
-    version.dwMajorVersion = 10;
-    mask = VerSetConditionMask(mask, VER_MAJORVERSION, VER_GREATER_EQUAL);
-    mask = VerSetConditionMask(mask, VER_MINORVERSION, VER_GREATER_EQUAL);
-    return VerifyVersionInfoW(&version, VER_MAJORVERSION | VER_MINORVERSION, mask);
-}
 static BOOL valid_hash(const BYTE *bytes, DWORD size) {
     BCRYPT_ALG_HANDLE algorithm = NULL;
     BCRYPT_HASH_HANDLE hash = NULL;

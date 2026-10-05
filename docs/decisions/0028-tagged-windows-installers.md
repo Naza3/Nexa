@@ -30,3 +30,10 @@
 - [完整 UI 的执行序列](https://learn.microsoft.com/en-us/windows/win32/msi/installuisequence-table)
 - [Windows 10 的 MSI VersionNT 仍为 603](https://learn.microsoft.com/en-us/troubleshoot/windows-client/application-management/versionnt-value-for-windows-10-server)
 - [WiX 维护费与显式 EULA](https://docs.firegiant.com/wix/osmf/)
+
+
+### 原生 MSI 宿主验证补充
+
+第三轮原生日志已定位到旧 DLL OS guard 的拒绝窗口，尚未区分 API 返回失败还是兼容版本信息。OS 门禁采用和 Setup 相同 manifest/谓词的独立只读 EXE，并作为同步、检查返回值的 [MSI Type 2](https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-type-2) 动作置于事务前。DLL 继续只读验证当前用户目录、路径和进程。早期真实 msiexec 私有测试只运行这些门禁，不启动安装事务或登记应用，失败优先暴露于耗时编译之前；实际应用安装/修复/升级/回滚门槛不因此放宽。
+
+OS API 契约参考：[VerifyVersionInfoW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-verifyversioninfow)、[EXE supportedOS manifest](https://learn.microsoft.com/en-us/windows/win32/sysinfo/targeting-your-application-at-windows-8-1)。共享谓词检查主/次版本及两个 service-pack 字段的最低值，任何 API 错误或不满足版本要求均拒绝；文档已标记该查询依赖 manifest，不能把 DLL 宿主结果等同独立 EXE。

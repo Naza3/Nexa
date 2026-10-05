@@ -50,6 +50,20 @@ class InstallerDiagnosticsTests(unittest.TestCase):
                 for forbidden in ("SECRET_PAYLOAD", "VERY_PRIVATE_TOKEN", "PrivateName", "secret.gguf", "C:"):
                     self.assertNotIn(forbidden, serialized)
 
+    def test_legacy_os_probe_preserves_only_bounded_numeric_facts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); log = root / "legacy.log"
+            log.write_text("NexaLegacyOsProbe stage=7 success=0 major=6 minor=0 build=6000 error=1150\n"
+                           "NexaLegacyOsProbe stage=99 success=1 major=10 minor=0 build=20348 error=0\n"
+                           "uncontrolled private path C:\\Users\\Somebody\n", encoding="utf-8")
+            observed = diag.summarize_log(log)
+            self.assertEqual(observed["legacy_os"], [{"stage": 7, "success": False, "major": 6, "minor": 0, "build": 6000, "win32_error": 1150}])
+            document = self.document(root)
+            document["events"][0]["msi_log"] = observed
+            diag.validate_document(document, "a" * 40)
+            observed["legacy_os"][0]["major"] = 65536
+            with self.assertRaises(ValueError): diag.validate_document(document, "a" * 40)
+
     def test_unknown_and_oversized_fields_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             original = self.document(Path(temporary))

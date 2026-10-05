@@ -7,6 +7,7 @@ No downloader, signing key, external installer framework, or application rebuild
 from __future__ import annotations
 import argparse
 import ctypes
+import copy
 import hashlib
 import json
 import os
@@ -184,11 +185,11 @@ def author_tables(files, version, *, rollback_fixture=False):
         ["NOT ALLUSERS", "Nexa supports current-user installation only. Do not set ALLUSERS."],
         ["Installed OR NOT NEXA_NEWER", "A newer Nexa version is installed. Downgrades are blocked to protect your data."],
     ]
-    tables["CustomAction"] = [["NexaGuard", 1, "NexaGuardBinary", "NexaGuard"]]
+    tables["CustomAction"] = [["NexaOsGuard", 2, "NexaOsGuardBinary", None], ["NexaGuard", 1, "NexaGuardBinary", "NexaGuard"]]
     tables["InstallExecuteSequence"] = [[action, condition, sequence] for action, condition, sequence in (
         ("FindRelatedProducts", None, 25), ("LaunchConditions", None, 100),
         ("CostInitialize", None, 800), ("FileCost", None, 900), ("CostFinalize", None, 1000),
-        ("NexaGuard", None, 1100), ("InstallValidate", None, 1400),
+        ("NexaOsGuard", None, 1050), ("NexaGuard", None, 1100), ("InstallValidate", None, 1400),
         ("InstallInitialize", None, 1500), ("RemoveExistingProducts", None, 1510),
         ("ProcessComponents", None, 1600), ("UnpublishFeatures", None, 1800),
         ("RemoveRegistryValues", None, 2600), ("RemoveShortcuts", None, 3200),
@@ -199,13 +200,44 @@ def author_tables(files, version, *, rollback_fixture=False):
         ("PublishProduct", None, 6400), ("InstallFinalize", None, 6600))]
     tables["InstallUISequence"] = [[action, None, sequence] for action, sequence in (
         ("FindRelatedProducts", 25), ("LaunchConditions", 100), ("CostInitialize", 800),
-        ("FileCost", 900), ("CostFinalize", 1000), ("NexaGuard", 1100), ("ExecuteAction", 1300))]
+        ("FileCost", 900), ("CostFinalize", 1000), ("NexaOsGuard", 1050), ("NexaGuard", 1100), ("ExecuteAction", 1300))]
     if rollback_fixture:
         # This table exists ONLY in a private CI fixture. It is not a property
         # backdoor in shipped MSI, and there is no CLI switch to generate it.
         tables["CustomAction"].append(["NexaTestRollback", 19, None, "Nexa private rollback fixture"])
         tables["InstallExecuteSequence"].append(["NexaTestRollback", None, 6500])
     return tables
+
+
+def production_tables(files, version, guard, os_guard, *, rollback_fixture=False):
+    tables = author_tables(files, version, rollback_fixture=rollback_fixture)
+    tables["Binary"] = [["NexaGuardBinary", guard], ["NexaOsGuardBinary", os_guard]]
+    return tables
+
+
+PREFLIGHT_ACTIONS = ("LaunchConditions", "CostInitialize", "FileCost", "CostFinalize", "NexaLegacyOsProbe", "NexaOsGuard", "NexaGuard")
+
+
+def preflight_tables(tables, legacy_probe):
+    """Private msiexec context test: exact guards, no installation transaction."""
+    result = copy.deepcopy(tables)
+    for row in result["Property"]:
+        if row[0] in ("ProductCode", "UpgradeCode"):
+            row[1] = "{" + str(uuid.uuid4()).upper() + "}"
+        elif row[0] == "ProductName":
+            row[1] = "Nexa guard preflight (not installed)"
+    for row in result["Component"]:
+        row[1] = "{" + str(uuid.uuid4()).upper() + "}"
+    result["Upgrade"] = []
+    result["InstallUISequence"] = []
+    result["Binary"].append(["NexaLegacyProbeBinary", legacy_probe])
+    result["CustomAction"].append(["NexaLegacyOsProbe", 1, "NexaLegacyProbeBinary", "NexaLegacyOsProbe"])
+    result["InstallExecuteSequence"] = [row for row in result["InstallExecuteSequence"] if row[0] in PREFLIGHT_ACTIONS]
+    result["InstallExecuteSequence"].append(["NexaLegacyOsProbe", None, 1025])
+    result["InstallExecuteSequence"].sort(key=lambda row: row[2])
+    if tuple(row[0] for row in result["InstallExecuteSequence"]) != PREFLIGHT_ACTIONS:
+        base.fail("private preflight action order changed")
+    return result
 
 
 def validate_tables(tables):
@@ -248,7 +280,9 @@ def validate_tables(tables):
         base.fail("duplicate MSI component GUID")
 
 
-def compile_native(work, msi=None, *, path_test=False):
+def compile_native(work, msi=None, *, path_test=False, os_check=False, legacy_probe=False):
+    if sum((msi is not None, path_test, os_check, legacy_probe)) > 1:
+        base.fail("installer helper build roles are mutually exclusive")
     for name in ("CL", "_CL_", "LINK", "_LINK_", "CFLAGS", "CXXFLAGS"):
         if os.environ.get(name):
             base.fail("installer refuses implicit " + name)
@@ -256,24 +290,25 @@ def compile_native(work, msi=None, *, path_test=False):
     compiler = base.selected_msvc_tool(vs, env, "cl.exe")
     dumpbin = base.selected_msvc_tool(vs, env, "dumpbin.exe")
     common = [compiler, "/nologo", "/W4", "/WX", "/O1", "/GS-", "/Zl", "/DUNICODE", "/D_UNICODE", "/D_WIN32_WINNT=0x0A00", "/I" + str(AUTHORING)]
-    if msi is None:
-        output = work / ("nexa-installer-path-test.dll" if path_test else "nexa-installer-guard.dll")
-        source = AUTHORING / ("path_test.c" if path_test else "guard.c")
+    if msi is None and not os_check:
+        output = work / ("nexa-installer-legacy-os-probe.dll" if legacy_probe else "nexa-installer-path-test.dll" if path_test else "nexa-installer-guard.dll")
+        source = AUTHORING / ("legacy_os_probe.c" if legacy_probe else "path_test.c" if path_test else "guard.c")
         base.command([*common, "/LD", source, "/Fo" + str(work / "guard.obj"),
                       "/link", "/NODEFAULTLIB", "/NOENTRY", "/MACHINE:X64", "/DYNAMICBASE", "/NXCOMPAT",
                       "/OUT:" + str(output), "/IMPLIB:" + str(work / "guard.lib"), "kernel32.lib", "user32.lib", "msi.lib", "shell32.lib", "ole32.lib", "uuid.lib", "version.lib"], env, cwd=work)
     else:
-        output = work / "nexa-setup.exe"
-        (work / "setup_identity.h").write_text('#define NEXA_MSI_SHA256 "' + base.digest(msi) + '"\n', encoding="ascii")
+        output = work / ("nexa-os-check.exe" if os_check else "nexa-setup.exe")
+        if not os_check:
+            (work / "setup_identity.h").write_text('#define NEXA_MSI_SHA256 "' + base.digest(msi) + '"\n', encoding="ascii")
         rc = Path(env["WINDOWSSDKDIR"]) / "bin" / env["WINDOWSSDKVERSION"].rstrip("\\/") / "x64/rc.exe"
         base.regular(rc)
         resource = work / "setup.rc"
         # RC paths are generated local paths and escaped, never arbitrary directives.
-        quoted = str(msi.resolve()).replace("\\", "\\\\").replace('"', '\\"')
-        resource.write_text('#include <windows.h>\n101 RCDATA "' + quoted + '"\n1 RT_MANIFEST "' + str(AUTHORING / "setup.manifest").replace("\\", "\\\\") + '"\n', encoding="utf-8")
+        embedded = "" if os_check else '101 RCDATA "' + str(msi.resolve()).replace("\\", "\\\\").replace('"', '\\"') + '"\n'
+        resource.write_text('#include <windows.h>\n' + embedded + '1 RT_MANIFEST "' + str(AUTHORING / "setup.manifest").replace("\\", "\\\\") + '"\n', encoding="utf-8")
         base.command([rc, "/nologo", "/fo", work / "setup.res", resource], env, cwd=work)
-        base.command([*common, "/I" + str(work), AUTHORING / "setup.c", work / "setup.res", "/Fo" + str(work / "setup.obj"),
-                      "/link", "/NODEFAULTLIB", "/ENTRY:SetupEntry", "/SUBSYSTEM:WINDOWS", "/MACHINE:X64", "/DYNAMICBASE", "/NXCOMPAT",
+        base.command([*common, "/I" + str(work), AUTHORING / ("os_check.c" if os_check else "setup.c"), work / "setup.res", "/Fo" + str(work / "setup.obj"),
+                      "/link", "/NODEFAULTLIB", "/ENTRY:" + ("OsCheckEntry" if os_check else "SetupEntry"), "/SUBSYSTEM:WINDOWS", "/MACHINE:X64", "/DYNAMICBASE", "/NXCOMPAT",
                       "/OUT:" + str(output), "kernel32.lib", "user32.lib", "shell32.lib", "ole32.lib", "bcrypt.lib", "comctl32.lib", "uuid.lib", "advapi32.lib", "gdi32.lib"], env, cwd=work)
     base.pe_machine(output)
     imports = base.parse_dependents(base.command([dumpbin, "/nologo", "/dependents", output], env))
@@ -336,9 +371,11 @@ def make_cabinet(payload, files, work):
     return base.regular(work / "nexa.cab")
 
 
-def write_msi(files, version, cab, guard, output, *, rollback_fixture=False):
-    tables = author_tables(files, version, rollback_fixture=rollback_fixture)
-    tables["Binary"] = [["NexaGuardBinary", guard]]
+def write_msi(files, version, cab, guard, output, *, rollback_fixture=False, preflight_probe=None):
+    os_guard = base.regular(guard.parent / "nexa-os-check.exe")
+    tables = production_tables(files, version, guard, os_guard, rollback_fixture=rollback_fixture)
+    if preflight_probe is not None:
+        tables = preflight_tables(tables, preflight_probe)
     validate_tables(tables)
     api = Msi()
     package_code = "{" + str(uuid.uuid4()).upper() + "}"
@@ -362,9 +399,69 @@ def write_msi(files, version, cab, guard, output, *, rollback_fixture=False):
             normalized = [["" if value is None else str(value) for value in row] for row in expected]
             if sorted(actual) != sorted(normalized):
                 base.fail("MSI table readback mismatch: " + table)
+        for name, binary in tables["Binary"]:
+            if hashlib.sha256(api.stream(database, "Binary." + name)).hexdigest() != base.digest(binary):
+                base.fail("MSI embedded guard differs from compiled helper")
         if hashlib.sha256(api.stream(database, "nexa.cab")).hexdigest() != base.digest(cab):
             base.fail("MSI embedded cabinet differs")
     return package_code
+
+
+def check_msi_guard_context(work, guard, os_guard):
+    """Use real msiexec before the long build, with only read-only guard actions."""
+    from windows_installer_diagnostics import Trace, summarize_log
+    if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Windows":
+        base.fail("MSI guard preflight requires a disposable GitHub Windows runner")
+    root = Path(os.environ["LOCALAPPDATA"]) / INSTALL_RELATIVE
+    data = Path(os.environ["LOCALAPPDATA"]) / "Nexa"
+    if root.exists() or data.exists():
+        base.fail("guard preflight refuses existing Nexa installation or user data")
+    commit = base.command(["git", "rev-parse", "HEAD"])
+    trace = Trace(ROOT / "dist/windows-msi-diagnostics.json", commit, repository_version(ROOT))
+    trace.event("installer_guard_preflight", "start", expected=(0,))
+    probe = work / "guard-context.msi"
+    log = work / "guard-context.log"
+    try:
+        direct = subprocess.run([str(os_guard)], timeout=30, check=False)
+        if direct.returncode != 0:
+            trace.event("installer_guard_preflight", "error", exit_code=direct.returncode, expected=(0,))
+            base.fail("manifest-bearing OS helper rejected this host: " + str(direct.returncode))
+        legacy, _ = compile_native(work, legacy_probe=True)
+        payload = work / "probe-payload"
+        payload.mkdir()
+        (payload / "README.txt").write_text("Private guard preflight. Never installed or released.\n", encoding="ascii")
+        files = base.entries(payload)
+        cab = make_cabinet(payload, files, work)
+        write_msi(files, repository_version(ROOT), cab, guard, probe, preflight_probe=legacy)
+        api = Msi()
+        with api.database(probe) as database:
+            identity = dict(api.rows(database, "SELECT `Property`,`Value` FROM `Property`"))["ProductCode"]
+        before = api.MsiQueryProductStateW(identity)
+        if before != -1: base.fail("private guard probe product unexpectedly registered")
+        executable = base.regular(Path(os.environ["SYSTEMROOT"]) / "System32/msiexec.exe")
+        process = subprocess.Popen([str(executable), "/i", str(probe), "/qn", "/norestart", "/l*v", str(log), "REBOOT=ReallySuppress"], stdin=subprocess.DEVNULL)
+        try:
+            code = process.wait(timeout=60)
+        except subprocess.TimeoutExpired as error:
+            trace.event("installer_guard_preflight", "timeout", expected=(0,), log=log, pid=process.pid)
+            raise ValueError("read-only MSI guard preflight exceeded 60 seconds") from error
+        trace.event("installer_guard_preflight", "complete" if code == 0 else "error", exit_code=code, expected=(0,), log=log, pid=process.pid)
+        after = api.MsiQueryProductStateW(identity)
+        if code != 0 or after != -1 or root.exists() or data.exists():
+            base.fail("read-only MSI guard preflight failed or changed product/user state")
+        observation = summarize_log(log)
+        required = {"NexaLegacyOsProbe", "NexaOsGuard", "NexaGuard"}
+        ended = {item["action"] for item in observation["actions"] if item["phase"] == "end" and item["return_code"] == 1}
+        if not required <= ended or not observation["legacy_os"]:
+            base.fail("real MSI-context guard execution was not observed")
+        # A passing preflight is still not a passing installation lifecycle.
+        return {"direct_os_check_exit_code": direct.returncode, "msiexec_exit_code": code,
+                "private_product_registered": False, "nexa_directories_created": False,
+                "production_guards_executed": True, "legacy_os": observation["legacy_os"]}
+    except (ValueError, OSError, subprocess.SubprocessError):
+        if trace.document["status"] != "failed":
+            trace.event("installer_guard_preflight", "error", expected=(0,), log=log)
+        raise
 
 
 def setup_embedded_msi(setup):
@@ -410,6 +507,7 @@ def build(payload, version, output, setup_output, report):
     with tempfile.TemporaryDirectory(prefix="nexa-msi-", dir=output.parent) as temporary:
         work = Path(temporary)
         guard, guard_tools = compile_native(work)
+        _, os_tools = compile_native(work, os_check=True)
         cab = make_cabinet(payload, files, work)
         staged_msi = work / "nexa.msi"
         package_code = write_msi(files, version, cab, guard, staged_msi)
@@ -422,7 +520,7 @@ def build(payload, version, output, setup_output, report):
                   "project_commit": manifest["project_commit"], "payload_manifest_sha256": base.digest(payload / "manifest.json"),
                   "msi_sha256": base.digest(staged_msi), "setup_sha256": base.digest(setup),
                   "product_code": product_code(version), "upgrade_code": UPGRADE_CODE, "package_code": package_code,
-                  "unsigned": True, "scope": "per-user", "toolchain": {"guard": guard_tools, "setup": setup_tools},
+                  "unsigned": True, "scope": "per-user", "toolchain": {"guard": guard_tools, "os_check": os_tools, "setup": setup_tools},
                   "checks": {"payload_verified": True, "msi_tables_verified": True, "setup_embeds_exact_msi": True}}
         shutil.copyfile(staged_msi, output)
         shutil.copyfile(setup, setup_output)
@@ -432,7 +530,7 @@ def build(payload, version, output, setup_output, report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check-toolchain", action="store_true", help="compile installer helpers only; does not create or validate an installer")
+    parser.add_argument("--check-toolchain", action="store_true", help="compile helpers and run private read-only MSI guard preflight; does not install application payload")
     parser.add_argument("--payload", type=Path)
     parser.add_argument("--version")
     parser.add_argument("--output", type=Path)
@@ -448,13 +546,15 @@ def main():
             args.report.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="nexa-installer-compile-", dir=args.report.parent) as temporary:
                 work = Path(temporary).resolve()
-                _, guard_tools = compile_native(work)
+                guard, guard_tools = compile_native(work)
+                os_guard, os_tools = compile_native(work, os_check=True)
                 guard_path_checks = check_native_paths(work)
+                guard_context = check_msi_guard_context(work, guard, os_guard)
                 fixture = work / "compile-only-resource.bin"
                 fixture.write_bytes(b"Nexa compile-only resource. This is not an MSI package.")
                 _, setup_tools = compile_native(work, fixture)
-                base.write_json(args.report, {"schema_version": 1, "status": "compile-pass", "guard": guard_tools, "setup": setup_tools, "guard_path_checks": guard_path_checks, "installation_tested": False})
-            print("Installer helpers compiled; no MSI installation or payload validation was performed")
+                base.write_json(args.report, {"schema_version": 1, "status": "compile-pass", "guard": guard_tools, "setup": setup_tools, "os_check": os_tools, "guard_path_checks": guard_path_checks, "msi_guard_context": guard_context, "installation_tested": False})
+            print("Installer helpers and real MSI-context preflight passed; no application installation or payload validation was performed")
             return 0
         result = build(args.payload, args.version, args.output, args.setup_output, args.report)
     except (ValueError, OSError, KeyError) as error:
