@@ -1,0 +1,60 @@
+{
+  "actual_process_close_runtime_reaped": true,
+  "actual_process_exit_kept_runtime": true,
+  "batch_size": 128,
+  "cancel_partial_bytes": 6,
+  "close_runtime_released_instance": true,
+  "context_size": 2048,
+  "data_dir_path_shape": {
+    "contains_non_ascii": true,
+    "contains_space": true
+  },
+  "default_close_kept_runtime": true,
+  "external_library": {
+    "automatic_display_name": true,
+    "catalog_registered_without_copy": true,
+    "changed_identity_rejected": false,
+    "delete_access_blocked_while_loaded": false,
+    "direct_chat_prepared": false,
+    "effective_directory_verified": true,
+    "failed_preparation_updates_list": false,
+    "guard_released_after_stop": false,
+    "guard_retained_after_unload": false,
+    "legacy_managed_preserved": true,
+    "local_text_validation": false,
+    "offline_validation_retained": false,
+    "owned_preparation_cancelled": false,
+    "preexisting_writer_rejected": false,
+    "repeat_text_validation": false,
+    "source_unchanged": true,
+    "stable_id_rescan": true,
+    "supported": false,
+    "write_access_blocked_while_loaded": false
+  },
+  "first_output_bytes": 151,
+  "first_usage_tokens": 54,
+  "local_text_validation": true,
+  "manual_load_stop": true,
+  "model_path_shape": {
+    "contains_non_ascii": false,
+    "contains_space": false
+  },
+  "model_sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+  "model_size_bytes": 639446688,
+  "offline_inventory": true,
+  "real_model": true,
+  "reload_after_stop": true,
+  "repeat_output_bytes": 87,
+  "repeat_text_validation": true,
+  "repeated_close": true,
+  "runtime_path_shape": {
+    "contains_non_ascii": false,
+    "contains_space": false
+  },
+  "runtime_setting_persisted_stopped": true,
+  "runtime_setting_rejected_while_running": true,
+  "same_instance_attach": true,
+  "stopped_load_phase": "loading",
+  "success": true,
+  "threads": 2
+}

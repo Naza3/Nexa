@@ -183,23 +183,26 @@ fn loaded_session(
             return;
         }
     };
-    let mut model = match engine.load(&resolved.path, options, &job.cancel) {
-        Ok(model) => model,
-        Err(error) => {
-            send_report(
-                reports,
-                Operation::Load,
-                started.elapsed(),
-                Duration::ZERO,
-                Duration::ZERO,
-                Duration::ZERO,
-                Usage::default(),
-                Some(error.code),
-            );
-            job.events.emit(ExecutorEvent::Failed(error));
-            return;
-        }
-    };
+    let loaded = engine.load(&resolved.path, options, &job.cancel);
+    if let Some(error) = loaded.as_ref().err().cloned() {
+        // A failed/cancelled Load is a cleanup acknowledgment too. Drop the
+        // borrowing result and engine before another thread can see it.
+        drop(loaded);
+        drop(engine);
+        send_report(
+            reports,
+            Operation::Load,
+            started.elapsed(),
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::ZERO,
+            Usage::default(),
+            Some(error.code),
+        );
+        job.events.emit(ExecutorEvent::Failed(error));
+        return;
+    }
+    let mut model = loaded.expect("load error handled before cleanup acknowledgment");
     send_report(
         reports,
         Operation::Load,

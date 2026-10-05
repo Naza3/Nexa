@@ -1670,3 +1670,7 @@ h3 {
 .download-target { max-width: 36rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .download-source-row > div { min-width: 0; }
 .chat-parameters { font-size: 12px; margin-top: 8px; }
+
+/* Keep the owned-task stop reachable without expanding the compact footer. */
+.app-statusbar .model-load-stop { flex: 0 0 auto; border-color: #c8c4df; color: #51436f; white-space: nowrap; }
+.app-statusbar .model-load-stop:disabled { color: #626c7c; }

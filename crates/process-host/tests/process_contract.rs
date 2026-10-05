@@ -533,3 +533,107 @@ fn load_deadline_keeps_load_timeout_after_forced_process_cleanup() {
     assert!(diagnostics.worker_pid().is_none());
     runtime.shutdown().unwrap();
 }
+
+#[test]
+fn manual_stop_of_uncooperative_load_reaps_only_its_worker_and_allows_retry() {
+    let mut config = ProcessHostConfig::new(fixture());
+    let directory = tempfile::tempdir().unwrap();
+    let pid = directory.path().join("worker");
+    let loading_marker = directory.path().join("worker.loading");
+    config.worker_args = vec!["hang_load_once".into(), pid.into_os_string()];
+    let host = ProcessHost::new(config).unwrap();
+    let diagnostics = host.diagnostics();
+    let runtime = Runtime::spawn(
+        RuntimeConfig {
+            load_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
+        |_id: &ModelId| Ok(resolved()),
+        host,
+    )
+    .unwrap();
+    let control = runtime_core::LoadControl::default();
+    let stop = control.clone();
+    let handle = runtime.handle();
+    let loading = thread::spawn(move || handle.load_controlled(model(), options(), control));
+    let until = Instant::now() + Duration::from_secs(2);
+    while !loading_marker.exists() {
+        assert!(Instant::now() < until);
+        thread::sleep(Duration::from_millis(5));
+    }
+    let now = Instant::now();
+    stop.cancel();
+    assert_eq!(
+        loading.join().unwrap().unwrap_err().code,
+        ErrorCode::RequestCancelled
+    );
+    assert!(now.elapsed() < Duration::from_secs(7));
+    assert!(diagnostics.worker_pid().is_none());
+    assert_eq!(
+        diagnostics.sessions_started(),
+        diagnostics.sessions_reaped()
+    );
+    assert_eq!(
+        runtime.handle().status().unwrap().state,
+        ModelState::Unloaded
+    );
+    assert!(!runtime.handle().status().unwrap().stopping);
+    // The same supervisor starts a new healthy worker for the next load.
+    runtime
+        .handle()
+        .load_controlled(model(), options(), runtime_core::LoadControl::default())
+        .unwrap();
+    assert_eq!(runtime.handle().status().unwrap().state, ModelState::Ready);
+    assert_eq!(diagnostics.sessions_started(), 2);
+    stop.cancel(); // A stale old token does not touch the replacement session.
+    assert_eq!(runtime.handle().status().unwrap().state, ModelState::Ready);
+    runtime.shutdown().unwrap();
+}
+
+#[test]
+fn manual_stop_cannot_hide_malformed_ipc_or_native_fault_after_load_dispatch() {
+    for (case, expected) in [
+        ("malformed_cancel_load", ErrorCode::NativeProtocol),
+        ("native_fault_cancel_load", ErrorCode::NativeFailure),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = ProcessHostConfig::new(fixture());
+        config.worker_args = vec![
+            case.into(),
+            directory.path().join("worker").into_os_string(),
+        ];
+        let host = ProcessHost::new(config).unwrap();
+        let diagnostics = host.diagnostics();
+        let runtime = Runtime::spawn(
+            RuntimeConfig::default(),
+            |_id: &ModelId| Ok(resolved()),
+            host,
+        )
+        .unwrap();
+        let control = runtime_core::LoadControl::default();
+        let stop = control.clone();
+        let handle = runtime.handle();
+        let loading = thread::spawn(move || handle.load_controlled(model(), options(), control));
+        let until = Instant::now() + Duration::from_secs(2);
+        while !directory.path().join("worker.loading").exists() {
+            assert!(Instant::now() < until);
+            thread::sleep(Duration::from_millis(2));
+        }
+        stop.cancel();
+        assert_eq!(loading.join().unwrap().unwrap_err().code, expected);
+        assert_eq!(
+            runtime.handle().status().unwrap().state,
+            ModelState::Faulted
+        );
+        assert_eq!(
+            runtime.handle().status().unwrap().last_error.unwrap().code,
+            expected
+        );
+        assert!(diagnostics.worker_pid().is_none());
+        assert_eq!(
+            diagnostics.sessions_started(),
+            diagnostics.sessions_reaped()
+        );
+        runtime.shutdown().unwrap();
+    }
+}

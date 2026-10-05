@@ -1,17 +1,22 @@
-import type { ViewState } from "./controller";
+import type { DesktopController, ViewState } from "./controller";
+import { FollowOnLoadControl, ModelLoadControl } from "./ModelLoadControl";
+import { followOnLoadLabel, modelLoadLabel } from "./modelLoad";
 import { runtimeView } from "./runtimeView";
 
 function currentOperation(state: ViewState): string {
   if (state.booting) return "正在确认状态";
+  if (state.model_load) return modelLoadLabel(state.model_load);
   if (state.operation) return state.operation.label;
   if (state.download_phase !== "idle") {
     if (state.download_phase === "recovery") return "下载结果待确认";
     if (state.download_phase === "stopping") return "等待下载取消确认";
+    if (state.download?.phase === "testing") return followOnLoadLabel(state.download);
     return state.download ? ({ connecting: "正在连接下载源", downloading: "正在下载模型", verifying: "正在校验下载", committing: "正在保存文件", registering: "正在登记模型", testing: "正在加载与测试", finished: "正在确认下载结果" })[state.download.phase] : "正在提交下载";
   }
   if (state.library_phase !== "idle") {
     if (state.library_phase === "recovery") return "模型库操作结果待确认";
     if (state.library_phase === "stopping") return "等待模型库取消确认";
+    if (state.library?.phase === "testing") return followOnLoadLabel(state.library);
     return state.library_kind === "configure" ? "正在保存下载目录" : state.library_kind === "add" ? "正在添加模型" : "正在扫描模型目录";
   }
   if (state.chat_phase !== "idle") return state.chat_phase === "recovery" ? "生成结果待确认" : state.chat_phase === "stopping" ? "等待生成取消确认" : "正在聊天测试";
@@ -25,7 +30,7 @@ function currentOperation(state: ViewState): string {
   return "无进行中操作";
 }
 
-export function StatusBar({ state, goActivity }: { state: ViewState; goActivity: () => void }) {
+export function StatusBar({ state, controller, goActivity }: { state: ViewState; controller?: DesktopController; goActivity: () => void }) {
   const view = runtimeView(state.snapshot);
   const operation = currentOperation(state);
   return <footer className="app-statusbar" aria-label="应用状态栏">
@@ -34,6 +39,7 @@ export function StatusBar({ state, goActivity }: { state: ViewState; goActivity:
       <span className="statusbar-model" title={view.residentName ?? view.modelLabel}>驻留：{view.residentName ?? view.modelLabel}</span>
       <span className="statusbar-operation" title={operation}>{operation}</span>
     </div>
+    {controller && <><ModelLoadControl task={state.model_load} controller={controller} /><FollowOnLoadControl state={state} controller={controller} /></>}
     <button className="text-button" onClick={goActivity}>查看活动</button>
   </footer>;
 }

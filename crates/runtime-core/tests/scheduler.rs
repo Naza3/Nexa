@@ -1986,3 +1986,238 @@ fn current_model_shutdown_cancels_bound_work_and_rejects_further_admission() {
     shutdown.join().unwrap();
     assert!(h.closed.load(Ordering::SeqCst));
 }
+
+fn begin_controlled_load(
+    h: &Harness,
+    model: ModelId,
+    control: LoadControl,
+) -> mpsc::Receiver<Result<(), RuntimeError>> {
+    let handle = h.handle.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(handle.load_controlled(model, LoadOptions::default(), control))
+            .unwrap();
+    });
+    rx
+}
+#[test]
+fn owned_load_cancel_waits_for_cleanup_and_rejects_other_clients() {
+    let h = Harness::new(config(), false);
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, control.clone());
+    let load = h.pending();
+    assert_eq!(
+        h.handle.submit(request()).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    control.cancel();
+    wait(|| load.cancelled.load(Ordering::Acquire));
+    assert!(result.try_recv().is_err());
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Loading);
+    load.events.emit(ExecutorEvent::Failed(RuntimeError::new(
+        ErrorCode::RequestCancelled,
+        "cleaned",
+    )));
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
+    assert!(h.handle.status().unwrap().selected_model.is_none());
+    assert!(h.commands.try_recv().is_err()); // No accidental queued cold reload.
+    h.finish();
+}
+#[test]
+fn cancellation_racing_loaded_waits_for_matching_unload_ack() {
+    let mut h = Harness::with_shutdown(config(), false, false, None);
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, control.clone());
+    let load = h.pending();
+    control.cancel();
+    load.events.emit(ExecutorEvent::Loaded);
+    let unload = h.pending();
+    assert!(matches!(unload.command, ExecutorCommand::Unload));
+    assert!(result.try_recv().is_err());
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloading);
+    assert_eq!(
+        h.handle.submit(request()).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    unload.events.emit(ExecutorEvent::Unloaded);
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    let (done, join) = h.begin_shutdown();
+    done.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+    join.join().unwrap();
+}
+#[test]
+fn stop_switch_finishes_old_unload_without_starting_replacement() {
+    let mut h = Harness::with_shutdown(config(), true, false, None);
+    h.handle
+        .load(request().model, LoadOptions::default())
+        .unwrap();
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, ModelId::new("replacement").unwrap(), control.clone());
+    let unload = h.pending();
+    control.cancel();
+    assert!(result.try_recv().is_err());
+    unload.events.emit(ExecutorEvent::Unloaded);
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert!(h.commands.try_recv().is_err());
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
+    let (done, join) = h.begin_shutdown();
+    done.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+    join.join().unwrap();
+}
+#[test]
+fn retired_load_control_cannot_cancel_newer_load_or_generation() {
+    let h = Harness::new(config(), false);
+    let old = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, old.clone());
+    h.pending().events.emit(ExecutorEvent::Loaded);
+    result
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let new = LoadControl::default();
+    let result = begin_controlled_load(&h, ModelId::new("replacement").unwrap(), new);
+    let load = h.pending();
+    old.cancel();
+    thread::sleep(Duration::from_millis(20));
+    assert!(!load.cancelled.load(Ordering::Acquire));
+    load.events.emit(ExecutorEvent::Loaded);
+    result
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let mut request = request();
+    request.model = ModelId::new("replacement").unwrap();
+    let events = h.handle.submit(request).unwrap();
+    let generation = h.pending();
+    old.cancel();
+    thread::sleep(Duration::from_millis(20));
+    assert!(!generation.cancelled.load(Ordering::Acquire));
+    generation.prepared();
+    generation.complete();
+    assert!(matches!(
+        terminal(&events),
+        RequestEventKind::Completed { .. }
+    ));
+    h.finish();
+}
+#[test]
+fn cancelled_load_does_not_hide_real_failure_or_unconfirmed_cleanup() {
+    for code in [
+        ErrorCode::NativeFailure,
+        ErrorCode::ExecutorCleanupUnconfirmed,
+    ] {
+        let mut h = Harness::new(config(), false);
+        let control = LoadControl::default();
+        let result = begin_controlled_load(&h, request().model, control.clone());
+        let load = h.pending();
+        control.cancel();
+        let error = RuntimeError::new(code, "fixture failure");
+        load.events
+            .emit(if code == ErrorCode::ExecutorCleanupUnconfirmed {
+                ExecutorEvent::CleanupUnconfirmed(error)
+            } else {
+                ExecutorEvent::Faulted(error)
+            });
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap_err()
+                .code,
+            code
+        );
+        assert_eq!(h.handle.status().unwrap().state, ModelState::Faulted);
+        if code == ErrorCode::ExecutorCleanupUnconfirmed {
+            assert_eq!(
+                h.handle
+                    .load_controlled(request().model, LoadOptions::default(), control)
+                    .unwrap_err()
+                    .code,
+                code
+            );
+            assert_eq!(h.runtime.take().unwrap().shutdown().unwrap_err().code, code);
+        } else {
+            h.finish();
+        }
+    }
+}
+#[test]
+fn precancelled_load_preserves_current_model_and_does_not_touch_executor() {
+    let h = Harness::new(config(), true);
+    h.handle
+        .load(request().model.clone(), LoadOptions::default())
+        .unwrap();
+    let control = LoadControl::default();
+    control.cancel();
+    assert_eq!(
+        h.handle
+            .load_controlled(
+                ModelId::new("other").unwrap(),
+                LoadOptions::default(),
+                control
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert_eq!(
+        h.handle.status().unwrap().selected_model,
+        Some(request().model)
+    );
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Ready);
+    assert!(h.commands.try_recv().is_err());
+    h.finish();
+}
+
+#[test]
+fn manual_stop_before_deadline_is_not_reclassified_while_cleanup_runs() {
+    let h = Harness::new(
+        RuntimeConfig {
+            load_timeout: Duration::from_millis(60),
+            ..config()
+        },
+        false,
+    );
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, control.clone());
+    let load = h.pending();
+    control.cancel();
+    wait(|| load.cancelled.load(Ordering::Acquire));
+    thread::sleep(Duration::from_millis(80));
+    load.events.emit(ExecutorEvent::Faulted(RuntimeError::new(
+        ErrorCode::RequestCancelled,
+        "worker reaped",
+    )));
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
+    h.finish();
+}

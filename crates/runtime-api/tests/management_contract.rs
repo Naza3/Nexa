@@ -801,3 +801,77 @@ async fn http_busy_profile_and_sampling_saves_preserve_queued_requests_and_idle_
     assert_eq!(reloaded["load_options"]["threads"], 3);
     h.close().await;
 }
+
+#[tokio::test]
+async fn owned_load_routes_are_strict_scoped_and_return_json_for_bad_identity() {
+    let h = Harness::new().await;
+    for path in [
+        "/runtime/load-operations/not-a-uuid",
+        "/runtime/load-operations/not-a-uuid/cancel",
+    ] {
+        let method = if path.ends_with("cancel") {
+            "POST"
+        } else {
+            "GET"
+        };
+        let (status, body) = h.call(method, path, "{}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "invalid_request");
+    }
+    for body in [
+        json!({"model":"absent"}),
+        json!({"model":"absent","operation_id":uuid::Uuid::nil()}),
+        json!({"model":"absent","operation_id":uuid::Uuid::new_v4(),"only_if_unloaded":"yes"}),
+        json!({"model":"absent","operation_id":uuid::Uuid::new_v4(),"path":"not allowed"}),
+    ] {
+        assert_eq!(
+            h.call("POST", "/runtime/load-operations", &body.to_string())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let id = uuid::Uuid::new_v4();
+    assert_eq!(
+        h.call("GET", &format!("/runtime/load-operations/{id}"), "")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        h.call(
+            "POST",
+            &format!("/runtime/load-operations/{id}/cancel"),
+            "{}"
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, body) = h
+        .call(
+            "POST",
+            "/runtime/load-operations",
+            &json!({"model":"absent","operation_id":id}).to_string(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["operation_id"], id.to_string());
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let (status, result) = h
+                .call("GET", &format!("/runtime/load-operations/{id}"), "")
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            if result["terminal"] == true {
+                assert_eq!(result["status"], "failed");
+                assert_eq!(result["error"]["code"], "model_not_found");
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    h.close().await;
+}

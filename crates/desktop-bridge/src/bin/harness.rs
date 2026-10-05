@@ -195,6 +195,90 @@ async fn cleanup(root: &Path, runtime: &Path) -> Cleanup {
     }
     cleanup
 }
+async fn stop_loading_smoke(bridge: &Arc<DesktopBridge>) -> Result<String> {
+    let id = Uuid::new_v4();
+    bridge.model_load_start(desktop_bridge::ModelLoadStartRequest {
+        operation_id: id,
+        load: LoadModelRequest {
+            model_id: "desktop-qa".into(),
+            context_size: 2048,
+            threads: 2,
+            batch_size: 128,
+        },
+    })?;
+    let phase = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let state = bridge.model_load_next(id).await?;
+            ensure(!state.terminal)?;
+            if state.phase != "preparing" {
+                return Ok::<_, Fault>(state.phase);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| Fault::new("timeout"))??;
+    ensure(bridge.model_load_cancel(id).await?.stopping)?;
+    let stopped = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let state = bridge.model_load_next(id).await?;
+            if state.terminal {
+                return Ok::<_, Fault>(state);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| Fault::new("timeout"))??;
+    ensure(
+        stopped.status == "cancelled"
+            && stopped
+                .error
+                .is_some_and(|error| error.code == "request_cancelled"),
+    )?;
+    let actual = stopped
+        .runtime
+        .ok_or_else(|| Fault::new("assertion_failed"))?;
+    ensure(
+        !actual.stopping
+            && actual.active_request.is_none()
+            && !actual.registry_busy
+            && matches!(actual.state, RuntimeState::Unloaded | RuntimeState::Ready),
+    )?;
+    ensure(!bridge.model_load_cancel(id).await?.stopping)?;
+    Ok(phase)
+}
+async fn owned_load_smoke(bridge: &Arc<DesktopBridge>) -> Result<()> {
+    let id = Uuid::new_v4();
+    bridge.model_load_start(desktop_bridge::ModelLoadStartRequest {
+        operation_id: id,
+        load: LoadModelRequest {
+            model_id: "desktop-qa".into(),
+            context_size: 2048,
+            threads: 2,
+            batch_size: 128,
+        },
+    })?;
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let state = bridge.model_load_next(id).await?;
+            if state.terminal {
+                ensure(
+                    state.status == "completed"
+                        && state
+                            .local_validation
+                            .is_some_and(|v| v.generation_pass && v.error_code.is_none()),
+                )?;
+                ensure(!bridge.model_load_cancel(id).await?.stopping)?;
+                return Ok::<_, Fault>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| Fault::new("timeout"))??;
+    Ok(())
+}
 async fn run(
     root: PathBuf,
     runtime: PathBuf,
@@ -228,7 +312,8 @@ async fn run(
         ensure(page.data.len()==1&&page.data[0].id.as_str()=="desktop-qa")?;
         stage="reject_running_idle_change";
         match bridge.save_idle(600).await {Err(error) if error.code=="runtime_running"=>(),Err(error)=>return Err(error.into()),Ok(_)=>return Err(Fault::new("assertion_failed"))}
-        at!(stage,"load_model",bridge.load_model(LoadModelRequest{model_id:"desktop-qa".into(),context_size:2048,threads:2,batch_size:128}).await);
+        let stopped_load_phase = at!(stage,"stop_loading",stop_loading_smoke(&bridge).await);
+        at!(stage,"load_model",owned_load_smoke(&bridge).await);
         let verified=at!(stage,"verify_local_validation",bridge.models_page(None,None).await);
         let validation=verified.data[0].local_validation.as_ref().ok_or_else(||Fault::new("assertion_failed"))?;
         ensure(validation.state==model_store::local_validation::ValidationState::Passed && validation.load_success && validation.generation_pass && validation.error_code.is_none())?;
@@ -270,7 +355,7 @@ async fn run(
         let offline=at!(stage,"verify_offline_inventory",stopped.models_page(None,None).await);
         ensure(offline.source==desktop_bridge::ModelsSource::Local && offline.data.len()==1 && offline.data[0].local_validation.as_ref().is_some_and(|v|v.state==model_store::local_validation::ValidationState::Passed))?;
         let external_library = external::run(&root, &runtime, &external_model_path, &mut stage).await?;
-        Ok(json!({"external_library":external_library,"local_text_validation":true,"repeat_text_validation":true,"offline_inventory":true,"success":true,"real_model":true,"threads":2,"context_size":2048,"batch_size":128,"first_output_bytes":first_bytes,"cancel_partial_bytes":cancel_bytes,"repeat_output_bytes":repeat_bytes,"first_usage_tokens":usage,"model_size_bytes":model.size_bytes,"model_sha256":model.sha256,"data_dir_path_shape":data_shape,"runtime_path_shape":runtime_shape,"model_path_shape":model_shape,"same_instance_attach":true,"default_close_kept_runtime":true,"actual_process_exit_kept_runtime":true,"actual_process_close_runtime_reaped":true,"repeated_close":true,"close_runtime_released_instance":true,"runtime_setting_rejected_while_running":true,"runtime_setting_persisted_stopped":true}))
+        Ok(json!({"manual_load_stop":true,"stopped_load_phase":stopped_load_phase,"reload_after_stop":true,"external_library":external_library,"local_text_validation":true,"repeat_text_validation":true,"offline_inventory":true,"success":true,"real_model":true,"threads":2,"context_size":2048,"batch_size":128,"first_output_bytes":first_bytes,"cancel_partial_bytes":cancel_bytes,"repeat_output_bytes":repeat_bytes,"first_usage_tokens":usage,"model_size_bytes":model.size_bytes,"model_sha256":model.sha256,"data_dir_path_shape":data_shape,"runtime_path_shape":runtime_shape,"model_path_shape":model_shape,"same_instance_attach":true,"default_close_kept_runtime":true,"actual_process_exit_kept_runtime":true,"actual_process_close_runtime_reaped":true,"repeated_close":true,"close_runtime_released_instance":true,"runtime_setting_rejected_while_running":true,"runtime_setting_persisted_stopped":true}))
     }.await;
     // Cleanup is independent evidence, never a replacement for the first cause.
     let mut cleanup = if bridge_created {

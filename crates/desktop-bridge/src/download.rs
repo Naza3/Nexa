@@ -65,17 +65,6 @@ impl DownloadTask {
         }
         self.changed.notify_waiters();
     }
-    async fn wait_onboarding_cancelled(&self) {
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if self.onboarding_cancelled.load(Ordering::Acquire) {
-                return;
-            }
-            changed.await;
-        }
-    }
     fn progress(&self, progress: DownloadProgress) {
         let mut state = self.state.lock().unwrap();
         // Identity and total belong to the admitted catalog operation, not transport.
@@ -255,6 +244,7 @@ impl DesktopBridge {
             SidecarDownloadFile::create(&library, &entry.file_name, id).map_err(store_error)?;
         let task = Arc::new(DownloadTask {
             state: Mutex::new(DownloadOperationState {
+                load_phase: None,
                 operation_id: id,
                 catalog_id,
                 source,
@@ -395,32 +385,40 @@ impl DesktopBridge {
         id: runtime_types::ModelId,
     ) -> LocalValidation {
         use model_store::local_validation::ValidationState;
-        #[derive(serde::Deserialize)]
-        struct TestedLoad {
-            local_validation: LocalValidation,
-        }
-        let result:Result<LocalValidation>=async {
-            if task.onboarding_cancelled.load(Ordering::Acquire){return Err(BridgeError::new("request_cancelled"));}
-            self.start_inner(true,Some(&task.onboarding_cancelled)).await?;
-            let body=if settings::config(&self.root)?.schema_version==2{json!({"model":id})}else{
-                let preferences=settings::preferences(&self.root)?;
-                crate::onboarding::load_body(LoadModelRequest{model_id:id.to_string(),context_size:preferences.context_size,threads:preferences.threads,batch_size:preferences.batch_size})?
-            };
-            let loading=self.json::<TestedLoad>(Method::POST,"/runtime/load-if-unloaded",Some(&body));
-            tokio::select! {
-                biased;
-                _=self.closing_requested()=>{self.load_disconnected.store(true,Ordering::Release);Err(BridgeError::new("request_cancelled"))},
-                _=task.wait_onboarding_cancelled()=>{self.load_disconnected.store(true,Ordering::Release);Err(BridgeError::new("request_cancelled"))},
-                status=loading=>Ok(status?.local_validation),
+        let result: Result<LocalValidation> = async {
+            if task.onboarding_cancelled.load(Ordering::Acquire) {
+                return Err(BridgeError::new("request_cancelled"));
             }
-        }.await;
+            self.start_inner(true, Some(&task.onboarding_cancelled))
+                .await?;
+            let body = if settings::config(&self.root)?.schema_version == 2 {
+                json!({"model":id})
+            } else {
+                let preferences = settings::preferences(&self.root)?;
+                crate::onboarding::load_body(LoadModelRequest {
+                    model_id: id.to_string(),
+                    context_size: preferences.context_size,
+                    threads: preferences.threads,
+                    batch_size: preferences.batch_size,
+                })?
+            };
+            self.automatic_load_operation(body, &task.onboarding_cancelled, |phase| {
+                task.state.lock().unwrap().load_phase = Some(phase.into());
+                task.changed.notify_waiters();
+            })
+            .await
+        }
+        .await;
         let loaded = self
             .local_observation(&id)
             .is_ok_and(|o| o.state != ValidationState::Stale && o.load_success);
         match result {
             Ok(observation) => observation,
             Err(error) => LocalValidation {
-                state: if matches!(error.code.as_str(), "runtime_busy" | "model_conflict") {
+                state: if matches!(
+                    error.code.as_str(),
+                    "runtime_busy" | "model_conflict" | "request_cancelled"
+                ) {
                     ValidationState::Deferred
                 } else {
                     ValidationState::Failed
@@ -716,6 +714,7 @@ mod tests {
     fn task_for(entry: &CatalogEntry) -> Arc<DownloadTask> {
         Arc::new(DownloadTask {
             state: Mutex::new(DownloadOperationState {
+                load_phase: None,
                 operation_id: Uuid::new_v4(),
                 catalog_id: entry.catalog_id.clone(),
                 source: DownloadSource::Modelscope,

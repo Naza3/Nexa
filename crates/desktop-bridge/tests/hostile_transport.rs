@@ -39,6 +39,9 @@ enum Mode {
     PendingPreparation,
     PendingChatPreparation,
     ProbeEvidenceError(&'static str),
+    HeldLoadStart,
+    LostLoadStart,
+    InvalidLoadState,
 }
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -82,7 +85,7 @@ async fn read_request(socket: &mut TcpStream) -> String {
     assert!(size <= 512 * 1024);
     let mut body = vec![0; size];
     let _ = socket.read_exact(&mut body).await;
-    head
+    format!("{head}{}", String::from_utf8(body).unwrap())
 }
 fn chunk(id: &str, choices: serde_json::Value, usage: Option<serde_json::Value>) -> String {
     let mut value = json!({"id":format!("chatcmpl-{id}"),"object":"chat.completion.chunk","model":"a","created":1,"choices":choices});
@@ -129,6 +132,7 @@ impl Fixture {
         let dc = disconnected.clone();
         let gate = Arc::new(tokio::sync::Notify::new());
         let g = gate.clone();
+        let load_operation = Arc::new(std::sync::Mutex::new(None::<Uuid>));
         let server = tokio::spawn(async move {
             loop {
                 let Ok((mut socket, peer)) = listener.accept().await else {
@@ -140,6 +144,7 @@ impl Fixture {
                 let cc = cc.clone();
                 let dc = dc.clone();
                 let g = g.clone();
+                let load_operation = load_operation.clone();
                 tokio::spawn(async move {
                     let first = read_request(&mut socket).await;
                     if first.is_empty() {
@@ -178,6 +183,61 @@ impl Fixture {
                         header(&request, "authorization").unwrap().as_bytes()
                     ));
                     a.fetch_add(1, Ordering::SeqCst);
+                    if request.starts_with("POST /runtime/load-operations ") {
+                        let body: serde_json::Value =
+                            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+                                .unwrap();
+                        let id = Uuid::parse_str(body["operation_id"].as_str().unwrap()).unwrap();
+                        *load_operation.lock().unwrap() = Some(id);
+                        c.fetch_add(1, Ordering::SeqCst);
+                        if matches!(mode, Mode::LostLoadStart) {
+                            return;
+                        }
+                        if matches!(mode, Mode::HeldLoadStart) {
+                            let mut byte = [0];
+                            let _ = socket.read(&mut byte).await;
+                            return;
+                        }
+                        let body = json!({"operation_id":id}).to_string();
+                        let _ = socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes()).await;
+                        return;
+                    }
+                    if request.starts_with("POST /runtime/load-operations/") {
+                        let id = load_operation.lock().unwrap().unwrap();
+                        assert!(
+                            request.starts_with(&format!(
+                                "POST /runtime/load-operations/{id}/cancel "
+                            ))
+                        );
+                        cc.fetch_add(1, Ordering::SeqCst);
+                        let body = r#"{"stopping":true}"#;
+                        let _ = socket
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .as_bytes(),
+                            )
+                            .await;
+                        return;
+                    }
+                    if request.starts_with("GET /runtime/load-operations/") {
+                        let id = *load_operation.lock().unwrap();
+                        let Some(id) = id else {
+                            let body = r#"{"error":{"code":"request_not_found"}}"#;
+                            let _ = socket.write_all(format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes()).await;
+                            return;
+                        };
+                        assert!(
+                            request.starts_with(&format!("GET /runtime/load-operations/{id} "))
+                        );
+                        let cancelled = cc.load(Ordering::SeqCst) > 0;
+                        let invalid = !cancelled && matches!(mode, Mode::InvalidLoadState);
+                        let body = json!({"operation_id":id,"model_id":"a","phase":if cancelled || invalid {"finished"}else{"loading"},"status":if cancelled {"cancelled"}else{"running"},"terminal":cancelled || invalid,"runtime":null,"local_validation":null,"error":if cancelled{json!({"code":"request_cancelled","message":"private fake text must not escape"})}else{json!(null)}}).to_string();
+                        let _ = socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes()).await;
+                        return;
+                    }
                     if request.starts_with("POST /runtime/shutdown ") {
                         let body = r#"{"status":"stopped"}"#;
                         let _=socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes()).await;
@@ -789,5 +849,114 @@ async fn corrupt_configuration_never_allows_stop_without_server_proof_or_valid_t
     assert_eq!(
         std::fs::read(root.join("config.toml")).unwrap(),
         b"damaged configuration"
+    );
+}
+
+fn load_request(id: Uuid) -> desktop_bridge::ModelLoadStartRequest {
+    desktop_bridge::ModelLoadStartRequest {
+        operation_id: id,
+        load: desktop_bridge::LoadModelRequest {
+            model_id: "a".into(),
+            context_size: 2048,
+            threads: 2,
+            batch_size: 128,
+        },
+    }
+}
+#[tokio::test]
+async fn held_or_lost_start_reply_keeps_owned_identity_and_stop_remains_prompt() {
+    for mode in [Mode::HeldLoadStart, Mode::LostLoadStart] {
+        let f = Fixture::new(mode).await;
+        let id = Uuid::new_v4();
+        let handle = f.bridge.model_load_start(load_request(id)).unwrap();
+        assert_eq!(handle.operation_id, id);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while f.chats.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            f.bridge
+                .model_load_cancel(Uuid::new_v4())
+                .await
+                .unwrap_err()
+                .code,
+            "request_not_owned"
+        );
+        assert!(f.bridge.model_load_cancel(id).await.unwrap().stopping);
+        let result = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok(result) = f.bridge.model_load_next(id).await
+                    && result.terminal
+                {
+                    return result;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.status, "cancelled");
+        assert_eq!(f.chats.load(Ordering::SeqCst), 1); // Never re-POST/reload.
+        assert!(!result.error.unwrap().message.contains("private"));
+        assert!(!f.bridge.model_load_cancel(id).await.unwrap().stopping);
+        f.bridge.close_ui_only().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn contradictory_terminal_never_releases_work_and_can_recover_by_owned_stop() {
+    let f = Fixture::new(Mode::InvalidLoadState).await;
+    let id = Uuid::new_v4();
+    f.bridge.model_load_start(load_request(id)).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if f.bridge.model_load_next(id).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        f.bridge
+            .model_load_start(load_request(Uuid::new_v4()))
+            .unwrap_err()
+            .code,
+        "desktop_busy"
+    );
+    f.bridge.model_load_cancel(id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(result) = f.bridge.model_load_next(id).await
+                && result.terminal
+            {
+                assert_eq!(result.status, "cancelled");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    f.bridge.close_ui_only().await.unwrap();
+}
+#[test]
+fn scoped_start_dtos_flatten_existing_fields_and_reject_unknowns() {
+    let id = Uuid::new_v4();
+    let legacy =
+        json!({"operation_id":id,"model_id":"a","context_size":2048,"threads":2,"batch_size":128});
+    assert!(serde_json::from_value::<desktop_bridge::ModelLoadStartRequest>(legacy).is_ok());
+    let profile = json!({"operation_id":id,"model_id":"a","load_overrides":{"threads":2}});
+    assert!(
+        serde_json::from_value::<desktop_bridge::ModelLoadProfileStartRequest>(profile.clone())
+            .is_ok()
+    );
+    let mut unknown = profile;
+    unknown["path"] = json!("arbitrary");
+    assert!(
+        serde_json::from_value::<desktop_bridge::ModelLoadProfileStartRequest>(unknown).is_err()
     );
 }

@@ -75,6 +75,16 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("models_scan", undefined);
     await nativeApi.reconcileModels();
     expect(invoke).toHaveBeenLastCalledWith("models_reconcile", undefined);
+    await nativeApi.loadModelStart!("owned-load", "registered-model", { context_size: 2048, threads: 2, batch_size: 128 });
+    expect(invoke).toHaveBeenLastCalledWith("model_load_start", { request: { operation_id: "owned-load", model_id: "registered-model", context_size: 2048, threads: 2, batch_size: 128 } });
+    await nativeApi.loadModelProfileStart!("owned-load", "registered-model");
+    expect(invoke).toHaveBeenLastCalledWith("model_load_profile_start", { request: { operation_id: "owned-load", model_id: "registered-model" } });
+    await nativeApi.loadModelProfileStart!("owned-load", "registered-model", { threads: 3 });
+    expect(invoke).toHaveBeenLastCalledWith("model_load_profile_start", { request: { operation_id: "owned-load", model_id: "registered-model", load_overrides: { threads: 3 } } });
+    await nativeApi.modelLoadNext!("owned-load");
+    expect(invoke).toHaveBeenLastCalledWith("model_load_next", { request: { operation_id: "owned-load" } });
+    await nativeApi.modelLoadCancel!("owned-load");
+    expect(invoke).toHaveBeenLastCalledWith("model_load_cancel", { request: { operation_id: "owned-load" } });
     await nativeApi.testModel("registered-model", { context_size: 2048, threads: 2, batch_size: 128 });
     expect(invoke).toHaveBeenLastCalledWith("model_test", { request: { model_id: "registered-model", context_size: 2048, threads: 2, batch_size: 128 } });
     await nativeApi.libraryNext("operation-only");

@@ -116,7 +116,7 @@ describe("explicitly closing add results", () => {
   it.each([
     ["starting", null, "取消添加"],
     ["running", "verifying", "取消添加"],
-    ["running", "testing", "取消后续测试"],
+    ["running", "testing", "停止加载与测试"],
     ["stopping", "testing", "等待取消确认"],
     ["recovery", "testing", "重新确认添加结果"],
   ] as const)("keeps control visible without dismissal in %s / %s", (library_phase, phase, control) => {

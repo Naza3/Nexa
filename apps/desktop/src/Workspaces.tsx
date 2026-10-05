@@ -1,3 +1,5 @@
+import { followOnLoadAction } from "./modelLoad";
+import { ModelLoadControl } from "./ModelLoadControl";
 import { useState } from "react";
 import type { DesktopController, ViewState } from "./controller";
 import { runtimeView, localBaseUrl } from "./runtimeView";
@@ -70,9 +72,10 @@ export function ActivityPage({ state, controller, goChat }: { state: ViewState; 
     <DetailsGroup title="运行请求"><section className="settings-card"><h2>运行请求</h2><p>活动请求：{view.runtime?.active_request ?? (view.runtime ? "无" : "未知")} · 排队：{view.runtime?.queued_jobs ?? "未知"}</p><p>这里只观察其他客户端，不获取其正文或取消其请求。</p></section></DetailsGroup>
     {!state.activities.length && <section className="settings-card"><h2>尚无本窗口活动</h2><p>模型加载、添加、下载和聊天测试结果会出现在这里。</p></section>}
     {state.activities.map((item) => <details key={item.id} className="details-group activity-card" aria-label={item.label}><summary><strong>{item.label}</strong><span>{statuses[item.status]}</span></summary><div className="details-group-content"><p>{item.detail}</p><p className="small-note">任务 {item.id} · <time dateTime={new Date(item.updated_at).toISOString()}>{new Date(item.updated_at).toLocaleTimeString()}</time></p>
-      {item.error && <p className="warning-text">{item.error.message}（{item.error.code}）</p>}{item.model && <ModelTestFeedback attempt={item.model} />}
-      {item.kind === "download" && state.download_task_id === item.id && state.download_phase !== "idle" && <button disabled={state.download_phase === "stopping"} onClick={() => void (state.download_phase === "recovery" ? controller.recoverDownload() : controller.cancelDownload())}>{state.download_phase === "recovery" ? "重新确认下载状态" : "取消下载后续步骤"}</button>}
-      {item.kind === "library" && state.library_task_id === item.id && state.library_phase !== "idle" && <button disabled={state.library_phase === "stopping"} onClick={() => void (state.library_phase === "recovery" ? controller.recoverLibrary() : controller.cancelLibrary())}>{state.library_phase === "recovery" ? "重新确认模型库操作" : "取消模型库操作"}</button>}
+      {item.error && <p className="warning-text">{item.error.message}（{item.error.code}）</p>}{item.model && <ModelTestFeedback attempt={item.model} loadTask={state.model_load?.attempt_id === item.model.id ? state.model_load : null} />}
+      {item.model && state.model_load?.attempt_id === item.model.id && <ModelLoadControl task={state.model_load} controller={controller} />}
+      {item.kind === "download" && state.download_task_id === item.id && state.download_phase !== "idle" && <button disabled={state.download_phase === "stopping"} onClick={() => void (state.download_phase === "recovery" ? controller.recoverDownload() : controller.cancelDownload())}>{state.download_phase === "recovery" ? "重新确认下载状态" : followOnLoadAction(state.download, "取消下载后续步骤")}</button>}
+      {item.kind === "library" && state.library_task_id === item.id && state.library_phase !== "idle" && <button disabled={state.library_phase === "stopping"} onClick={() => void (state.library_phase === "recovery" ? controller.recoverLibrary() : controller.cancelLibrary())}>{state.library_phase === "recovery" ? "重新确认模型库操作" : followOnLoadAction(state.library, "取消模型库操作")}</button>}
       {item.kind === "chat" && !item.id.startsWith("previous:") && ["running", "stopping", "recovery"].includes(item.status) && state.chat_phase !== "idle" && <button disabled={state.chat_phase === "stopping"} onClick={() => void (state.chat_phase === "recovery" ? controller.recover() : controller.cancel())}>{state.chat_phase === "recovery" ? "重新确认生成终态" : "取消本窗口生成"}</button>}
       {item.status === "recovery" && (item.id.startsWith("previous:") || ["service", "configuration", "model"].includes(item.kind)) && <button onClick={() => void controller.checkService()}>核对当前服务状态</button>}
       {item.kind === "chat" && <button onClick={goChat}>查看辅助测试会话</button>}

@@ -1,3 +1,5 @@
+import { followOnLoadAction } from "./modelLoad";
+import { ModelLoadControl } from "./ModelLoadControl";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
@@ -471,6 +473,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
                           ? "重新加载"
                           : switching ? "切换并测试" : "加载模型"}
                   </button>
+                  {state.model_load?.model_id === model.id && <ModelLoadControl task={state.model_load} controller={controller} />}
                   {expanded && current && <><button disabled={busy} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>{state.testing_model === model.id ? "测试中…" : "基础测试"}</button>{busy && state.testing_model !== model.id && <span className="small-note">当前有任务进行中，空闲后可基础测试</span>}<button disabled={busy} onClick={() => void controller.unload()}>卸载模型</button></>}
 
                   </div>;
@@ -489,7 +492,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
       <section className="settings-card model-detail-content"><div className="card-heading"><h2>模型信息与测试</h2><button onClick={goChat}>聊天测试</button></div><div className="model-meta"><span>{model.quantization || "量化未知"}</span><span>{model.architecture || "架构未知"}</span><span>{formatSize(model.size_bytes)}</span><span>登记时已识别 GGUF</span><span>{model.storage === "external" ? "本地文件 · 直接读取" : "原有管理模型"}</span></div>
       <div className="model-id-row"><span className="hash">API ID：{model.id}</span><button aria-label={`复制 ${model.display_name} 的模型 ID`} onClick={() => void controller.copyModelId(model.id)}>复制 ID</button></div>
                     <p className="small-note">{compatibility.architecture}</p>
-                    {attempt && <ModelTestFeedback attempt={attempt} currentEvidence={model.local_validation} />}
+                    {attempt && <ModelTestFeedback attempt={attempt} currentEvidence={model.local_validation} loadTask={state.model_load?.attempt_id === attempt.id ? state.model_load : null} />}
                     {model.local_validation ? <LocalValidationFeedback value={model.local_validation} history /> : <p className="small-note">本机记录未提供，尚未取得本机测试证明。</p>}
                     <ModelProfile modelId={model.id} state={state} controller={controller} />
                     <details>
@@ -974,7 +977,7 @@ function SettingsPage({
             <div>
               <h2>关闭窗口时同时退出运行服务</h2>
               <p>
-                默认关闭窗口仅取消本窗口生成，运行服务继续供其他客户端使用。
+                默认关闭窗口会停止本窗口加载与生成，运行服务继续供其他客户端使用。
               </p>
             </div>
             <input
@@ -1213,8 +1216,8 @@ export default function App({
               </div>
             )}
           <ModelSelectionPanel state={state} controller={controller} onStop={() => setConfirmAddStop(true)} />
-          {state.download_phase !== "idle" && <div className="task-quick-actions"><button disabled={state.download_phase === "stopping"} onClick={() => void (state.download_phase === "recovery" ? controller.recoverDownload() : controller.cancelDownload())}>{state.download_phase === "recovery" ? "核对下载结果" : state.download_phase === "stopping" ? "等待下载取消确认" : "取消当前下载任务"}</button></div>}
-          {state.library_phase !== "idle" && <div className="task-quick-actions"><button disabled={state.library_phase === "stopping" && !state.error} onClick={() => void (state.library_phase === "recovery" ? controller.recoverLibrary() : controller.cancelLibrary())}>{state.library_phase === "recovery" ? "核对模型库结果" : state.library_phase === "stopping" ? "等待模型库取消确认" : "取消当前模型库任务"}</button></div>}
+          {state.download_phase !== "idle" && <div className="task-quick-actions"><button disabled={state.download_phase === "stopping"} onClick={() => void (state.download_phase === "recovery" ? controller.recoverDownload() : controller.cancelDownload())}>{state.download_phase === "recovery" ? "核对下载结果" : state.download_phase === "stopping" ? "等待下载取消确认" : followOnLoadAction(state.download, "取消当前下载任务")}</button></div>}
+          {state.library_phase !== "idle" && <div className="task-quick-actions"><button disabled={state.library_phase === "stopping" && !state.error} onClick={() => void (state.library_phase === "recovery" ? controller.recoverLibrary() : controller.cancelLibrary())}>{state.library_phase === "recovery" ? "核对模型库结果" : state.library_phase === "stopping" ? "等待模型库取消确认" : followOnLoadAction(state.library, "取消当前模型库任务")}</button></div>}
           {(state.download || state.download_phase !== "idle") && <DetailsGroup title={state.download_phase === "recovery" ? "下载结果待确认" : state.download_phase === "stopping" ? "下载取消中 · 等待确认" : state.download_phase !== "idle" ? "模型下载进行中" : state.download?.status === "completed" ? state.download.result?.registered ? "下载完成 · 已登记" : "文件已保存 · 登记未完成" : state.download?.status === "cancelled" ? "下载已取消" : "下载未完成"} description="查看进度、结果或取消"><DownloadProgress state={state} controller={controller} /></DetailsGroup>}
           {(state.library || state.library_phase !== "idle") && <DetailsGroup title={state.library_phase === "recovery" ? "模型库结果待确认" : state.library_phase === "stopping" ? "模型库取消中 · 等待确认" : state.library_phase !== "idle" ? "模型库操作进行中" : state.library?.status === "partial" ? "模型库操作部分完成" : state.library?.status === "completed" ? "模型库操作已完成" : state.library?.status === "cancelled" ? "模型库操作已取消" : "模型库操作未完成"} description="查看进度、逐文件结果或取消"><AddModelProgress state={state} controller={controller} /><LibraryProgress state={state} controller={controller} /><LibraryDiagnostics state={state} /></DetailsGroup>}
           {state.notice && !noticeInDetail && (
@@ -1263,7 +1266,7 @@ export default function App({
           </Modal>}
           {confirmAddStop && <Modal title="停止所有客户端的运行任务？" confirm="停止运行服务" danger onCancel={() => setConfirmAddStop(false)} onConfirm={() => { setConfirmAddStop(false); void controller.stop(); }}><p>将终止所有客户端任务并卸载当前模型，可能中断其他应用的调用。确认停止后，所选文件保留，请再次点击添加；不会自动开始登记。</p></Modal>}
         </main>
-        <StatusBar state={state} goActivity={() => setPage("activity")} />
+        <StatusBar state={state} controller={controller} goActivity={() => setPage("activity")} />
       </div>
     </div></ConfigDraftContext.Provider>
   );

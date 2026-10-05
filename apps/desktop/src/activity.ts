@@ -1,3 +1,4 @@
+import { modelLoadLabel } from "./modelLoad";
 import type { ViewState, ModelTestAttempt } from "./controller";
 import type { DownloadOperation, LibraryOperation, SafeError } from "./types";
 export const ACTIVITY_LIMIT = 32;
@@ -24,9 +25,10 @@ export function recordActivity(records: Activity[], record: Activity): Activity[
 export function projectActivities(previous: Activity[], state: ViewState): Activity[] {
   let records = previous;
   for (const attempt of Object.values(state.model_tests)) {
-    const status = attempt.phase === "running" ? "running" : attempt.result?.error_code === "request_cancelled" ? "cancelled" : attempt.error || ["failed", "unavailable"].includes(attempt.result?.state ?? "") ? "failed" : "completed";
+    const load = state.model_load?.attempt_id === attempt.id ? state.model_load : null;
+    const status = attempt.phase === "running" ? load?.phase === "recovery" ? "recovery" : load?.phase === "stopping" ? "stopping" : "running" : attempt.outcome === "cancelled" ? "cancelled" : attempt.result?.error_code === "request_cancelled" ? "cancelled" : attempt.error || ["failed", "unavailable"].includes(attempt.result?.state ?? "") ? "failed" : "completed";
     records = recordActivity(records, { id: `${state.activity_session_id}:model:${attempt.id}`, kind: "model", label: `${attempt.mode === "load" ? "加载并短测" : "基础测试"} · ${attempt.model_id}`, status, updated_at: attempt.finished_at ?? attempt.started_at,
-      detail: attempt.phase === "running" ? "此原生阶段暂不支持单独取消；切换页面不影响任务。" : "查看本次结果；历史证明与当前驻留分别判断。", error: attempt.error, model: attempt });
+      detail: attempt.phase === "running" ? load ? `${modelLoadLabel(load)}；切换页面不影响任务。` : "此原生阶段暂不支持单独取消；切换页面不影响任务。" : "查看本次结果；历史证明与当前驻留分别判断。", error: attempt.error, model: attempt });
   }
   for (const kind of ["download", "library"] as const) {
     const id = kind === "download" ? state.download_task_id : state.library_task_id;

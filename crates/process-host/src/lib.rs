@@ -695,13 +695,28 @@ impl Supervisor {
     fn fault(&mut self, mut error: RuntimeError) -> Result<(), RuntimeError> {
         self.reap()?;
         if let Some(active) = self.active.take() {
-            if let Some(reason) = active.job.events.cancellation_reason() {
-                error = RuntimeError::new(reason, "worker stopped during cancellation");
-            } else if active.job.cancel.since().is_some() {
-                error = RuntimeError::new(
-                    ErrorCode::RequestCancelled,
-                    "worker stopped during cancellation",
-                );
+            // Cancellation explains an expected worker exit or control ACK,
+            // never malformed IPC or a real executor/native failure. Cleanup
+            // has already been confirmed above; unconfirmed cleanup is separate.
+            if matches!(
+                error.code,
+                ErrorCode::ExecutorUnavailable
+                    | ErrorCode::RequestCancelled
+                    | ErrorCode::ConsumerStopped
+                    | ErrorCode::SlowConsumer
+                    | ErrorCode::RuntimeShutdown
+                    | ErrorCode::QueueTimeout
+                    | ErrorCode::LoadTimeout
+                    | ErrorCode::ExecutionTimeout
+            ) {
+                if let Some(reason) = active.job.events.cancellation_reason() {
+                    error = RuntimeError::new(reason, "worker stopped during cancellation");
+                } else if active.job.cancel.since().is_some() {
+                    error = RuntimeError::new(
+                        ErrorCode::RequestCancelled,
+                        "worker stopped during cancellation",
+                    );
+                }
             }
             active.job.events.emit(ExecutorEvent::Faulted(error));
         } else if let Some(events) = self.last_events.take() {

@@ -87,7 +87,7 @@ describe("download opt-in and saved outcome display", () => {
     const controller = new DesktopController(makeApi());
     render(<DownloadProgress state={{ ...controller.getSnapshot(), snapshot: stopped(), download: { ...task, result: { ...task.result!, local_validation: { ...proof, state: "failed", generation_pass: false, error_code: "request_cancelled" } } } }} controller={controller} />);
     expect(screen.getByText("文件已保存并登记")).toBeInTheDocument();
-    expect(screen.getByText("本机加载通过 · 短文本测试失败")).toBeInTheDocument();
+    expect(screen.getByText("本机加载通过 · 短文本测试已停止")).toBeInTheDocument();
     expect(screen.queryByText("下载已取消")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重新下载" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "选择已保存文件以登记" })).not.toBeInTheDocument();
@@ -95,8 +95,8 @@ describe("download opt-in and saved outcome display", () => {
   it("offers cancellation of post-save steps without implying file deletion", () => {
     const controller = new DesktopController(makeApi());
     render(<DownloadProgress state={{ ...controller.getSnapshot(), download_phase: "running", download: { ...task, phase: "testing", status: "running", terminal: false, result: null } }} controller={controller} />);
-    expect(screen.getByRole("button", { name: "取消后续步骤" })).toBeEnabled();
-    expect(screen.getByText("文件已登记 · 正在加载与基础测试")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停止加载与测试" })).toBeEnabled();
+    expect(screen.getByText("文件已登记 · 正在加载与测试")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "取消下载" })).not.toBeInTheDocument();
   });
   it("shows a registration diagnostic while retaining saved-file success", () => {

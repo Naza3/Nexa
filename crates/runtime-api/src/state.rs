@@ -36,6 +36,7 @@ pub struct ApiState {
     lan_listening: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) store: Arc<ModelStore>,
     pub(crate) probe_build: ProbeBuild,
+    pub(crate) load_operations: Arc<std::sync::Mutex<crate::load_operations::LoadOperations>>,
     registry: Arc<RwLock<RegistrySnapshot>>,
     thread_selection: Arc<RwLock<Option<(LoadOptions, &'static str)>>>,
     requests: Arc<Semaphore>,
@@ -71,6 +72,7 @@ impl ApiState {
             lan_listening: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             store,
             probe_build: Arc::new(std::sync::OnceLock::new()),
+            load_operations: Arc::new(std::sync::Mutex::new(Default::default())),
             registry: Arc::new(RwLock::new(RegistrySnapshot {
                 models: Vec::new(),
                 generation: uuid::Uuid::new_v4(),
@@ -304,6 +306,32 @@ impl ApiState {
             id,
             move |control| store.prepare_external(&requested, &control),
             true,
+            None,
+        )
+        .await
+    }
+    pub(crate) async fn prepare_external_controlled(
+        &self,
+        id: ModelId,
+        cancel: runtime_core::LoadControl,
+        only_if_unloaded: bool,
+    ) -> Result<(), ApiError> {
+        crate::load_operations::check_cancelled(&cancel)?;
+        match self.store.needs_external_preparation(&id) {
+            Ok(false) => return Ok(()),
+            Ok(true) => (),
+            Err(error) => {
+                publish_preparation_result(&self.registry, &id, &Err(error.clone()))?;
+                return Err(error.into());
+            }
+        }
+        let store = self.store.clone();
+        let requested = id.clone();
+        self.prepare_guarded_with_condition(
+            id,
+            move |control| store.prepare_external(&requested, &control),
+            only_if_unloaded,
+            Some(cancel),
         )
         .await
     }
@@ -313,13 +341,15 @@ impl ApiState {
             + Send
             + 'static,
     {
-        self.prepare_guarded_with_condition(id, action, false).await
+        self.prepare_guarded_with_condition(id, action, false, None)
+            .await
     }
     async fn prepare_guarded_with_condition<F>(
         &self,
         id: ModelId,
         action: F,
         only_if_unloaded: bool,
+        cancellation: Option<runtime_core::LoadControl>,
     ) -> Result<(), ApiError>
     where
         F: FnOnce(Arc<model_store::library::ScanControl>) -> Result<(), RuntimeError>
@@ -345,9 +375,26 @@ impl ApiState {
         ));
         let shutdown = self.shutdown.clone();
         let shutdown_control = control.clone();
+        if cancellation
+            .as_ref()
+            .is_some_and(runtime_core::LoadControl::is_cancelled)
+        {
+            control.cancel();
+        }
         let watcher = tokio::spawn(async move {
-            shutdown.requested().await;
-            shutdown_control.cancel();
+            loop {
+                if cancellation
+                    .as_ref()
+                    .is_some_and(runtime_core::LoadControl::is_cancelled)
+                {
+                    shutdown_control.cancel();
+                    return;
+                }
+                tokio::select! {
+                    _ = shutdown.requested() => { shutdown_control.cancel(); return; },
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => (),
+                }
+            }
         });
         let mut guard = PreparationGuard {
             control: control.clone(),
@@ -383,6 +430,17 @@ impl ApiState {
     ) -> Result<(), ApiError> {
         self.ensure_running()?;
         self.prepare_external(model.clone()).await?;
+        self.load_prepared(model, options, explicit_threads, None, false)
+            .await
+    }
+    pub(crate) async fn load_prepared(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        explicit_threads: bool,
+        cancel: Option<runtime_core::LoadControl>,
+        only_if_unloaded: bool,
+    ) -> Result<(), ApiError> {
         let source = if explicit_threads {
             "request"
         } else if self.config.inference.threads.is_some() {
@@ -393,7 +451,13 @@ impl ApiState {
         let selection = self.thread_selection.clone();
         let self_schema_one = self.config.schema_version == 1;
         self.execute(move |runtime| {
-            runtime.load(model, options)?;
+            match cancel {
+                Some(cancel) if only_if_unloaded => {
+                    runtime.load_if_unloaded_controlled(model, options, cancel)?
+                }
+                Some(cancel) => runtime.load_controlled(model, options, cancel)?,
+                None => runtime.load(model, options)?,
+            }
             *selection.write().map_err(|_| {
                 RuntimeError::new(
                     ErrorCode::RuntimeFaulted,

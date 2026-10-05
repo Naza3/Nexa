@@ -1,3 +1,4 @@
+import { followOnLoadAction, followOnLoadLabel } from "./modelLoad";
 import { useEffect, useState } from "react";
 import type { DesktopController, ViewState } from "./controller";
 import type { DownloadSource } from "./types";
@@ -33,7 +34,7 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
   const saved = task?.phase === "registering" || task?.phase === "testing";
   if (!task && !active) return null;
   const phase = {
-    connecting: "连接下载源", downloading: "下载文件", verifying: "校验文件", committing: "保存文件", registering: "文件已保存 · 正在登记", testing: "文件已登记 · 正在加载与基础测试", finished: "已结束",
+    connecting: "连接下载源", downloading: "下载文件", verifying: "校验文件", committing: "保存文件", registering: "文件已保存 · 正在登记", testing: `文件已登记 · ${followOnLoadLabel(task ?? {})}`, finished: "已结束",
   } as const;
   const status = active ? state.download_phase === "recovery" ? "下载状态待确认" : state.download_phase === "stopping" ? saved ? "正在取消后续步骤，已保存文件保留" : "正在取消下载" : task ? phase[task.phase] : "正在提交下载" :
     task?.status === "completed" ? task.result?.registered ? "文件已保存并登记" : "文件已保存，尚未登记" : task?.status === "cancelled" ? "下载已取消" : "下载失败";
@@ -56,7 +57,7 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
       </>}
     </div>
     {state.download_phase === "recovery" ? <button onClick={() => void controller.recoverDownload()}>重新确认下载状态</button> : active ?
-      <button disabled={state.download_phase === "stopping"} onClick={() => void controller.cancelDownload()}>{state.download_phase === "stopping" ? "正在取消…" : saved ? "取消后续步骤" : "取消下载"}</button> :
+      <button disabled={state.download_phase === "stopping"} onClick={() => void controller.cancelDownload()}>{state.download_phase === "stopping" ? "正在取消…" : followOnLoadAction(task, saved ? "取消后续步骤" : "取消下载")}</button> :
       task?.status === "completed" ? !task.result?.registered && <button disabled={state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.pickModels()}>选择已保存文件以登记</button> :
         task && <button disabled={state.snapshot?.connection !== "stopped" || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.startDownload(task.catalog_id, state.download_auto_test)}>重新下载</button>}
     {!active && task?.terminal && <button onClick={() => controller.dismissDownloadResult(task)}>关闭下载结果</button>}

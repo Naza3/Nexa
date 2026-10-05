@@ -87,3 +87,5 @@ Windows 首次load或直接chat自动加载前，在blocking准备任务取得�
 ## 可选 LAN 设置
 
 DesktopSnapshot.lan_api 为保存的 enabled/listen/allowed_cidrs；RuntimeStatus.lan_api 的 running 是服务实际监听观测。save_lan 只在已初始化、已停服、无残留未确认清理且持实例锁时原子写 config.toml，不创建密钥或启停服务；运行时修改返回 runtime_running。runtime_lan_save 是对应固定 invoke 命令。lan_token_copy 只把已启用且启动生成过的独立 LAN token 经原生直接写剪贴板，返回 copied 布尔，不向JS返回key。详细限制见[ADR0020](../../docs/decisions/0020-opt-in-lan-inference-api.md)。
+
+手动停止加载按[ADR0027](../../docs/decisions/0027-owned-model-load-cancellation.md)：每次操作独立UUID/取消令牌，取消ACK与清理终态分离，覆盖准备/切换/加载及自有短测，不影响其他客户端或全服务。

@@ -208,3 +208,54 @@ fn compatibility_survives_source_failures_cancellation_and_prepare_retries() {
     assert!(!observed.models[0].validated);
     assert!(observed.models[0].availability_error.is_none());
 }
+
+#[tokio::test]
+async fn explicit_stop_during_preparation_keeps_lease_until_actual_cleanup() {
+    let (_root, state, _) = fixture().await;
+    let cancel = runtime_core::LoadControl::default();
+    let stop = cancel.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let owner = state.clone();
+    let task = tokio::spawn(async move {
+        owner
+            .prepare_guarded_with_condition(
+                ModelId::new("fixture").unwrap(),
+                move |control| {
+                    let _ = started_tx.send(control.clone());
+                    release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                    control.check()
+                },
+                false,
+                Some(cancel),
+            )
+            .await
+    });
+    let control = started_rx.await.unwrap();
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while control.check().is_ok() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!task.is_finished());
+    assert!(state.runtime.status().unwrap().registry_busy);
+    assert_eq!(
+        state
+            .runtime
+            .load(ModelId::new("other").unwrap(), Default::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        task.await.unwrap().unwrap_err().error.code,
+        "model_scan_cancelled"
+    );
+    assert!(!state.runtime.status().unwrap().registry_busy);
+    state.shutdown.begin();
+    state.wait_shutdown().await.unwrap();
+}

@@ -1,5 +1,15 @@
 # Nexa 当前状态
 
+## 2026-10-05 按操作身份手动停止加载（开发验证完成，Windows待验）
+
+用户要求加载耗时长时可以手动停止。在 `codex/dev` clean基线 `a5ba7388d23758d31e2bfbc94571ef906fd8e535` 实施[ADR0027](docs/decisions/0027-owned-model-load-cancellation.md)：模型库legacy/profile、添加/下载后的自动加载共用按次UUID，取消覆盖hash/切换/native load/本操作私有短测；不停止整个服务、不取消别的客户端、只在清理ACK后终态，旧令牌不能影响新工作。生成与LAN管理边界保持，已保存/登记不回滚。
+
+最终全workspace/all-targets42组539通过/0失败/7既有忽略，另doc-tests7；完整clippy/root与壳fmt、壳31项/clippy、Windows壳及关联后端all-targets交叉check（仅既有clang-cl探测warning）通过。前端695项/typecheck/lint/build、Python208通过/4平台skip通过；独立96项与最终稳定进程fixture复验为子集不累加，审查无剩余阻断。真实不合作Load在收到Load后的原子标记取消，5.07秒kill/reap后同supervisor正常重载；坏IPC/原生真实故障不再被Stop覆盖为正常取消。最终重建Linux固定Qwen0.6B实际loading阶段Stop，断言终态cancelled、无active/registry工作及旧ID无效，随后同服务重载、短测/聊天/证明与最终清理全部通过。详见[验证记录](docs/verification/2026-10-05-model-load-cancellation.md)及[脱敏真实报告](docs/verification/2026-10-05-model-load-cancellation-smoke.json)。
+
+本轮子任务没有提交、推送或触发Actions；新原生Windows/目标机结果尚无。由主代理统一提交并按当前授权运行标准GitHub Windows构建，不自动合并main，不把交叉check冒称Windows运行或新包交付。
+
+下文为以前阶段快照，不覆盖本节新任务与验证状态。
+
 ## 2026-10-05 许可无损整合与整体桌面精简（进行中）
 
 当前源码基线为`codex/dev`的`a14eb6fdb1858baf507c8b9a8509b0ca30df1316`；最后实际交付仍为a14原Windows包，[Actions37216837409](https://github.com/Naza3/Nexa/actions/runs/37216837409)已成功。本节更新当前状态，下文保留各阶段历史，不将旧包CI证据转授本次源码。

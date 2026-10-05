@@ -23,7 +23,7 @@ FAILURE_STAGES = frozenset({
     "arguments", "create_private_directory", "initialize_token", "write_config",
     "construct_bridge", "launch_initial_child", "start_after_child_exit", "read_initial_instance",
     "attach_existing", "close_attached_window", "import_model", "list_models",
-    "reject_running_idle_change", "load_model", "verify_local_validation", "repeat_model_test", "verify_offline_inventory", "first_chat_start", "first_chat_consume",
+    "reject_running_idle_change", "stop_loading", "load_model", "verify_local_validation", "repeat_model_test", "verify_offline_inventory", "first_chat_start", "first_chat_consume",
     "cancel_chat_start", "cancel_chat_consume", "wait_ready", "repeat_chat_start",
     "repeat_chat_consume", "close_window", "verify_default_close", "launch_keep_child",
     "verify_process_exit", "unload_model", "reload_model", "launch_stop_child",
@@ -199,7 +199,9 @@ def onboarding_report(value):
     if (type(value) is not dict or value.get("success") is not True
             or value.get("local_text_validation") is not True
             or value.get("repeat_text_validation") is not True
-            or value.get("offline_inventory") is not True):
+            or value.get("offline_inventory") is not True
+            or value.get("manual_load_stop") is not True
+            or value.get("reload_after_stop") is not True):
         raise ValueError("desktop onboarding assertions missing or not passed")
     return value
 

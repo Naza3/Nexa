@@ -210,6 +210,47 @@ async fn configuration_migrate(
     guard(&window, &state)?;
     state.bridge.configuration_migrate(request).await
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelLoadOperationRequest {
+    operation_id: Uuid,
+}
+#[tauri::command]
+async fn model_load_start(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadStartRequest,
+) -> Result<ModelLoadOperationHandle> {
+    guard(&window, &state)?;
+    state.bridge.model_load_start(request)
+}
+#[tauri::command]
+async fn model_load_profile_start(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadProfileStartRequest,
+) -> Result<ModelLoadOperationHandle> {
+    guard(&window, &state)?;
+    state.bridge.model_load_profile_start(request)
+}
+#[tauri::command]
+async fn model_load_next(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadOperationRequest,
+) -> Result<ModelLoadOperationState> {
+    guard(&window, &state)?;
+    state.bridge.model_load_next(request.operation_id).await
+}
+#[tauri::command]
+async fn model_load_cancel(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadOperationRequest,
+) -> Result<ModelLoadStopping> {
+    guard(&window, &state)?;
+    state.bridge.model_load_cancel(request.operation_id).await
+}
 #[tauri::command]
 async fn model_load_profile(
     window: WebviewWindow,
@@ -873,6 +914,10 @@ pub fn run() {
             configuration_save,
             configuration_migrate,
             model_load_profile,
+            model_load_start,
+            model_load_profile_start,
+            model_load_next,
+            model_load_cancel,
             ui_preferences_get,
             ui_preferences_save,
             runtime_start,

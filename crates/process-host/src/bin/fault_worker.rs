@@ -154,6 +154,7 @@ fn main() {
         .unwrap();
     }
     let mut seq = 0;
+    let mut pending_load = None;
     let mut generate: Option<Frame> = None;
     let mut emitted = 0;
     while let Some(frame) = read_frame(&mut input, MAX_REQUEST_FRAME_BYTES).unwrap() {
@@ -165,8 +166,24 @@ fn main() {
                 if case == "crash_load" {
                     std::process::exit(43);
                 }
+                if matches!(case, "malformed_cancel_load" | "native_fault_cancel_load") {
+                    pending_load = Some(frame.clone());
+                    publish_pid(
+                        &PathBuf::from(format!("{}.loading", args.get(1).unwrap())),
+                        std::process::id(),
+                    )
+                    .unwrap();
+                    continue;
+                }
                 if case == "hang_load" {
                     sleep_forever();
+                }
+                if case == "hang_load_once" {
+                    let marker = PathBuf::from(format!("{}.loading", args.get(1).unwrap()));
+                    if !marker.exists() {
+                        publish_pid(&marker, std::process::id()).unwrap();
+                        sleep_forever();
+                    }
                 }
                 #[cfg(target_os = "linux")]
                 if case == "escaped_pipe" {
@@ -331,6 +348,24 @@ fn main() {
                 }
             }
             Message::Cancel {} => {
+                if case == "malformed_cancel_load" {
+                    output.write_all(b"{malformed\n").unwrap();
+                    output.flush().unwrap();
+                    sleep_forever();
+                }
+                if case == "native_fault_cancel_load" {
+                    emit(
+                        &mut output,
+                        &pending_load.take().unwrap(),
+                        &mut seq,
+                        ExecutorEvent::Faulted(RuntimeError::new(
+                            ErrorCode::NativeFailure,
+                            "fixture native failure during stop",
+                        )),
+                        None,
+                    );
+                    sleep_forever();
+                }
                 if case == "ignore_cancel" {
                     continue;
                 }

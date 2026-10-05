@@ -40,6 +40,12 @@ pub fn router(state: ApiState, security: Arc<SecurityContext>) -> Router {
         .route("/runtime/models", get(models))
         .route("/runtime/models/import", post(import))
         .route("/runtime/load", post(load))
+        .route("/runtime/load-operations", post(load_operation_start))
+        .route("/runtime/load-operations/{id}", get(load_operation_next))
+        .route(
+            "/runtime/load-operations/{id}/cancel",
+            post(load_operation_cancel),
+        )
         .route("/runtime/load-and-test", post(load_and_test))
         .route("/runtime/load-if-unloaded", post(load_if_unloaded))
         .route("/runtime/model-test", post(model_test))
@@ -174,7 +180,7 @@ fn state_name(state: ModelState) -> &'static str {
         ModelState::Faulted => "faulted",
     }
 }
-fn status_json(state: &ApiState, status: RuntimeStatus) -> Value {
+pub(crate) fn status_json(state: &ApiState, status: RuntimeStatus) -> Value {
     let diagnostics = state.diagnostics.as_ref();
     let available = std::thread::available_parallelism().ok().map(|n| n.get());
     let threads = status.load_options.map(|options| options.threads);
@@ -275,6 +281,48 @@ async fn load(State(state): State<ApiState>, request: Request) -> Result<Json<Va
         .await?;
     let status = state.control(|runtime| runtime.status()).await?;
     Ok(Json(status_json(&state, status)))
+}
+async fn load_operation_start(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let bytes = json_body(request, state.config.api.max_body_bytes).await?;
+    let mut value = crate::dto::parse_json(&bytes)?;
+    let id = value
+        .as_object_mut()
+        .and_then(|object| object.remove("operation_id"))
+        .and_then(|id| id.as_str().and_then(|id| uuid::Uuid::parse_str(id).ok()))
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| ApiError::invalid("operation_id", "Expected an opaque operation UUID."))?;
+    let only_if_unloaded = match value
+        .as_object_mut()
+        .and_then(|object| object.remove("only_if_unloaded"))
+    {
+        None => false,
+        Some(Value::Bool(value)) => value,
+        _ => return Err(ApiError::invalid("only_if_unloaded", "Expected a boolean.")),
+    };
+    let load = LoadRequest::parse(&serde_json::to_vec(&value).map_err(|_| ApiError::internal())?)?;
+    let options = load.options(&state.active_config()?)?;
+    Ok(Json(
+        json!({"operation_id":state.load_operation_start(id, load.model, options, only_if_unloaded, load.threads.is_some())?}),
+    ))
+}
+async fn load_operation_next(
+    State(state): State<ApiState>,
+    id: Result<Path<uuid::Uuid>, PathRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::invalid("operation_id", "Invalid operation UUID."))?;
+    Ok(Json(state.load_operation_next(id)?))
+}
+async fn load_operation_cancel(
+    State(state): State<ApiState>,
+    id: Result<Path<uuid::Uuid>, PathRejection>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::invalid("operation_id", "Invalid operation UUID."))?;
+    empty_body(request, state.config.api.max_body_bytes).await?;
+    Ok(Json(json!({"stopping":state.load_operation_cancel(id)?})))
 }
 async fn load_and_test(
     State(state): State<ApiState>,

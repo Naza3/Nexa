@@ -79,7 +79,7 @@ describe("offline model inventory and local evidence", () => {
     const { api, controller } = await create({ snapshot: vi.fn(async () => snapshot()), testModel: vi.fn(async () => failed), modelsPage: vi.fn(async () => page(failed, "runtime")) });
     await controller.testModel(model.id);
     expect(controller.getSnapshot().models.data[0].local_validation).toEqual(failed);
-    expect(controller.getSnapshot().notice).toBe("本机加载通过 · 短文本测试失败");
+    expect(controller.getSnapshot().notice).toBe(code === "request_cancelled" ? "本机加载通过 · 短文本测试已停止" : "本机加载通过 · 短文本测试失败");
     expect(api.chatStart).not.toHaveBeenCalled();
     expect(api.loadModel).not.toHaveBeenCalled();
   });

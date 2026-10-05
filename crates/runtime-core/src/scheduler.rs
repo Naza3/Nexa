@@ -14,6 +14,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Per-attempt cancellation identity. Clones only affect the load that received
+/// this control; they never refer to the currently selected model or request.
+#[derive(Clone, Default)]
+pub struct LoadControl(Arc<std::sync::OnceLock<Instant>>);
+impl LoadControl {
+    pub fn cancel(&self) {
+        let _ = self.0.set(Instant::now());
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.get().is_some()
+    }
+    fn cancelled_before(&self, deadline: Instant) -> bool {
+        self.0.get().is_some_and(|at| *at <= deadline)
+    }
+}
+
 type Reply<T> = mpsc::Sender<Result<T, RuntimeError>>;
 #[derive(Clone)]
 pub struct RuntimeHandle {
@@ -57,6 +73,7 @@ enum Command {
     ),
     Load(ModelId, LoadOptions, Reply<()>),
     LoadIfUnloaded(ModelId, LoadOptions, Reply<()>),
+    LoadControlled(ModelId, LoadOptions, LoadControl, bool, Reply<()>),
     SubmitIfIdle(GenerationRequest, LoadOptions, Reply<EventReceiver>),
     Unload(Reply<()>),
     Cancel(RequestId, Reply<()>),
@@ -158,6 +175,24 @@ impl RuntimeHandle {
     pub fn load(&self, model: ModelId, options: LoadOptions) -> Result<(), RuntimeError> {
         options.validate()?;
         self.ask(|reply| Command::Load(model, options, reply))
+    }
+    pub fn load_controlled(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        control: LoadControl,
+    ) -> Result<(), RuntimeError> {
+        options.validate()?;
+        self.ask(|reply| Command::LoadControlled(model, options, control, false, reply))
+    }
+    pub fn load_if_unloaded_controlled(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        control: LoadControl,
+    ) -> Result<(), RuntimeError> {
+        options.validate()?;
+        self.ask(|reply| Command::LoadControlled(model, options, control, true, reply))
     }
     /// Automatic onboarding must never evict a selection or wait behind work.
     pub fn load_if_unloaded(
@@ -338,6 +373,8 @@ struct Actor {
     queue: VecDeque<Job>,
     operation: Option<Operation>,
     operation_id: u64,
+    owned_load: Option<LoadControl>,
+    cancelled_load_reply: Option<Reply<()>>,
     last_error: Option<RuntimeError>,
     poison: Option<RuntimeError>,
     cleanup_error: Option<RuntimeError>,
@@ -370,6 +407,8 @@ impl Actor {
             queue: VecDeque::new(),
             operation: None,
             operation_id: 0,
+            owned_load: None,
+            cancelled_load_reply: None,
             last_error: None,
             poison: None,
             cleanup_error: None,
@@ -502,7 +541,21 @@ impl Actor {
                 };
                 let _ = reply.send(result);
             }
-            Command::Load(id, options, reply) => self.explicit_load(id, options, reply),
+            Command::Load(id, options, reply) => self.explicit_load(id, options, reply, None),
+            Command::LoadControlled(id, options, control, only_if_unloaded, reply) => {
+                if only_if_unloaded
+                    && (self.state != ModelState::Unloaded
+                        || self.selected.is_some()
+                        || self.busy_error().is_some())
+                {
+                    let _ = reply.send(Err(self
+                        .cleanup_error
+                        .clone()
+                        .unwrap_or_else(|| error(ErrorCode::RuntimeBusy))));
+                } else {
+                    self.explicit_load(id, options, reply, Some(control));
+                }
+            }
             Command::LoadIfUnloaded(id, options, reply) => {
                 if self.state != ModelState::Unloaded
                     || self.selected.is_some()
@@ -510,7 +563,7 @@ impl Actor {
                 {
                     let _ = reply.send(Err(error(ErrorCode::RuntimeBusy)));
                 } else {
-                    self.explicit_load(id, options, reply);
+                    self.explicit_load(id, options, reply, None);
                 }
             }
             Command::SubmitIfIdle(request, options, reply) => {
@@ -588,7 +641,8 @@ impl Actor {
         if self.stopping {
             return Err(stopped());
         }
-        if self.registry_busy()
+        if self.owned_load.is_some()
+            || self.registry_busy()
             || matches!(
                 self.operation,
                 Some(Operation::Unload { next: Some(_), .. })
@@ -660,9 +714,19 @@ impl Actor {
         }
         Ok(EventReceiver { output })
     }
-    fn explicit_load(&mut self, id: ModelId, options: LoadOptions, reply: Reply<()>) {
+    fn explicit_load(
+        &mut self,
+        id: ModelId,
+        options: LoadOptions,
+        reply: Reply<()>,
+        control: Option<LoadControl>,
+    ) {
         if let Some(error) = &self.cleanup_error {
             let _ = reply.send(Err(error.clone()));
+            return;
+        }
+        if control.as_ref().is_some_and(LoadControl::is_cancelled) {
+            let _ = reply.send(Err(error(ErrorCode::RequestCancelled)));
             return;
         }
         if let Some(err) = self.busy_error() {
@@ -683,6 +747,7 @@ impl Actor {
             let _ = reply.send(Ok(()));
             return;
         }
+        self.owned_load = control;
         if matches!(self.state, ModelState::Ready | ModelState::Faulted) {
             self.unload(None, Some((model, options, reply)));
         } else {
@@ -913,7 +978,10 @@ impl Actor {
         match &mut self.operation {
             Some(Operation::Load { start, timeout, .. })
                 if envelope.emitted_at.saturating_duration_since(*start)
-                    >= self.config.load_timeout =>
+                    >= self.config.load_timeout
+                    && !self.owned_load.as_ref().is_some_and(|control| {
+                        control.cancelled_before(*start + self.config.load_timeout)
+                    }) =>
             {
                 *timeout = true
             }
@@ -947,6 +1015,19 @@ impl Actor {
                     self.unload(None, None);
                     return;
                 }
+                if self
+                    .owned_load
+                    .as_ref()
+                    .is_some_and(LoadControl::is_cancelled)
+                {
+                    self.cancelled_load_reply = reply;
+                    // Loaded raced with cancellation. Keep ownership and defer
+                    // the terminal reply until the matching unload cleanup ACK.
+                    self.state = ModelState::Ready;
+                    self.unload(None, None);
+                    return;
+                }
+                self.owned_load = None;
                 if let Some(reply) = reply {
                     let _ = reply.send(Ok(()));
                 }
@@ -1035,7 +1116,26 @@ impl Actor {
                 if let Some(reply) = reply {
                     let _ = reply.send(Ok(()));
                 }
+                if let Some(cancelled_reply) = self.cancelled_load_reply.take() {
+                    self.owned_load = None;
+                    self.selected = None;
+                    self.options = None;
+                    self.state = ModelState::Unloaded;
+                    let _ = cancelled_reply.send(Err(error(ErrorCode::RequestCancelled)));
+                }
                 if let Some((model, options, reply)) = next {
+                    if self
+                        .owned_load
+                        .as_ref()
+                        .is_some_and(LoadControl::is_cancelled)
+                    {
+                        self.owned_load = None;
+                        self.selected = None;
+                        self.options = None;
+                        self.state = ModelState::Unloaded;
+                        let _ = reply.send(Err(error(ErrorCode::RequestCancelled)));
+                        return;
+                    }
                     if self.stopping {
                         let _ = reply.send(Err(stopped()));
                         return;
@@ -1047,7 +1147,21 @@ impl Actor {
                     self.start_active();
                 }
             }
-            ExecutorEvent::Faulted(err) => self.fault(err),
+            ExecutorEvent::Faulted(err) => {
+                if self
+                    .owned_load
+                    .as_ref()
+                    .is_some_and(LoadControl::is_cancelled)
+                    && matches!(self.operation, Some(Operation::Load { timeout: false, .. }))
+                    && is_cancellation(err.code)
+                {
+                    // ProcessHost emits Faulted only after the killed worker has
+                    // exited and been reaped. CleanupUnconfirmed is separate.
+                    self.operation_failed(err);
+                } else {
+                    self.fault(err);
+                }
+            }
             ExecutorEvent::CleanupUnconfirmed(_) => {
                 unreachable!("handled before operation matching")
             }
@@ -1078,6 +1192,10 @@ impl Actor {
             None => "executor cleanup could not be confirmed".into(),
         };
         let error = RuntimeError::new(ErrorCode::ExecutorCleanupUnconfirmed, message);
+        self.owned_load = None;
+        if let Some(reply) = self.cancelled_load_reply.take() {
+            let _ = reply.send(Err(error.clone()));
+        }
         self.cleanup_error = Some(error.clone());
         self.poison = None;
         if let Some(operation) = self.operation.take() {
@@ -1128,6 +1246,22 @@ impl Actor {
                 } else {
                     err
                 };
+                let cancelled = !timeout
+                    && self
+                        .owned_load
+                        .as_ref()
+                        .is_some_and(LoadControl::is_cancelled)
+                    && is_cancellation(err.code);
+                self.owned_load = None;
+                if cancelled {
+                    self.state = ModelState::Unloaded;
+                    self.selected = None;
+                    self.options = None;
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(error(ErrorCode::RequestCancelled)));
+                    }
+                    return;
+                }
                 if let Some(reply) = reply {
                     let _ = reply.send(Err(err.clone()));
                 }
@@ -1197,6 +1331,10 @@ impl Actor {
         if matches!(self.operation, Some(Operation::Load { timeout: true, .. })) {
             err = error(ErrorCode::LoadTimeout);
         }
+        self.owned_load = None;
+        if let Some(reply) = self.cancelled_load_reply.take() {
+            let _ = reply.send(Err(err.clone()));
+        }
         self.remember_shutdown_error(&err);
         self.poison = None;
         if let Some(operation) = self.operation.take() {
@@ -1251,6 +1389,14 @@ impl Actor {
         }
     }
     fn tick(&mut self) {
+        if self
+            .owned_load
+            .as_ref()
+            .is_some_and(LoadControl::is_cancelled)
+            && let Some(Operation::Load { cancel, .. }) = &self.operation
+        {
+            cancel.cancel();
+        }
         if !self.registry_busy() {
             self.registry = None;
         }
@@ -1278,7 +1424,12 @@ impl Actor {
                 cancel,
                 timeout,
                 ..
-            }) if start.elapsed() >= self.config.load_timeout && !*timeout => {
+            }) if start.elapsed() >= self.config.load_timeout
+                && !*timeout
+                && !self.owned_load.as_ref().is_some_and(|control| {
+                    control.cancelled_before(*start + self.config.load_timeout)
+                }) =>
+            {
                 *timeout = true;
                 cancel.cancel();
             }
@@ -1595,7 +1746,7 @@ mod ledger_tests {
             batch_size: 256,
         };
         let (reply, _receiver) = mpsc::channel();
-        actor.explicit_load(id, replacement, reply);
+        actor.explicit_load(id, replacement, reply, None);
         assert_eq!(actor.options, Some(replacement));
     }
 }

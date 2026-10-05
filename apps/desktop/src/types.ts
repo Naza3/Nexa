@@ -177,6 +177,7 @@ export interface LibraryFileError {
   message: string;
 }
 export interface LibraryOperation {
+  load_phase?: "preparing" | "loading" | "testing" | null;
   operation_id: string;
   status: "running" | "completed" | "partial" | "cancelled" | "failed";
   phase: "checking" | "enumerating" | "verifying" | "committing" | "testing" | "finished";
@@ -243,6 +244,7 @@ export interface CatalogEntry {
   sources: CatalogSource[];
 }
 export interface DownloadOperation {
+  load_phase?: "preparing" | "loading" | "testing" | null;
   operation_id: string;
   catalog_id: string;
   source: DownloadSource;
@@ -259,12 +261,27 @@ export interface DownloadOperation {
   result: { saved: true; registered: boolean; file_name: string; cleanup_warning: string | null; registration_error?: SafeError | null; local_validation?: LocalValidation | null } | null;
   error: SafeError | null;
 }
+/** An opaque handle owns only this window's explicit load and its private probe. */
+export interface ModelLoadOperation {
+  operation_id: string;
+  model_id: string;
+  phase: "preparing" | "loading" | "testing" | "finished";
+  status: "running" | "cancelling" | "completed" | "cancelled" | "failed";
+  terminal: boolean;
+  runtime: RuntimeStatus | null;
+  local_validation: LocalValidation | null;
+  error: SafeError | null;
+}
 export interface DesktopApi {
   initialize?(): Promise<Snapshot>;
   configurationGet?(): Promise<ConfigurationSnapshot>;
   configurationModelGet?(model_id: string): Promise<ModelConfiguration>;
   configurationSave?(request: ConfigurationSaveRequest): Promise<ConfigurationSnapshot>;
   configurationMigrate?(request: ConfigurationMigrateRequest): Promise<ConfigurationSnapshot>;
+  loadModelStart?(operation_id: string, model_id: string, options: LoadOptions): Promise<{ operation_id: string }>;
+  loadModelProfileStart?(operation_id: string, model_id: string, load_overrides?: Partial<LoadOptions>): Promise<{ operation_id: string }>;
+  modelLoadNext?(operation_id: string): Promise<ModelLoadOperation>;
+  modelLoadCancel?(operation_id: string): Promise<{ stopping: boolean }>;
   loadModelProfile?(model_id: string, load_overrides?: Partial<LoadOptions>): Promise<RuntimeStatus>;
   uiPreferencesGet?(): Promise<UiPreferencesSnapshot>;
   uiPreferencesSave?(request: { expected_revision: string; preferences: UiPreferences }): Promise<UiPreferencesSnapshot>;

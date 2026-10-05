@@ -1,4 +1,5 @@
 import { projectActivities, recordActivity, readActivityHistory, createActivitySessionId, persistActivitySummaries } from "./activity";
+import { validModelLoadOperation, validOptionalLoadPhase } from "./modelLoad";
 import { ownRecord } from "./records";
 import type { Activity } from "./activity";
 import { localBaseUrl } from "./runtimeView";
@@ -16,6 +17,7 @@ import type {
   DesktopApi,
   ModelPage,
   ModelSummary,
+  ModelLoadOperation,
   LocalValidation,
   LoadOptions,
   DirectorySelection,
@@ -59,7 +61,7 @@ function validLibraryOperation(value: LibraryOperation, configuring = false): bo
   const failures = value.file_errors ?? [];
   if (configuring && (value.examined_entries !== 0 || value.candidate_files !== 0 || value.verified_files !== 0 || failures.length || value.status === "partial" || !["checking", "committing", "finished"].includes(value.phase))) return false;
   const published = value.status === "completed" || value.status === "partial";
-  if (!["running", "completed", "partial", "cancelled", "failed"].includes(value.status) ||
+  if (!validOptionalLoadPhase(value.load_phase) || !["running", "completed", "partial", "cancelled", "failed"].includes(value.status) ||
     !["checking", "enumerating", "verifying", "committing", "finished"].includes(value.phase) ||
     !integer(value.examined_entries, 1025) || !integer(value.candidate_files, 64) ||
     !integer(value.verified_files, value.candidate_files) || value.candidate_files > value.examined_entries || !Array.isArray(failures) || failures.length > 64 ||
@@ -91,7 +93,7 @@ function validLibraryOperation(value: LibraryOperation, configuring = false): bo
 function validDownloadOperation(value: DownloadOperation): boolean {
   const text = (value: unknown, max: number, nonempty = true) => typeof value === "string" && (!nonempty || value.length > 0) && byteLength(value) <= max && !value.includes("\0");
   const bytes = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 16 * 1024 ** 3;
-  if (!value || typeof value !== "object" || byteLength(JSON.stringify(value)) > 64 * 1024 ||
+  if (!value || typeof value !== "object" || !validOptionalLoadPhase(value.load_phase) || byteLength(JSON.stringify(value)) > 64 * 1024 ||
       !text(value.operation_id, 128) || !text(value.catalog_id, 256) || !text(value.directory_id, 128) ||
       !text(value.file_name, 1024) || /[/\\]/.test(value.file_name) || !text(value.target_display_path, 32768) ||
       (value.attempt !== undefined && (!Number.isSafeInteger(value.attempt) || value.attempt < 1 || value.attempt > 3)) ||
@@ -127,6 +129,7 @@ export interface ModelTestAttempt {
   model_signature: string;
   mode: "load" | "test";
   phase: "running" | "finished";
+  outcome?: "cancelled";
   started_at: number;
   finished_at: number | null;
   result: LocalValidation | null;
@@ -152,7 +155,26 @@ function loadOptions(value: LoadOptions): string {
   return JSON.stringify([value.context_size, value.threads, value.batch_size]);
 }
 export interface CommandOperation { id: number; kind: "start" | "stop" | "check" | "pick_models" | "read_models" | "configuration" | "initialize" | "management"; label: string }
+export interface ModelLoadTaskView {
+  attempt_id: number;
+  model_id: string;
+  operation_id: string | null;
+  phase: "starting" | "running" | "stopping" | "recovery";
+  progress: ModelLoadOperation | null;
+  cancel_error: SafeError | null;
+  stop_requested: boolean;
+}
+interface ModelLoadTask {
+  view: ModelLoadTaskView;
+  cancel: boolean;
+  cancelSent: boolean;
+  cancelPending: boolean;
+  accepted: boolean;
+  startSettled: boolean;
+  resume: (() => void) | null;
+}
 export interface ViewState {
+  model_load: ModelLoadTaskView | null;
   activities: Activity[];
   activity_session_id: string;
   activity_storage_warning: string | null;
@@ -259,6 +281,7 @@ export function checkSubmission(
 export class DesktopController {
   private activityHistory = readActivityHistory();
   private state: ViewState = {
+    model_load: null,
     activities: this.activityHistory.records,
     activity_session_id: createActivitySessionId(),
     activity_storage_warning: this.activityHistory.warning,
@@ -325,6 +348,7 @@ export class DesktopController {
   private modelFeedbackEpoch = 0;
   private settingsEpoch = 0;
   private nextTest = 0;
+  private modelLoadTask: ModelLoadTask | null = null;
   private snapshotReadError: SafeError | null = null;
   private modelsReadError: SafeError | null = null;
   constructor(readonly api: DesktopApi) {}
@@ -378,6 +402,7 @@ export class DesktopController {
       clearTimeout(this.reconcileTimer);
       void this.discardModelSelection();
       void this.cancel();
+      void this.cancelModelLoad();
       void this.cancelLibrary();
       void this.cancelDownload();
     };
@@ -905,7 +930,7 @@ export class DesktopController {
     task.cancelSent = true;
     try { await this.api.downloadCancel(task.id); }
     catch (error) {
-      if (this.downloadTask === task) { task.cancelSent = false; this.report(error); }
+      if (this.downloadTask === task) { task.cancelSent = false; if (this.state.download_phase !== "recovery") this.update({ download_phase: "running" }); this.report(error); }
     }
   }
   recoverDownload = async () => {
@@ -1000,12 +1025,19 @@ export class DesktopController {
       (this.state.snapshot?.connection === scope.connection && (runtime?.selected_model ?? null) === scope.selected_model &&
         (runtime?.load_options ? loadOptions(runtime.load_options) : null) === scope.runtime_options);
   }
-  private finishModelTest(scope: ModelTestScope, result: LocalValidation | null, error: SafeError | null = null) {
+  private finishModelTest(scope: ModelTestScope, result: LocalValidation | null, error: SafeError | null = null, cancelled = false) {
     if (!this.testScopeCurrent(scope)) return;
     this.update({ model_tests: { ...Object.fromEntries(Object.entries(this.state.model_tests).slice(-31)), [scope.attempt.model_id]: {
-      ...scope.attempt, phase: "finished", finished_at: Date.now(), result, error,
+      ...scope.attempt, phase: "finished", finished_at: Date.now(), result, error, ...(cancelled ? { outcome: "cancelled" as const } : {}),
     } } });
     if (error) { this.report(error); return; }
+    if (cancelled) {
+      const runtime = this.state.snapshot?.connection === "connected" ? this.state.snapshot.runtime : null;
+      this.update({ notice: runtime?.selected_model === scope.attempt.model_id && ["ready", "generating"].includes(runtime.state)
+        ? "本次操作已停止，模型仍已加载；本次未取得基础测试通过证明。"
+        : "本次加载已停止；当前驻留状态以服务确认结果为准。" });
+      return;
+    }
     const evidence = this.state.models.data.find((entry) => entry.id === scope.attempt.model_id)?.local_validation;
     this.update({ notice: result ? `${localValidationLabel(result)}${result.state !== "passed" && evidence?.state === "passed" ? "；历史本机通过记录仍保留，不代表本次通过。" : ""}` : "本次操作已结束，尚未取得可确认的短文本测试结果。" });
   }
@@ -1031,6 +1063,82 @@ export class DesktopController {
     if (evidence?.state === "stale") return { code: "validation_scope_changed", message: validationErrorReason("validation_scope_changed") };
     return null;
   }
+  private updateModelLoad(task: ModelLoadTask, patch: Partial<ModelLoadTaskView>) {
+    if (this.modelLoadTask !== task) return;
+    task.view = { ...task.view, ...patch };
+    this.update({ model_load: task.view });
+  }
+  cancelModelLoad = async () => {
+    const task = this.modelLoadTask;
+    if (!task || task.view.progress?.terminal || task.cancelPending || task.cancelSent) return;
+    task.cancel = true;
+    if (task.view.cancel_error && this.state.error?.message === task.view.cancel_error.message) this.update({ error: null });
+    this.updateModelLoad(task, { phase: task.view.phase === "recovery" ? "recovery" : "stopping", cancel_error: null, stop_requested: true });
+    await this.sendModelLoadCancel(task);
+    if (task.resume && !task.view.cancel_error) this.recoverModelLoad();
+  };
+  private async sendModelLoadCancel(task: ModelLoadTask) {
+    if (this.modelLoadTask !== task || !task.startSettled || !task.view.operation_id || task.cancelSent || task.cancelPending || !this.api.modelLoadCancel) return;
+    task.cancelPending = true;
+    try {
+      const result = await this.api.modelLoadCancel(task.view.operation_id);
+      if (!result || typeof result.stopping !== "boolean") throw new DesktopError("invalid_model_load_operation", "停止请求回执无效，请核对本次任务状态。");
+      if (this.modelLoadTask !== task || task.view.progress?.terminal) return;
+      task.cancelSent = true;
+      task.accepted = true;
+      // An acknowledgement is never a terminal result, including stopping:false.
+    } catch (error) {
+      if (this.modelLoadTask !== task || task.view.progress?.terminal) return;
+      const failure = { code: safeError(error).code, message: "停止请求尚未确认，任务仍可能进行。可重试停止或等待真实结果。" };
+      this.updateModelLoad(task, { phase: task.view.phase === "recovery" ? "recovery" : "running", cancel_error: failure });
+      this.report(failure);
+    } finally { task.cancelPending = false; }
+  }
+  recoverModelLoad = () => {
+    const task = this.modelLoadTask;
+    if (!task?.resume) return;
+    const resume = task.resume;
+    task.resume = null;
+    this.updateModelLoad(task, { phase: task.cancel && !task.view.cancel_error ? "stopping" : "running" });
+    this.update({ error: null });
+    resume();
+  };
+  private async consumeModelLoad(task: ModelLoadTask, scope: ModelTestScope, startError: SafeError | null): Promise<ModelLoadOperation> {
+    for (;;) {
+      try {
+        const progress = await this.api.modelLoadNext!(task.view.operation_id!);
+        await this.awaitCloseDecision();
+        if (this.modelLoadTask !== task) throw new DesktopError("validation_scope_changed", validationErrorReason("validation_scope_changed"));
+        if (!validModelLoadOperation(progress, task.view.operation_id!, task.view.model_id))
+          throw new DesktopError("invalid_model_load_operation", "本次加载状态不完整或不匹配，尚未确认任务结束。");
+        task.accepted = true;
+        if (progress.status === "cancelling") {
+          task.cancelSent = true;
+          if (task.view.cancel_error && this.state.error?.message === task.view.cancel_error.message) this.update({ error: null });
+          this.updateModelLoad(task, { cancel_error: null, stop_requested: true });
+        }
+        this.updateModelLoad(task, { progress, phase: progress.status === "cancelling" || (task.cancel && !task.view.cancel_error) ? "stopping" : "running" });
+        if (progress.runtime && this.testScopeCurrent(scope)) this.setRuntime(progress.runtime);
+        if (progress.terminal) {
+          if (task.view.cancel_error && this.state.error?.message === task.view.cancel_error.message) this.update({ error: null });
+          return progress;
+        }
+        if (task.cancel && !task.view.cancel_error) void this.sendModelLoadCancel(task);
+      } catch (error) {
+        if (this.modelLoadTask !== task) throw error;
+        // Only the bridge's exact non-ownership reply proves a failed start was not admitted.
+        if (!task.accepted && safeError(error).code === "request_not_owned") throw startError ?? error;
+        const failure = { code: safeError(error).code, message: "本次加载状态读取失败，尚未确认停止或完成。请重新确认任务状态；不会重新加载。" };
+        // Keep the original action and its busy lock until this exact task reaches a terminal.
+        await new Promise<void>((resolve) => {
+          task.resume = resolve;
+          this.updateModelLoad(task, { phase: "recovery" });
+          this.report(failure);
+        });
+      }
+      await wait(250);
+    }
+  }
   private runModelTest = async (modelId: string, mode: "load" | "test", temporary?: Partial<LoadOptions>) => {
     if (this.closing) return;
     const model = this.state.models.data.find((entry) => entry.id === modelId);
@@ -1042,7 +1150,7 @@ export class DesktopController {
     if (mode === "load" && snapshot?.configuration?.schema_version === 1) {
       this.report(new DesktopError("configuration_migration_required", "请先在设置中确认旧配置来源，再按统一档案加载。")); return;
     }
-    if (mode === "load" && snapshot?.configuration && !this.api.loadModelProfile) {
+    if (mode === "load" && snapshot?.configuration && !this.api.loadModelProfile && !this.api.loadModelProfileStart) {
       this.report(new DesktopError("configuration_unavailable", "当前桥接未提供统一档案加载能力，请更新应用。")); return;
     }
     if (!snapshot || !["connected", "stopped"].includes(snapshot.connection)) {
@@ -1074,6 +1182,12 @@ export class DesktopController {
       this.update({ testing_model: modelId, model_tests: { ...this.state.model_tests, [modelId]: attempt } });
       let result: LocalValidation | null = null;
       let failure: SafeError | null = null;
+      let cancelled = false;
+      const supportsLoadTask = mode === "load" && !!this.api.modelLoadNext && !!this.api.modelLoadCancel &&
+        (snapshot?.configuration ? !!this.api.loadModelProfileStart : !!this.api.loadModelStart);
+      const task: ModelLoadTask | null = supportsLoadTask ? { view: { attempt_id: attempt.id, model_id: modelId,
+        operation_id: crypto.randomUUID(), phase: "starting", progress: null, cancel_error: null, stop_requested: false }, cancel: false, cancelSent: false, cancelPending: false, accepted: false, startSettled: false, resume: null } : null;
+      if (task) { this.modelLoadTask = task; this.update({ model_load: task.view }); }
       try {
         if (mode === "load") {
           if (!model.available || model.loadable !== true)
@@ -1086,15 +1200,42 @@ export class DesktopController {
             this.update({ snapshot: started });
           }
           if (!this.testScopeCurrent(scope)) return;
-          const loaded = snapshot?.configuration && this.api.loadModelProfile
-            ? await (temporary && Object.keys(temporary).length ? this.api.loadModelProfile(modelId, temporary) : this.api.loadModelProfile(modelId))
-            : await this.api.loadModel(modelId, options);
-          await this.awaitCloseDecision();
-          if (!this.testScopeCurrent(scope)) return;
-          this.setRuntime(loaded);
-          result = { state: "loaded", load_success: loaded.selected_model === modelId && ["ready", "generating"].includes(loaded.state),
-            generation_pass: false, checked_at_unix_ms: Date.now(), error_code: "validation_result_missing" };
-          if (!result.load_success) result = unavailableValidation("validation_result_missing");
+          if (task) {
+            if (task.cancel) cancelled = true; // Startup finished; no load was ever submitted.
+            else {
+              let startError: SafeError | null = null;
+              try {
+                const handle = snapshot?.configuration
+                  ? await (temporary && Object.keys(temporary).length ? this.api.loadModelProfileStart!(task.view.operation_id!, modelId, temporary) : this.api.loadModelProfileStart!(task.view.operation_id!, modelId))
+                  : await this.api.loadModelStart!(task.view.operation_id!, modelId, options);
+                if (!handle || handle.operation_id !== task.view.operation_id)
+                  throw new DesktopError("invalid_model_load_operation", "加载回执标识不匹配，正在核对原任务；不会重新加载。");
+                task.accepted = true;
+              } catch (error) { startError = safeError(error); }
+              task.startSettled = true;
+              this.updateModelLoad(task, { phase: task.cancel ? "stopping" : "running" });
+              if (task.cancel) void this.sendModelLoadCancel(task);
+              const terminal = await this.consumeModelLoad(task, scope, startError);
+              cancelled = terminal.status === "cancelled";
+              result = terminal.local_validation;
+              if (terminal.status === "failed") failure = { code: terminal.error!.code, message: validationErrorReason(terminal.error!.code) };
+              if (!result && !cancelled && !failure && terminal.runtime) {
+                result = { state: "loaded", load_success: terminal.runtime.selected_model === modelId && ["ready", "generating"].includes(terminal.runtime.state),
+                  generation_pass: false, checked_at_unix_ms: Date.now(), error_code: "validation_result_missing" };
+                if (!result.load_success) result = unavailableValidation("validation_result_missing");
+              }
+            }
+          } else {
+            const loaded = snapshot?.configuration && this.api.loadModelProfile
+              ? await (temporary && Object.keys(temporary).length ? this.api.loadModelProfile(modelId, temporary) : this.api.loadModelProfile(modelId))
+              : await this.api.loadModel(modelId, options);
+            await this.awaitCloseDecision();
+            if (!this.testScopeCurrent(scope)) return;
+            this.setRuntime(loaded);
+            result = { state: "loaded", load_success: loaded.selected_model === modelId && ["ready", "generating"].includes(loaded.state),
+              generation_pass: false, checked_at_unix_ms: Date.now(), error_code: "validation_result_missing" };
+            if (!result.load_success) result = unavailableValidation("validation_result_missing");
+          }
         } else {
           if (!runtime?.load_options || runtime.selected_model !== modelId || runtime.state !== "ready")
             throw new DesktopError("model_not_ready", validationErrorReason("model_not_ready"));
@@ -1116,28 +1257,30 @@ export class DesktopController {
         if (!failure) failure = readError;
         await this.awaitCloseDecision();
         if (!this.testScopeCurrent(scope)) return;
-        if (mode === "load" && !failure) {
+        if (mode === "load" && !task && !failure && !cancelled) {
           const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
           // model_load returns runtime state, not the probe's DTO. An old Passed is never this attempt's proof.
           if (evidence && evidence.checked_at_unix_ms !== null && evidence.checked_at_unix_ms >= attempt.started_at &&
               evidence.checked_at_unix_ms !== model.local_validation?.checked_at_unix_ms) result = evidence;
         }
-        if (mode === "test" && result?.state === "passed" && !failure) {
+        if ((mode === "test" || task) && result?.state === "passed" && !failure) {
           const evidence = this.state.models.data.find((entry) => entry.id === modelId)?.local_validation;
           if (!evidence || evidence.state !== "passed" || evidence.checked_at_unix_ms !== result.checked_at_unix_ms) {
             const code = evidence?.state === "stale" ? "validation_scope_changed" : "validation_result_unconfirmed";
             failure = { code, message: validationErrorReason(code) };
           }
         }
-        this.finishModelTest(scope, result, failure);
+        this.finishModelTest(scope, result, failure, cancelled);
       } finally {
+        if (this.modelLoadTask === task) { this.modelLoadTask = null; this.update({ model_load: null }); }
         this.update({ testing_model: null });
       }
     });
     // Early returns while awaiting service startup still release UI ownership.
+    if (this.modelLoadTask?.view.attempt_id === attempt.id) { this.modelLoadTask = null; this.update({ model_load: null }); }
     if (this.state.testing_model === modelId) this.update({ testing_model: null });
     const activityId = `${this.state.activity_session_id}:model:${attempt.id}`;
-    if (this.state.activities.some((item) => item.id === activityId && ["running", "recovery"].includes(item.status))) {
+    if (this.state.activities.some((item) => item.id === activityId && ["running", "stopping", "recovery"].includes(item.status))) {
       const stopped: ModelTestAttempt = { ...attempt, phase: "finished", finished_at: Date.now(), result: null, error: { code: "validation_scope_changed", message: validationErrorReason("validation_scope_changed") } };
       const model_tests = { ...this.state.model_tests };
       delete model_tests[modelId];
@@ -1481,7 +1624,7 @@ export class DesktopController {
       await this.api.close();
       // Only a confirmed close invalidates follow-on work. Rejection preserves ownership.
       ++this.modelFeedbackEpoch;
-      this.update({ model_tests: {}, activities: this.state.activities.map((item) => item.kind === "model" && item.status === "running" ? { ...item, status: "recovery" as const, detail: "窗口关闭已确认，本次模型结果未在窗口内完成核对。重开后检查状态，不自动重放。" } : item) });
+      this.update({ model_tests: {}, activities: this.state.activities.map((item) => item.kind === "model" && ["running", "stopping"].includes(item.status) ? { ...item, status: "recovery" as const, detail: "窗口关闭已确认，本次模型结果未在窗口内完成核对。重开后检查状态，不自动重放。" } : item) });
     }
     catch (error) { this.report(error); }
     finally { this.closing = false; this.closeDecision = null; finishDecision(); }

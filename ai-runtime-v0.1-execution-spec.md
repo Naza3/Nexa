@@ -359,9 +359,14 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 | `GET /runtime/devices` | 本构建后端与设备探测结果 |
 | `POST /runtime/models/import` | 当前用户本地文件导入；只供受信任本机管理客户端 |
 | `POST /runtime/load` | 显式加载/切换，完成后返回 200；受 load_timeout 约束 |
+| `POST /runtime/load-operations` | ADR0027按次UUID异步加载/切换与私有短测；可选only_if_unloaded保留自动不抢占 |
+| `GET /runtime/load-operations/{id}` | 有界current/previous操作观察；身份、阶段、终态与最后runtime/短测结果 |
+| `POST /runtime/load-operations/{id}/cancel` | 仅停止持有该随机句柄的操作；回执不等于清理完成，next终态确认 |
 | `POST /runtime/unload` | 无任务时卸载，返回最终状态 |
 | `POST /runtime/requests/{id}/cancel` | 标记取消；存在活动请求返回 202，未知 ID 返回 404 |
 | `POST /runtime/shutdown` | 停止接收新请求、取消任务、回收 worker、退出 |
+
+ADR0027增量：桌面可停止自己的文件准备/hash、显式切换/加载及同操作私有短测。取消直接作用于操作令牌，不排在Load后；显式加载独占期间不接受其他客户端排队；取消Loaded竞态需再卸载并等ACK。不合作worker沿用5秒宽限/强制终止/确认回收；清理未确认是永久故障，不能返回cancelled/unloaded。加载已结束后的Stop只取消私有probe，可能保留驻留模型；不取消别人的生成，不保存取消为失败模型证明，不用shutdown替代。完整身份/回执恢复/自动流程边界见[ADR0027](docs/decisions/0027-owned-model-load-cancellation.md)。
 
 T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。35bfd85基线`/v1/models`仅列旧准入模型；ADR0015增量改按当前available/loadable筛选，未有历史validated的合法候选也可列出，列表不承诺实际load必成功；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
 

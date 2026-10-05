@@ -13,7 +13,7 @@ import run_desktop_smoke as smoke
 
 class DesktopSmokeFailureTests(unittest.TestCase):
     def test_onboarding_requires_new_exact_pass_observations(self):
-        report = {"success": True, "local_text_validation": True, "repeat_text_validation": True, "offline_inventory": True}
+        report = {"success": True, "local_text_validation": True, "repeat_text_validation": True, "offline_inventory": True, "manual_load_stop": True, "reload_after_stop": True}
         self.assertEqual(smoke.onboarding_report(report), report)
         for field in report:
             for value in (False, None, 1, "true"):

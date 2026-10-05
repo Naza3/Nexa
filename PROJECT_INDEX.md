@@ -110,3 +110,5 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [精简桌面产品体验](docs/product/compact-desktop-experience.md)：全局状态条、分组摘要和按需展开设置的整体设计
 
 - [本轮精简桌面验证](docs/verification/2026-10-05-compact-desktop-experience.md)：前端回归、独立审查与原生Windows验证边界
+
+- [手动停止加载ADR0027](docs/decisions/0027-owned-model-load-cancellation.md) / [本轮验证](docs/verification/2026-10-05-model-load-cancellation.md)：按次UUID、hash/切换/native/probe、回执恢复与worker回收；状态以当前状态为准

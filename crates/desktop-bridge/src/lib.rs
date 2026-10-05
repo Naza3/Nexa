@@ -7,6 +7,7 @@ pub mod dto;
 mod error;
 mod lan_addresses;
 mod library;
+mod loading;
 mod onboarding;
 mod settings;
 mod sse;
@@ -59,6 +60,7 @@ pub struct DesktopBridge {
     directory_validator: Option<std::sync::Arc<library::DirectoryValidator>>,
     chat: Mutex<chat::ChatSlot>,
     library: Mutex<library::LibrarySlot>,
+    loads: Mutex<loading::LoadSlot>,
     library_poll: AsyncMutex<()>,
     default_model_directory: Option<PathBuf>,
     downloads: Mutex<download::DownloadSlot>,
@@ -94,6 +96,7 @@ impl DesktopBridge {
             directory_validator: None,
             chat: Mutex::new(chat::ChatSlot::default()),
             library: Mutex::new(library::LibrarySlot::default()),
+            loads: Mutex::new(loading::LoadSlot::default()),
             library_poll: AsyncMutex::new(()),
             default_model_directory: None,
             downloads: Mutex::new(download::DownloadSlot::default()),
@@ -731,6 +734,7 @@ impl DesktopBridge {
             self.close_download().await?;
             self.close_chat().await?;
             self.close_library().await?;
+            self.close_load().await?;
             let _work = tokio::time::timeout(Duration::from_secs(10), self.work.lock())
                 .await
                 .map_err(|_| BridgeError::new("desktop_busy"))?;

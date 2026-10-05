@@ -107,10 +107,15 @@ impl BridgeError {
                 "The stream was malformed or ended before a verified completion. The partial reply is incomplete."
             }
             "consumer_busy" => "Only one pending output read is allowed.",
-            "request_not_owned" => "This request does not belong to this window.",
-            "model_load_interrupted" => {
-                "This window's model request was disconnected. Preparation is cancelling; native loading, if already admitted, must finish cleanup."
+            "executor_cleanup_unconfirmed" => {
+                "推理进程或资源清理未确认。请检查服务状态；不能继续加载，也不能把它视为已停止。"
             }
+            "model_load_result_unavailable" => {
+                "本次操作已经结束，但结果已过期。请刷新模型状态后重试。"
+            }
+            "request_cancelled" => "本次加载或基础测试已停止。",
+            "request_not_owned" => "This request does not belong to this window.",
+            "model_load_interrupted" => "本次加载结果暂时无法确认，正在重新读取；请勿重复加载。",
             "import_interrupted" => {
                 "The import connection was closed. Refresh the model list before retrying; a completed copy may already exist."
             }
@@ -210,6 +215,9 @@ impl BridgeError {
             "load_timeout",
             "execution_timeout",
             "runtime_faulted",
+            "executor_cleanup_unconfirmed",
+            "native_failure",
+            "native_protocol_error",
             "worker_lost",
             "runtime_shutdown",
             "model_load_failed",

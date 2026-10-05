@@ -354,6 +354,8 @@ pub struct AddedFileResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibraryOperationState {
+    #[serde(default)]
+    pub load_phase: Option<String>,
     pub operation_id: Uuid,
     pub status: LibraryOperationStatus,
     pub phase: LibraryOperationPhase,
@@ -544,6 +546,8 @@ pub struct DownloadResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadOperationState {
+    #[serde(default)]
+    pub load_phase: Option<String>,
     pub operation_id: Uuid,
     pub catalog_id: String,
     pub source: DownloadSource,
@@ -606,4 +610,39 @@ fn nonnull_optional_u32<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> std::result::Result<Option<u32>, D::Error> {
     u32::deserialize(d).map(Some)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelLoadOperationHandle {
+    pub operation_id: Uuid,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelLoadOperationState {
+    pub operation_id: Uuid,
+    pub model_id: String,
+    pub phase: String,
+    pub status: String,
+    pub terminal: bool,
+    pub runtime: Option<RuntimeStatus>,
+    pub local_validation: Option<LocalValidation>,
+    pub error: Option<crate::BridgeError>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelLoadStopping {
+    pub stopping: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLoadStartRequest {
+    pub operation_id: Uuid,
+    #[serde(flatten)]
+    pub load: LoadModelRequest,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLoadProfileStartRequest {
+    pub operation_id: Uuid,
+    #[serde(flatten)]
+    pub load: ModelLoadProfileRequest,
 }

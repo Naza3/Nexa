@@ -9,6 +9,10 @@ export interface TestStatus { tone: TestTone; label: string; running: boolean }
 export function modelTestStatus(value?: LocalValidation | null, attempt?: ModelTestAttempt): TestStatus {
   const status = (label: string, tone: TestTone = "neutral", running = false): TestStatus => ({ label, tone, running });
   if (attempt?.phase === "running") return status(attempt.mode === "load" ? "加载与测试中" : "测试中", "neutral", true);
+  if (attempt?.outcome === "cancelled") {
+    if (value && validLocalValidation(value) && value.checked_at_unix_ms !== null && value.checked_at_unix_ms > (attempt.finished_at ?? attempt.started_at)) return modelTestStatus(value);
+    return status("本次操作已停止");
+  }
   // A finished attempt is historical. A subsequent native reread can invalidate
   // that evidence without changing the model's identity or original test time.
   if (attempt && value) {
@@ -20,8 +24,8 @@ export function modelTestStatus(value?: LocalValidation | null, attempt?: ModelT
   }
   if (attempt) {
     const code = attempt.error?.code ?? attempt.result?.error_code;
-    if (code === "runtime_busy" || attempt.result?.state === "deferred") return status("测试已暂缓");
     if (code === "request_cancelled") return status("测试已取消");
+    if (code === "runtime_busy" || attempt.result?.state === "deferred") return status("测试已暂缓");
     if (code?.startsWith("validation_") || code === "invalid_local_validation") return status("测试结果待确认");
     if (attempt.error) {
       return ["model_load_failed", "load_timeout", "context_too_large", "context_length_exceeded", "unsupported_model", "worker_failed", "deadline_exceeded"].includes(code ?? "")
