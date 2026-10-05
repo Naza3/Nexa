@@ -8,7 +8,7 @@
 - 新需求为广泛模型支持，精确验证矩阵不再用作模型名/hash运行白名单；依据[ADR0015](../decisions/0015-open-model-loading-and-validation-evidence.md)
 - 开始实现前开发基线为`35bfd85`（Harness窄文本协议测试），当时最新已交付Windows实现为`389eeef`；本轮50c9d41交付见末节
 - [CI37087595998](https://github.com/Naza3/Nexa/actions/runs/37087595998)已于02:27 UTC成功并经50项source/hash复核，但仅覆盖35bfd85；开放模型工作区变更不在该提交内，不能继承其通过结论
-- 本次不升级llama.cpp、不做GPU/NPU/移动端、不触碰Android B3b WIP；工具契约另行设计，工具功能尚未因此实现
+- 本次不升级llama.cpp、不做GPU/NPU或移动端；工具契约另行设计，工具功能尚未因此实现
 
 ## 已冻结的实施边界（最终WindowsCI通过，目标机待验）
 
@@ -85,19 +85,18 @@ Windows产品worker由父进程独立计时：加载使用load_timeout，prepare
 
 独立审查无未解阻断，最终50c9d41 WindowsCI已覆盖固定GGUF真实回归、原生身份、HTTP/CLI、产品包和desktop bridge。下载桌面包独立字节闭包复核及发送已完成；下一步待用户下载/运行后验新包原生窗口/目标Win10/16GB设备，其他模型继续单独实测。模型验证矩阵只新增真实有证据的组合，开放尝试不自动给validated。
 
-无工具协议实现或真实harness工具闭环；未新增GPU/NPU或Android产品能力，14项B3b WIP未改；50c9d41对保留研究线的共享字段机械同步另记于末节。本地结果与末节Windows结果分层；固定模型回归不等于完整W02、多模型、目标设备或工具能力完成。原字节包已向用户发送获接受，具体交付事实见末节；用户下载/运行尚未确认。
+无工具协议实现或真实harness工具闭环；未新增GPU/NPU或移动产品能力。本地结果与末节Windows结果分层；固定模型回归不等于完整W02、多模型、目标设备或工具能力完成。原字节包已向用户发送获接受，具体交付事实见末节；用户下载/运行尚未确认。
 
 
 ## 提交恢复与CI闭包修正（2026-10-03）
 
-开放模型提交 `8522514cac6c287fb43ef9052e677346b24a45ef` 已推送，tree为 `25ad5853acd3ecc8932cd73821e5a54f9b69fdf9`。其Windows运行37101303658与历史MNN运行37101303651当时已启动，后续两者实际均cancelled，不记为失败推理或通过。此前上传中断，代码和冻结清单均保留；恢复后46源码/68暂存路径与14项Android WIP再次核对一致。
+开放模型提交 `8522514cac6c287fb43ef9052e677346b24a45ef` 已推送，tree为 `25ad5853acd3ecc8932cd73821e5a54f9b69fdf9`。其Windows运行37101303658当时已启动，后续实际cancelled，不记为失败推理或通过。此前上传中断，代码和冻结清单均保留；恢复后已再次核对源码与暂存范围；原始全量记录由Git追溯。
 
-复查发现两个确定的静态闭包缺口，补丁不跳过门禁：
+桌面复查发现确定的静态闭包缺口，补丁不跳过门禁：
 
 - Windows显式CMake构建目标遗漏新 `air-template-test`，而CTest已包含其模板/隐私测试。将该可执行目标加入原列表，保留全量CTest；这是运行到该步骤前发现的配置问题，不伪称已经观察到CI失败日志。
-- 共享 `ResolvedModel` 字段改为 `loadable` 后，保留的MNN workspace与原先干净的设备runner仍有旧字段引用。仅同步四处构造/读取；研究候选仍不可被生产resolver加载，测试专用研究分支保持原语义，不开放Android模型，不构建新APK。14项B3b未提交WIP未改，其中旧字段引用仍可能导致该私有工作区不能编译，不能把CI检查推广到WIP。
 
-实际轻量验证：固定Rust1.98.1的mobile workspace `cargo fmt --check`、runner `rustfmt --check`、`git diff --check`及三个CTest到显式目标的静态闭包检查均退出0。未运行本地cargo/native编译；actionlint不可用且未安装替代。后续须以修正提交的实际CI为准。
+实际轻量验证：`git diff --check`及三个CTest到显式目标的静态闭包检查均退出0。未运行本地cargo/native编译；actionlint不可用且未安装替代。后续须以修正提交的实际CI为准。
 
 ## 最终50c9d41 Windows CI与交付产物（2026-10-03）
 
@@ -126,7 +125,3 @@ Windows产品worker由父进程独立计时：加载使用load_timeout，prepare
 独立产物复核通过：750个文件及嵌套runtime的197个文件身份/hash一致；6个AMD64 PE的导入依赖闭包完整；桌面Rust许可540项、嵌入前端npm许可6项、runtime许可186项记录及原文hash已核。3个CRT文件与CI记录的微软签名身份/文件hash一致；本次Linux复核未重新签名，也未独立执行Windows Authenticode验签，不能把记录比对表述为Linux重新验签。
 
 2026-10-03 07:03 UTC以`Nexa-Windows-x64-50c9d41.zip`向用户发送，消息发送获接受。用户文件名与原`desktop-windows.zip`不同，内容保持上述9,423,216 bytes和SHA256不变。发送获接受不等于用户已下载或运行。W01与W02目标机相关门槛继续待用户验收，其他模型、Win10原生窗口、i5-8400/16GB性能、实际离线与长期稳定性均未因CI成功或交付变为已验证；工具调用尚未实现。
-
-### 保留研究回归与取消记录
-
-8522514的Windows37101303658、历史MNN37101303651实际均cancelled，保留上述静态闭包修正原因，不伪造它们已通过。50c9d41的[历史MNN研究回归37101760095](https://github.com/Naza3/Nexa/actions/runs/37101760095)另已成功，仅覆盖共享类型机械迁移和原研究门禁；不是Android App/真机验收，也不恢复Android产品排期，14项旧B3b WIP继续原位保留。

@@ -1,6 +1,6 @@
 # 模型验证矩阵
 
-日期：2026-10-03。记录Windows精确模型资产与验证范围。小模型链路结果不等于桌面实用质量、工具能力或未测CPU支持；旧移动研究资产见历史快照。
+日期：2026-10-03。记录Windows精确模型资产与验证范围。小模型链路结果不等于桌面实用质量、工具能力或未测CPU支持；退役平台研究资产由Git历史追溯。
 
 ## Windows / Linux 开发 GGUF 基线
 
@@ -83,4 +83,4 @@ managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限�
 
 当前结构子集包括GGUF v2/v3及已实现常规/K tensor布局；未知layout、分片、无嵌入模板或非受支持执行方式明确拒绝。已发送50c9d41仍可能因单个不兼容文件整批登记失败；本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)在完整安全扫描后一次发布合法集合，partial带完整有界诊断、全坏保旧、空目录可空提交。所有预算/IO/身份/路径/reparse/取消/timeout/save仍硬失败；实现及43ad5c2 WindowsCI/包发送已完成，用户目标机待验，见[新记录](verification/2026-10-03-mixed-model-directory.md)。候选扫描改进不新增任何模型实测标签。[W02记录](verification/2026-10-03-windows-open-models.md)单列逻辑、模板fixture、真实模型和WindowsCI，不混用通过结论。
 
-旧Android/MNN研究矩阵完整保留于[原矩阵快照](archive/windows-focus-2026-10-03/docs/model-matrix.md)，不构成当前Windows依赖。
+本矩阵只维护当前桌面证据；退役平台研究不作为Windows模型准入或发行依赖。

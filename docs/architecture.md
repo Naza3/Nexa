@@ -1,6 +1,6 @@
 # Nexa Windows 总体方案与架构
 
-日期：2026-10-03。当前范围见 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，具体协议见 [执行规格](../ai-runtime-v0.1-execution-spec.md)，完成事实见 [当前状态](../PROJECT_STATE.md)。旧跨端方案保留于 [历史索引](archive/windows-focus-2026-10-03/INDEX.md)。
+日期：2026-10-03。当前范围见 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，具体协议见 [执行规格](../ai-runtime-v0.1-execution-spec.md)，完成事实见 [当前状态](../PROJECT_STATE.md)。源码与文档清理边界见 [ADR0029](decisions/0029-desktop-only-source-tree.md)，旧版由 Git 追溯。
 
 > 2026-10-04 增量：[ADR0020](decisions/0020-opt-in-lan-inference-api.md)定义用户显式启用的独立局域网推理监听，仅对已加载模型开放 models/chat；原回环管理与服务端证明不变。实施/目标机验证状态见 PROJECT_STATE。本文早期“本机API”不禁止该受限显式增量，公网服务仍非目标。
 
@@ -127,7 +127,7 @@ Windows产品worker由父进程独立计时：加载使用load_timeout，prepare
 
 发行许可展示按[ADR0026](decisions/0026-lossless-license-bundles.md)将每层原文无损汇集为索引/文本/标准库版权HTML，完整桌面（含runtime/download）至多10份许可相关文件。runtime继续自包含；aria2原构建产物的11份许可、build-manifest与对应源码归档不改，在最终打包层汇集。下载原生消费者验证原路径/字节范围/hash与原build.files绑定，不把减少文件数变成放宽组件身份或许可闭包。
 
-W00后，W01既有功能短验与W04最小harness文本互通并行；真实工具闭环依赖W02实用模型/工具能力准入。W04文本优先于非必要托盘美化，不被W03管理器阻塞；各阶段门槛通过后进入W05后期发行。无开发工具、离线和长期稳定性仍留后期；未验不等于通过。详见 [路线](roadmap.md)。Android历史不再是依赖，原研究源码/WIP不动。
+W00后，W01既有功能短验与W04最小harness文本互通并行；真实工具闭环依赖W02实用模型/工具能力准入。W04文本优先于非必要托盘美化，不被W03管理器阻塞；各阶段门槛通过后进入W05后期发行。无开发工具、离线和长期稳定性仍留后期；未验不等于通过。详见 [路线](roadmap.md)。本项目不保留移动研究工程作为开发或发行依赖。
 
 ## 按次加载取消增量（2026-10-05）
 

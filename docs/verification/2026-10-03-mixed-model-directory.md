@@ -8,7 +8,7 @@
 - 本轮开始时已发送产品为`Nexa-Windows-x64-50c9d41.zip`；其[真实CI与交付记录](2026-10-03-windows-open-models.md#最终50c9d41-windows-ci与交付产物2026-10-03)仍有效，但不覆盖本轮partial/逐文件诊断/短context扫描增量
 - 按[ADR0016](../decisions/0016-mixed-model-directory-diagnostics.md)实施：混合目录合法集合一次原子替换；全坏保留旧目录/索引/generation；空目录可提交空集合；仅明确内容问题逐文件软拒，既有预算/安全/事务失败仍硬失败
 - 诊断仅存当前App生命周期；私有DTO增量不改公共HTTP、worker/native协议身份或library schema。显式import/load参数不降级，自动扫描默认值取min(2048, metadata)
-- 不实现工具调用，不改产品preflight边界；混合坏文件验收使用包外目录；Android旧14项WIP与独立项目不属本切片
+- 不实现工具调用，不改产品preflight边界；混合坏文件验收使用包外目录；独立项目不属本切片
 
 ## C01–C12 分层验收矩阵
 

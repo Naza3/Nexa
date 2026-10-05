@@ -1,5 +1,23 @@
 # Nexa 当前状态
 
+## 2026-10-05 桌面源码清理（开发检查完成，待原生验证）
+
+安装器前置任务已完成并交付后，按用户明确要求移除本项目移动代码及相关文档，后续只维护桌面主线。清理基线为长期 `codex/dev` 的干净 `de7732f031c11e44a27f86b33a341c48131a3906`。删除独立移动 workspace、验证器、MNN 适配/探针/补丁、专用脚本与 CI，以及对应设计/研究文档；同步共享配置、验证报告字段和 Windows 路径过滤。范围见[ADR0029](docs/decisions/0029-desktop-only-source-tree.md)，本批实际检查见[清理验证记录](docs/verification/2026-10-05-desktop-only-cleanup.md)。
+
+当前为源码与文档清理工作树；Python270项（266通过/4既有平台skip）、前端701项及typecheck/lint/build、4份工作流actionlint通过，文档99份/415本地链接/19锚点和围栏通过，独立11组审查无剩余源码或文档阻断；没有本批清理后的新 Windows 包或原生 CI 结论。既有 Windows actor/worker、GGUF/API、安全、数据及完整许可/对应源码边界不变；独立 `Naza3/MNN`、锁定 llama.cpp 上游完整源码和 Git 历史不动。原先保留移动源码、隔离 CI、B3b WIP 的要求已被本次明确删除授权替代。
+
+## 2026-10-05 三格式安装器完成并交付
+
+精确提交 `de7732f031c11e44a27f86b33a341c48131a3906`、tree `afde24f2d64c81cc7e4484c6c8641c7ed87a8fe1` 的[Actions37306309927](https://github.com/Naza3/Nexa/actions/runs/37306309927)已成功：Windows Server 2022 上真实模型/HTTP/CLI/桌面 bridge、MSI/Setup 构建及全部13项安装生命周期门槛通过。独立 Linux 只读产物审计2419项断言通过、0失败，包含逐文件/许可断言，不是2419个独立产品测试。
+
+版本0.1.0的 Setup EXE、MSI、便携ZIP及校验/来源说明已于12:49:24 UTC交付。三格式同一28文件payload、10份许可闭包及aria2对应源码核验通过，Setup内MSI、MSI CAB与便携字节完全相符；623份源文件重建Windows CRLF指纹与原生清单一致。准确大小/hash、13门槛与未验证项见[最终交付证据](docs/verification/2026-10-05-tag-release.md#最终de7732f原生成功与三格式交付)。
+
+[PR #9](https://github.com/Naza3/Nexa/pull/9)仍为草稿，`main`仍为`4c40a0d0f969dfb6d10a295bb7b7922f741c9643`。本次是分支构建，Release job按条件跳过，未创建/推送实际tag、未发布Release或合并main。交付未签名，ICE未运行；用户Win10/i5-8400、应用原生窗口、两机LAN、干净机器/离线及长期稳定性仍独立待验。Setup向导CI通过不能转授应用GUI或目标机结论。
+
+## 以下为桌面阶段历史
+
+以下条目保留其当时的提交、失败、待验和交付状态；现状以上方最新条目为准，不将旧验证结果追溯覆盖新源码。
+
 ## 2026-10-05 安装维护范围不变量核验（待原生验证）
 
 `4067823`的[第四轮37300524739](https://github.com/Naza3/Nexa/actions/runs/37300524739)已通过真实MSI早期门禁、默认安装及登记/字节校验、MSI与Setup修复、短路径修复、实际runtime启动、忙进程阻止维修/卸载和正常停服。旧查询数字已确认stage7/major6/minor3/build20348/error1150：版本被返回为6.3后拒绝，不是API读文件失败。新失败为已安装per-user产品维修时传ALLUSERS=1返回0，而测试硬编码1603；不能仅凭0认定范围升级。候选修正以官方API证明真实上下文仅当前用户USERUNMANAGED=[2]、无machine/managed登记、原组件路径/逐文件hash/数据哨兵不变且不创建外部目录，再判断维护请求是安全归一化或拒绝；首次安装覆盖范围/目录仍必须1603，生产C门禁不改。私有3010测试MSI修改后刷新并读回PackageCode。严格Python265项（261通过/4skip）及独立安全不变量/发行回归通过；下一原生运行仍需完整升级/回滚/降级/卸载/3010/向导门槛。移动清理保持后置。
@@ -127,13 +145,13 @@ Windows本机记录/反馈修复已在同一长期分支推送 `abcb1a0a9b448915
 - 本机“加载成功/基础生成通过”与历史验证矩阵分开；绑定真实模型/模板/引擎/参数和平台，条件变化则失效。落盘失败、空输出、断流、取消或延期不能用旧 Passed 冒充本次通过
 - 最终源代码回归：Rust 全 workspace/all-targets 40 组 407 通过/0 失败/7 既有忽略，完整 clippy/fmt 通过；前端193项/typecheck/lint/production build通过；Python155项中153通过/2平台跳过；独立源码与断连/竞态复核无剩余阻断
 - Linux 真实 Qwen3-0.6B Q8_0 已完成加载、短生成、记录持久化、停服后离线读取与生命周期清理；报告 success/local_text_validation/offline_inventory 均 true。该证据不冒称 Windows 外部文件保护或窗口通过，见[本轮验证](docs/verification/2026-10-04-model-onboarding.md)
-- 下一步：形成源码提交并捕获干净源身份，执行新 Windows 交叉构建、真实同源 aria2 重建与完整 ZIP 核验后提供测试包。当前新包尚未完成；不运行 GitHub Actions、不购买资源、不改 vendor/推理 ABI、不恢复 Android/Harness
+- 下一步：形成源码提交并捕获干净源身份，执行新 Windows 交叉构建、真实同源 aria2 重建与完整 ZIP 核验后提供测试包。当前新包尚未完成；不运行 GitHub Actions、不购买资源、不改 vendor/推理 ABI、不恢复其他平台/Harness
 
 ## 2026-10-04 云端 Windows 交叉构建（提交前验证快照）
 
 用户因本地构建反复失败，已要求改由云端构建，并明确同意本次 Microsoft Build Tools/SDK 适用条款。当前使用 Linux 云端的独立 Windows x64 MSVC-ABI 测试路径，不使用 GitHub Actions、不购买云资源；用户后续负责运行验收，无需继续自行编译。原生 Windows 两个打包器保持原样，见[交叉测试构建说明](docs/windows-cross-test-build.md)。
 
-- 基线 `ecfa2c21aee52b65957dde9de534ca75704ca7f9`，真实锁定 llama.cpp Git checkout 为 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；主仓库使用核对原始 Git object SHA 的显式 shallow sparse checkout，未物化 Android/历史文件不冒称完整 checkout
+- 基线 `ecfa2c21aee52b65957dde9de534ca75704ca7f9`，真实锁定 llama.cpp Git checkout 为 `2149c00f4442dc59302e134a02e4c99d5f7ed9fc`；主仓库使用核对原始 Git object SHA 的显式 shallow sparse checkout，未物化当时完整树时不冒称完整 checkout
 - 新增显式 `linux-clang-cl-msvc` profile，核对 Clang/MSVC frontend/ABI、Linux host、Windows x64 target、Release /MD、实际编译探针及与 i5-8400 对应的固定 AVX2 等 CPU 基线；不修改 vendor、不伪装 MSVC 编译器身份
 - 实际探索构建已完成 Windows AMD64 的 desktop、API CLI、worker、验收器以及锁定推理静态库；前端149项、typecheck/lint/production build通过，新增身份/打包器测试及独立审查通过。探索性构建不充作最终 commit 的交付证明
 - 新独立 cross-test 打包器保留产品既有三层来源身份、PE普通/延迟导入闭包、原许可与同源aria2；真实Linux签名校验与Windows系统验签/运行分开记录。工具链目录声明hash/大小异常保留在完整来源报告，不能写成所有上游目录链已通过
@@ -160,7 +178,7 @@ Windows本机记录/反馈修复已在同一长期分支推送 `abcb1a0a9b448915
 
 ### 以下保留 2026-10-03 状态与历史证据
 
-最后更新：2026-10-03。工程实现、逻辑测试、真实模型、Windows CI、原生窗口、目标设备与后期发行条件分层记录。唯一当前排期见本文件；详细历史见 [归档索引](docs/archive/windows-focus-2026-10-03/INDEX.md)。
+最后更新：2026-10-03。工程实现、逻辑测试、真实模型、Windows CI、原生窗口、目标设备与后期发行条件分层记录。当前排期见本文件顶部；保留桌面阶段记录，原始版本由Git追溯。
 
 ## 当前目标与授权
 
@@ -168,7 +186,7 @@ Windows本机记录/反馈修复已在同一长期分支推送 `abcb1a0a9b448915
 
 用户明确要求API兼容官方DeepSeek Harness（dsh）；只读研究已确认rc2基线与pi-ai自定义openai-completions路线，见[harness契约](docs/windows-harness-contract.md)。官方pi-ai的受控文本协议子集已有实测；DSH本体、工具协议/实用模型/真实agent回合未执行或验证，不能把文本子集宣称为完整兼容。用户2026-10-03已明确“可以，现在逐步推进”，后续Windows路线实施已获授权。已完成W00为纯文档；后续W02源码/原生构建与验证独立记录；W04最小文本互通可独立推进，不等待W01目标机窗口或W03托盘。既有开发分支/CI授权不扩张为独立项目、新权限、合并或部署。
 
-Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B3b 未提交 WIP 保留。外部 MNN Chat fork 是独立项目，不改。Telegram 摘要为可选参考调用端，不构成 runtime 发布依赖。无开发工具、实际离线和长期稳定性仍列后期验收。
+本段为2026-10-03的桌面范围记录；后续移动清理以文件顶部和ADR0029为准。独立项目不改。Telegram 摘要为可选参考调用端，不构成 runtime 发布依赖。无开发工具、实际离线和长期稳定性仍列后期验收。
 
 用户补充目标机16GB，要求支持很多模型而非仅特定几个。按[ADR0015](docs/decisions/0015-open-model-loading-and-validation-evidence.md)开放符合结构/安全/文本契约的候选尝试；validated仅保存历史证据，不作模型名/hash白名单。开放实现及闭包修正已提交`50c9d41`，最终WindowsCI于2026-10-03 06:50 UTC成功，原固定GGUF的真实模板/推理与完整包链路已回归；独立桌面包字节闭包复核通过，原字节包已于07:03 UTC发送，消息发送获接受；用户下载或运行尚未确认。35bfd85与已交付389eeef不可追溯获得新行为，其他模型与Win10目标机仍未因此验收。
 
@@ -231,13 +249,10 @@ Android 设计退出当前主线；历史研究源码、报告、隔离 CI 与 B
 1. W00已完成；W04窄文本切片已提交35bfd85，其[WindowsCI37087595998](https://github.com/Naza3/Nexa/actions/runs/37087595998)已于02:27 UTC成功，50项证据/身份/hash核验通过；只覆盖35bfd85，不覆盖本次开放模型工作区变更
 2. 收口aria2工作树与三补丁Windows源码构建，按同source运行真实源/进程/文件事务/完整包闭环；旧具体被拒分支仍未知，不预称修复。目标机下载→显式扫描/加载完整验收仍未完成
 3. W02混合目录43ad5c2已通过WindowsCI、包内验收与独立下载包复核，原字节包已发送；等待用户目标机验收，按[本轮矩阵](docs/verification/2026-10-03-mixed-model-directory.md)逐层记录；旧50c9d41 CI不覆盖该增量。继续其他模型/目标16GB机实测，不扩大已验证矩阵。W04完整DSH/真实模型文本与工具能力缺口保留，按用户要求暂停新实施；pi-ai fixture仍非DSH本体捕获
-4. ADR0017的33f0e17已过精确WindowsCI、真实MS固定模型链和独立包/新依赖许可复核并发送；后续记录用户目标机发现、下载→显式扫描/加载与取消分支。HF实际下载与其他7个候选另验。W04新实施暂停，生产工具仍未实现，不恢复Android或绑定Telegram业务
+4. ADR0017的33f0e17已过精确WindowsCI、真实MS固定模型链和独立包/新依赖许可复核并发送；后续记录用户目标机发现、下载→显式扫描/加载与取消分支。HF实际下载与其他7个候选另验。W04新实施暂停，生产工具仍未实现，不恢复其他平台或绑定Telegram业务
 
-## 历史与保留工作
-
-完整旧状态原文（含T00–T08、Android研究及历次失败/交付）见 [状态快照](docs/archive/windows-focus-2026-10-03/PROJECT_STATE.md)。既有验证报告仍原位保存。`apps/android-verifier/` 14项修改/未跟踪文件是暂停的B3b WIP，不属于本轮；不得删除、暂存或覆盖。它不构成可交付的新APK或生产支持。
-
+## 桌面历史构建
 
 ### 开放模型提交与构建状态
 
-8522514的Windows37101303658与历史MNN37101303651已cancelled，不记为失败推理或通过。闭包修正50c9d41的Windows37101760025已success，当前产物独立字节闭包复核已通过，原字节包于07:03 UTC发送获接受；目标机下载/运行仍待确认。50c9d41的历史MNN研究回归37101760095另已成功，只用于共享DTO迁移回归，不是Android App/设备验收，未恢复Android产品线；旧B3b WIP未动。详见[最终CI记录](docs/verification/2026-10-03-windows-open-models.md#最终50c9d41-windows-ci与交付产物2026-10-03)。
+8522514的Windows37101303658已cancelled，不记为失败推理或通过。闭包修正50c9d41的Windows37101760025已success，当前产物独立字节闭包复核已通过，原字节包于07:03 UTC发送获接受；目标机下载/运行仍待确认。详见[最终CI记录](docs/verification/2026-10-03-windows-open-models.md#最终50c9d41-windows-ci与交付产物2026-10-03)。

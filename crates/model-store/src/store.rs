@@ -186,8 +186,8 @@ impl ModelStore {
         self.import_reader(source, opened.len(), request, cancel)
     }
 
-    /// Imports a stream whose exact byte length is known. This keeps URI/Android
-    /// ContentResolver concerns outside this crate. Short and oversized streams
+    /// Imports a stream whose exact byte length is known. Stream acquisition
+    /// remains the caller's responsibility. Short and oversized streams
     /// fail, preserving the source and cleaning the incomplete destination.
     /// A blocking Read cannot itself be interrupted; adapters should arrange for
     /// their read to return when cancelled. Cancellation is checked per chunk and

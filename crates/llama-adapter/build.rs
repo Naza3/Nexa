@@ -28,7 +28,7 @@ fn main() {
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap();
     assert!(
         target_os == "linux" || (target_os == "windows" && target_env == "msvc"),
-        "this T01 build entry supports Linux host verification and Windows MSVC only; Android integration is T07"
+        "this build entry supports Linux host verification and Windows MSVC only"
     );
     assert!(
         !env::var("CARGO_CFG_TARGET_FEATURE")

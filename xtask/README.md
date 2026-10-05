@@ -17,7 +17,7 @@ Windows 的 example 文件名为 `native-smoke.exe`。原生库构建配置以 `
 
 `native-smoke` 先执行相同基线校验，再调用已经构建的真实模型 example，检查中英文/长输入非空输出、预算、重复加载释放及取消/消费者停止路径。每个进程的退出码、时间、二进制/输入/输出摘要和观测数值写入 JSON。对子进程 stdout 做大小限制和独立结构断言；不会凭退出 0 或一条 pass 字段宣布成功。报告不保存原文或完整本地路径。重复加载只验证两轮功能生命周期；不宣称已测内存泄漏或性能。中途 prefill 取消、连续 100 请求、20 次加载卸载以及内存释放量均不在此 smoke 覆盖范围。
 
-退出码：0 表示当前请求的验证范围通过；1 表示已执行的验证失败；2 表示参数/前置文件错误。读取不到文件时不会写一份伪成功报告。默认设备标签和无法测量的性能值为 `unavailable`。目标 Windows/Android 验收单独标记 `skipped`；即便在对应 OS 执行，也不能代替指定设备的完整验收。
+退出码：0 表示当前请求的验证范围通过；1 表示已执行的验证失败；2 表示参数/前置文件错误。读取不到文件时不会写一份伪成功报告。默认设备标签和无法测量的性能值为 `unavailable`。目标 Windows 验收单独标记 `skipped`；即便在 Windows 执行，也不能代替指定设备的完整验收。
 
 执行规格中后续阶段的`check`、`test --suite contract`尚未实现，调用会明确失败。T04已有api-smoke，T05新增Windows专用build及独立验收器，范围和关停副作用见下节；每阶段实际验收分别记录，不能凭一条命令宣布T02–T09全完成。
 
@@ -30,7 +30,7 @@ NEXA_TEST_MODEL=/path/to/Qwen3-0.6B-Q8_0.gguf NEXA_TEST_THREADS=2 cargo test --l
 NEXA_TEST_MODEL=/path/to/Qwen3-0.6B-Q8_0.gguf NEXA_TEST_THREADS=2 cargo test --locked -p engine-host --test real_runtime -- --ignored --test-threads=1 --nocapture
 ```
 
-先重建shim版本2，`AIR_NATIVE_DIR`指向最新构建。`native-smoke`兼容校验现要求shim_version=2；新air_generate_observed保留v1生成入口。adapter真实测试分别记录至少一批prefill成功后及decode阶段取消；host真实测试把原模型复制到临时model-store并验证调度端到端。逻辑fake不能代替这些真实GGUF命令，Windows/Android状态分别记录。
+先重建shim版本2，`AIR_NATIVE_DIR`指向最新构建。`native-smoke`兼容校验现要求shim_version=2；新air_generate_observed保留v1生成入口。adapter真实测试分别记录至少一批prefill成功后及decode阶段取消；host真实测试把原模型复制到临时model-store并验证调度端到端。逻辑fake不能代替这些真实GGUF命令，开发主机与 Windows 目标机状态分别记录。
 
 
 ## T04 实际 HTTP/CLI smoke

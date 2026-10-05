@@ -17,7 +17,7 @@
 | 中文空格新解压目录、空 CWD、受限 PATH 真实 CLI/API | 固定CI通过 | 解压Release产品16项包检查通过、HTTP89pass/9skip、断流50/50/50，实际回收/清理与包未修改通过 |
 | Windows 10 i5-8400 本地短验 | 已通过短验 | workstation build19044 / 6逻辑CPU；16包pass/2skip、HTTP44pass/9skip、断流5/5/5；identity匹配交付包，RAM未核实 |
 | 无开发工具独立机器、VC预装状态、实际离线 | 未验证 | 用户声明安装过大部分开发工具且测试联网；VC预装未知，PATH清理不证明A20 |
-| Windows 11 / Android /长期内存与性能 | 未执行 | 不在本轮短包 CI 结论内 |
+| Windows 11 /长期内存与性能 | 未执行 | 不在本轮短包 CI 结论内 |
 
 ## 已执行的证据工具验证
 

@@ -1,4 +1,4 @@
-//! Developer verification only. Never claims Windows/Android acceptance on a Linux host.
+//! Developer verification only. Never claims Windows acceptance on a Linux host.
 mod api_smoke;
 mod gguf;
 mod smoke;
@@ -346,7 +346,7 @@ fn execute(options: &Options) -> Result<bool> {
         "inference":if options.command == "native-smoke" && prerequisites_passed {"attempted"} else {"skipped"},
         "performance":{"peak_memory_bytes":"unavailable","release_memory_bytes":"unavailable",
             "ttft_ms":"unavailable","decode_tokens_per_second":"unavailable"},
-        "acceptance":{"windows_x64_cpu":"skipped","android_arm64_cpu":"skipped",
+        "acceptance":{"windows_x64_cpu":"skipped",
             "T00":"not_evaluated","T01":"not_evaluated"},
         "limitations":["Host-only developer verification; target-device acceptance remains required.",
             "Metadata/hash verification does not prove inference quality or GGUF loader safety.",

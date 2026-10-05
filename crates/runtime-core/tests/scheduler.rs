@@ -259,10 +259,17 @@ fn a06_one_active_eight_waiting_fifo_and_duplicate_ids() {
     h.finish();
 }
 #[test]
-fn android_one_waiting_and_zero_waiting_config() {
+fn desktop_one_waiting_and_zero_waiting_config() {
     for capacity in [0, 1] {
-        let mut c = RuntimeConfig::android();
-        c.max_queued_jobs = capacity;
+        let c = RuntimeConfig {
+            max_queued_jobs: capacity,
+            idle_unload: Duration::from_secs(60),
+            load_options: LoadOptions {
+                context_size: 2048,
+                ..LoadOptions::default()
+            },
+            ..RuntimeConfig::default()
+        };
         let h = Harness::new(c, true);
         let first = h.handle.submit(request()).unwrap();
         let pending = h.pending();

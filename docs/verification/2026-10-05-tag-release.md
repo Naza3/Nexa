@@ -60,3 +60,44 @@ Windows 10 目标机器原生窗口、无开发工具/离线及长期稳定性�
 ## 第四轮实际安装通过后的维护范围修正
 
 第四轮37300524739（4067823）实际通过默认安装、MSI/Setup维修、alias目录维修及busy进程阻止，旧OS查询数字为6.3/build20348/error1150，新manifest EXE门禁有效。维修ALLUSERS=1返回0使旧硬编码断言失败；新测试必须通过官方API读出唯一USERUNMANAGED上下文并复核原路径/字节/数据和无机器/外部目录，不能只放宽返回码。首次安装不安全覆盖仍强拒绝；3010私有fixture重新生成PackageCode。严格265项：261通过/4既有skip；独立20项不变量、26项installer/diagnostics/context及27项release通过，均为子集。真实新上下文API与剩余13门槛待下一轮native，不提前宣称MSI/Setup交付。
+
+## 最终de7732f原生成功与三格式交付
+
+精确提交 `de7732f031c11e44a27f86b33a341c48131a3906`，tree `afde24f2d64c81cc7e4484c6c8641c7ed87a8fe1` 的[Actions37306309927](https://github.com/Naza3/Nexa/actions/runs/37306309927)已成功。以下更新上述各轮“待验/失败”后的最终状态；旧失败记录保留，不将它们改写为成功。
+
+### 实际Windows验证
+
+- 主机为Windows Server 2022，分支构建；原生应用、固定GGUF、HTTP/CLI、桌面bridge、下载与完整包门禁通过
+- Rust证据为53组551通过、0失败、7忽略，桌面壳29通过，CTest 4/4通过；这是该精确源提交的运行结果，不覆盖随后移动清理
+- 正式MSI/Setup构建三项门槛及全部13项生命周期为true：安装、修复、升级、回滚、降级拒绝、卸载、用户数据保留、运行进程阻止、Setup安装/修复/卸载/退出码/向导
+- 默认MSI Basic UI安装、MSI/Setup删文件修复、短路径修复与真正已安装runtime启动通过；忙进程阻止维修/卸载后由应用API正常停服，没有通过强杀绕过
+- 首次不安全ALLUSERS/目标目录覆盖返回1603；已安装维护请求返回0，但官方API确认唯一USERUNMANAGED上下文`[2]`，无machine/managed登记，路径/字节/数据哨兵与外部目录不变。此为安全归一化，不能把0记作拒绝
+- Setup向导三操作Next/Back/Cancel及实际Apply/Progress/Finish执行通过；退出码0/87/1602/1603/1605/3010均有真实观察。升级/失败回滚与3010使用隔离的私有测试fixture，不进入交付
+- 原生breakaway探针因CI job环境拒绝spawn（错误5），如实保留；inherited-job探针和产品生命周期通过，不将前者改算成功
+
+### 独立产物核验与交付
+
+Linux只读独立审计最终命令 `PYTHONDONTWRITEBYTECODE=1 review/venv/bin/python review/supplement.py` 退出0：2419项断言通过、0失败。含逐文件、逐许可和来源检查，不是2419个独立产品测试，也不是在Linux上执行Windows安装器。
+
+| 文件 | 字节 | SHA256 |
+| --- | --- | --- |
+| `Nexa-0.1.0-windows-x64-portable.zip` | 16107773 | `b2398432a1f1a17b12429e37614072d3f0e4060ddf2ea6f8e9aadaca99b0bdbb` |
+| `Nexa-0.1.0-windows-x64-setup.msi` | 13864960 | `0168d898f2862ac62f1b0276e9303ac79c4c3b9f81abaa9df8e472ac317ed458` |
+| `Nexa-0.1.0-windows-x64-setup.exe` | 13881344 | `02541bb73eb199ddfdc1f5919e21f8afa0d293944479dbd4791afad2e7be5bfc` |
+| `Nexa-0.1.0-aria2-1.37.0-nexa-corresponding-source.tar.gz` | 5734590 | `35385ae26a78b6253e090fd6db592e3f5e0abbea5f1ac3ee0d78b462ee85a066` |
+
+发行集合另含`release-manifest.json`与`SHA256SUMS`，共六文件；payload manifest SHA256为`1daa58b4244d3c2045d2b58a563673690b86d2a31aea4d423cb88f55e93f6b57`。三格式及校验/来源说明于2026-10-05 12:49:24 UTC交付，发送不等于用户已在目标机安装。
+
+- 便携ZIP与单独desktop artifact内ZIP相同；Setup内嵌MSI与独立MSI完全相同；独立解出的MSI LZX CAB全部28文件/42408941字节与便携payload相同
+- 17张MSI表独立解码并与封闭authoring逐行匹配；HKCU/每用户/x64范围与固定安装路径成立，没有生产fixture或模型/配置递归删除
+- 10份许可文件完整恢复746份原文（桌面548、runtime187、download11）；许可归属/hash、aria2对应源码与1449份补丁重放源码均匹配
+- 主仓库623份普通文件逐一匹配Git blob；按实际CRLF/属性重建的Windows来源指纹`681da572eed6420ed3244d77f0cfb9c8c37cc9dc9ac0549cbb320a13a012a646`与原生清单一致。上游Gitlink核对通过，本机审计未独立重编译未物化的子模块
+- 54份原生证据库存/hash/source核对通过；独立诊断69事件与精确job日志逐字段匹配，另有6个早期MSI guard上下文事件
+
+### 完成边界
+
+[PR #9](https://github.com/Naza3/Nexa/pull/9)仍为草稿，main为`4c40a0d0f969dfb6d10a295bb7b7922f741c9643`。分支构建的Release job按条件跳过，清单中的`v0.1.0`仅为版本身份，未创建/推送实际tag或发布GitHub Release。
+
+交付安装器未签名，Windows Installer ICE未执行。两份原始installer build/lifecycle JSON未单独上传，可直接取证的是严格staging后的发行清单、诊断和精确job日志。升级/回滚采用同payload私有下一版本fixture，不证明历史用户版本迁移；3010不表示正式生产包主动安排重启。Server 2022与Setup向导通过不代替用户Win10/i5-8400、应用原生窗口/选择器/剪贴板、两机LAN、干净机器/离线和长期稳定性。独立审计未重做Windows签名/撤销检查，仅核对原生证据与交付字节绑定。
+
+安装器任务在上述范围内完成后，移动源码清理作为[独立任务](2026-10-05-desktop-only-cleanup.md)开始；旧交付包不改写为清理后的新来源。

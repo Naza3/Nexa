@@ -1,3 +1,0 @@
-# Unified patches encode an unchanged empty source line as a single space.
-# git apply --whitespace=error still validates actual added source lines.
-*.patch whitespace=-blank-at-eol

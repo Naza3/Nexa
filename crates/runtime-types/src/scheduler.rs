@@ -131,17 +131,6 @@ impl Default for RuntimeConfig {
     }
 }
 impl RuntimeConfig {
-    pub fn android() -> Self {
-        Self {
-            max_queued_jobs: 1,
-            idle_unload: Duration::from_secs(60),
-            load_options: LoadOptions {
-                context_size: 2048,
-                ..LoadOptions::default()
-            },
-            ..Self::default()
-        }
-    }
     pub fn validate(&self) -> Result<(), RuntimeError> {
         self.load_options.validate()?;
         if self.max_queued_jobs > 8
@@ -257,7 +246,13 @@ mod tests {
         config.max_queued_jobs = 8;
         config.load_timeout = Duration::ZERO;
         assert!(config.validate().is_err());
-        assert_eq!(RuntimeConfig::android().max_queued_jobs, 1);
+        for max_queued_jobs in [0, 1, 8] {
+            let desktop = RuntimeConfig {
+                max_queued_jobs,
+                ..RuntimeConfig::default()
+            };
+            assert!(desktop.validate().is_ok());
+        }
         let mut disabled = RuntimeConfig {
             idle_unload_enabled: false,
             ..RuntimeConfig::default()

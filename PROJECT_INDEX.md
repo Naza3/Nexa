@@ -23,7 +23,7 @@
 | [工具契约草案](docs/windows-tools-contract.md) | 生产tools尚未实现；T0已有无模型parser观察并定位严格完整性/schema/普通文本缺口 |
 | [构建锁](docs/build-lock.md) / [模型矩阵](docs/model-matrix.md) | 固定工具链/llama与精确模型验证证据，非运行许可名单 |
 | [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |
-| [历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md) | 收敛前主文档、Android/MNN研究与历史状态，不驱动当前排期 |
+| [桌面源码边界 ADR0029](docs/decisions/0029-desktop-only-source-tree.md) | 安装器交付后移除本项目移动实现/专用文档，Git 历史与独立项目不变 |
 
 ## 实际 Windows 工程
 
@@ -44,7 +44,7 @@
 | `native/llama-shim/tests/tool_parser_test.cpp` | T0合成上游模板/parser诊断，13case/无权重，不是生产工具接受算法 |
 | `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
-`RuntimeConfig::android()` 等遗留源码、独立移动workspace和隔离CI仍原位保留，不因本次文档收敛修改。`.codex/agents/`是开发代理配置，不是产品运行依赖。
+根 workspace、桌面壳 workspace 与相关 Windows/Linux 开发验证是当前工程入口。`.codex/agents/`是开发代理配置，不是产品运行依赖；上游 llama.cpp 的跨平台源码保持完整。
 
 ## Windows 接口、发行与原生窗口
 
@@ -82,11 +82,11 @@
 
 历史报告是当时精确源码/设备的证据，不追溯覆盖新功能或新硬件。当前W阶段结果仍以状态与各自新报告为准。
 
-## 可选调用层与历史
+## 可选调用层与后续验证
 
 [Telegram摘要方案](docs/telegram-summary.md)是可选参考，不是runtime发布前置；源码规划路径未创建，不自动导入Telegram SDK、账号、数据库或定时任务。
 
-Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告仅从[历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md)进入，不放回当前推荐阅读顺序，不重新启动已暂停工作。
+当前源码树不保留项目自有移动工程、专用设计和研究报告。删除范围与开发验证见[桌面清理记录](docs/verification/2026-10-05-desktop-only-cleanup.md)，历史内容可由 Git 追溯。
 
 - [Windows本机测试记录修复验证](docs/verification/2026-10-04-windows-model-evidence.md)
 

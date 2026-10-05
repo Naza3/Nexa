@@ -44,4 +44,4 @@ nexa-process-harness real /absolute/path/ai-runtime-worker /absolute/path/model.
 
 固定 context 2048、2 CPU 线程、batch 128；检查中文文本/Usage、卸载再加载后的英文恢复、显式取消、shutdown 后 spawn==reap。只输出数值 JSON，不输出模型路径或生成正文。它是 T03 开发/CI 验证工具，不是 T04 产品 CLI，不验证模型导入来源；必须给已在模型矩阵锁定并核对的本地 GGUF。
 
-Windows 交叉 `check` 只能确认类型和编译，不证明 Job 运行行为；必须再执行实际 Windows CI。Linux 与 CI 都不替代目标 i5-8400 或 Android 实机验收。
+Windows 交叉 `check` 只能确认类型和编译，不证明 Job 运行行为；必须再执行实际 Windows CI。Linux 与 CI 都不替代目标 i5-8400 Windows 实机验收。
