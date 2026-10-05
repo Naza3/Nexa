@@ -1,6 +1,6 @@
-# Nexa Windows x64 CPU 私有开发验收包
+# Nexa Windows x64 CPU 运行包
 
-本包仅供已授权的内部开发和验收，不是公开发布。首要目标系统是 Windows 10 x64；Windows 11 后续验证。Windows Server 2022 CI 构建/测试不能代替 Windows 10、无开发工具独立机器或 i5-8400/16GB 实机验收。实际结果以与 manifest 精确对应的独立验收报告为准。
+本包由仓库构建或 tag 发布提供，来源与结果以对应提交、manifest 和验收报告为准。首要目标系统是 Windows 10 x64；Windows 11 后续验证。Windows Server 2022 CI 构建/测试不能代替 Windows 10、无开发工具独立机器或 i5-8400/16GB 实机验收。实际结果以与 manifest 精确对应的独立验收报告为准。
 
 ## 包内内容与边界
 

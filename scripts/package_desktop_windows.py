@@ -16,6 +16,7 @@ import tempfile
 import zipfile
 import package_windows as base
 import build_aria2_windows as aria2_build
+from release_version import repository_version
 
 ROOT = base.ROOT
 SHELL = ROOT / "apps/desktop/src-tauri"
@@ -382,7 +383,7 @@ def build(executable, component):
         copy_rust_licenses(stage, metadata, env)
         npm_licenses(stage)
         base.consolidate_licenses(stage)
-        manifest = {"schema_version": 1, "product": "nexa-desktop", "package_version": "0.1.0", "platform": "windows-x64", "backend": "cpu", "target": base.TARGET, "configuration": "Release",
+        manifest = {"schema_version": 1, "product": "nexa-desktop", "package_version": repository_version(ROOT), "platform": "windows-x64", "backend": "cpu", "target": base.TARGET, "configuration": "Release",
                     "project_commit": source["commit"], "project_dirty": source["dirty"], "source": source,
                     "desktop_cargo_lock_sha256": base.digest(SHELL / "Cargo.lock"), "npm_lock_sha256": base.digest(ROOT / "apps/desktop/package-lock.json"),
                     "runtime_manifest_sha256": base.digest(runtime_root / "manifest.json"), "dependencies": dependencies, "crt_sources": crt_sources,

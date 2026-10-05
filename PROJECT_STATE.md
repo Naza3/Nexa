@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-05 Tag 三格式自动发行（进行中）
+
+用户要求 GitHub tag 自动构建便携版、MSI，并追加 Setup 安装包。本轮在 `codex/dev` 的精确 `9a3de0317129d0c09f6986a0e758022f2f83ea21` 基线上保留已有原生 Windows 全门禁，增加严格稳定 tag/版本一致性验证、同一已验证 payload 的三格式打包与安装生命周期，以及仅 tag push 可进入的隔离 Release 发布。见[发行说明](docs/windows-releases.md)。 用户已于07:32:53 UTC合并[PR8](https://github.com/Naza3/Nexa/pull/8)，main为`4c40a0d0f969dfb6d10a295bb7b7922f741c9643`且tree与9a3完全一致；开发分支已快进同步该main后继续本批，不重写用户合并。不自行选择发行版本，不创建 tag、合并 main、修改仓库安全设置或新增签名服务。
+
+当前严格 Python 全量 247 项（243 通过/4 既有平台 skip；发行 25 项与安装器静态 10 项为子集）、actionlint 1.7.12、实际旧 Windows ZIP 跨平台 28 文件身份复验及 diff 检查通过，见[开发验证](docs/verification/2026-10-05-tag-release.md)。开发验证和原生安装器验证分别记录；独立源码审查无剩余已知阻断，现在进入统一提交与首轮原生验证；当前没有本轮 Windows CI 成功结论，不将已有 9a3de03 便携包证据转授安装器。现有 28 文件/10 许可闭包与对应 aria2 源码必须完整保留，卸载/升级必须保留模型和配置；目标 Win10 GUI、干净机器/离线/长期条件仍独立待验。移动端清理是用户随后提出的下一任务，本轮不混入删除。
+
 ## 2026-10-05 按操作身份手动停止加载（开发验证完成，Windows待验）
 
 用户要求加载耗时长时可以手动停止。在 `codex/dev` clean基线 `a5ba7388d23758d31e2bfbc94571ef906fd8e535` 实施[ADR0027](docs/decisions/0027-owned-model-load-cancellation.md)：模型库legacy/profile、添加/下载后的自动加载共用按次UUID，取消覆盖hash/切换/native load/本操作私有短测；不停止整个服务、不取消别的客户端、只在清理ACK后终态，旧令牌不能影响新工作。生成与LAN管理边界保持，已保存/登记不回滚。

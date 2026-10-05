@@ -48,6 +48,8 @@
 
 ## Windows 接口、发行与原生窗口
 
+- [Tag 自动发行](docs/windows-releases.md)：同一精确源码/payload 的便携 ZIP、MSI、Setup EXE、版本与对应源码闭包；分支构建不发布，平台/目标机验收分层
+
 - [HTTP/管理 ADR0005](docs/decisions/0005-t04-loopback-http-and-management.md)：鉴权、同连接proof、原子导入/输出预算与关停
 - [worker ADR0004](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md)：进程隔离、单一信用账本与消费lease
 - [模型/调度 ADR0003](docs/decisions/0003-t02-scheduler-storage-and-observability.md)：存储、单actor与可观测性
@@ -112,3 +114,5 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [本轮精简桌面验证](docs/verification/2026-10-05-compact-desktop-experience.md)：前端回归、独立审查与原生Windows验证边界
 
 - [手动停止加载ADR0027](docs/decisions/0027-owned-model-load-cancellation.md) / [本轮验证](docs/verification/2026-10-05-model-load-cancellation.md)：按次UUID、hash/切换/native/probe、回执恢复与worker回收；状态以当前状态为准
+
+- [Tag 发行开发验证](docs/verification/2026-10-05-tag-release.md)：版本、封闭资产、精确 tag/commit 与无覆盖发布反例；Windows 安装器结果分层记录
