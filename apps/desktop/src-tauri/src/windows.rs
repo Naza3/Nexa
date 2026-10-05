@@ -5,7 +5,10 @@ use crate::{
     layout,
     selection::{PickedModel, Selection},
 };
-use desktop_bridge::{BridgeError, DesktopBridge, dto::*};
+use desktop_bridge::{
+    BridgeError, ConfigurationMigrateRequest, ConfigurationSaveRequest, ConfigurationSnapshot,
+    DesktopBridge, ModelConfiguration, UiPreferencesSaveRequest, UiPreferencesSnapshot, dto::*,
+};
 use rfd::{MessageButtons, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -157,6 +160,122 @@ struct LanRequest {
 #[derive(Serialize)]
 struct Copied {
     copied: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfigurationModelRequest {
+    model_id: String,
+}
+#[tauri::command]
+async fn runtime_initialize(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<DesktopSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.initialize().await
+}
+#[tauri::command]
+async fn configuration_get(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<ConfigurationSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.configuration_get().await
+}
+#[tauri::command]
+async fn configuration_model_get(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ConfigurationModelRequest,
+) -> Result<ModelConfiguration> {
+    guard(&window, &state)?;
+    state.bridge.configuration_model_get(request.model_id).await
+}
+#[tauri::command]
+async fn configuration_save(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ConfigurationSaveRequest,
+) -> Result<ConfigurationSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.configuration_save(request).await
+}
+#[tauri::command]
+async fn configuration_migrate(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ConfigurationMigrateRequest,
+) -> Result<ConfigurationSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.configuration_migrate(request).await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelLoadOperationRequest {
+    operation_id: Uuid,
+}
+#[tauri::command]
+async fn model_load_start(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadStartRequest,
+) -> Result<ModelLoadOperationHandle> {
+    guard(&window, &state)?;
+    state.bridge.model_load_start(request)
+}
+#[tauri::command]
+async fn model_load_profile_start(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadProfileStartRequest,
+) -> Result<ModelLoadOperationHandle> {
+    guard(&window, &state)?;
+    state.bridge.model_load_profile_start(request)
+}
+#[tauri::command]
+async fn model_load_next(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadOperationRequest,
+) -> Result<ModelLoadOperationState> {
+    guard(&window, &state)?;
+    state.bridge.model_load_next(request.operation_id).await
+}
+#[tauri::command]
+async fn model_load_cancel(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadOperationRequest,
+) -> Result<ModelLoadStopping> {
+    guard(&window, &state)?;
+    state.bridge.model_load_cancel(request.operation_id).await
+}
+#[tauri::command]
+async fn model_load_profile(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ModelLoadProfileRequest,
+) -> Result<RuntimeStatus> {
+    guard(&window, &state)?;
+    state.bridge.model_load_profile(request).await
+}
+#[tauri::command]
+async fn ui_preferences_get(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<UiPreferencesSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.ui_preferences_get()
+}
+#[tauri::command]
+async fn ui_preferences_save(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: UiPreferencesSaveRequest,
+) -> Result<UiPreferencesSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.ui_preferences_save(request).await
 }
 
 #[tauri::command]
@@ -587,6 +706,14 @@ async fn runtime_lan_save(
     state.bridge.save_lan(request.lan_api).await
 }
 #[tauri::command]
+async fn runtime_lan_addresses(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<LanIpv4Addresses> {
+    guard(&window, &state)?;
+    state.bridge.lan_addresses().await
+}
+#[tauri::command]
 async fn lan_token_copy(window: WebviewWindow, state: State<'_, Arc<Shell>>) -> Result<Copied> {
     guard(&window, &state)?;
     let token = state.bridge.lan_token_for_copy().await?;
@@ -781,6 +908,18 @@ pub fn run() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             desktop_snapshot,
+            runtime_initialize,
+            configuration_get,
+            configuration_model_get,
+            configuration_save,
+            configuration_migrate,
+            model_load_profile,
+            model_load_start,
+            model_load_profile_start,
+            model_load_next,
+            model_load_cancel,
+            ui_preferences_get,
+            ui_preferences_save,
             runtime_start,
             model_pick,
             models_pick,
@@ -810,6 +949,7 @@ pub fn run() {
             runtime_idle_save,
             runtime_verification_save,
             runtime_lan_save,
+            runtime_lan_addresses,
             lan_token_copy,
             token_copy,
             runtime_stop,

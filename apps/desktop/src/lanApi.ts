@@ -1,4 +1,4 @@
-import type { LanApiSettings } from "./types";
+import type { LanAddressDiscovery, LanApiSettings } from "./types";
 
 export const DEFAULT_LAN_SETTINGS: LanApiSettings = {
   enabled: false,
@@ -54,4 +54,22 @@ export function lanSettingsFromDraft(enabled: boolean, host: string, port: strin
 
 export function lanBaseUrl(settings: LanApiSettings): string | null {
   return settings.enabled && settings.listen && !validateLanSettings(settings) ? `http://${settings.listen}/v1` : null;
+}
+
+/** Fail closed on malformed discovery data; never accept public/wildcard suggestions. */
+export function validLanAddresses(value: unknown): value is LanAddressDiscovery {
+  if (!value || typeof value !== "object" || !("status" in value) || !("addresses" in value) ||
+    typeof value.status !== "string" || !["available", "empty", "unsupported"].includes(value.status) || !Array.isArray(value.addresses) ||
+    value.addresses.length > 256 || (value.status === "available") !== (value.addresses.length > 0)) return false;
+  const seen = new Set<string>();
+  return value.addresses.every((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || !("interface_index" in entry) || !("interface_name" in entry) || !("address" in entry) ||
+      !Number.isInteger(entry.interface_index) || Number(entry.interface_index) < 1 || Number(entry.interface_index) > 0xffffffff ||
+      typeof entry.interface_name !== "string" || !entry.interface_name.trim() || entry.interface_name.length > 256 ||
+      /\p{Cc}/u.test(entry.interface_name) || typeof entry.address !== "string" || privateIpv4(entry.address) === null) return false;
+    const key = `${entry.interface_index}:${entry.address}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

@@ -249,3 +249,15 @@ mod lan_tests {
         }
     }
 }
+
+/// Bounded callers may read legacy non-secret configuration through this safe
+/// regular-file open. New configuration is always published with private ACLs.
+pub fn open_regular_file(path: &Path) -> io::Result<std::fs::File> {
+    platform::open_regular_file(path)
+}
+pub fn open_private_file(path: &Path) -> io::Result<std::fs::File> {
+    platform::open_private_file(path)
+}
+pub fn atomic_replace_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    platform::atomic_replace(path, bytes)
+}

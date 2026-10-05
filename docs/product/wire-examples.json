@@ -1,0 +1,59 @@
+{
+  "save_profile": {
+    "expected_revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "update": {
+      "kind": "model_profile",
+      "model_id": "qa-small",
+      "load_overrides": {
+        "context_size": 2048,
+        "threads": 2,
+        "batch_size": 128
+      }
+    }
+  },
+  "save_request_defaults": {
+    "expected_revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "update": {
+      "kind": "request_defaults",
+      "request_defaults": {
+        "max_output_tokens": 768,
+        "temperature": 0.5,
+        "top_p": 0.9
+      }
+    }
+  },
+  "clear_profile": {
+    "expected_revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "update": {
+      "kind": "model_profile",
+      "model_id": "qa-small",
+      "load_overrides": {
+        "context_size": null,
+        "threads": null,
+        "batch_size": null
+      }
+    }
+  },
+  "load_profile": {
+    "model_id": "qa-small"
+  },
+  "load_session_override": {
+    "model_id": "qa-small",
+    "load_overrides": {
+      "threads": 3
+    }
+  },
+  "migrate_desktop": {
+    "expected_revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "expected_preferences_revision": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "choice": "desktop",
+    "custom": null
+  },
+  "ui_preferences": {
+    "expected_revision": "absent",
+    "preferences": {
+      "close_runtime_on_exit": false,
+      "download_source": "modelscope"
+    }
+  }
+}

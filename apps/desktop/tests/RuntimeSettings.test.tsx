@@ -22,7 +22,7 @@ async function setup(initial = stopped(), overrides: Partial<DesktopApi> = {}) {
     ...overrides,
   });
   const controller = new DesktopController(api);
-  const rendered = render(<App controller={controller} />);
+  const rendered = render(<App initialPage="models" controller={controller} />);
   await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
   const user = userEvent.setup(); await user.click(screen.getByRole("button", { name: "设置" }));
   return { api, controller, user, ...rendered };
@@ -95,11 +95,13 @@ describe("separate idle and verification settings", () => {
     await user.click(screen.getByRole("button", { name: "取消校验超时更改" })); expect(verificationInput()).toHaveValue(300);
     expect(api.saveIdle).not.toHaveBeenCalled(); expect(api.saveVerificationTimeout).not.toHaveBeenCalled();
   });
-  it("navigation discards unsaved settings and window close never implicitly saves", async () => {
+  it("navigation preserves drafts and confirmed window close never implicitly saves", async () => {
     const { api, user } = await setup(); await user.click(noUnload()); fireEvent.change(verificationInput(), { target: { value: "1200" } });
     await user.keyboard("{Alt>}1{/Alt}"); await user.click(screen.getByRole("button", { name: "设置" }));
-    expect(noUnload()).not.toBeChecked(); expect(verificationInput()).toHaveValue(300);
-    await user.click(noUnload()); await user.click(screen.getByRole("button", { name: "关闭应用" }));
+    expect(noUnload()).toBeChecked(); expect(verificationInput()).toHaveValue(1200);
+    await user.click(screen.getByRole("button", { name: "关闭窗口并保留服务" }));
+    expect(api.close).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "放弃草稿并关闭" }));
     expect(api.close).toHaveBeenCalledTimes(1); expect(api.saveIdle).not.toHaveBeenCalled(); expect(api.saveVerificationTimeout).not.toHaveBeenCalled();
   });
   it.each(["connected", "connecting", "error"] as const)("is read-only for connection %s and never implicitly stops", async (connection) => {
@@ -137,9 +139,11 @@ describe("separate idle and verification settings", () => {
     const { api, user } = await setup(stopped(), { saveVerificationTimeout: vi.fn(() => pending.promise) });
     fireEvent.change(verificationInput(), { target: { value: "600" } }); const save = saveVerification(); fireEvent.click(save); fireEvent.click(save);
     expect(api.saveVerificationTimeout).toHaveBeenCalledTimes(1); expect(verificationInput()).toBeDisabled(); expect(noUnload()).toBeDisabled();
-    expect(screen.getByRole("switch", { name: "启用局域网 API" })).toBeDisabled(); expect(screen.getByRole("button", { name: "关闭应用" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "关闭窗口并保留服务" })).toBeDisabled();
     expect(screen.getAllByText(/有其他操作正在进行/)).toHaveLength(2);
-    await user.click(screen.getByRole("button", { name: "模型" }));
+    await user.click(screen.getByRole("button", { name: "API 接入" }));
+    expect(screen.getByRole("switch", { name: "启用局域网 API" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "模型库" }));
     expect(screen.getByRole("button", { name: "添加模型" })).toBeDisabled();
     await act(async () => pending.reject({ code: "settings_save_failed", message: "设置保存失败，请重试。" }));
     await user.click(screen.getByRole("button", { name: "设置" }));

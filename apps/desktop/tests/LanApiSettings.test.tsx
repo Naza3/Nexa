@@ -14,10 +14,10 @@ async function setup(state = stopped(), overrides: Partial<DesktopApi> = {}) {
     current = { ...current, lan_api }; return current;
   }), ...overrides });
   const controller = new DesktopController(api);
-  const rendered = render(<App controller={controller} />);
+  const rendered = render(<App initialPage="models" controller={controller} />);
   await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "设置" }));
+  await user.click(screen.getByRole("button", { name: "API 接入" }));
   return { api, controller, user, ...rendered };
 }
 async function enableDraft(user: ReturnType<typeof userEvent.setup>) {
@@ -134,7 +134,7 @@ describe("LAN settings explicit consent and lifecycle", () => {
     await user.keyboard("{Alt>}1{/Alt}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(api.copyLanToken).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("button", { name: "API 接入" }));
     await user.click(screen.getByRole("button", { name: "复制局域网 API 密钥" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确认复制局域网密钥" }));
     expect(api.copyLanToken).toHaveBeenCalledTimes(1);

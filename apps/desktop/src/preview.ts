@@ -7,6 +7,8 @@ import type {
   ChatEvent,
   DesktopApi,
   ModelSummary,
+  ModelLoadOperation,
+  LoadOptions,
   RuntimeStatus,
   Snapshot,
   DirectoryIdentity,
@@ -117,7 +119,42 @@ export function createPreviewApi(): DesktopApi {
       : snapshot.model_directory.configured;
     return { operation_id: `preview-library-${libraryId}` };
   }
+  let loadTask: { progress: ModelLoadOperation; options: LoadOptions; step: number; cancel: boolean } | null = null;
   return {
+    loadModelStart: async (operation_id, model_id, options) => {
+      if (loadTask && !loadTask.progress.terminal) throw new DesktopError("runtime_busy", "预览加载仍在进行。");
+      loadTask = { progress: { operation_id, model_id, phase: "preparing", status: "running", terminal: false,
+        runtime: structuredClone(runtime), local_validation: null, error: null }, options, step: 0, cancel: false };
+      return { operation_id };
+    },
+    modelLoadNext: async (operation_id) => {
+      const task = loadTask;
+      if (!task || task.progress.operation_id !== operation_id) throw new DesktopError("request_not_owned", "不是当前预览任务。");
+      if (task.progress.terminal) return structuredClone(task.progress);
+      await wait(200);
+      if (task.cancel) {
+        if (runtime.state === "loading") runtime.state = "unloaded";
+        task.progress = { ...task.progress, phase: "finished", status: "cancelled", terminal: true,
+          runtime: structuredClone(runtime), error: { code: "request_cancelled", message: "预览任务已取消" } };
+      } else {
+        task.step++;
+        if (task.step === 2) { runtime.state = "loading"; task.progress.phase = "loading"; }
+        if (task.step === 3) {
+          runtime.state = "ready"; runtime.selected_model = task.progress.model_id;
+          runtime.selected_model_display_name = models.find((model) => model.id === task.progress.model_id)?.display_name ?? null;
+          runtime.load_options = task.options; task.progress.phase = "testing";
+        }
+        if (task.step >= 4) { task.progress.phase = "finished"; task.progress.status = "completed"; task.progress.terminal = true; }
+        task.progress.runtime = structuredClone(runtime);
+      }
+      return structuredClone(task.progress);
+    },
+    modelLoadCancel: async (operation_id) => {
+      if (!loadTask || loadTask.progress.operation_id !== operation_id) throw new DesktopError("request_not_owned", "不是当前预览任务。");
+      if (loadTask.progress.terminal) return { stopping: false };
+      loadTask.cancel = true; loadTask.progress.status = "cancelling";
+      return { stopping: true };
+    },
     catalog: async () => ({ entries: [] }),
     discoverDirectory: async () => null,
     downloadStart: async () => { throw new DesktopError("preview_only", "开发预览不下载真实模型。"); },
@@ -332,6 +369,7 @@ export function createPreviewApi(): DesktopApi {
       snapshot.settings.model_verification_timeout_seconds = model_verification_timeout_seconds;
       return clone();
     },
+    lanAddresses: async () => ({ status: "unsupported", addresses: [] }),
     saveLanSettings: async (lan_api) => {
       if (!snapshot.initialized) throw new DesktopError("not_initialized", "请先显式初始化。");
       if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先显式停止运行服务。");

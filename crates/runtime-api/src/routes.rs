@@ -28,10 +28,24 @@ pub fn router(state: ApiState, security: Arc<SecurityContext>) -> Router {
         .route("/v1/models", get(available_models))
         .route("/v1/chat/completions", post(crate::chat::chat))
         .route("/runtime/status", get(status))
+        .route(
+            "/runtime/configuration",
+            get(configuration_get).put(configuration_save),
+        )
+        .route(
+            "/runtime/configuration/models/{model_id}",
+            get(configuration_model_get),
+        )
         .route("/runtime/devices", get(devices))
         .route("/runtime/models", get(models))
         .route("/runtime/models/import", post(import))
         .route("/runtime/load", post(load))
+        .route("/runtime/load-operations", post(load_operation_start))
+        .route("/runtime/load-operations/{id}", get(load_operation_next))
+        .route(
+            "/runtime/load-operations/{id}/cancel",
+            post(load_operation_cancel),
+        )
         .route("/runtime/load-and-test", post(load_and_test))
         .route("/runtime/load-if-unloaded", post(load_if_unloaded))
         .route("/runtime/model-test", post(model_test))
@@ -166,7 +180,7 @@ fn state_name(state: ModelState) -> &'static str {
         ModelState::Faulted => "faulted",
     }
 }
-fn status_json(state: &ApiState, status: RuntimeStatus) -> Value {
+pub(crate) fn status_json(state: &ApiState, status: RuntimeStatus) -> Value {
     let diagnostics = state.diagnostics.as_ref();
     let available = std::thread::available_parallelism().ok().map(|n| n.get());
     let threads = status.load_options.map(|options| options.threads);
@@ -261,12 +275,54 @@ async fn load(State(state): State<ApiState>, request: Request) -> Result<Json<Va
     state.ensure_running()?;
     let bytes = json_body(request, state.config.api.max_body_bytes).await?;
     let load = LoadRequest::parse(&bytes)?;
-    let options = load.options(&state.config)?;
+    let options = load.options(&state.active_config()?)?;
     state
         .load(load.model, options, load.threads.is_some())
         .await?;
     let status = state.control(|runtime| runtime.status()).await?;
     Ok(Json(status_json(&state, status)))
+}
+async fn load_operation_start(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let bytes = json_body(request, state.config.api.max_body_bytes).await?;
+    let mut value = crate::dto::parse_json(&bytes)?;
+    let id = value
+        .as_object_mut()
+        .and_then(|object| object.remove("operation_id"))
+        .and_then(|id| id.as_str().and_then(|id| uuid::Uuid::parse_str(id).ok()))
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| ApiError::invalid("operation_id", "Expected an opaque operation UUID."))?;
+    let only_if_unloaded = match value
+        .as_object_mut()
+        .and_then(|object| object.remove("only_if_unloaded"))
+    {
+        None => false,
+        Some(Value::Bool(value)) => value,
+        _ => return Err(ApiError::invalid("only_if_unloaded", "Expected a boolean.")),
+    };
+    let load = LoadRequest::parse(&serde_json::to_vec(&value).map_err(|_| ApiError::internal())?)?;
+    let options = load.options(&state.active_config()?)?;
+    Ok(Json(
+        json!({"operation_id":state.load_operation_start(id, load.model, options, only_if_unloaded, load.threads.is_some())?}),
+    ))
+}
+async fn load_operation_next(
+    State(state): State<ApiState>,
+    id: Result<Path<uuid::Uuid>, PathRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::invalid("operation_id", "Invalid operation UUID."))?;
+    Ok(Json(state.load_operation_next(id)?))
+}
+async fn load_operation_cancel(
+    State(state): State<ApiState>,
+    id: Result<Path<uuid::Uuid>, PathRejection>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::invalid("operation_id", "Invalid operation UUID."))?;
+    empty_body(request, state.config.api.max_body_bytes).await?;
+    Ok(Json(json!({"stopping":state.load_operation_cancel(id)?})))
 }
 async fn load_and_test(
     State(state): State<ApiState>,
@@ -287,7 +343,7 @@ async fn desktop_load(
 ) -> Result<Json<Value>, ApiError> {
     let bytes = json_body(request, state.config.api.max_body_bytes).await?;
     let load = LoadRequest::parse(&bytes)?;
-    let options = load.options(&state.config)?;
+    let options = load.options(&state.active_config()?)?;
     let observation = state
         .desktop_load(
             load.model,
@@ -308,7 +364,21 @@ async fn model_test(
 ) -> Result<Json<Value>, ApiError> {
     let bytes = json_body(request, state.config.api.max_body_bytes).await?;
     let load = LoadRequest::parse(&bytes)?;
-    let options = load.options(&state.config)?;
+    let status = state.control(|runtime| runtime.status()).await?;
+    let options = if status.selected_model.as_ref() == Some(&load.model)
+        && matches!(status.state, ModelState::Ready | ModelState::Generating)
+    {
+        let actual = status.load_options.ok_or_else(ApiError::internal)?;
+        let mut validation = state.active_config()?;
+        validation.model_profiles.clear();
+        validation.inference.context_size = actual.context_size;
+        validation.inference.threads = Some(actual.threads);
+        validation.inference.batch_size = actual.batch_size;
+        load.options(&validation)?; // Explicit invalid fields must still fail.
+        actual
+    } else {
+        load.options(&state.active_config()?)?
+    };
     Ok(Json(
         serde_json::to_value(state.model_probe(load.model, options).await?)
             .map_err(|_| ApiError::internal())?,
@@ -346,4 +416,25 @@ async fn shutdown(
     state.shutdown.begin();
     state.wait_shutdown().await?;
     Ok(Json(json!({"status":"stopped"})))
+}
+
+async fn configuration_get(
+    State(state): State<ApiState>,
+) -> Result<Json<crate::configuration::ConfigurationSnapshot>, ApiError> {
+    Ok(Json(state.configuration_get().await?))
+}
+async fn configuration_save(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<crate::configuration::ConfigurationSnapshot>, ApiError> {
+    let bytes = json_body(request, state.config.api.max_body_bytes).await?;
+    let request = crate::configuration::parse_save_request(&bytes)?;
+    Ok(Json(state.configuration_save(request).await?))
+}
+async fn configuration_model_get(
+    State(state): State<ApiState>,
+    id: Result<Path<ModelId>, PathRejection>,
+) -> Result<Json<crate::configuration::ModelConfiguration>, ApiError> {
+    let Path(id) = id.map_err(|_| ApiError::invalid("model_id", "Invalid model ID."))?;
+    Ok(Json(state.configuration_model_get(id).await?))
 }

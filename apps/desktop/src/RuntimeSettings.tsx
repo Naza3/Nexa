@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useConfigDraft } from "./configDraft";
+import { DraftConflict } from "./Configuration";
 import type { DesktopController, ViewState } from "./controller";
 import { DEFAULT_VERIFICATION_SECONDS, MAX_VERIFICATION_SECONDS, MIN_VERIFICATION_SECONDS, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 
@@ -6,7 +7,7 @@ type Props = { state: ViewState; controller: DesktopController };
 function settingsAccess(state: ViewState) {
   const busy = !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle";
   const reason = !state.snapshot?.initialized
-    ? "请先在模型页显式初始化运行服务，再停止服务后配置；保存不会初始化或启动服务。"
+    ? "请先通过左侧服务按钮显式初始化运行服务，再停止服务后配置；保存不会初始化或启动服务。"
     : state.snapshot.connection !== "stopped"
       ? "请先显式停止运行服务再修改；不会自动中断当前任务。"
       : busy ? "有其他操作正在进行，请等待完成或取消后再修改。" : null;
@@ -14,26 +15,27 @@ function settingsAccess(state: ViewState) {
 }
 
 export function IdleUnloadSettings({ state, controller }: Props) {
-  const settings = state.snapshot!.settings;
+  const settings = state.snapshot!.configuration?.saved.runtime ?? state.snapshot!.settings;
   const supported = typeof settings.idle_unload_enabled === "boolean";
   const savedEnabled = settings.idle_unload_enabled ?? true;
-  const [enabled, setEnabled] = useState(savedEnabled);
-  const [seconds, setSeconds] = useState(settings.idle_unload_seconds);
+  const form = useConfigDraft({ enabled: savedEnabled, seconds: settings.idle_unload_seconds }, state.snapshot?.configuration?.revision, "idle_policy");
+  const { enabled, seconds } = form.draft;
+  const setSeconds = (seconds: number) => form.setDraft({ ...form.draft, seconds });
   const access = settingsAccess(state);
   const changed = enabled !== savedEnabled || seconds !== settings.idle_unload_seconds;
   const validation = validateIdleSeconds(seconds);
   const savedIntervalInvalid = !!validateIdleSeconds(settings.idle_unload_seconds);
-  function reset() { setEnabled(savedEnabled); setSeconds(settings.idle_unload_seconds); }
+  const reset = form.reset;
 
   return <section className="settings-card idle-card" aria-labelledby="idle-title">
     <div className="card-heading"><div><h2 id="idle-title">空闲自动卸载</h2>
       <p>模型空闲时释放内存。必须先停止服务，保存后在下次显式启动运行服务时生效。</p></div><span className="mini-label">独立保存</span></div>
+    {form.conflict && <DraftConflict reset={form.reset} rebase={form.rebase} draft={form.draft} saved={{ enabled: savedEnabled, seconds: settings.idle_unload_seconds }} />}
     <div className="toggle-row runtime-setting-toggle">
       <div><h3>不自动卸载</h3><p>开启后，模型在空闲时继续驻留内存，直到显式卸载、停止服务或进程退出。</p></div>
       <input type="checkbox" role="switch" className="switch" aria-label="不自动卸载" checked={!enabled}
         disabled={!access.editable || !supported} onChange={(event) => {
-          setEnabled(!event.target.checked);
-          if (event.target.checked && validation && !savedIntervalInvalid) setSeconds(settings.idle_unload_seconds);
+          form.setDraft({ enabled: !event.target.checked, seconds: event.target.checked && validation && !savedIntervalInvalid ? settings.idle_unload_seconds : seconds });
         }} />
     </div>
     <div className="idle-controls">
@@ -54,18 +56,20 @@ export function IdleUnloadSettings({ state, controller }: Props) {
       <span className="muted">{changed ? "有未保存的更改" : "配置与已保存内容一致"}</span>
       <div className="runtime-settings-actions">
         <button disabled={!access.editable || !changed} onClick={reset}>取消空闲卸载更改</button>
-        <button disabled={!access.editable || !changed || !!validation}
-          onClick={() => void controller.saveIdle(seconds, supported ? enabled : undefined)}>应用空闲卸载设置</button>
+        <button disabled={!access.editable || !changed || !!validation || form.conflict}
+          onClick={() => void (state.snapshot?.configuration ? controller.saveConfiguration({ expected_revision: form.baseRevision!, update: { kind: "runtime", runtime: { ...state.snapshot.configuration.saved.runtime, idle_unload_seconds: seconds, idle_unload_enabled: enabled } } }) : controller.saveIdle(seconds, supported ? enabled : undefined))}>应用空闲卸载设置</button>
       </div>
     </div>
   </section>;
 }
 
 export function VerificationTimeoutSettings({ state, controller }: Props) {
-  const saved = state.snapshot!.settings.model_verification_timeout_seconds;
+  const saved = state.snapshot!.configuration?.saved.runtime.model_verification_timeout_seconds ?? state.snapshot!.settings.model_verification_timeout_seconds;
   const supported = typeof saved === "number";
   const configured = saved ?? DEFAULT_VERIFICATION_SECONDS;
-  const [seconds, setSeconds] = useState(configured);
+  const form = useConfigDraft(configured, state.snapshot?.configuration?.revision, "verification_policy");
+  const seconds = form.draft;
+  const setSeconds = form.setDraft;
   const access = settingsAccess(state);
   const editable = access.editable && supported;
   const changed = seconds !== configured;
@@ -74,6 +78,7 @@ export function VerificationTimeoutSettings({ state, controller }: Props) {
   return <section className="settings-card idle-card" aria-labelledby="verification-title">
     <div className="card-heading"><div><h2 id="verification-title">模型文件校验超时</h2>
       <p>高级设置。必须先停止服务；保存后用于后续新校验，正在执行的操作不会改动计时。</p></div><span className="mini-label">独立保存</span></div>
+    {form.conflict && <DraftConflict reset={form.reset} rebase={form.rebase} draft={form.draft} saved={configured} />}
     <p className="small-note">适用于全量扫描、选中文件添加、下载完成后的登记校验，以及加载前的外部文件校验。一次校验操作内的所有文件共用时限，不是每个文件单独计时。</p>
     <p className="small-note">此值不改变网络下载传输、原生模型加载或基础短文本生成的独立超时。加载前校验在下次显式启动运行服务后使用新值。</p>
     <div className="idle-controls"><label htmlFor="verification-timeout">模型文件校验时间上限<div className="number-field">
@@ -89,8 +94,8 @@ export function VerificationTimeoutSettings({ state, controller }: Props) {
     <div className="save-row runtime-settings-save">
       <span className="muted">{changed ? "有未保存的更改" : "配置与已保存内容一致"}</span>
       <div className="runtime-settings-actions">
-        <button disabled={!editable || !changed} onClick={() => setSeconds(configured)}>取消校验超时更改</button>
-        <button disabled={!editable || !changed || !!validation} onClick={() => void controller.saveVerificationTimeout(seconds)}>保存模型文件校验超时</button>
+        <button disabled={!editable || !changed} onClick={form.reset}>取消校验超时更改</button>
+        <button disabled={!editable || !changed || !!validation || form.conflict} onClick={() => void (state.snapshot?.configuration ? controller.saveConfiguration({ expected_revision: form.baseRevision!, update: { kind: "runtime", runtime: { ...state.snapshot.configuration.saved.runtime, model_verification_timeout_seconds: seconds } } }) : controller.saveVerificationTimeout(seconds))}>保存模型文件校验超时</button>
       </div>
     </div>
   </section>;

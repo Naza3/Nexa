@@ -302,6 +302,351 @@ fn safe_license_path(path: &str) -> bool {
             .contains(&part)
         })
 }
+// serde_json::Value normally accepts repeated keys. Original inventories and
+// open-ended attribution records must reject ambiguity before typed decoding.
+struct StrictLicenseJson(Value);
+impl<'de> Deserialize<'de> for StrictLicenseJson {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = StrictLicenseJson;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("JSON without duplicate object keys")
+            }
+            fn visit_bool<E: serde::de::Error>(
+                self,
+                value: bool,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(StrictLicenseJson(value.into()))
+            }
+            fn visit_i64<E: serde::de::Error>(
+                self,
+                value: i64,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(StrictLicenseJson(value.into()))
+            }
+            fn visit_u64<E: serde::de::Error>(
+                self,
+                value: u64,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(StrictLicenseJson(value.into()))
+            }
+            fn visit_f64<E: serde::de::Error>(
+                self,
+                _value: f64,
+            ) -> std::result::Result<Self::Value, E> {
+                // serde_json also routes out-of-range integers and -0 here.
+                // Never round original attribution values through IEEE-754.
+                Err(E::custom("license JSON requires exact i64/u64 integers"))
+            }
+            fn visit_str<E: serde::de::Error>(
+                self,
+                value: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(StrictLicenseJson(value.into()))
+            }
+            fn visit_string<E: serde::de::Error>(
+                self,
+                value: String,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(StrictLicenseJson(value.into()))
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(StrictLicenseJson(Value::Null))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut values = Vec::new();
+                while let Some(StrictLicenseJson(value)) = access.next_element()? {
+                    values.push(value);
+                }
+                Ok(StrictLicenseJson(Value::Array(values)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut values = serde_json::Map::new();
+                while let Some((key, StrictLicenseJson(value))) =
+                    access.next_entry::<String, StrictLicenseJson>()?
+                {
+                    if values.insert(key, value).is_some() {
+                        return Err(serde::de::Error::custom("duplicate license JSON key"));
+                    }
+                }
+                Ok(StrictLicenseJson(Value::Object(values)))
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+fn strict_license_json(raw: &[u8]) -> Result<Value> {
+    Ok(serde_json::from_slice::<StrictLicenseJson>(raw)?.0)
+}
+fn license_original_path(name: &str) -> Result<()> {
+    safe_relative(name)?;
+    if name != "THIRD_PARTY_NOTICES.md"
+        && (!name.starts_with("licenses/") || !safe_license_path(name))
+    {
+        return Err("unsupported license original path".into());
+    }
+    Ok(())
+}
+fn license_storage(name: &str, raw: &[u8]) -> Result<String> {
+    let suffix = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if std::str::from_utf8(raw).is_err()
+        || raw.contains(&0)
+        || ["pdf", "docx"].contains(&suffix.as_str())
+    {
+        if !name.starts_with("licenses/microsoft-crt/")
+            || !["txt", "rtf", "html", "htm", "md", "pdf", "docx"].contains(&suffix.as_str())
+        {
+            return Err("unsupported binary license original".into());
+        }
+        return Ok(format!(
+            "licenses/ORIGINAL-{}",
+            name.rsplit('/').next().ok_or("original name missing")?
+        ));
+    }
+    Ok(if name == "licenses/rust-std/COPYRIGHT-library.html" {
+        "licenses/COPYRIGHT.html"
+    } else {
+        "licenses/THIRD_PARTY_LICENSES.txt"
+    }
+    .into())
+}
+fn license_attributions(
+    originals: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<String, Vec<Value>>> {
+    // Match package_windows.license_attributions: preserve complete inventory
+    // records, their order and every field; never substitute summary metadata.
+    const INDEXES: [&str; 3] = [
+        "licenses/index.json",
+        "licenses/microsoft-crt/index.json",
+        "licenses/npm-index.json",
+    ];
+    let mut result = BTreeMap::new();
+    if originals.contains_key("THIRD_PARTY_NOTICES.md") {
+        result.insert(
+            "THIRD_PARTY_NOTICES.md".into(),
+            vec![json!({"component":"Nexa third-party notices","source":"THIRD_PARTY_NOTICES.md"})],
+        );
+    }
+    for name in INDEXES {
+        let Some(raw) = originals.get(name) else {
+            continue;
+        };
+        let index = strict_license_json(raw)?;
+        let files = index
+            .as_object()
+            .and_then(|object| object.get("files"))
+            .and_then(Value::as_array)
+            .filter(|files| !files.is_empty())
+            .ok_or("original license inventory is empty or invalid")?;
+        let mut seen = BTreeSet::new();
+        for record in files {
+            let path = record
+                .as_object()
+                .and_then(|object| object.get("path"))
+                .and_then(Value::as_str)
+                .ok_or("invalid original license record")?;
+            license_original_path(path)?;
+            if !seen.insert(path.to_lowercase()) || INDEXES.contains(&path) {
+                return Err("duplicate original license record".into());
+            }
+            let bytes = originals
+                .get(path)
+                .ok_or("missing original license record")?;
+            if record.get("sha256").and_then(Value::as_str)
+                != Some(format!("{:x}", Sha256::digest(bytes)).as_str())
+            {
+                return Err("original license inventory hash mismatch".into());
+            }
+            result
+                .entry(path.into())
+                .or_insert_with(Vec::new)
+                .push(record.clone());
+        }
+        result.insert(
+            name.into(),
+            vec![json!({"component":"Original component/license inventory","source":name})],
+        );
+    }
+    if result.len() != originals.len()
+        || result.keys().ne(originals.keys())
+        || result.values().any(Vec::is_empty)
+    {
+        return Err("license originals and attribution closure differ".into());
+    }
+    Ok(result)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LicenseBundleIndex {
+    schema_version: u32,
+    format: String,
+    documents: Vec<LicenseBundleDocument>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LicenseBundleDocument {
+    original_path: String,
+    sha256: String,
+    size_bytes: u64,
+    stored_path: String,
+    offset_bytes: u64,
+    attributions: Vec<Value>,
+}
+/// Cross packages retain binary Microsoft originals as ordinary files, freeing
+/// their file slot by preserving the root notices inside the readable bundle.
+/// A missing root notice is accepted only with this fully checked replacement.
+fn verify_bundled_notices(root: &Path, listed: &BTreeSet<String>) -> Result<()> {
+    const INDEX: &str = "licenses/index.json";
+    const TEXT: &str = "licenses/THIRD_PARTY_LICENSES.txt";
+    const PREFIX: &[u8] = b"Nexa third-party license bundle (format 1)\nOriginal license and notice bytes are preserved without modification.\nComponent, version and source mappings are in index.json.\n";
+    const FOOTER: &[u8] = b"\nEND ORIGINAL\n";
+    if !listed.contains(INDEX) || !listed.contains(TEXT) {
+        return Err("required package notices missing".into());
+    }
+    let index: LicenseBundleIndex = serde_json::from_value(strict_license_json(&bounded_read(
+        &root.join(INDEX),
+        4 * 1024 * 1024,
+    )?)?)?;
+    let bundle = bounded_read(&root.join(TEXT), 32 * 1024 * 1024)?;
+    if index.schema_version != 1
+        || index.format != "nexa-license-bundle-v1"
+        || !bundle.starts_with(PREFIX)
+    {
+        return Err("unsupported bundled notices format".into());
+    }
+    let mut cursor = PREFIX.len();
+    let mut previous = String::new();
+    let mut originals = BTreeSet::new();
+    let mut storage: BTreeSet<String> = [INDEX.into(), TEXT.into()].into_iter().collect();
+    let mut notices = false;
+    let mut recovered = BTreeMap::new();
+    for document in &index.documents {
+        license_original_path(&document.original_path)?;
+        if document.original_path <= previous
+            || !originals.insert(document.original_path.to_lowercase())
+            || !valid_hex(&document.sha256, 64)
+            || document.attributions.is_empty()
+            || document
+                .attributions
+                .iter()
+                .any(|record| record.as_object().is_none_or(|record| record.is_empty()))
+        {
+            return Err("invalid or duplicate bundled original".into());
+        }
+        previous = document.original_path.clone();
+        let raw = if document.stored_path == TEXT {
+            let header = format!(
+                "\n===== ORIGINAL FILE: {} =====\nSHA256: {}\nBytes: {}\nBEGIN ORIGINAL\n",
+                document.original_path, document.sha256, document.size_bytes
+            );
+            let start = cursor
+                .checked_add(header.len())
+                .ok_or("license range overflow")?;
+            let end = start
+                .checked_add(usize::try_from(document.size_bytes)?)
+                .ok_or("license range overflow")?;
+            let next = end
+                .checked_add(FOOTER.len())
+                .ok_or("license range overflow")?;
+            if document.offset_bytes != u64::try_from(start)?
+                || bundle.get(cursor..start) != Some(header.as_bytes())
+                || bundle.get(end..next) != Some(FOOTER)
+            {
+                return Err("bundled notice framing mismatch".into());
+            }
+            let raw = bundle
+                .get(start..end)
+                .ok_or("bundled notice range invalid")?;
+            if std::str::from_utf8(raw).is_err() || raw.contains(&0) {
+                return Err("bundled notice is not readable UTF-8".into());
+            }
+            cursor = next;
+            raw.to_vec()
+        } else {
+            let expected = if document.original_path == "licenses/rust-std/COPYRIGHT-library.html" {
+                "licenses/COPYRIGHT.html".to_owned()
+            } else if document
+                .original_path
+                .starts_with("licenses/microsoft-crt/")
+            {
+                format!(
+                    "licenses/ORIGINAL-{}",
+                    document
+                        .original_path
+                        .rsplit('/')
+                        .next()
+                        .ok_or("original name missing")?
+                )
+            } else {
+                return Err("unsupported standalone original".into());
+            };
+            if document.stored_path != expected
+                || document.offset_bytes != 0
+                || !listed.contains(&expected)
+                || !storage.insert(expected.clone())
+            {
+                return Err("standalone original mapping mismatch".into());
+            }
+            bounded_read(&root.join(expected), 32 * 1024 * 1024)?
+        };
+        if license_storage(&document.original_path, &raw)? != document.stored_path {
+            return Err(
+                "license original must remain directly readable in its original format".into(),
+            );
+        }
+        if document.size_bytes != raw.len() as u64
+            || format!("{:x}", Sha256::digest(&raw)) != document.sha256
+        {
+            return Err("bundled original integrity mismatch".into());
+        }
+        if document.original_path == "THIRD_PARTY_NOTICES.md" {
+            if document.stored_path != TEXT
+                || document.attributions
+                    != vec![
+                        json!({"component":"Nexa third-party notices","source":"THIRD_PARTY_NOTICES.md"}),
+                    ]
+            {
+                return Err("bundled notice attribution mismatch".into());
+            }
+            notices = true;
+        }
+        recovered.insert(document.original_path.clone(), raw);
+    }
+    let attributions = license_attributions(&recovered)?;
+    if index
+        .documents
+        .iter()
+        .any(|document| attributions.get(&document.original_path) != Some(&document.attributions))
+    {
+        return Err("license attribution differs from original inventory".into());
+    }
+    for entry in fs::read_dir(root.join("licenses"))? {
+        if !ordinary_metadata(&entry?.path())?.is_file() {
+            return Err("unexpected directory in consolidated licenses".into());
+        }
+    }
+    if !notices
+        || cursor != bundle.len()
+        || storage
+            != listed
+                .iter()
+                .filter(|name| name.starts_with("licenses/"))
+                .cloned()
+                .collect()
+    {
+        return Err("bundled notice or license file closure mismatch".into());
+    }
+    Ok(())
+}
 fn verify_package(root: &Path) -> Result<Package> {
     if !ordinary_metadata(root)?.is_dir() {
         return Err("package directory required".into());
@@ -365,11 +710,13 @@ fn verify_package(root: &Path) -> Result<Package> {
         "ai-runtime-worker.exe",
         "config.example.toml",
         "README.md",
-        "THIRD_PARTY_NOTICES.md",
     ] {
         if !listed.contains(required) {
             return Err("required package file missing".into());
         }
+    }
+    if !listed.contains("THIRD_PARTY_NOTICES.md") {
+        verify_bundled_notices(&root, &listed)?;
     }
     if !listed.iter().any(|p| p.starts_with("licenses/")) {
         return Err("package licenses missing".into());
@@ -1181,6 +1528,322 @@ mod tests {
             .map(|p| format!("{}  {p}\n", file_hash(&root.join(p)).unwrap()))
             .collect::<String>();
         fs::write(root.join("SHA256SUMS"), sums).unwrap();
+    }
+    fn reseal_fixture(root: &Path) {
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+        let mut files = BTreeSet::new();
+        inventory(root, "", &mut files).unwrap();
+        files.remove("manifest.json");
+        files.remove("SHA256SUMS");
+        manifest["files"] = files.iter().map(|name| json!({"path":name,"size_bytes":fs::metadata(root.join(name)).unwrap().len(),"sha256":file_hash(&root.join(name)).unwrap()})).collect::<Vec<_>>().into();
+        fs::write(
+            root.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        rewrite_sums(root);
+    }
+    fn bundled_notice_fixture() -> tempfile::TempDir {
+        let root = fixture();
+        fs::remove_file(root.path().join("THIRD_PARTY_NOTICES.md")).unwrap();
+        fs::remove_file(root.path().join("licenses/LICENSE")).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../scripts/fixtures/license-bundle/runtime-contract.json"
+        ))
+        .unwrap();
+        fs::write(
+            root.path().join("licenses/index.json"),
+            serde_json::to_vec(&fixture["index"]).unwrap(),
+        )
+        .unwrap();
+        for (name, values) in fixture["stored_files"].as_object().unwrap() {
+            let bytes: Vec<u8> = values
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| u8::try_from(value.as_u64().unwrap()).unwrap())
+                .collect();
+            fs::write(root.path().join(name), bytes).unwrap();
+        }
+        reseal_fixture(root.path());
+        root
+    }
+    #[test]
+    fn python_bundled_notices_keep_runtime_self_contained() {
+        let temp = bundled_notice_fixture();
+        assert!(verify_package(temp.path()).is_ok());
+        assert!(!temp.path().join("THIRD_PARTY_NOTICES.md").exists());
+        assert!(
+            temp.path()
+                .join("licenses/ORIGINAL-original-3-vs2022-license.docx")
+                .exists()
+        );
+    }
+    #[test]
+    fn bundled_notices_reject_resealed_missing_corrupt_or_ambiguous_replacements() {
+        for mutation in [
+            "missing",
+            "schema",
+            "attribution",
+            "offset",
+            "overflow",
+            "hash",
+            "duplicate",
+            "prefix",
+            "trailing",
+            "binary-original",
+            "missing-bundle",
+        ] {
+            let temp = bundled_notice_fixture();
+            let path = temp.path().join("licenses/index.json");
+            let mut index: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            let bundle_path = temp.path().join("licenses/THIRD_PARTY_LICENSES.txt");
+            match mutation {
+                "missing" => {
+                    index["documents"].as_array_mut().unwrap().remove(0);
+                }
+                "schema" => index["schema_version"] = 2.into(),
+                "attribution" => {
+                    index["documents"][0]["attributions"][0]["component"] = "wrong".into()
+                }
+                "offset" => index["documents"][0]["offset_bytes"] = 0.into(),
+                "overflow" => index["documents"][0]["size_bytes"] = u64::MAX.into(),
+                "hash" => index["documents"][0]["sha256"] = "0".repeat(64).into(),
+                "duplicate" => {
+                    let document = index["documents"][0].clone();
+                    index["documents"].as_array_mut().unwrap().push(document);
+                }
+                "prefix" | "trailing" => {
+                    let mut bytes = fs::read(&bundle_path).unwrap();
+                    if mutation == "prefix" {
+                        bytes[0] ^= 1;
+                    } else {
+                        bytes.push(b'\n');
+                    }
+                    fs::write(bundle_path, bytes).unwrap();
+                }
+                "binary-original" => fs::write(
+                    temp.path()
+                        .join("licenses/ORIGINAL-original-3-vs2022-license.docx"),
+                    b"changed",
+                )
+                .unwrap(),
+                "missing-bundle" => fs::remove_file(bundle_path).unwrap(),
+                _ => unreachable!(),
+            }
+            fs::write(path, serde_json::to_vec(&index).unwrap()).unwrap();
+            reseal_fixture(temp.path());
+            assert!(verify_package(temp.path()).is_err(), "accepted {mutation}");
+        }
+    }
+    #[test]
+    fn bundled_notices_reject_resealed_attribution_drift_for_every_original() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../scripts/fixtures/license-bundle/runtime-contract.json"
+        ))
+        .unwrap();
+        for (position, document) in fixture["index"]["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            let original = document["attributions"].clone();
+            let mut mutations = vec![
+                json!([]),
+                json!([null]),
+                json!([{}]),
+                json!([false]),
+                json!(["wrong"]),
+                json!([[]]),
+            ];
+            let mut extra = original.clone();
+            extra[0]["unrecorded"] = true.into();
+            mutations.push(extra);
+            for key in original[0].as_object().unwrap().keys() {
+                let mut changed = original.clone();
+                changed[0][key] = "wrong".into();
+                mutations.push(changed);
+                let mut missing = original.clone();
+                missing[0].as_object_mut().unwrap().remove(key);
+                mutations.push(missing);
+            }
+            let mut duplicate = original.clone();
+            duplicate.as_array_mut().unwrap().push(original[0].clone());
+            mutations.push(duplicate);
+            for attribution in mutations {
+                let temp = bundled_notice_fixture();
+                let mut index = fixture["index"].clone();
+                index["documents"][position]["attributions"] = attribution.clone();
+                fs::write(
+                    temp.path().join("licenses/index.json"),
+                    serde_json::to_vec(&index).unwrap(),
+                )
+                .unwrap();
+                reseal_fixture(temp.path());
+                assert!(
+                    verify_package(temp.path()).is_err(),
+                    "accepted document {position}: {attribution}"
+                );
+            }
+        }
+    }
+    fn original_license_fixture() -> BTreeMap<String, Vec<u8>> {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../scripts/fixtures/license-bundle/runtime-contract.json"
+        ))
+        .unwrap();
+        fixture["index"]["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|document| {
+                let stored = &fixture["stored_files"][document["stored_path"].as_str().unwrap()];
+                let offset = document["offset_bytes"].as_u64().unwrap() as usize;
+                let size = document["size_bytes"].as_u64().unwrap() as usize;
+                let bytes = stored.as_array().unwrap()[offset..offset + size]
+                    .iter()
+                    .map(|byte| byte.as_u64().unwrap() as u8)
+                    .collect();
+                (
+                    document["original_path"].as_str().unwrap().to_owned(),
+                    bytes,
+                )
+            })
+            .collect()
+    }
+    #[test]
+    fn original_attributions_require_complete_unambiguous_inventory_closure() {
+        let originals = original_license_fixture();
+        assert!(license_attributions(&originals).is_ok());
+        for name in ["licenses/index.json", "licenses/microsoft-crt/index.json"] {
+            for mutation in [
+                "hash",
+                "missing",
+                "duplicate",
+                "inventory-path",
+                "null",
+                "empty",
+                "duplicate-json-key",
+                "nonstandard-json",
+            ] {
+                let mut changed = originals.clone();
+                let mut index: Value = serde_json::from_slice(&changed[name]).unwrap();
+                match mutation {
+                    "hash" => index["files"][0]["sha256"] = "0".repeat(64).into(),
+                    "missing" => index["files"][0]["path"] = "licenses/missing.txt".into(),
+                    "duplicate" => {
+                        let record = index["files"][0].clone();
+                        index["files"].as_array_mut().unwrap().push(record);
+                    }
+                    "inventory-path" => index["files"][0]["path"] = name.into(),
+                    "null" => index["files"][0] = Value::Null,
+                    "empty" => index["files"] = json!([]),
+                    "duplicate-json-key" | "nonstandard-json" => (),
+                    _ => unreachable!(),
+                }
+                let raw = match mutation {
+                    "duplicate-json-key" => br#"{"files":[],"files":[]}"#.to_vec(),
+                    "nonstandard-json" => br#"{"files":[],"extra":NaN}"#.to_vec(),
+                    _ => serde_json::to_vec(&index).unwrap(),
+                };
+                changed.insert(name.into(), raw);
+                assert!(
+                    license_attributions(&changed).is_err(),
+                    "accepted {name}: {mutation}"
+                );
+            }
+        }
+        let mut changed = originals.clone();
+        changed.insert("licenses/unmapped.txt".into(), b"unmapped".to_vec());
+        assert!(license_attributions(&changed).is_err());
+        // Optional npm and duplicate component mappings retain every original
+        // field and follow the same inventory ordering as the Python writer.
+        let name = "licenses/rust-crates/example-1.2.3/LICENSE";
+        let record = json!({"path":name,"sha256":format!("{:x}",Sha256::digest(&originals[name])),"component":"npm fixture","integrity":"sha512-fixture","nested":{"field":[1,"original"]}});
+        let mut changed = originals;
+        changed.insert(
+            "licenses/npm-index.json".into(),
+            serde_json::to_vec(&json!({"files":[record.clone()]})).unwrap(),
+        );
+        let attributes = license_attributions(&changed).unwrap();
+        assert_eq!(attributes[name].len(), 2);
+        assert_eq!(attributes[name][1], record);
+    }
+    #[test]
+    fn license_inventory_rejects_rounded_numbers_and_keeps_boolean_types_distinct() {
+        for number in [
+            "18446744073709551616",
+            "18446744073709551617",
+            "-9223372036854775809",
+            "1.0",
+            "1e0",
+            "-0",
+        ] {
+            let mut originals = original_license_fixture();
+            let raw = String::from_utf8(originals["licenses/index.json"].clone()).unwrap();
+            let changed = raw.replacen(
+                "\"component\":",
+                &format!("\"nested\":{{\"serial\":{number}}},\"component\":"),
+                1,
+            );
+            assert_ne!(raw, changed);
+            originals.insert("licenses/index.json".into(), changed.into_bytes());
+            assert!(
+                license_attributions(&originals).is_err(),
+                "accepted inventory number {number}"
+            );
+            let temp = bundled_notice_fixture();
+            let path = temp.path().join("licenses/index.json");
+            let raw = fs::read_to_string(&path).unwrap();
+            let changed = raw.replacen(
+                "\"component\":",
+                &format!("\"nested\":{{\"serial\":{number}}},\"component\":"),
+                1,
+            );
+            assert_ne!(raw, changed);
+            fs::write(path, changed).unwrap();
+            reseal_fixture(temp.path());
+            assert!(
+                verify_package(temp.path()).is_err(),
+                "accepted attribution number {number}"
+            );
+        }
+        assert_ne!(
+            strict_license_json(br#"{"serial":true}"#).unwrap(),
+            strict_license_json(br#"{"serial":1}"#).unwrap()
+        );
+        assert_ne!(
+            strict_license_json(br#"{"serial":false}"#).unwrap(),
+            strict_license_json(br#"{"serial":0}"#).unwrap()
+        );
+    }
+    #[test]
+    fn strict_license_json_rejects_ambiguous_nested_records_and_non_json_input() {
+        for raw in [
+            &br#"{"files":[],"files":[]}"#[..],
+            &br#"{"files":[{"path":"first","path":"second"}]}"#[..],
+            &br#"{"attributions":[{"nested":{"a":1,"a":1}}]}"#[..],
+            &br#"{"number":NaN}"#[..],
+            &br#"{"number":Infinity}"#[..],
+            &br#"{"number":1.5}"#[..],
+            &br#"{"number":1.0}"#[..],
+            &br#"{"number":1e0}"#[..],
+            &br#"{"number":-0}"#[..],
+            &br#"{"number":18446744073709551616}"#[..],
+            &br#"{"number":18446744073709551617}"#[..],
+            &br#"{"number":-9223372036854775809}"#[..],
+            &br#"{"attributions":[{"nested":{"serial":18446744073709551617}}]}"#[..],
+            &b"\xef\xbb\xbf{}"[..],
+            &b"\xff\xfe{\x00}\x00"[..],
+        ] {
+            assert!(strict_license_json(raw).is_err());
+        }
+        assert_eq!(
+            strict_license_json(br#"{"data":[null,true,false,0,1,-1,18446744073709551615,-9223372036854775808,"ok"]}"#).unwrap(),
+            json!({"data":[null,true,false,0,1,-1,u64::MAX,i64::MIN,"ok"]})
+        );
     }
     #[test]
     fn traversal_windows_ads_devices_and_ambiguous_names_are_rejected() {

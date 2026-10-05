@@ -41,6 +41,7 @@ pub const STAGES: &[&str] = &[
     "import_model",
     "list_models",
     "reject_running_idle_change",
+    "stop_loading",
     "load_model",
     "verify_local_validation",
     "repeat_model_test",

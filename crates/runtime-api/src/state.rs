@@ -6,7 +6,10 @@ use crate::{
 use model_store::{ImportCancellation, ImportRequest, ModelManifest, ModelSource, ModelStore};
 use process_host::ProcessDiagnostics;
 use runtime_core::{EventReceiver, Runtime, RuntimeHandle};
-use runtime_types::{ErrorCode, GenerationRequest, LoadOptions, ModelId, RuntimeError};
+use runtime_types::{
+    ErrorCode, GenerationOptions, GenerationRequest, LoadOptions, Message, ModelId, RequestId,
+    RuntimeError,
+};
 use std::{
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -26,11 +29,14 @@ struct RegistrySnapshot {
 pub struct ApiState {
     pub runtime: RuntimeHandle,
     pub config: Arc<Config>,
+    active_configuration: Arc<RwLock<crate::configuration::Document>>,
+    configuration_gate: Arc<tokio::sync::Mutex<()>>,
     pub shutdown: ServiceShutdown,
     pub diagnostics: Option<ProcessDiagnostics>,
     lan_listening: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) store: Arc<ModelStore>,
     pub(crate) probe_build: ProbeBuild,
+    pub(crate) load_operations: Arc<std::sync::Mutex<crate::load_operations::LoadOperations>>,
     registry: Arc<RwLock<RegistrySnapshot>>,
     thread_selection: Arc<RwLock<Option<(LoadOptions, &'static str)>>>,
     requests: Arc<Semaphore>,
@@ -47,14 +53,26 @@ impl ApiState {
         diagnostics: Option<ProcessDiagnostics>,
     ) -> Self {
         let import_cancel = ImportCancellation::default();
+        let config_bytes = config
+            .to_toml()
+            .expect("validated startup configuration")
+            .into_bytes();
+        let active = crate::configuration::Document {
+            config: config.clone(),
+            revision: crate::configuration::revision(&config_bytes),
+            bytes: config_bytes,
+        };
         Self {
             runtime: runtime.handle(),
             config: Arc::new(config),
+            active_configuration: Arc::new(RwLock::new(active)),
+            configuration_gate: Arc::new(tokio::sync::Mutex::new(())),
             shutdown: ServiceShutdown::new(runtime, import_cancel.clone()),
             diagnostics,
             lan_listening: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             store,
             probe_build: Arc::new(std::sync::OnceLock::new()),
+            load_operations: Arc::new(std::sync::Mutex::new(Default::default())),
             registry: Arc::new(RwLock::new(RegistrySnapshot {
                 models: Vec::new(),
                 generation: uuid::Uuid::new_v4(),
@@ -64,6 +82,98 @@ impl ApiState {
             controls: Arc::new(Semaphore::new(8)),
             storage: Arc::new(Semaphore::new(1)),
         }
+    }
+    pub fn active_config(&self) -> Result<Config, ApiError> {
+        Ok(self
+            .active_configuration
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .config
+            .clone())
+    }
+    pub async fn configuration_get(
+        &self,
+    ) -> Result<crate::configuration::ConfigurationSnapshot, ApiError> {
+        let _gate = self.configuration_gate.lock().await;
+        let active = self
+            .active_configuration
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .clone();
+        let root = self.store.data_directory().to_owned();
+        tokio::task::spawn_blocking(move || {
+            let saved = crate::configuration::read(&root)?;
+            crate::configuration::snapshot(&root, &saved, Some(&active))
+        })
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(Into::into)
+    }
+    pub async fn configuration_save(
+        &self,
+        request: crate::configuration::ConfigurationSaveRequest,
+    ) -> Result<crate::configuration::ConfigurationSnapshot, ApiError> {
+        self.ensure_running()?;
+        let gate = self
+            .configuration_gate
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| crate::configuration::ConfigurationError {
+                code: "configuration_busy",
+                param: None,
+            })?;
+        let active = self
+            .active_configuration
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .clone();
+        let root = self.store.data_directory().to_owned();
+        let limits = self
+            .registry
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .models
+            .iter()
+            .map(|m| (m.id.clone(), m.context_limit))
+            .collect();
+        let cache = self.active_configuration.clone();
+        tokio::task::spawn_blocking(move || {
+            // The detached blocking transaction owns the cache publication and
+            // gate even if the HTTP client disconnects while disk I/O runs.
+            let _gate = gate;
+            let next = crate::configuration::save(&root, request, Some(&active), &limits)?;
+            *cache
+                .write()
+                .map_err(|_| crate::configuration::ConfigurationError {
+                    code: "configuration_unavailable",
+                    param: None,
+                })? = next.clone();
+            crate::configuration::snapshot(&root, &next, Some(&next))
+        })
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(Into::into)
+    }
+    pub async fn configuration_model_get(
+        &self,
+        id: ModelId,
+    ) -> Result<crate::configuration::ModelConfiguration, ApiError> {
+        let _gate = self.configuration_gate.lock().await;
+        let root = self.store.data_directory().to_owned();
+        let saved = tokio::task::spawn_blocking(move || crate::configuration::read(&root))
+            .await
+            .map_err(|_| ApiError::internal())??;
+        let limit = self
+            .registry
+            .read()
+            .map_err(|_| ApiError::internal())?
+            .models
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.context_limit);
+        let status = self.control(|runtime| runtime.status()).await?;
+        crate::configuration::model_configuration(&saved, id, Some(&status), limit)
+            .map_err(Into::into)
     }
     pub async fn open_store(path: PathBuf) -> Result<Arc<ModelStore>, RuntimeError> {
         tokio::task::spawn_blocking(move || ModelStore::open(path).map(Arc::new))
@@ -76,6 +186,23 @@ impl ApiState {
             })?
     }
     pub async fn initialize_registry(&self) -> Result<(), ApiError> {
+        let root = self.store.data_directory().to_owned();
+        if root.join("config.toml").exists() {
+            let document = tokio::task::spawn_blocking(move || crate::configuration::read(&root))
+                .await
+                .map_err(|_| ApiError::internal())??;
+            if document.config != *self.config {
+                return Err(crate::configuration::ConfigurationError {
+                    code: "configuration_restart_required",
+                    param: None,
+                }
+                .into());
+            }
+            *self
+                .active_configuration
+                .write()
+                .map_err(|_| ApiError::internal())? = document;
+        }
         let build = self.probe_build.clone();
         tokio::task::spawn_blocking(move || {
             build.get_or_init(|| {
@@ -179,6 +306,32 @@ impl ApiState {
             id,
             move |control| store.prepare_external(&requested, &control),
             true,
+            None,
+        )
+        .await
+    }
+    pub(crate) async fn prepare_external_controlled(
+        &self,
+        id: ModelId,
+        cancel: runtime_core::LoadControl,
+        only_if_unloaded: bool,
+    ) -> Result<(), ApiError> {
+        crate::load_operations::check_cancelled(&cancel)?;
+        match self.store.needs_external_preparation(&id) {
+            Ok(false) => return Ok(()),
+            Ok(true) => (),
+            Err(error) => {
+                publish_preparation_result(&self.registry, &id, &Err(error.clone()))?;
+                return Err(error.into());
+            }
+        }
+        let store = self.store.clone();
+        let requested = id.clone();
+        self.prepare_guarded_with_condition(
+            id,
+            move |control| store.prepare_external(&requested, &control),
+            only_if_unloaded,
+            Some(cancel),
         )
         .await
     }
@@ -188,13 +341,15 @@ impl ApiState {
             + Send
             + 'static,
     {
-        self.prepare_guarded_with_condition(id, action, false).await
+        self.prepare_guarded_with_condition(id, action, false, None)
+            .await
     }
     async fn prepare_guarded_with_condition<F>(
         &self,
         id: ModelId,
         action: F,
         only_if_unloaded: bool,
+        cancellation: Option<runtime_core::LoadControl>,
     ) -> Result<(), ApiError>
     where
         F: FnOnce(Arc<model_store::library::ScanControl>) -> Result<(), RuntimeError>
@@ -220,9 +375,26 @@ impl ApiState {
         ));
         let shutdown = self.shutdown.clone();
         let shutdown_control = control.clone();
+        if cancellation
+            .as_ref()
+            .is_some_and(runtime_core::LoadControl::is_cancelled)
+        {
+            control.cancel();
+        }
         let watcher = tokio::spawn(async move {
-            shutdown.requested().await;
-            shutdown_control.cancel();
+            loop {
+                if cancellation
+                    .as_ref()
+                    .is_some_and(runtime_core::LoadControl::is_cancelled)
+                {
+                    shutdown_control.cancel();
+                    return;
+                }
+                tokio::select! {
+                    _ = shutdown.requested() => { shutdown_control.cancel(); return; },
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => (),
+                }
+            }
         });
         let mut guard = PreparationGuard {
             control: control.clone(),
@@ -258,6 +430,17 @@ impl ApiState {
     ) -> Result<(), ApiError> {
         self.ensure_running()?;
         self.prepare_external(model.clone()).await?;
+        self.load_prepared(model, options, explicit_threads, None, false)
+            .await
+    }
+    pub(crate) async fn load_prepared(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        explicit_threads: bool,
+        cancel: Option<runtime_core::LoadControl>,
+        only_if_unloaded: bool,
+    ) -> Result<(), ApiError> {
         let source = if explicit_threads {
             "request"
         } else if self.config.inference.threads.is_some() {
@@ -266,14 +449,25 @@ impl ApiState {
             "automatic_min_4_available_parallelism_fallback_1"
         };
         let selection = self.thread_selection.clone();
+        let self_schema_one = self.config.schema_version == 1;
         self.execute(move |runtime| {
-            runtime.load(model, options)?;
+            match cancel {
+                Some(cancel) if only_if_unloaded => {
+                    runtime.load_if_unloaded_controlled(model, options, cancel)?
+                }
+                Some(cancel) => runtime.load_controlled(model, options, cancel)?,
+                None => runtime.load(model, options)?,
+            }
             *selection.write().map_err(|_| {
                 RuntimeError::new(
                     ErrorCode::RuntimeFaulted,
                     "thread selection observation failed",
                 )
-            })? = Some((options, source));
+            })? = if explicit_threads || self_schema_one {
+                Some((options, source))
+            } else {
+                None
+            };
             Ok(())
         })
         .await
@@ -292,7 +486,7 @@ impl ApiState {
         {
             return Some(source);
         }
-        if options == self.config.load_options() {
+        if self.config.schema_version == 1 && options == self.config.load_options() {
             Some(if self.config.inference.threads.is_some() {
                 "configuration"
             } else {
@@ -324,7 +518,26 @@ impl ApiState {
     pub async fn submit(&self, request: GenerationRequest) -> Result<EventReceiver, ApiError> {
         self.ensure_running()?;
         self.prepare_external(request.model.clone()).await?;
-        self.execute(move |runtime| runtime.submit(request)).await
+        let config = self.active_config()?;
+        let options = crate::configuration::resolve_load_options(
+            &config,
+            &request.model,
+            Default::default(),
+        )?;
+        self.execute(move |runtime| runtime.submit_with_load_options(request, options))
+            .await
+    }
+    pub async fn submit_current(
+        &self,
+        request_id: RequestId,
+        messages: Vec<Message>,
+        options: GenerationOptions,
+    ) -> Result<(ModelId, EventReceiver), ApiError> {
+        self.ensure_running()?;
+        // Current-model inference must not prepare external files or infer a
+        // load target from a separate, potentially stale status observation.
+        self.execute(move |runtime| runtime.submit_current(request_id, messages, options))
+            .await
     }
     pub async fn execute<T, F>(&self, action: F) -> Result<T, ApiError>
     where

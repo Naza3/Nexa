@@ -176,6 +176,7 @@ impl Body for RequestBody {
 }
 
 pub struct VerifiedConnection {
+    instance_id: Uuid,
     sender: SendRequest<RequestBody>,
     driver: JoinHandle<()>,
     token: SecretToken,
@@ -276,11 +277,16 @@ impl VerifiedConnection {
         collect_bounded(response.into_body(), 4096, PROOF_TIMEOUT).await?;
         // All observations above came from this sender's one socket.
         Ok(Self {
+            instance_id: instance,
             sender,
             driver: guard.0.take().unwrap(),
             token,
             authority: address.to_string(),
         })
+    }
+    /// Identity authenticated on this exact connection, not a later discovery read.
+    pub fn instance_id(&self) -> Uuid {
+        self.instance_id
     }
     pub async fn request(
         &mut self,
@@ -593,6 +599,7 @@ mod readiness_tests {
                 .unwrap();
         });
         let mut client = VerifiedConnection {
+            instance_id: Uuid::new_v4(),
             sender,
             driver,
             token: SecretToken::generate().unwrap(),

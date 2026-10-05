@@ -27,3 +27,5 @@ LAN router 仅开放 GET /v1/models 和 POST /v1/chat/completions；models 只�
 可信 LAN HTTP 没有 TLS 机密性；不支持公开服务/反代身份，不改防火墙或 NAT。两监听共享 64 连接上限，LAN 至多48以为本机保留16；请求/队列/输出/取消预算沿用，LAN body 另有10秒总读取截止。两端点预绑定成功后才创建运行时/发布本机发现；任一服务失败触发共同关停并等待两端连接/worker清理。
 
 LAN 专用凭据仅显式 enabled 的服务启动生成至安全 secrets/lan-api-token；本机 init/浏览/status 不生成，配置/status/discovery 不含密钥。实际 running 观测与 saved enabled 分开。测试的真实 TCP 仅用 loopback，加测试层模拟私网 peer；不能当作 Windows 网卡/防火墙/两设备验收。
+
+手动停止加载按[ADR0027](../../docs/decisions/0027-owned-model-load-cancellation.md)：每次操作独立UUID/取消令牌，取消ACK与清理终态分离，覆盖准备/切换/加载及自有短测，不影响其他客户端或全服务。

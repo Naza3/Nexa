@@ -47,6 +47,8 @@ describe("native-only adapter", () => {
     await nativeApi.saveVerificationTimeout(7200);
     expect(invoke).toHaveBeenLastCalledWith("runtime_verification_save", { request: { model_verification_timeout_seconds: 7200 } });
     const lan_api = { enabled: true, listen: "192.168.1.20:18081", allowed_cidrs: ["192.168.1.30/32"] };
+    await nativeApi.lanAddresses();
+    expect(invoke).toHaveBeenLastCalledWith("runtime_lan_addresses", undefined);
     await nativeApi.saveLanSettings(lan_api);
     expect(invoke).toHaveBeenLastCalledWith("runtime_lan_save", { request: { lan_api } });
     await nativeApi.copyLanToken();
@@ -73,6 +75,16 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("models_scan", undefined);
     await nativeApi.reconcileModels();
     expect(invoke).toHaveBeenLastCalledWith("models_reconcile", undefined);
+    await nativeApi.loadModelStart!("owned-load", "registered-model", { context_size: 2048, threads: 2, batch_size: 128 });
+    expect(invoke).toHaveBeenLastCalledWith("model_load_start", { request: { operation_id: "owned-load", model_id: "registered-model", context_size: 2048, threads: 2, batch_size: 128 } });
+    await nativeApi.loadModelProfileStart!("owned-load", "registered-model");
+    expect(invoke).toHaveBeenLastCalledWith("model_load_profile_start", { request: { operation_id: "owned-load", model_id: "registered-model" } });
+    await nativeApi.loadModelProfileStart!("owned-load", "registered-model", { threads: 3 });
+    expect(invoke).toHaveBeenLastCalledWith("model_load_profile_start", { request: { operation_id: "owned-load", model_id: "registered-model", load_overrides: { threads: 3 } } });
+    await nativeApi.modelLoadNext!("owned-load");
+    expect(invoke).toHaveBeenLastCalledWith("model_load_next", { request: { operation_id: "owned-load" } });
+    await nativeApi.modelLoadCancel!("owned-load");
+    expect(invoke).toHaveBeenLastCalledWith("model_load_cancel", { request: { operation_id: "owned-load" } });
     await nativeApi.testModel("registered-model", { context_size: 2048, threads: 2, batch_size: 128 });
     expect(invoke).toHaveBeenLastCalledWith("model_test", { request: { model_id: "registered-model", context_size: 2048, threads: 2, batch_size: 128 } });
     await nativeApi.libraryNext("operation-only");
@@ -107,5 +119,23 @@ describe("native-only adapter", () => {
     expect(safeError("raw sensitive failure").message).not.toContain(
       "sensitive",
     );
+  });
+});
+
+describe("canonical native configuration commands", () => {
+  it("uses the eight frozen commands without adding inference fields to UI preferences or ordinary load", async () => {
+    const revision = `sha256:${"a".repeat(64)}`;
+    await nativeApi.initialize!(); expect(invoke).toHaveBeenLastCalledWith("runtime_initialize", undefined);
+    await nativeApi.configurationGet!(); expect(invoke).toHaveBeenLastCalledWith("configuration_get", undefined);
+    await nativeApi.configurationModelGet!("model-a"); expect(invoke).toHaveBeenLastCalledWith("configuration_model_get", { request: { model_id: "model-a" } });
+    const update = { expected_revision: revision, update: { kind: "model_profile" as const, model_id: "model-a", load_overrides: { context_size: 2048, threads: null, batch_size: null } } };
+    await nativeApi.configurationSave!(update); expect(invoke).toHaveBeenLastCalledWith("configuration_save", { request: update });
+    const migration = { expected_revision: revision, expected_preferences_revision: null, choice: "api" as const, custom: null };
+    await nativeApi.configurationMigrate!(migration); expect(invoke).toHaveBeenLastCalledWith("configuration_migrate", { request: migration });
+    await nativeApi.loadModelProfile!("model-a"); expect(invoke).toHaveBeenLastCalledWith("model_load_profile", { request: { model_id: "model-a" } });
+    await nativeApi.loadModelProfile!("model-a", { threads: 2 }); expect(invoke).toHaveBeenLastCalledWith("model_load_profile", { request: { model_id: "model-a", load_overrides: { threads: 2 } } });
+    await nativeApi.uiPreferencesGet!(); expect(invoke).toHaveBeenLastCalledWith("ui_preferences_get", undefined);
+    const ui = { expected_revision: revision, preferences: { download_source: "modelscope" as const, close_runtime_on_exit: false } };
+    await nativeApi.uiPreferencesSave!(ui); expect(invoke).toHaveBeenLastCalledWith("ui_preferences_save", { request: ui });
   });
 });

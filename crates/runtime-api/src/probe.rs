@@ -92,6 +92,17 @@ impl ApiState {
         } else {
             self.load(model.clone(), options, explicit_threads).await?;
         }
+        self.probe_after_load(model, options, None).await
+    }
+    pub(crate) async fn probe_after_load(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        cancel: Option<runtime_core::LoadControl>,
+    ) -> Result<LocalValidation, ApiError> {
+        if let Some(cancel) = &cancel {
+            crate::load_operations::check_cancelled(cancel)?;
+        }
         let state = self.clone();
         let requested = model.clone();
         let loaded_scope = tokio::task::spawn_blocking(move || {
@@ -110,10 +121,22 @@ impl ApiState {
         })
         .await
         .map_err(|_| ApiError::internal())?;
-        let (mut observation, needs_record) = match self.model_probe(model, options).await {
+        let (mut observation, needs_record) = match self
+            .model_probe_controlled(model, options, cancel.clone())
+            .await
+        {
             Ok(observation) => {
                 let deferred = observation.state == ValidationState::Deferred;
                 (observation, deferred)
+            }
+            Err(error)
+                if cancel.is_some()
+                    && (cancel
+                        .as_ref()
+                        .is_some_and(runtime_core::LoadControl::is_cancelled)
+                        || error.error.code == "executor_cleanup_unconfirmed") =>
+            {
+                return Err(error);
             }
             Err(error) => (
                 LocalValidation {
@@ -147,7 +170,18 @@ impl ApiState {
         model: ModelId,
         options: LoadOptions,
     ) -> Result<LocalValidation, ApiError> {
+        self.model_probe_controlled(model, options, None).await
+    }
+    async fn model_probe_controlled(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        cancel: Option<runtime_core::LoadControl>,
+    ) -> Result<LocalValidation, ApiError> {
         self.ensure_running()?;
+        if let Some(cancel) = &cancel {
+            crate::load_operations::check_cancelled(cancel)?;
+        }
         let state = self.clone();
         let requested = model.clone();
         let scope = tokio::task::spawn_blocking(move || state.probe_scope(&requested, options))
@@ -164,8 +198,21 @@ impl ApiState {
                 ..GenerationOptions::default()
             },
         };
+        let probe_id = request.request_id;
+        let admission_cancel = cancel.clone();
         let receiver = match self
-            .execute(move |runtime| runtime.submit_if_idle(request, options))
+            .execute(move |runtime| {
+                if admission_cancel
+                    .as_ref()
+                    .is_some_and(runtime_core::LoadControl::is_cancelled)
+                {
+                    return Err(runtime_types::RuntimeError::new(
+                        runtime_types::ErrorCode::RequestCancelled,
+                        "cancelled",
+                    ));
+                }
+                runtime.submit_if_idle(request, options)
+            })
             .await
         {
             Ok(receiver) => receiver,
@@ -182,8 +229,23 @@ impl ApiState {
         };
         let _disconnect = DisconnectOnDrop(receiver.disconnect_handle());
         let state = self.clone();
+        let cancellation = cancel.clone();
         let observation = tokio::task::spawn_blocking(move || {
-            let mut observation = consume_probe(receiver, PROBE_TIMEOUT, options.context_size);
+            let mut observation = consume_probe_controlled(
+                receiver,
+                PROBE_TIMEOUT,
+                options.context_size,
+                cancel
+                    .as_ref()
+                    .map(|cancel| (cancel, &state.runtime, probe_id)),
+            );
+            if cancel
+                .as_ref()
+                .is_some_and(runtime_core::LoadControl::is_cancelled)
+                && !observation.generation_pass
+            {
+                return observation; // A stopped probe is not a failed model test.
+            }
             match scope {
                 Ok(scope) => {
                     match state.probe_scope(&scope.model_id, scope.options) {
@@ -205,6 +267,21 @@ impl ApiState {
         })
         .await
         .map_err(|_| ApiError::internal())?;
+        if cancellation
+            .as_ref()
+            .is_some_and(runtime_core::LoadControl::is_cancelled)
+            && !observation.generation_pass
+        {
+            return Err(ApiError::new(
+                axum::http::StatusCode::CONFLICT,
+                observation
+                    .error_code
+                    .as_deref()
+                    .unwrap_or("request_cancelled"),
+                "The owned probe ended during cancellation.",
+                None,
+            ));
+        }
         Ok(observation)
     }
 }
@@ -217,18 +294,45 @@ fn evidence_unavailable(observation: &mut LocalValidation, code: &'static str) {
         observation.generation_pass = false;
     }
 }
+#[cfg(test)]
 fn consume_probe(receiver: EventReceiver, timeout: Duration, context_size: u32) -> LocalValidation {
+    consume_probe_controlled(receiver, timeout, context_size, None)
+}
+fn consume_probe_controlled(
+    receiver: EventReceiver,
+    timeout: Duration,
+    context_size: u32,
+    cancellation: Option<(
+        &runtime_core::LoadControl,
+        &runtime_core::RuntimeHandle,
+        RequestId,
+    )>,
+) -> LocalValidation {
+    let mut cancel_sent = false;
     let deadline = Instant::now() + timeout;
     let mut nonempty = false;
     let mut bytes = 0usize;
     let mut started = None;
     let result = loop {
+        if !cancel_sent
+            && let Some((cancel, runtime, id)) = cancellation
+            && cancel.is_cancelled()
+        {
+            let _ = runtime.cancel(id);
+            cancel_sent = true;
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if remaining.is_zero() && !cancel_sent {
             break Err("execution_timeout".to_string());
         }
-        let event = match receiver.recv_timeout(remaining) {
+        let poll = if cancellation.is_some() {
+            Duration::from_millis(20)
+        } else {
+            remaining
+        };
+        let event = match receiver.recv_timeout(poll) {
             Ok(event) => event,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if cancellation.is_some() => continue,
             Err(_) => {
                 break Err(if Instant::now() >= deadline {
                     "execution_timeout"

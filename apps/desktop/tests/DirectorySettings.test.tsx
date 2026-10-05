@@ -1,3 +1,4 @@
+import { openModelDetails } from "./navigation";
 import {
   act,
   fireEvent,
@@ -51,7 +52,7 @@ async function setup(overrides: Partial<DesktopApi> = {}) {
     ...overrides,
   });
   const controller = new DesktopController(api);
-  const result = render(<App controller={controller} />);
+  const result = render(<App initialPage="models" controller={controller} />);
   await waitFor(() => expect(controller.getSnapshot().booting).toBe(false));
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "设置" }));
@@ -120,7 +121,7 @@ describe("directory settings React flow", () => {
       libraryNext: vi.fn(() => terminal.promise),
     });
     await configure(user);
-    await user.click(screen.getByRole("button", { name: "模型" }));
+    await user.click(screen.getByRole("button", { name: "模型库" }));
     expect(
       screen.getByRole("region", { name: "模型库操作" }),
     ).toBeInTheDocument();
@@ -142,7 +143,7 @@ describe("directory settings React flow", () => {
       libraryNext: vi.fn(() => terminal.promise),
     });
     await configure(user);
-    await user.click(screen.getByRole("button", { name: "关闭应用" }));
+    await user.click(screen.getByRole("button", { name: "关闭窗口并保留服务" }));
     expect(api.close).toHaveBeenCalledTimes(1);
     await act(async () => terminal.resolve(cancelled));
   });
@@ -175,18 +176,18 @@ describe("directory settings React flow", () => {
           generation: "same",
         }),
     });
-    await user.click(screen.getByRole("button", { name: "模型" }));
-    expect(screen.getAllByRole("heading", { name: display })).toHaveLength(2);
-    expect(screen.getByText("原有管理模型")).toBeInTheDocument();
-    expect(
-      screen.getByText(`API ID：${external.id}`).closest("details"),
-    ).not.toHaveAttribute("open");
+    await user.click(screen.getByRole("button", { name: "模型库" }));
+    expect(screen.getAllByRole("heading", { name: display })).toHaveLength(1);
+    expect(screen.getByLabelText("应用状态栏")).toHaveTextContent(`驻留：${display}`);
+    expect(screen.queryByText(`API ID：${external.id}`)).not.toBeInTheDocument();
+    await openModelDetails(display); expect(screen.getByText(`API ID：${external.id}`)).toBeVisible(); await user.click(screen.getByRole("button", { name: /返回模型库/ }));
     await user.click(screen.getByRole("button", { name: "下一页" }));
     await waitFor(() =>
-      expect(screen.getAllByRole("heading", { name: display })).toHaveLength(1),
+      expect(screen.queryAllByRole("heading", { name: display })).toHaveLength(0),
     );
-    await user.click(screen.getByRole("button", { name: "聊天" }));
-    expect(screen.getByText(new RegExp(display))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "模型库" }));
+    await user.click(screen.getByRole("button", { name: "聊天测试" }));
+    expect(screen.getByLabelText("应用状态栏")).toHaveTextContent(display);
   });
   it("shows duplicate names with source and short id without renaming files", async () => {
     const { user } = await setup({
@@ -199,10 +200,10 @@ describe("directory settings React flow", () => {
         generation: "same",
       })),
     });
-    await user.click(screen.getByRole("button", { name: "模型" }));
-    expect(screen.getByText("同名区分：目录 · 12345678")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "模型库" }));
+    expect(screen.getByText("12345678")).toBeInTheDocument();
     expect(
-      screen.getByText(`同名区分：管理 · ${model.id}`),
+      screen.getByText(model.id),
     ).toBeInTheDocument();
   });
   it("clearly separates configured and effective paths and blocks generation when stale", async () => {
@@ -219,7 +220,8 @@ describe("directory settings React flow", () => {
     const { user, api } = await setup({ snapshot: vi.fn(async () => stale) });
     expect(screen.getByText(identity.display_path)).toBeInTheDocument();
     expect(screen.getByText("D:\\当前服务 旧目录")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "聊天" }));
+    await user.click(screen.getByRole("button", { name: "模型库" }));
+    await user.click(screen.getByRole("button", { name: "聊天测试" }));
     await user.type(
       screen.getByRole("textbox", { name: "输入消息" }),
       "不要发给错误实例",
@@ -314,7 +316,7 @@ it("shows partial registration and rejected basenames as text across navigation"
   expect(screen.queryByText(/默认目录扫描完成，本次登记/)).not.toBeInTheDocument();
   expect(controller.getSnapshot().notice).toBeNull();
   expect(document.querySelector(".library-diagnostics script")).toBeNull();
-  await user.click(screen.getByRole("button", { name: "模型" }));
+  await user.click(screen.getByRole("button", { name: "模型库" }));
   expect(screen.getByLabelText("模型目录核验结果")).toHaveTextContent("仅保留在当前窗口");
   expect(screen.getByText("坏 <script>.gguf")).toBeInTheDocument();
 });

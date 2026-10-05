@@ -17,7 +17,7 @@ function failedDownload(patch: Partial<DownloadOperation> = {}): DownloadOperati
 async function mount(source: "modelscope" | "huggingface" = "modelscope") {
   const value = stopped(); value.settings.download_source = source;
   const api = makeApi({ snapshot: vi.fn(async () => value), catalog: vi.fn(async () => ({ entries: [entry] })) });
-  const controller = new DesktopController(api); render(<App controller={controller} />);
+  const controller = new DesktopController(api); render(<App initialPage="models" controller={controller} />);
   await waitFor(() => expect(controller.getSnapshot().snapshot).not.toBeNull());
   return { api, controller };
 }

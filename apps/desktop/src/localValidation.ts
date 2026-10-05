@@ -19,6 +19,7 @@ export function validLocalValidation(value: LocalValidation): boolean {
 export function localValidationLabel(value: LocalValidation): string {
   if (!validLocalValidation(value)) return "本机测试记录无效，待重测";
   if (["validation_record_write_failed", "validation_record_unavailable"].includes(value.error_code ?? "")) return value.load_success ? "本机加载通过 · 测试记录无法保存" : "本机测试记录无法保存";
+  if (value.error_code === "request_cancelled") return value.load_success ? "本机加载通过 · 短文本测试已停止" : "本次加载或测试已停止";
   switch (value.state) {
     case "passed": return "本机基础测试通过";
     case "loaded": return "本机加载通过 · 短文本待测试";
@@ -32,6 +33,7 @@ export function localValidationLabel(value: LocalValidation): string {
 
 export function localValidationReason(value: LocalValidation): string | null {
   if (!validLocalValidation(value)) return "无法确认本机证明，请重新加载并测试。";
+  if (value.error_code === "request_cancelled") return "本次加载或测试已停止，取消不算基础测试通过；已保存和登记的文件保留。";
   if (value.error_code?.startsWith("validation_")) return validationErrorReason(value.error_code);
   if (value.state === "stale") return "文件、引擎、设备或加载参数已变化；旧记录不能作为当前组合的通过证明。";
   if (value.state === "deferred") return "运行服务正在使用其他模型或处理任务，测试已暂缓。空闲后显式加载或重试；不会切换模型或中断其他客户端。";
@@ -62,6 +64,13 @@ export function validationErrorReason(code: string): string {
     request_cancelled: "本次短文本测试已取消，取消不算通过。",
     deadline_exceeded: "本次短文本测试超时，未按通过处理；请在空闲时重试。",
     worker_failed: "推理进程未完成本次测试，未按通过处理。请检查运行状态后重试。",
+    configuration_migration_required: "请先在设置中确认旧配置迁移来源，再按统一档案加载。",
+    configuration_restart_required: "已保存配置尚未被运行实例采用，请显式停止并重新启动服务后再加载。",
+    load_timeout: "原生加载超时，请检查模型文件与加载参数。此错误不等同于上下文超限或内存不足。",
+    model_load_interrupted: "本次加载连接已中断，实际结果尚未确认。请先核对运行状态，不自动重放。",
+    context_length_exceeded: "输入、模板与输出预算超过上下文限制，请减少输入或输出预算，或使用模型支持的上下文配置。",
+    context_too_large: "请求上下文超过模型或运行时上限，请降低该模型的上下文配置后重新加载。",
+    model_load_failed: "模型加载失败，请检查文件、内存及当前加载参数；不能据此判断为上下文超限。",
     unsupported_model: "本次加载或测试未通过当前引擎检查，请查看模型与运行服务诊断。",
   };
   return reasons[code] ?? "本次操作未完成或结果尚未确认，请检查运行状态并在空闲时重试。";

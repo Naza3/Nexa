@@ -8,7 +8,7 @@ pub use output::{
     TextPermit,
 };
 use runtime_types::{ModelId, ResolvedModel, RuntimeError};
-pub use scheduler::{RegistryLease, Runtime, RuntimeHandle};
+pub use scheduler::{LoadControl, RegistryLease, Runtime, RuntimeHandle};
 /// A bounded metadata/path lookup. Perform imports and whole-file integrity
 /// verification before actor startup or outside it under a RegistryLease.
 /// Never copy or hash a model in this scheduler-facing call.

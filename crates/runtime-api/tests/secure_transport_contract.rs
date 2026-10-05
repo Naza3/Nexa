@@ -60,6 +60,9 @@ struct Observed {
     events: Mutex<Option<ExecutionEvents>>,
     request: Mutex<Option<runtime_types::GenerationRequest>>,
     peak: AtomicUsize,
+    resolutions: AtomicUsize,
+    loads: AtomicUsize,
+    unloads: AtomicUsize,
 }
 struct CancelCompletionGate(Arc<Observed>);
 impl CancelCompletionGate {
@@ -107,6 +110,7 @@ impl Executor for ProtocolExecutor {
             };
             match command {
                 ExecutorCommand::Load { .. } => {
+                    observed.loads.fetch_add(1, Ordering::SeqCst);
                     if matches!(mode, Mode::LoadWait) {
                         wait(1);
                         events.emit(ExecutorEvent::Failed(RuntimeError::new(
@@ -118,6 +122,7 @@ impl Executor for ProtocolExecutor {
                     }
                 }
                 ExecutorCommand::Unload => {
+                    observed.unloads.fetch_add(1, Ordering::SeqCst);
                     events.emit(ExecutorEvent::Unloaded);
                 }
                 ExecutorCommand::Generate { request } => {
@@ -235,9 +240,11 @@ impl Harness {
         config.api.listen = address;
         config.inference.context_size = 2048;
         let observed = Arc::new(Observed::default());
+        let resolved = observed.clone();
         let runtime = Runtime::spawn(
             config.runtime_config(),
-            |id: &ModelId| {
+            move |id: &ModelId| {
+                resolved.resolutions.fetch_add(1, Ordering::SeqCst);
                 if id.as_str() == "missing-model" {
                     return Err(RuntimeError::new(
                         ErrorCode::ModelNotFound,
@@ -1331,6 +1338,8 @@ async fn lan_router_has_no_management_proof_or_ambient_authentication() {
     for path in [
         "/healthz",
         "/runtime/status",
+        "/runtime/configuration",
+        "/runtime/configuration/models/fixture",
         "/runtime/models",
         "/runtime/models/import",
         "/runtime/load",
@@ -1340,7 +1349,7 @@ async fn lan_router_has_no_management_proof_or_ambient_authentication() {
         "/runtime/load-and-test",
         "/runtime/model-test",
     ] {
-        for method in ["GET", "POST"] {
+        for method in ["GET", "POST", "PUT"] {
             let (code, headers, _) = lan_raw(&h, method, path, Some(key), "").await;
             assert_eq!(code, 404, "{method} {path}");
             assert!(!headers.contains("x-nexa-server-proof"));
@@ -1503,4 +1512,198 @@ async fn lan_body_limit_and_total_read_deadline_apply_before_inference() {
     assert_eq!(decode(&wire).0, 408);
     assert_eq!(h.observed.phase.load(Ordering::SeqCst), 0);
     h.close().await;
+}
+
+fn current_chat_body(model: Option<&str>, streaming: bool) -> Value {
+    let mut body =
+        json!({"messages":[{"role":"user","content":"current model test"}],"stream":streaming});
+    if let Some(model) = model {
+        body["model"] = json!(model);
+    }
+    if streaming {
+        body["stream_options"] = json!({"include_usage":true});
+    }
+    body
+}
+
+#[tokio::test]
+async fn current_model_wire_binds_actual_id_for_all_sse_frames_and_nonstream_responses() {
+    for lan in [false, true] {
+        let h = Harness::with_lan(Mode::Success, lan).await;
+        for actual in ["first-loaded", "second-loaded"] {
+            h.state
+                .control(move |runtime| {
+                    runtime.load(
+                        ModelId::new(actual).unwrap(),
+                        runtime_types::LoadOptions::default(),
+                    )
+                })
+                .await
+                .unwrap();
+            let resolutions = h.observed.resolutions.load(Ordering::SeqCst);
+            let loads = h.observed.loads.load(Ordering::SeqCst);
+            let unloads = h.observed.unloads.load(Ordering::SeqCst);
+            for selector in [None, Some(""), Some(" \t\r\n\u{2003}")] {
+                for streaming in [false, true] {
+                    let request = current_chat_body(selector, streaming);
+                    let (code, headers, body) = h
+                        .reply_body(&request.to_string(), Some(h.bearer.to_str().unwrap()))
+                        .await;
+                    assert_eq!(code, 200, "lan={lan} model={selector:?}: {body}");
+                    assert!(headers.to_ascii_lowercase().contains("x-request-id:"));
+                    if streaming {
+                        assert!(
+                            headers
+                                .to_ascii_lowercase()
+                                .contains("content-type: text/event-stream")
+                        );
+                        let frames: Vec<_> = body
+                            .split("\n\n")
+                            .filter(|frame| !frame.is_empty())
+                            .collect();
+                        assert_eq!(frames.len(), 5);
+                        assert_eq!(frames.last(), Some(&"data: [DONE]"));
+                        for frame in &frames[..frames.len() - 1] {
+                            let chunk: Value =
+                                serde_json::from_str(frame.strip_prefix("data: ").unwrap())
+                                    .unwrap();
+                            assert_eq!(chunk["model"], actual);
+                        }
+                    } else {
+                        assert_eq!(
+                            serde_json::from_str::<Value>(&body).unwrap()["model"],
+                            actual
+                        );
+                    }
+                    h.clean().await;
+                    let generated = h.observed.request.lock().unwrap().clone().unwrap();
+                    assert_eq!(generated.model.as_str(), actual);
+                    assert_eq!(
+                        serde_json::to_value(generated.messages).unwrap(),
+                        request["messages"]
+                    );
+                }
+            }
+            // Explicit IDs remain strict conflicts, with no fallback or switch.
+            let (code, _, body) = h
+                .reply_body(
+                    &current_chat_body(Some("different-model"), false).to_string(),
+                    Some(h.bearer.to_str().unwrap()),
+                )
+                .await;
+            assert_eq!(code, 409, "{body}");
+            assert_eq!(
+                serde_json::from_str::<Value>(&body).unwrap()["error"]["code"],
+                "model_conflict"
+            );
+            assert_eq!(h.observed.resolutions.load(Ordering::SeqCst), resolutions);
+            assert_eq!(h.observed.loads.load(Ordering::SeqCst), loads);
+            assert_eq!(h.observed.unloads.load(Ordering::SeqCst), unloads);
+        }
+        h.close().await;
+    }
+}
+
+#[tokio::test]
+async fn current_model_wire_fails_before_inference_when_unloaded_or_model_type_is_invalid() {
+    for lan in [false, true] {
+        let h = Harness::with_lan(Mode::Success, lan).await;
+        for retained_selection in [false, true] {
+            if retained_selection {
+                h.state
+                    .control(|runtime| {
+                        runtime.load(
+                            ModelId::new("fixture").unwrap(),
+                            runtime_types::LoadOptions::default(),
+                        )
+                    })
+                    .await
+                    .unwrap();
+                h.state.control(|runtime| runtime.unload()).await.unwrap();
+            }
+            let resolutions = h.observed.resolutions.load(Ordering::SeqCst);
+            let loads = h.observed.loads.load(Ordering::SeqCst);
+            for selector in [None, Some(""), Some(" \t\r\n")] {
+                for streaming in [false, true] {
+                    let (code, headers, body) = h
+                        .reply_body(
+                            &current_chat_body(selector, streaming).to_string(),
+                            Some(h.bearer.to_str().unwrap()),
+                        )
+                        .await;
+                    assert_eq!(code, 409, "{body}");
+                    assert!(
+                        headers
+                            .to_ascii_lowercase()
+                            .contains("content-type: application/json")
+                    );
+                    let body: Value = serde_json::from_str(&body).unwrap();
+                    assert_eq!(body["error"]["code"], "model_not_loaded");
+                    assert_eq!(body["error"]["param"], "model");
+                }
+            }
+            for model in [
+                Value::Null,
+                json!(0),
+                json!(false),
+                json!([]),
+                json!({}),
+                json!(" fixture"),
+                json!("fixture "),
+                json!("../fixture"),
+            ] {
+                let mut request = current_chat_body(None, true);
+                request["model"] = model;
+                let (code, _, body) = h
+                    .reply_body(&request.to_string(), Some(h.bearer.to_str().unwrap()))
+                    .await;
+                assert_eq!(code, 400, "{body}");
+                let body: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(body["error"]["code"], "invalid_request");
+                assert_eq!(body["error"]["param"], "model");
+            }
+            assert_eq!(h.observed.resolutions.load(Ordering::SeqCst), resolutions);
+            assert_eq!(h.observed.loads.load(Ordering::SeqCst), loads);
+            assert!(h.observed.request.lock().unwrap().is_none());
+        }
+        h.close().await;
+    }
+}
+
+#[tokio::test]
+async fn current_model_wire_disconnect_cancels_active_work_without_loading() {
+    for lan in [false, true] {
+        for stream in [false, true] {
+            let h = Harness::with_lan(Mode::StartedWait, lan).await;
+            h.state
+                .control(|runtime| {
+                    runtime.load(
+                        ModelId::new("fixture").unwrap(),
+                        runtime_types::LoadOptions::default(),
+                    )
+                })
+                .await
+                .unwrap();
+            let resolutions = h.observed.resolutions.load(Ordering::SeqCst);
+            let socket = h
+                .send_body(
+                    &current_chat_body(None, stream).to_string(),
+                    Some(h.bearer.to_str().unwrap()),
+                    false,
+                )
+                .await;
+            h.phase(4).await;
+            drop(socket);
+            h.disconnected(DisconnectCase {
+                rst: false,
+                mode: Mode::StartedWait,
+                stream,
+                phase: 4,
+            })
+            .await;
+            assert_eq!(h.observed.resolutions.load(Ordering::SeqCst), resolutions);
+            assert_eq!(h.observed.loads.load(Ordering::SeqCst), 1);
+            h.close().await;
+        }
+    }
 }

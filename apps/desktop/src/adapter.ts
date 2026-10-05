@@ -43,6 +43,18 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
   }
 }
 export const nativeApi: DesktopApi = {
+  initialize: () => call("runtime_initialize"),
+  configurationGet: () => call("configuration_get"),
+  configurationModelGet: (model_id) => call("configuration_model_get", { model_id }),
+  configurationSave: (request) => call("configuration_save", request),
+  configurationMigrate: (request) => call("configuration_migrate", request),
+  loadModelStart: (operation_id, model_id, options) => call("model_load_start", { operation_id, model_id, ...options }),
+  loadModelProfileStart: (operation_id, model_id, load_overrides) => call("model_load_profile_start", { operation_id, model_id, ...(load_overrides ? { load_overrides } : {}) }),
+  modelLoadNext: (operation_id) => call("model_load_next", { operation_id }),
+  modelLoadCancel: (operation_id) => call("model_load_cancel", { operation_id }),
+  loadModelProfile: (model_id, load_overrides) => call("model_load_profile", { model_id, ...(load_overrides ? { load_overrides } : {}) }),
+  uiPreferencesGet: () => call("ui_preferences_get"),
+  uiPreferencesSave: (request) => call("ui_preferences_save", request),
   catalog: () => call("model_catalog"),
   discoverDirectory: () => call("model_directory_discover"),
   downloadStart: (catalog_id, auto_test) => call("model_download_start", { catalog_id, ...(auto_test === undefined ? {} : { auto_test }) }),
@@ -78,6 +90,7 @@ export const nativeApi: DesktopApi = {
   saveVerificationTimeout: (model_verification_timeout_seconds) =>
     call("runtime_verification_save", { model_verification_timeout_seconds }),
   copyToken: () => call("token_copy"),
+  lanAddresses: () => call("runtime_lan_addresses"),
   saveLanSettings: (lan_api) => call("runtime_lan_save", { lan_api }),
   copyLanToken: () => call("lan_token_copy"),
   stop: () => call("runtime_stop"),

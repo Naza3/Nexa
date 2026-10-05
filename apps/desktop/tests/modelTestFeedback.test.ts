@@ -154,20 +154,30 @@ describe("current model test attempts", () => {
     }
     if (kind === "close") await controller.close();
     next.resolve(passed()); await pending;
-    expect(controller.getSnapshot().model_tests[model.id]).toBeUndefined();
+    if (kind === "page" || kind === "view") {
+      expect(controller.getSnapshot().model_tests[model.id]?.phase).toBe("finished");
+      if (kind === "page") expect(controller.getSnapshot().page_after).toBe("next");
+    } else {
+      expect(controller.getSnapshot().model_tests[model.id]).toBeUndefined();
+      expect(controller.getSnapshot().notice).toBeNull();
+    }
     expect(controller.getSnapshot().testing_model).toBeNull();
-    expect(controller.getSnapshot().notice).toBeNull();
   });
 
-  it.each(["close", "view"])("does not start a late load when %s occurs during service startup", async (kind) => {
+  it.each(["close", "view"])("continues after navigation but prevents post-close load during startup: %s", async (kind) => {
     const starting = deferred<Snapshot>();
     const { api, controller } = await create({ snapshot: vi.fn(async () => ({ ...snapshot(), connection: "stopped" as const, runtime: null })), start: vi.fn(() => starting.promise) });
     const pending = controller.loadModel(model.id);
     expect(controller.getSnapshot().testing_model).toBe(model.id);
     if (kind === "close") await controller.close(); else controller.leaveModelPage();
     starting.resolve(snapshot()); await pending;
-    expect(api.loadModel).not.toHaveBeenCalled();
-    expect(controller.getSnapshot().model_tests[model.id]).toBeUndefined();
+    if (kind === "close") {
+      expect(api.loadModel).not.toHaveBeenCalled();
+      expect(controller.getSnapshot().model_tests[model.id]).toBeUndefined();
+    } else {
+      expect(api.loadModel).toHaveBeenCalledTimes(1);
+      expect(controller.getSnapshot().model_tests[model.id]?.phase).toBe("finished");
+    }
     expect(controller.getSnapshot().testing_model).toBeNull();
   });
 });

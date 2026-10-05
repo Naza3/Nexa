@@ -90,3 +90,25 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [运行策略与最终联合回归](docs/verification/2026-10-04-runtime-policy-and-final-regression.md) / [Windows联合验收步骤](docs/verification/2026-10-04-windows-model-management-checklist.md)
 
 - [公开仓库恢复Windows Actions](docs/verification/2026-10-04-public-actions-restoration.md)：用户最新构建授权、标准runner、同源工具链与推送前验证
+
+- [桌面控制与网卡选择验证](docs/verification/2026-10-04-desktop-controls-and-lan-discovery.md)：添加结果关闭、统一服务主控与只读本机IPv4发现；实现/验证进展见报告
+
+- [空ID默认当前模型ADR0024](docs/decisions/0024-current-loaded-model-chat-default.md)：用户确认的文本API便利扩展，actor原子选择、不隐式加载/切换，本地源码验证通过、统一Windows构建待验
+
+- [空ID当前模型验证](docs/verification/2026-10-04-current-model-api-default.md)：DTO、actor原子准入和SSE/非流式实际模型身份，Windows新包待验
+
+- [整体产品体验实施](docs/product/experience-implementation.md)：用户批准的状态、配置、模型档案、任务和页面统一规则，当前实施中
+
+- [统一档案与配置ADR0025](docs/decisions/0025-unified-model-profiles-and-configuration.md)：schema2、CAS迁移、共享解析、会话快照和前后端命令合同，实施中
+
+- [整体体验实施验证](docs/verification/2026-10-04-unified-product-experience.md)：档案/CAS、状态、任务、独立反例与真实GGUF分层证据
+
+- [许可无损整合ADR0026](docs/decisions/0026-lossless-license-bundles.md)：完整桌面含runtime/download至多10份许可文件，保留全部原文、版权HTML、Microsoft原件与原库存映射
+
+- [许可整合验证](docs/verification/2026-10-05-lossless-license-bundles.md)：Python/Rust共享合同、77项针对性Rust回归、748/760份原文旧包语料逐字节恢复和未验证的Windows边界
+
+- [精简桌面产品体验](docs/product/compact-desktop-experience.md)：全局状态条、分组摘要和按需展开设置的整体设计
+
+- [本轮精简桌面验证](docs/verification/2026-10-05-compact-desktop-experience.md)：前端回归、独立审查与原生Windows验证边界
+
+- [手动停止加载ADR0027](docs/decisions/0027-owned-model-load-cancellation.md) / [本轮验证](docs/verification/2026-10-05-model-load-cancellation.md)：按次UUID、hash/切换/native/probe、回执恢复与worker回收；状态以当前状态为准

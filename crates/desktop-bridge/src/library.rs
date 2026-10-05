@@ -220,6 +220,7 @@ impl DesktopBridge {
         let id = Uuid::new_v4();
         let task = Arc::new(LibraryTask {
             state: Mutex::new(LibraryOperationState {
+                load_phase: None,
                 operation_id: id,
                 status: LibraryOperationStatus::Running,
                 phase: LibraryOperationPhase::Checking,
@@ -423,6 +424,7 @@ impl DesktopBridge {
             .collect();
         let task = Arc::new(LibraryTask {
             state: Mutex::new(LibraryOperationState {
+                load_phase: None,
                 operation_id: id,
                 status: LibraryOperationStatus::Running,
                 phase: LibraryOperationPhase::Checking,
@@ -543,34 +545,29 @@ impl DesktopBridge {
         id: &runtime_types::ModelId,
     ) -> LocalValidation {
         use model_store::local_validation::ValidationState;
-        #[derive(serde::Deserialize)]
-        struct Tested {
-            local_validation: LocalValidation,
-        }
         let result: Result<LocalValidation> = async {
-            if task.cancelled.load(Ordering::Acquire) { return Err(BridgeError::new("request_cancelled")); }
-            self.start_inner(true, Some(&task.cancelled)).await?;
-            let preferences = settings::preferences(&self.root)?;
-            let body = crate::onboarding::load_body(LoadModelRequest {
-                model_id: id.to_string(), context_size: preferences.context_size,
-                threads: preferences.threads, batch_size: preferences.batch_size,
-            })?;
-            let cancelled = async {
-                loop {
-                    let changed = task.changed.notified();
-                    tokio::pin!(changed);
-                    changed.as_mut().enable();
-                    if task.cancelled.load(Ordering::Acquire) { break; }
-                    changed.await;
-                }
-            };
-            tokio::select! {
-                biased;
-                _ = self.closing_requested() => { self.load_disconnected.store(true, Ordering::Release); Err(BridgeError::new("request_cancelled")) },
-                _ = cancelled => { self.load_disconnected.store(true, Ordering::Release); Err(BridgeError::new("request_cancelled")) },
-                tested = self.json::<Tested>(Method::POST, "/runtime/load-if-unloaded", Some(&body)) => Ok(tested?.local_validation),
+            if task.cancelled.load(Ordering::Acquire) {
+                return Err(BridgeError::new("request_cancelled"));
             }
-        }.await;
+            self.start_inner(true, Some(&task.cancelled)).await?;
+            let body = if settings::config(&self.root)?.schema_version == 2 {
+                json!({"model":id})
+            } else {
+                let preferences = settings::preferences(&self.root)?;
+                crate::onboarding::load_body(LoadModelRequest {
+                    model_id: id.to_string(),
+                    context_size: preferences.context_size,
+                    threads: preferences.threads,
+                    batch_size: preferences.batch_size,
+                })?
+            };
+            self.automatic_load_operation(body, &task.cancelled, |phase| {
+                task.state.lock().unwrap().load_phase = Some(phase.into());
+                task.changed.notify_waiters();
+            })
+            .await
+        }
+        .await;
         match result {
             Ok(observation) => observation,
             Err(error) => LocalValidation {

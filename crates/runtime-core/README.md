@@ -36,3 +36,5 @@ cargo clippy --locked -p runtime-core -p runtime-types --all-targets -- -D warni
 ```
 
 `tests/scheduler.rs` 用受控执行器验证A05–A12的调度逻辑，绝不算作模型推理或设备验收。真实 model-store→runtime-core→engine-host→llama.cpp 链路在 engine-host 的 `real_runtime` 可选测试中执行。
+
+手动停止加载按[ADR0027](../../docs/decisions/0027-owned-model-load-cancellation.md)：每次操作独立UUID/取消令牌，取消ACK与清理终态分离，覆盖准备/切换/加载及自有短测，不影响其他客户端或全服务。

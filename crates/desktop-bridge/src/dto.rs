@@ -98,6 +98,12 @@ pub enum ConnectionState {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DesktopSnapshot {
+    #[serde(default)]
+    pub configuration: Option<runtime_api::configuration::ConfigurationSnapshot>,
+    #[serde(default)]
+    pub configuration_error: Option<crate::BridgeError>,
+    #[serde(default)]
+    pub ui_preferences: Option<runtime_api::configuration::UiPreferencesSnapshot>,
     pub initialized: bool,
     pub connection: ConnectionState,
     pub api_address: Option<String>,
@@ -147,6 +153,25 @@ pub struct LanApiStatus {
     pub enabled: bool,
     pub listen: Option<String>,
     pub running: bool,
+}
+/// An ephemeral local-interface observation, never a persisted LAN setting.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LanIpv4Address {
+    pub interface_index: u32,
+    pub interface_name: String,
+    pub address: String,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LanAddressDiscoveryStatus {
+    Available,
+    Empty,
+    Unsupported,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LanIpv4Addresses {
+    pub status: LanAddressDiscoveryStatus,
+    pub addresses: Vec<LanIpv4Address>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerStatus {
@@ -329,6 +354,8 @@ pub struct AddedFileResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LibraryOperationState {
+    #[serde(default)]
+    pub load_phase: Option<String>,
     pub operation_id: Uuid,
     pub status: LibraryOperationStatus,
     pub phase: LibraryOperationPhase,
@@ -519,6 +546,8 @@ pub struct DownloadResult {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DownloadOperationState {
+    #[serde(default)]
+    pub load_phase: Option<String>,
     pub operation_id: Uuid,
     pub catalog_id: String,
     pub source: DownloadSource,
@@ -550,3 +579,70 @@ pub struct ModelsReconcile {
     pub operation_id: Option<Uuid>,
 }
 pub use model_store::local_validation::LocalValidation;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLoadProfileRequest {
+    pub model_id: String,
+    #[serde(default)]
+    pub load_overrides: TemporaryLoadOverrides,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TemporaryLoadOverrides {
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "nonnull_optional_u32"
+    )]
+    pub context_size: Option<u32>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "nonnull_optional_u32"
+    )]
+    pub threads: Option<u32>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "nonnull_optional_u32"
+    )]
+    pub batch_size: Option<u32>,
+}
+fn nonnull_optional_u32<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<u32>, D::Error> {
+    u32::deserialize(d).map(Some)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelLoadOperationHandle {
+    pub operation_id: Uuid,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelLoadOperationState {
+    pub operation_id: Uuid,
+    pub model_id: String,
+    pub phase: String,
+    pub status: String,
+    pub terminal: bool,
+    pub runtime: Option<RuntimeStatus>,
+    pub local_validation: Option<LocalValidation>,
+    pub error: Option<crate::BridgeError>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelLoadStopping {
+    pub stopping: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLoadStartRequest {
+    pub operation_id: Uuid,
+    #[serde(flatten)]
+    pub load: LoadModelRequest,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLoadProfileStartRequest {
+    pub operation_id: Uuid,
+    #[serde(flatten)]
+    pub load: ModelLoadProfileRequest,
+}

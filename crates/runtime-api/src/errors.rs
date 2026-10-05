@@ -122,7 +122,7 @@ impl From<RuntimeError> for ApiError {
             ModelNotLoaded => (
                 StatusCode::CONFLICT,
                 "model_not_loaded",
-                "Load the model locally before using the LAN inference API.",
+                "No model is currently ready for inference. Load a model locally first.",
                 Some("model"),
             ),
             RequestNotFound => (

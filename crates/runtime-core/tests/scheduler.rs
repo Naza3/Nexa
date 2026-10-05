@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -96,6 +96,7 @@ struct Harness {
     commands: mpsc::Receiver<Pending>,
     closed: Arc<AtomicBool>,
     current: Arc<Mutex<Option<ExecutionEvents>>>,
+    resolutions: Arc<AtomicUsize>,
 }
 impl Harness {
     fn new(config: RuntimeConfig, auto_load: bool) -> Self {
@@ -110,7 +111,10 @@ impl Harness {
         let (sender, commands) = mpsc::channel();
         let current = Arc::new(Mutex::new(None));
         let closed = Arc::new(AtomicBool::new(false));
-        let resolver = |id: &ModelId| {
+        let resolutions = Arc::new(AtomicUsize::new(0));
+        let resolved = resolutions.clone();
+        let resolver = move |id: &ModelId| {
+            resolved.fetch_add(1, Ordering::SeqCst);
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: PathBuf::from("controlled.gguf"),
@@ -139,6 +143,7 @@ impl Harness {
             commands,
             closed,
             current,
+            resolutions,
         }
     }
     fn pending(&self) -> Pending {
@@ -186,6 +191,10 @@ fn request() -> GenerationRequest {
         messages: vec![Message::new(Role::User, "synthetic")],
         options: GenerationOptions::default(),
     }
+}
+fn submit_current(handle: &RuntimeHandle) -> Result<(ModelId, EventReceiver), RuntimeError> {
+    let request = request();
+    handle.submit_current(request.request_id, request.messages, request.options)
 }
 fn events(receiver: &EventReceiver) -> Vec<RequestEvent> {
     let mut result = Vec::new();
@@ -478,6 +487,16 @@ fn a11_idle_unload_retains_selection_and_next_request_reloads() {
     assert_eq!(
         h.handle.submit_loaded(request()).err().unwrap().code,
         ErrorCode::ModelNotLoaded
+    );
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    let mut other = request();
+    other.model = ModelId::new("other").unwrap();
+    assert_eq!(
+        h.handle.submit(other).err().unwrap().code,
+        ErrorCode::ModelConflict
     );
     assert!(h.commands.try_recv().is_err());
     let receiver = h.handle.submit(request()).unwrap();
@@ -1679,4 +1698,526 @@ fn disabled_idle_unload_shutdown_waits_for_active_cancellation_and_cleanup() {
     done.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
     join.join().unwrap();
     assert!(h.closed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn current_model_binds_actual_identity_and_preserves_fifo_without_resolving() {
+    let h = Harness::new(
+        RuntimeConfig {
+            max_queued_jobs: 1,
+            ..config()
+        },
+        true,
+    );
+    let actual = ModelId::new("actually-loaded").unwrap();
+    h.handle
+        .load(actual.clone(), LoadOptions::default())
+        .unwrap();
+    let resolutions = h.resolutions.load(Ordering::SeqCst);
+    let (model, first) = submit_current(&h.handle).unwrap();
+    assert_eq!(model, actual);
+    let running = h.pending();
+    let ExecutorCommand::Generate {
+        request: running_request,
+    } = &running.command
+    else {
+        panic!("unexpected load")
+    };
+    assert_eq!(running_request.model, actual);
+    let next_request = request();
+    let (model, next) = h
+        .handle
+        .submit_current(
+            next_request.request_id,
+            next_request.messages.clone(),
+            next_request.options.clone(),
+        )
+        .unwrap();
+    assert_eq!(model, actual);
+    assert_eq!(
+        h.handle
+            .submit_current(
+                next_request.request_id,
+                next_request.messages,
+                next_request.options
+            )
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::DuplicateRequestId
+    );
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::QueueFull
+    );
+    assert_eq!(h.handle.unload().unwrap_err().code, ErrorCode::RuntimeBusy);
+    assert_eq!(
+        h.handle
+            .load(request().model, LoadOptions::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    assert_eq!(h.resolutions.load(Ordering::SeqCst), resolutions);
+    running.prepared();
+    running.complete();
+    terminal(&first);
+    let queued = h.pending();
+    assert_eq!(queued.id(), next_request.request_id);
+    let ExecutorCommand::Generate { request } = &queued.command else {
+        panic!("unexpected load")
+    };
+    assert_eq!(request.model, actual);
+    queued.prepared();
+    queued.complete();
+    assert!(
+        events(&next)
+            .iter()
+            .any(|event| matches!(event.kind, RequestEventKind::Queued))
+    );
+    assert_eq!(h.resolutions.load(Ordering::SeqCst), resolutions);
+    h.finish();
+}
+
+#[test]
+fn current_model_rejects_unloaded_loading_unloading_and_switch_intervals() {
+    let h = Harness::with_shutdown(config(), false, false, None);
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert_eq!(h.resolutions.load(Ordering::SeqCst), 0);
+    assert!(h.commands.try_recv().is_err());
+    let handle = h.handle.clone();
+    let loading = thread::spawn(move || handle.load(request().model, LoadOptions::default()));
+    let load = h.pending();
+    assert!(matches!(load.command, ExecutorCommand::Load { .. }));
+    let resolutions = h.resolutions.load(Ordering::SeqCst);
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert_eq!(h.resolutions.load(Ordering::SeqCst), resolutions);
+    load.events.emit(ExecutorEvent::Loaded);
+    loading.join().unwrap().unwrap();
+
+    // A current request winning actor admission prevents a later switch/unload.
+    let (_, first) = submit_current(&h.handle).unwrap();
+    let job = h.pending();
+    assert_eq!(h.handle.unload().unwrap_err().code, ErrorCode::RuntimeBusy);
+    assert_eq!(
+        h.handle
+            .load(ModelId::new("other").unwrap(), LoadOptions::default())
+            .unwrap_err()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    job.prepared();
+    job.complete();
+    terminal(&first);
+
+    // A switch winning admission excludes current requests during both phases.
+    let handle = h.handle.clone();
+    let switching =
+        thread::spawn(move || handle.load(ModelId::new("other").unwrap(), LoadOptions::default()));
+    let unload = h.pending();
+    assert!(matches!(unload.command, ExecutorCommand::Unload));
+    let resolutions = h.resolutions.load(Ordering::SeqCst);
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert_eq!(h.resolutions.load(Ordering::SeqCst), resolutions);
+    unload.events.emit(ExecutorEvent::Unloaded);
+    let load = h.pending();
+    assert!(matches!(load.command, ExecutorCommand::Load { .. }));
+    let resolutions = h.resolutions.load(Ordering::SeqCst);
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert_eq!(h.resolutions.load(Ordering::SeqCst), resolutions);
+    load.events.emit(ExecutorEvent::Loaded);
+    switching.join().unwrap().unwrap();
+    let (model, current) = submit_current(&h.handle).unwrap();
+    assert_eq!(model.as_str(), "other");
+    let job = h.pending();
+    job.prepared();
+    job.complete();
+    terminal(&current);
+
+    let handle = h.handle.clone();
+    let unloading = thread::spawn(move || handle.unload());
+    let unload = h.pending();
+    assert!(matches!(unload.command, ExecutorCommand::Unload));
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    unload.events.emit(ExecutorEvent::Unloaded);
+    unloading.join().unwrap().unwrap();
+    assert_eq!(
+        h.handle.status().unwrap().selected_model.unwrap().as_str(),
+        "other"
+    );
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert!(h.commands.try_recv().is_err());
+    h.finish();
+}
+
+#[test]
+fn current_model_does_not_resolve_or_recover_a_faulted_executor() {
+    let h = Harness::new(config(), true);
+    h.handle
+        .load(request().model, LoadOptions::default())
+        .unwrap();
+    let (_, receiver) = submit_current(&h.handle).unwrap();
+    let pending = h.pending();
+    pending
+        .events
+        .emit(ExecutorEvent::Faulted(RuntimeError::new(
+            ErrorCode::ExecutorUnavailable,
+            "controlled fault",
+        )));
+    terminal(&receiver);
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Faulted);
+    let resolutions = h.resolutions.load(Ordering::SeqCst);
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::ModelNotLoaded
+    );
+    assert_eq!(h.resolutions.load(Ordering::SeqCst), resolutions);
+    assert!(h.commands.try_recv().is_err());
+    h.finish();
+}
+
+#[test]
+fn current_model_keeps_registry_validation_and_queued_cancellation_guards() {
+    let h = Harness::new(config(), true);
+    h.handle
+        .load(request().model, LoadOptions::default())
+        .unwrap();
+    let lease = h.handle.reserve_registry().unwrap();
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    assert!(h.commands.try_recv().is_err());
+    drop(lease);
+    let r = request();
+    assert_eq!(
+        h.handle
+            .submit_current(r.request_id, vec![], r.options)
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::InvalidArgument
+    );
+    let r = request();
+    assert_eq!(
+        h.handle
+            .submit_current(
+                r.request_id,
+                r.messages,
+                GenerationOptions {
+                    max_tokens: 0,
+                    ..r.options
+                }
+            )
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::InvalidArgument
+    );
+    let (_, first) = submit_current(&h.handle).unwrap();
+    let running = h.pending();
+    let r = request();
+    let (_, cancelled) = h
+        .handle
+        .submit_current(r.request_id, r.messages, r.options)
+        .unwrap();
+    h.handle.cancel(r.request_id).unwrap();
+    assert!(matches!(
+        terminal(&cancelled),
+        RequestEventKind::Cancelled { .. }
+    ));
+    let (_, disconnected) = submit_current(&h.handle).unwrap();
+    drop(disconnected);
+    wait(|| h.handle.status().unwrap().queued_jobs == 0);
+    running.prepared();
+    running.complete();
+    terminal(&first);
+    assert!(h.commands.try_recv().is_err());
+    h.finish();
+}
+
+#[test]
+fn current_model_shutdown_cancels_bound_work_and_rejects_further_admission() {
+    let mut h = Harness::new(config(), true);
+    h.handle
+        .load(request().model, LoadOptions::default())
+        .unwrap();
+    let (_, active) = submit_current(&h.handle).unwrap();
+    let pending = h.pending();
+    let (_, queued) = submit_current(&h.handle).unwrap();
+    let (result, shutdown) = h.begin_shutdown();
+    wait(|| h.handle.status().unwrap().stopping);
+    assert_eq!(
+        submit_current(&h.handle).err().unwrap().code,
+        ErrorCode::RuntimeShutdown
+    );
+    assert!(matches!(
+        terminal(&queued),
+        RequestEventKind::Cancelled { .. }
+    ));
+    wait(|| pending.cancelled.load(Ordering::SeqCst));
+    pending.fail(ErrorCode::RequestCancelled);
+    assert!(matches!(
+        terminal(&active),
+        RequestEventKind::Cancelled { .. }
+    ));
+    result
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    shutdown.join().unwrap();
+    assert!(h.closed.load(Ordering::SeqCst));
+}
+
+fn begin_controlled_load(
+    h: &Harness,
+    model: ModelId,
+    control: LoadControl,
+) -> mpsc::Receiver<Result<(), RuntimeError>> {
+    let handle = h.handle.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(handle.load_controlled(model, LoadOptions::default(), control))
+            .unwrap();
+    });
+    rx
+}
+#[test]
+fn owned_load_cancel_waits_for_cleanup_and_rejects_other_clients() {
+    let h = Harness::new(config(), false);
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, control.clone());
+    let load = h.pending();
+    assert_eq!(
+        h.handle.submit(request()).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    control.cancel();
+    wait(|| load.cancelled.load(Ordering::Acquire));
+    assert!(result.try_recv().is_err());
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Loading);
+    load.events.emit(ExecutorEvent::Failed(RuntimeError::new(
+        ErrorCode::RequestCancelled,
+        "cleaned",
+    )));
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
+    assert!(h.handle.status().unwrap().selected_model.is_none());
+    assert!(h.commands.try_recv().is_err()); // No accidental queued cold reload.
+    h.finish();
+}
+#[test]
+fn cancellation_racing_loaded_waits_for_matching_unload_ack() {
+    let mut h = Harness::with_shutdown(config(), false, false, None);
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, control.clone());
+    let load = h.pending();
+    control.cancel();
+    load.events.emit(ExecutorEvent::Loaded);
+    let unload = h.pending();
+    assert!(matches!(unload.command, ExecutorCommand::Unload));
+    assert!(result.try_recv().is_err());
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloading);
+    assert_eq!(
+        h.handle.submit(request()).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    unload.events.emit(ExecutorEvent::Unloaded);
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    let (done, join) = h.begin_shutdown();
+    done.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+    join.join().unwrap();
+}
+#[test]
+fn stop_switch_finishes_old_unload_without_starting_replacement() {
+    let mut h = Harness::with_shutdown(config(), true, false, None);
+    h.handle
+        .load(request().model, LoadOptions::default())
+        .unwrap();
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, ModelId::new("replacement").unwrap(), control.clone());
+    let unload = h.pending();
+    control.cancel();
+    assert!(result.try_recv().is_err());
+    unload.events.emit(ExecutorEvent::Unloaded);
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert!(h.commands.try_recv().is_err());
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
+    let (done, join) = h.begin_shutdown();
+    done.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+    join.join().unwrap();
+}
+#[test]
+fn retired_load_control_cannot_cancel_newer_load_or_generation() {
+    let h = Harness::new(config(), false);
+    let old = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, old.clone());
+    h.pending().events.emit(ExecutorEvent::Loaded);
+    result
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let new = LoadControl::default();
+    let result = begin_controlled_load(&h, ModelId::new("replacement").unwrap(), new);
+    let load = h.pending();
+    old.cancel();
+    thread::sleep(Duration::from_millis(20));
+    assert!(!load.cancelled.load(Ordering::Acquire));
+    load.events.emit(ExecutorEvent::Loaded);
+    result
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    let mut request = request();
+    request.model = ModelId::new("replacement").unwrap();
+    let events = h.handle.submit(request).unwrap();
+    let generation = h.pending();
+    old.cancel();
+    thread::sleep(Duration::from_millis(20));
+    assert!(!generation.cancelled.load(Ordering::Acquire));
+    generation.prepared();
+    generation.complete();
+    assert!(matches!(
+        terminal(&events),
+        RequestEventKind::Completed { .. }
+    ));
+    h.finish();
+}
+#[test]
+fn cancelled_load_does_not_hide_real_failure_or_unconfirmed_cleanup() {
+    for code in [
+        ErrorCode::NativeFailure,
+        ErrorCode::ExecutorCleanupUnconfirmed,
+    ] {
+        let mut h = Harness::new(config(), false);
+        let control = LoadControl::default();
+        let result = begin_controlled_load(&h, request().model, control.clone());
+        let load = h.pending();
+        control.cancel();
+        let error = RuntimeError::new(code, "fixture failure");
+        load.events
+            .emit(if code == ErrorCode::ExecutorCleanupUnconfirmed {
+                ExecutorEvent::CleanupUnconfirmed(error)
+            } else {
+                ExecutorEvent::Faulted(error)
+            });
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap_err()
+                .code,
+            code
+        );
+        assert_eq!(h.handle.status().unwrap().state, ModelState::Faulted);
+        if code == ErrorCode::ExecutorCleanupUnconfirmed {
+            assert_eq!(
+                h.handle
+                    .load_controlled(request().model, LoadOptions::default(), control)
+                    .unwrap_err()
+                    .code,
+                code
+            );
+            assert_eq!(h.runtime.take().unwrap().shutdown().unwrap_err().code, code);
+        } else {
+            h.finish();
+        }
+    }
+}
+#[test]
+fn precancelled_load_preserves_current_model_and_does_not_touch_executor() {
+    let h = Harness::new(config(), true);
+    h.handle
+        .load(request().model.clone(), LoadOptions::default())
+        .unwrap();
+    let control = LoadControl::default();
+    control.cancel();
+    assert_eq!(
+        h.handle
+            .load_controlled(
+                ModelId::new("other").unwrap(),
+                LoadOptions::default(),
+                control
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert_eq!(
+        h.handle.status().unwrap().selected_model,
+        Some(request().model)
+    );
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Ready);
+    assert!(h.commands.try_recv().is_err());
+    h.finish();
+}
+
+#[test]
+fn manual_stop_before_deadline_is_not_reclassified_while_cleanup_runs() {
+    let h = Harness::new(
+        RuntimeConfig {
+            load_timeout: Duration::from_millis(60),
+            ..config()
+        },
+        false,
+    );
+    let control = LoadControl::default();
+    let result = begin_controlled_load(&h, request().model, control.clone());
+    let load = h.pending();
+    control.cancel();
+    wait(|| load.cancelled.load(Ordering::Acquire));
+    thread::sleep(Duration::from_millis(80));
+    load.events.emit(ExecutorEvent::Faulted(RuntimeError::new(
+        ErrorCode::RequestCancelled,
+        "worker reaped",
+    )));
+    assert_eq!(
+        result
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
+    h.finish();
 }

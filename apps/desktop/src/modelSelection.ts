@@ -1,3 +1,4 @@
+import { validOptionalLoadPhase } from "./modelLoad";
 import { validLocalValidation } from "./localValidation";
 import type { LibraryOperation, ModelFileSelection } from "./types";
 
@@ -20,7 +21,7 @@ export function validModelSelection(value: ModelFileSelection): boolean {
 
 /** Selected-file operations have additive, per-file results, unlike full directory scans. */
 export function validAddOperation(value: LibraryOperation, selection: ModelFileSelection): boolean {
-  if (!value || typeof value !== "object" || bytes(JSON.stringify(value)) > 1024 * 1024 ||
+  if (!value || typeof value !== "object" || !validOptionalLoadPhase(value.load_phase) || bytes(JSON.stringify(value)) > 1024 * 1024 ||
     !text(value.operation_id, 128) || !["running", "completed", "partial", "cancelled", "failed"].includes(value.status) ||
     !["checking", "enumerating", "verifying", "committing", "testing", "finished"].includes(value.phase) ||
     !integer(value.examined_entries, selection.files.length) || value.candidate_files !== selection.files.length ||

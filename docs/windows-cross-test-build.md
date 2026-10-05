@@ -45,7 +45,7 @@ cargo xwin build --locked --release --target x86_64-pc-windows-msvc \
 - `schema_version: 1`
 - `archives`：每项包含 `path`、官方 Microsoft HTTPS `url`、`sha256`、`size_bytes`，保留包 ID/版本
 - `dlls`：每项包含 `path`、`sha256`、`size_bytes`、`archive_sha256`、精确原 ZIP/VSIX `package_path`
-- `licenses`：每项包含原文 `path`、`sha256`、`size_bytes`、`source_url`；保留真实 DOCX 等原件
+- `licenses`：每项包含原文 `path`、`sha256`、`size_bytes`、`source_url`。按[十文件许可整合契约](decisions/0026-lossless-license-bundles.md)，UTF-8 原文汇入文本；DOCX/PDF或其他已支持的非 UTF-8 Microsoft 原件保持原字节、原格式，独立存为 `licenses/ORIGINAL-<原文件名>`。此时本层 `THIRD_PARTY_NOTICES.md` 原字节汇入文本并由索引绑定，腾出文件位置；runtime仍自包含，完整桌面仍受至多10份许可文件的硬门槛约束。不转码、不删原件，也不另建压缩包。
 
 工具链记录中的目录/元数据 hash 或 size 验证局限必须原样保留，不得用自算 hash 宣称上游校验已通过。打包器重新核验 archive、原 member 和 DLL 字节关系，只复制实际普通/delay import 闭包需要的 Release DLL。每种实际复制字节须通过指定 `osslsigncode verify` 的签名、时间戳、CRL 检查；无忽略/跳过验签参数。manifest 保留工具/信任根/日志 hash、警告和 Windows 策略不等效标识。Windows `Get-AuthenticodeSignature` 明确未执行。
 

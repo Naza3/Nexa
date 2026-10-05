@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+from test_license_bundle import compact_fixture
 
 spec = importlib.util.spec_from_file_location("package_windows", Path(__file__).with_name("package_windows.py"))
 pack = importlib.util.module_from_spec(spec)
@@ -603,10 +604,11 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(sorted(copied), ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"])
 
     def fixture(self, stage):
-        for name in ("ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/index.json"):
+        for name in ("ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", "THIRD_PARTY_NOTICES.md"):
             path = stage / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture", encoding="utf-8")
+        compact_fixture(stage)
         return {"product": "nexa-runtime", "files": pack.entries(stage), "dependencies": {"ai-runtime.exe": {"imports": [{"name":"kernel32.dll", "kind":"os"}]}, "ai-runtime-worker.exe": {"imports": [{"name":"kernel32.dll", "kind":"os"}]}}}
 
     def test_manifest_rejects_missing_changed_extra_duplicate_and_pollution(self):

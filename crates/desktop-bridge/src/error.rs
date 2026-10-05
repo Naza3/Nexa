@@ -7,6 +7,24 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "configuration_conflict" => "配置已被其他窗口或程序更改。请重读并比较草稿后再保存。",
+            "configuration_migration_required" => {
+                "请先在设置中比较并确认旧桌面/API默认值，升级配置后再使用模型档案。"
+            }
+            "configuration_restart_required" => {
+                "磁盘配置与运行服务不同。请停服并重启后再主动加载或保存。"
+            }
+            "configuration_revision_required" => {
+                "此旧写入接口不支持配置版本检查。请使用新版设置页面。"
+            }
+            "configuration_busy" => "另一个配置事务正在进行，请稍后重试。",
+            "configuration_invalid" | "model_profile_invalid" => {
+                "配置或模型档案超出有效范围，未保存。"
+            }
+            "configuration_durability_unconfirmed" => {
+                "配置可能已保存，但磁盘持久化未确认。请先重新读取，不要直接重试。"
+            }
+
             "validation_record_unavailable" | "validation_record_write_failed" => {
                 "本机测试记录无法保存，未确认本次验证通过。已加载模型仍可继续使用，请检查数据目录后重试测试。"
             }
@@ -54,8 +72,15 @@ impl BridgeError {
             "lan_token_unavailable" => {
                 "请先显式启用 LAN 并成功启动服务，再复制独立 LAN 密钥。现有密钥仍需通过安全文件校验。"
             }
+            "lan_address_discovery_failed" => "无法读取本机 IPv4 网卡地址，可刷新重试或手动填写。",
+            "lan_address_discovery_busy" => "上次本机地址读取尚未结束，请稍后刷新或手动填写。",
+            "lan_address_discovery_timeout" => "读取本机网卡地址超时，可稍后刷新或手动填写。",
+            "lan_address_discovery_invalid" => {
+                "系统返回的网卡信息无法安全读取，可刷新重试或手动填写。"
+            }
+            "lan_address_discovery_limit" => "本机网卡信息超过读取上限，请手动填写 IPv4 地址。",
             "runtime_running" => "Stop the runtime before applying this runtime setting.",
-            "not_initialized" => "Initialize and start the runtime explicitly first.",
+            "not_initialized" => "请先明确初始化本机配置。初始化不会启动服务。",
             "runtime_not_running" => "Start the runtime first.",
             "connection_failed" => {
                 "The existing instance could not be securely verified. It was not replaced."
@@ -82,10 +107,15 @@ impl BridgeError {
                 "The stream was malformed or ended before a verified completion. The partial reply is incomplete."
             }
             "consumer_busy" => "Only one pending output read is allowed.",
-            "request_not_owned" => "This request does not belong to this window.",
-            "model_load_interrupted" => {
-                "This window's model request was disconnected. Preparation is cancelling; native loading, if already admitted, must finish cleanup."
+            "executor_cleanup_unconfirmed" => {
+                "推理进程或资源清理未确认。请检查服务状态；不能继续加载，也不能把它视为已停止。"
             }
+            "model_load_result_unavailable" => {
+                "本次操作已经结束，但结果已过期。请刷新模型状态后重试。"
+            }
+            "request_cancelled" => "本次加载或基础测试已停止。",
+            "request_not_owned" => "This request does not belong to this window.",
+            "model_load_interrupted" => "本次加载结果暂时无法确认，正在重新读取；请勿重复加载。",
             "import_interrupted" => {
                 "The import connection was closed. Refresh the model list before retrying; a completed copy may already exist."
             }
@@ -122,6 +152,27 @@ impl BridgeError {
             message: message.into(),
         }
     }
+    fn with_configuration_param(mut self, param: Option<&str>) -> Self {
+        let label = match param {
+            Some("expected_revision") => Some("保存版本"),
+            Some("expected_preferences_revision") => Some("旧桌面偏好版本"),
+            Some("update") => Some("配置组"),
+            Some("update.load_overrides") => Some("模型运行档案"),
+            Some("update.load_overrides.context_size") => Some("模型上下文上限"),
+            Some("update.global_defaults") => Some("全局加载默认值"),
+            Some("update.global_defaults.context_size") => Some("全局默认上下文与模型上限"),
+            Some("update.request_defaults") => Some("请求默认值"),
+            Some("update.runtime") => Some("运行策略"),
+            Some("update.runtime.idle_unload_seconds") => Some("空闲释放时间"),
+            Some("update.local_api") => Some("本机监听"),
+            Some("update.lan_api") => Some("局域网设置"),
+            _ => None,
+        };
+        if let Some(label) = label {
+            self.message.push_str(&format!("（字段：{label}）"));
+        }
+        self
+    }
     pub(crate) fn spawn(error: &std::io::Error) -> Self {
         let mut safe = Self::new("runtime_start_failed");
         if let Some(code) = error.raw_os_error() {
@@ -133,6 +184,18 @@ impl BridgeError {
     }
     pub(crate) fn api(code: Option<&str>) -> Self {
         const KNOWN: &[&str] = &[
+            "not_found",
+            "configuration_conflict",
+            "configuration_migration_required",
+            "configuration_restart_required",
+            "configuration_revision_required",
+            "configuration_busy",
+            "configuration_invalid",
+            "model_profile_invalid",
+            "configuration_unavailable",
+            "configuration_write_failed",
+            "configuration_durability_unconfirmed",
+            "runtime_running",
             "invalid_request",
             "unsupported_parameter",
             "unsupported_model",
@@ -152,6 +215,9 @@ impl BridgeError {
             "load_timeout",
             "execution_timeout",
             "runtime_faulted",
+            "executor_cleanup_unconfirmed",
+            "native_failure",
+            "native_protocol_error",
             "worker_lost",
             "runtime_shutdown",
             "model_load_failed",
@@ -185,9 +251,16 @@ impl std::error::Error for BridgeError {}
 impl From<runtime_cli::client::ClientError> for BridgeError {
     fn from(e: runtime_cli::client::ClientError) -> Self {
         match e {
-            runtime_cli::client::ClientError::Api { code, .. } => Self::api(code.as_deref()),
+            runtime_cli::client::ClientError::Api { code, param, .. } => {
+                Self::api(code.as_deref()).with_configuration_param(param.as_deref())
+            }
             _ => Self::new("connection_failed"),
         }
+    }
+}
+impl From<runtime_api::configuration::ConfigurationError> for BridgeError {
+    fn from(e: runtime_api::configuration::ConfigurationError) -> Self {
+        Self::new(e.code).with_configuration_param(e.param)
     }
 }
 pub type Result<T> = std::result::Result<T, BridgeError>;

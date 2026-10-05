@@ -2,7 +2,7 @@ name: Windows CPU native and runtime verification
 
 on:
   push:
-    branches: ['codex/nexa-add-model']
+    branches: ['codex/dev']
     # Only known isolated Android/docs paths are excluded; unknown paths still trigger.
     paths-ignore:
       - 'native/mnn-probe/**'

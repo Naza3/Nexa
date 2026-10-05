@@ -46,7 +46,7 @@ describe("selected-file and LAN controller integration", () => {
     const picking = controller.pickModels();
     await controller.saveLanSettings(enabled); await controller.copyLanToken(); await controller.copyLanBaseUrl();
     expect(api.saveLanSettings).not.toHaveBeenCalled(); expect(api.copyLanToken).not.toHaveBeenCalled();
-    expect(controller.getSnapshot().operation).toBe("正在选择 GGUF 文件");
+    expect(controller.getSnapshot().operation).toMatchObject({ kind: "pick_models", label: "正在选择 GGUF 文件" });
     await controller.close(); expect(api.close).toHaveBeenCalledTimes(1);
     picker.resolve(selection); await picking;
     expect(api.discardModelSelection).toHaveBeenCalledExactlyOnceWith(selection.selection_id);
@@ -103,10 +103,10 @@ describe("selected-file and LAN controller integration", () => {
 
 describe("selected-file and LAN settings UI integration", () => {
   it("preserves selected files when cancelling the extracted LAN modal, then releases them on explicit cancellation", async () => {
-    const { api, controller } = await create(); render(<App controller={controller} />);
+    const { api, controller } = await create(); render(<App initialPage="models" controller={controller} />);
     fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
     await screen.findByRole("region", { name: "添加选中的模型" });
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "API 接入" }));
     fireEvent.click(screen.getByRole("button", { name: "复制局域网 API 密钥" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("其他应用或剪贴板历史");
     fireEvent.keyDown(document, { key: "Escape" });
@@ -121,11 +121,11 @@ describe("selected-file and LAN settings UI integration", () => {
   it("disables LAN during add cancellation and restores it only after the native terminal state", async () => {
     const terminal = deferred<LibraryOperation>();
     const { api, controller } = await create({ libraryNext: vi.fn(() => terminal.promise) });
-    render(<App controller={controller} />);
+    render(<App initialPage="models" controller={controller} />);
     fireEvent.click(screen.getByRole("button", { name: "添加模型" }));
     fireEvent.click(await screen.findByRole("button", { name: "确认添加 1 个模型" }));
     await waitFor(() => expect(api.libraryNext).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "API 接入" }));
     expect(screen.getByRole("switch", { name: "启用局域网 API" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "复制局域网 API 密钥" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "取消添加" }));

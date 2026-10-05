@@ -359,9 +359,14 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 | `GET /runtime/devices` | 本构建后端与设备探测结果 |
 | `POST /runtime/models/import` | 当前用户本地文件导入；只供受信任本机管理客户端 |
 | `POST /runtime/load` | 显式加载/切换，完成后返回 200；受 load_timeout 约束 |
+| `POST /runtime/load-operations` | ADR0027按次UUID异步加载/切换与私有短测；可选only_if_unloaded保留自动不抢占 |
+| `GET /runtime/load-operations/{id}` | 有界current/previous操作观察；身份、阶段、终态与最后runtime/短测结果 |
+| `POST /runtime/load-operations/{id}/cancel` | 仅停止持有该随机句柄的操作；回执不等于清理完成，next终态确认 |
 | `POST /runtime/unload` | 无任务时卸载，返回最终状态 |
 | `POST /runtime/requests/{id}/cancel` | 标记取消；存在活动请求返回 202，未知 ID 返回 404 |
 | `POST /runtime/shutdown` | 停止接收新请求、取消任务、回收 worker、退出 |
+
+ADR0027增量：桌面可停止自己的文件准备/hash、显式切换/加载及同操作私有短测。取消直接作用于操作令牌，不排在Load后；显式加载独占期间不接受其他客户端排队；取消Loaded竞态需再卸载并等ACK。不合作worker沿用5秒宽限/强制终止/确认回收；清理未确认是永久故障，不能返回cancelled/unloaded。加载已结束后的Stop只取消私有probe，可能保留驻留模型；不取消别人的生成，不保存取消为失败模型证明，不用shutdown替代。完整身份/回执恢复/自动流程边界见[ADR0027](docs/decisions/0027-owned-model-load-cancellation.md)。
 
 T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。35bfd85基线`/v1/models`仅列旧准入模型；ADR0015增量改按当前available/loadable筛选，未有历史validated的合法候选也可列出，列表不承诺实际load必成功；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
 
@@ -381,7 +386,7 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 
 | 字段 | 第一版规则 |
 |---|---|
-| `model` | 必填，已注册 ID |
+| `model` | 非空时为严格已注册ID；缺省/空串/全空白使用准入时当前已加载模型，详见ADR0024；null及其他类型仍400 |
 | `messages` | 必填，1–128 条；role 为 system/user/assistant；content 为字符串 |
 | 消息顺序 | 至多一个 system 且在首位；随后 user/assistant 交替；最后为 user |
 | `stream` | 默认 false |
@@ -394,6 +399,8 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 | `n` | 仅允许省略或 1 |
 | `stream_options.include_usage` | 允许；只对 stream=true 有效 |
 | `user` | 可接收的标识，长度限制 128 字符；不写入默认日志，不参与调度 |
+
+空ID选择是[ADR0024](docs/decisions/0024-current-loaded-model-chat-default.md)的Nexa便利扩展，由actor原子绑定当前Ready/Generating模型；没有已加载模型时明确失败，不自动加载。显式ID不匹配时不回退或切换；LAN始终只用本机已加载模型。SSE/非流式响应返回实际绑定ID。实施与交付状态见当前状态，不追溯改变旧包行为。
 
 不支持的已知功能字段（如 tools、tool_choice、response_format、logprobs、非零 penalties、多模态 content）返回 400 `unsupported_parameter`，不得静默忽略。frequency_penalty/presence_penalty=0、logprobs=false、tool_choice="none" 可作为兼容空操作接受。其他未知字段返回 400，并指明字段名。
 

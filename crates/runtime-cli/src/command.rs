@@ -10,7 +10,7 @@ use runtime_api::{
     dto::ModelSummary,
     lan::LanSecurityContext,
     security::SecurityContext,
-    token::{init_private_lan_token, init_private_token, load_private_token, write_private_new},
+    token::{init_private_lan_token, load_private_token},
 };
 use runtime_core::Runtime;
 use runtime_types::ModelId;
@@ -18,8 +18,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
-    fs,
-    io::{self, Read},
+    fs, io,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -170,22 +169,7 @@ fn default_data_dir() -> Result<PathBuf> {
     }
 }
 fn read_config(root: &Path) -> Result<Config> {
-    let path = root.join("config.toml");
-    if !fs::symlink_metadata(&path)
-        .map_err(|_| "configuration missing; run init explicitly")?
-        .file_type()
-        .is_file()
-    {
-        return Err("configuration must be a regular file".into());
-    }
-    let mut bytes = Vec::new();
-    fs::File::open(&path)?.take(65537).read_to_end(&mut bytes)?;
-    if bytes.len() > 65536 {
-        return Err("configuration exceeds size limit".into());
-    }
-    Ok(Config::from_toml(
-        std::str::from_utf8(&bytes).map_err(|_| "configuration must be UTF-8")?,
-    )?)
+    Ok(runtime_api::configuration::read(root)?.config)
 }
 fn require_initialized(root: &Path) -> Result<Config> {
     let config = read_config(root)?;
@@ -232,18 +216,14 @@ pub async fn execute(options: Options) -> Result<()> {
         );
     }
     if matches!(options.command, Command::Init) {
-        let _lock = InstanceLock::try_acquire(&root)?
+        let lock = InstanceLock::try_acquire(&root)?
             .ok_or("data directory is in use; stop the service before init")?;
-        let _ = init_private_token(&root)?;
-        match write_private_new(
-            &root.join("config.toml"),
-            Config::default().to_toml()?.as_bytes(),
-        ) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e.into()),
-        };
-        let _ = read_config(&root)?;
+        if lock.has_discovery() {
+            return Err(
+                "runtime_stop_unconfirmed: previous service cleanup is not confirmed".into(),
+            );
+        }
+        runtime_api::configuration::initialize(&root)?;
         return print(json!({"initialized":true}));
     }
     if matches!(options.command, Command::Serve) {
@@ -253,7 +233,14 @@ pub async fn execute(options: Options) -> Result<()> {
     if matches!(options.command, Command::Stop) && !root.exists() {
         return print(json!({"stopped":true,"was_running":false}));
     }
-    let config = require_initialized(&root)?;
+    let config = if matches!(options.command, Command::Stop) {
+        // Stop uses discovery, ownership and endpoint proof; a damaged saved
+        // configuration must not prevent shutting down the authenticated owner.
+        let _ = load_private_token(&root)?;
+        None
+    } else {
+        Some(require_initialized(&root)?)
+    };
     let lock = InstanceLock::try_acquire(&root)?;
     if let Some(lock) = lock {
         return match options.command {
@@ -358,7 +345,10 @@ pub async fn execute(options: Options) -> Result<()> {
                         Method::POST,
                         "/runtime/load",
                         Some(&value),
-                        config.model_verification_timeout(),
+                        config
+                            .as_ref()
+                            .ok_or("configuration unavailable for load")?
+                            .model_verification_timeout(),
                     )
                     .await?
             } else {

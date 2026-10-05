@@ -125,4 +125,10 @@ Windows产品worker由父进程独立计时：加载使用load_timeout，prepare
 
 保留runtime包、桌面包、独立验收器的分离与同source身份/PE依赖/许可/hash闭包。Windows10短验与Server2022 CI分别记录，Windows11和其他CPU不自动继承支持。
 
+发行许可展示按[ADR0026](decisions/0026-lossless-license-bundles.md)将每层原文无损汇集为索引/文本/标准库版权HTML，完整桌面（含runtime/download）至多10份许可相关文件。runtime继续自包含；aria2原构建产物的11份许可、build-manifest与对应源码归档不改，在最终打包层汇集。下载原生消费者验证原路径/字节范围/hash与原build.files绑定，不把减少文件数变成放宽组件身份或许可闭包。
+
 W00后，W01既有功能短验与W04最小harness文本互通并行；真实工具闭环依赖W02实用模型/工具能力准入。W04文本优先于非必要托盘美化，不被W03管理器阻塞；各阶段门槛通过后进入W05后期发行。无开发工具、离线和长期稳定性仍留后期；未验不等于通过。详见 [路线](roadmap.md)。Android历史不再是依赖，原研究源码/WIP不动。
+
+## 按次加载取消增量（2026-10-05）
+
+[ADR0027](decisions/0027-owned-model-load-cancellation.md)将取消身份贯穿前端随机UUID、native bridge、回环异步load-operation与单actor `LoadControl`。API负责有界操作记录、hash准备与私有probe；actor持有切换/加载/取消后卸载的独占令牌，ProcessHost负责不合作worker终止/reap，EngineHost只在原生资源释放后确认失败/卸载。已加载后的probe取消不能卸载其他客户端可用模型。新增管理路由不进入LAN，源文件guard仍按原有服务生命周期释放；这不是全服务shutdown别名。

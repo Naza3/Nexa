@@ -221,6 +221,236 @@ def collect_dependencies(stage, redist, inspect, copy_crt, binaries=("ai-runtime
     return result
 
 
+# A package keeps directly readable notices and an exact original-file mapping.
+# These files are a presentation change, not a selection of alternate licenses.
+LICENSE_INDEX = "licenses/index.json"
+LICENSE_TEXT = "licenses/THIRD_PARTY_LICENSES.txt"
+LICENSE_HTML = "licenses/COPYRIGHT.html"
+LICENSE_NOTICES = "THIRD_PARTY_NOTICES.md"
+LICENSE_FORMAT = "nexa-license-bundle-v1"
+LICENSE_PREFIX = (b"Nexa third-party license bundle (format 1)\n"
+                  b"Original license and notice bytes are preserved without modification.\n"
+                  b"Component, version and source mappings are in index.json.\n")
+LICENSE_FOOTER = b"\nEND ORIGINAL\n"
+ORIGINAL_INDEXES = {LICENSE_INDEX, "licenses/npm-index.json", "licenses/microsoft-crt/index.json"}
+
+
+def strict_json(raw):
+    # Match the native consumer: no UTF-16/32 auto-detection or UTF-8 BOM.
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="strict")
+    def object_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                fail("duplicate JSON key in license inventory")
+            result[key] = value
+        return result
+    def invalid_constant(value):
+        fail("non-JSON numeric constant in license inventory")
+    def exact_integer(value):
+        number = int(value)
+        if value == "-0" or not -(2**63) <= number <= 2**64 - 1:
+            fail("license JSON integer is outside the exact native range")
+        return number
+    def invalid_float(value):
+        fail("floating-point numbers are forbidden in license JSON")
+    return json.loads(raw, object_pairs_hook=object_pairs, parse_constant=invalid_constant,
+                      parse_int=exact_integer, parse_float=invalid_float)
+
+
+def exact_json_equal(left, right):
+    """Compare preserved records without Python's bool/int equality aliases."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(exact_json_equal(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(exact_json_equal(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def license_header(document):
+    return (f"\n===== ORIGINAL FILE: {document['original_path']} =====\n"
+            f"SHA256: {document['sha256']}\nBytes: {document['size_bytes']}\nBEGIN ORIGINAL\n").encode("utf-8")
+
+
+def license_original_path(name):
+    relative(name)
+    if name == LICENSE_NOTICES:
+        return name
+    if (not name.startswith("licenses/") or
+            Path(name).suffix.lower() in {".exe", ".dll", ".gguf", ".pdb", ".lib", ".a", ".so", ".log", ".bat", ".ps1", ".py"} or
+            any(part.lower() in {".git", "userdata", "secrets", "logs", "models", "node_modules", "target", "build"} for part in name.split("/"))):
+        fail("unsupported license original path or non-text original")
+    return name
+
+
+def license_storage(name, raw):
+    """Keep native HTML and non-text Microsoft originals directly openable."""
+    try:
+        raw.decode("utf-8", errors="strict")
+        text = b"\0" not in raw
+    except UnicodeDecodeError:
+        text = False
+    suffix = Path(name).suffix.lower()
+    if not text or suffix in {".pdf", ".docx"}:
+        if (not name.startswith("licenses/microsoft-crt/") or
+                suffix not in {".txt", ".rtf", ".html", ".htm", ".md", ".pdf", ".docx"}):
+            fail("unsupported binary license original; conversion or omission is forbidden")
+        return "licenses/ORIGINAL-" + Path(name).name
+    return LICENSE_HTML if name == "licenses/rust-std/COPYRIGHT-library.html" else LICENSE_TEXT
+
+
+def license_attributions(originals, supplied=None):
+    """Check the pre-consolidation closure, retaining all original index bytes."""
+    result = {name: list(records) for name, records in (supplied or {}).items()}
+    if LICENSE_NOTICES in originals:
+        result[LICENSE_NOTICES] = [{"component": "Nexa third-party notices", "source": LICENSE_NOTICES}]
+    if not set(result) <= set(originals):
+        fail("license attribution names an absent original")
+    for name in sorted(ORIGINAL_INDEXES & originals.keys()):
+        index = strict_json(originals[name])
+        if not isinstance(index, dict) or not isinstance(index.get("files"), list) or not index["files"]:
+            fail("original license inventory is empty or invalid")
+        seen = set()
+        for record in index["files"]:
+            if not isinstance(record, dict):
+                fail("invalid original license record")
+            path = license_original_path(record.get("path"))
+            if path.casefold() in seen or path in ORIGINAL_INDEXES or path not in originals:
+                fail("duplicate or missing original license record")
+            seen.add(path.casefold())
+            if hashlib.sha256(originals[path]).hexdigest() != record.get("sha256"):
+                fail("original license inventory hash mismatch")
+            result.setdefault(path, []).append(record)
+        result[name] = [{"component": "Original component/license inventory", "source": name}]
+    if set(result) != set(originals) or any(not records for records in result.values()):
+        fail("license originals and attribution closure differ")
+    return result
+
+
+def consolidate_licenses(stage, supplied=None):
+    """Replace staged license presentation, preserving every original byte.
+
+    The Rust copyright HTML remains an ordinary HTML file; all other UTF-8
+    originals, including previous JSON inventories, are concatenated verbatim.
+    Non-text Microsoft originals remain separate. In that case the root notices
+    join the text bundle to free a file slot without losing any notice bytes.
+    No archive, license selection, newline conversion or source pruning occurs.
+    """
+    original_entries = entries(stage / "licenses")
+    originals = {"licenses/" + item["path"]: regular(stage / "licenses" / item["path"]).read_bytes()
+                 for item in original_entries}
+    if not originals:
+        fail("license closure is empty")
+    standalone = any(license_storage(name, raw) not in {LICENSE_TEXT, LICENSE_HTML}
+                     for name, raw in originals.items())
+    if standalone and (stage / LICENSE_NOTICES).exists():
+        originals[LICENSE_NOTICES] = regular(stage / LICENSE_NOTICES).read_bytes()
+    attributes = license_attributions(originals, supplied)
+    bundle, documents, standalone_files = bytearray(LICENSE_PREFIX), [], {}
+    for name, raw in sorted(originals.items()):
+        license_original_path(name)
+        storage = license_storage(name, raw)
+        document = {"original_path": name, "sha256": hashlib.sha256(raw).hexdigest(),
+                    "size_bytes": len(raw), "stored_path": storage, "offset_bytes": 0,
+                    "attributions": attributes[name]}
+        if storage != LICENSE_TEXT:
+            if storage.casefold() in {path.casefold() for path in standalone_files}:
+                fail("duplicate standalone license storage path")
+            standalone_files[storage] = raw
+        else:
+            bundle.extend(license_header(document))
+            document["offset_bytes"] = len(bundle)
+            bundle.extend(raw)
+            bundle.extend(LICENSE_FOOTER)
+        documents.append(document)
+    index = {"schema_version": 1, "format": LICENSE_FORMAT, "documents": documents}
+    # Validate the replacement before touching any original staging file.
+    with tempfile.TemporaryDirectory(prefix=".license-stage-", dir=stage) as temporary:
+        compact = Path(temporary)
+        (compact / "licenses").mkdir()
+        (compact / LICENSE_TEXT).write_bytes(bundle)
+        for name, raw in standalone_files.items():
+            (compact / name).write_bytes(raw)
+        write_json(compact / LICENSE_INDEX, index)
+        recovered = verify_license_bundle(compact, supplied=supplied)
+        if {name: item["raw"] for name, item in recovered.items()} != originals:
+            fail("license consolidation failed lossless round-trip")
+        shutil.rmtree(stage / "licenses")
+        (compact / "licenses").rename(stage / "licenses")
+        if LICENSE_NOTICES in originals:
+            (stage / LICENSE_NOTICES).unlink()
+    return index
+
+
+def verify_license_bundle(stage, supplied=None):
+    """Validate every byte, offset, original attribution and closed output role."""
+    index = strict_json(regular(stage / LICENSE_INDEX).read_bytes())
+    if (not isinstance(index, dict) or set(index) != {"schema_version", "format", "documents"} or
+            type(index["schema_version"]) is not int or index["schema_version"] != 1 or
+            index["format"] != LICENSE_FORMAT or not isinstance(index["documents"], list) or not index["documents"]):
+        fail("unsupported or empty license bundle index")
+    bundle = regular(stage / LICENSE_TEXT).read_bytes()
+    if not bundle.startswith(LICENSE_PREFIX):
+        fail("license bundle header mismatch")
+    cursor, result, folded, storage_files = len(LICENSE_PREFIX), {}, set(), set()
+    for document in index["documents"]:
+        if not isinstance(document, dict) or set(document) != {"original_path", "sha256", "size_bytes", "stored_path", "offset_bytes", "attributions"}:
+            fail("invalid license bundle document")
+        name = license_original_path(document["original_path"])
+        size, offset = document["size_bytes"], document["offset_bytes"]
+        if (name.casefold() in folded or (result and name <= next(reversed(result))) or
+                not isinstance(document["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", document["sha256"]) or
+                type(size) is not int or size < 0 or type(offset) is not int or offset < 0 or
+                not isinstance(document["attributions"], list) or not document["attributions"] or
+                any(not isinstance(record, dict) or not record for record in document["attributions"])):
+            fail("duplicate, unordered or invalid license bundle record")
+        folded.add(name.casefold())
+        storage = document["stored_path"]
+        if storage == LICENSE_TEXT:
+            header = license_header(document)
+            if bundle[cursor:cursor + len(header)] != header or offset != cursor + len(header) or size > len(bundle) - offset:
+                fail("license byte range/framing mismatch")
+            raw = bundle[offset:offset + size]
+            cursor = offset + size
+            if bundle[cursor:cursor + len(LICENSE_FOOTER)] != LICENSE_FOOTER:
+                fail("license bundle footer mismatch")
+            cursor += len(LICENSE_FOOTER)
+        else:
+            expected = LICENSE_HTML if name == "licenses/rust-std/COPYRIGHT-library.html" else "licenses/ORIGINAL-" + Path(name).name
+            if storage != expected or storage in storage_files or offset != 0:
+                fail("license document escapes fixed standalone storage roles")
+            raw = regular(stage / storage).read_bytes()
+            storage_files.add(storage)
+        if license_storage(name, raw) != storage:
+            fail("license original must remain directly readable in its original format")
+        if len(raw) != size or hashlib.sha256(raw).hexdigest() != document["sha256"]:
+            fail("license original hash/size mismatch")
+        result[name] = {"document": document, "raw": raw}
+    if cursor != len(bundle):
+        fail("unmapped trailing bytes in license bundle")
+    expected = {LICENSE_INDEX, LICENSE_TEXT} | storage_files
+    if {"licenses/" + item["path"] for item in entries(stage / "licenses")} != expected:
+        fail("license bundle file closure mismatch")
+    if any(path.is_dir() for path in (stage / "licenses").rglob("*")):
+        fail("unexpected directory in consolidated licenses")
+    if LICENSE_NOTICES in result and (stage / LICENSE_NOTICES).exists():
+        fail("bundled notices must not also exist as an unindexed standalone copy")
+    originals = {name: item["raw"] for name, item in result.items()}
+    attributes = license_attributions(originals, supplied)
+    if any(not exact_json_equal(item["document"]["attributions"], attributes[name]) for name, item in result.items()):
+        fail("license attribution differs from original inventory")
+    return result
+
+
+def license_related_files(stage):
+    return [item["path"] for item in entries(stage)
+            if "licenses" in item["path"].lower().split("/") or
+            Path(item["path"]).name.lower().startswith(("license", "licence", "copying", "notice", "unlicense", "copyright", "third_party_notice"))]
+
+
 def verify_package(stage, manifest):
     declared = {}
     for item in manifest["files"]:
@@ -232,6 +462,7 @@ def verify_package(stage, manifest):
     payload = [x for x in actual if x["path"] not in ("manifest.json", "SHA256SUMS")]
     if {x["path"].casefold(): x for x in payload} != declared:
         fail("manifest file set/hash/size mismatch")
+    originals = verify_license_bundle(stage)
     helper = manifest.get("product") == "nexa-acceptance-tools"
     allowed_root = ROOT_FILES | ({"nexa-acceptance.exe"} if helper else set())
     for item in actual:
@@ -245,9 +476,11 @@ def verify_package(stage, manifest):
         if "/" in name or name not in manifest["dependencies"] or not name.endswith(".dll"):
             fail(f"unexpected package content: {name}")
     names = {x["path"] for x in payload}
-    required = {"nexa-acceptance.exe", "THIRD_PARTY_NOTICES.md", "licenses/index.json"} if helper else {"ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", "THIRD_PARTY_NOTICES.md", "licenses/index.json"}
+    required = {"nexa-acceptance.exe", LICENSE_INDEX} if helper else {"ai-runtime.exe", "ai-runtime-worker.exe", "config.example.toml", "README.md", LICENSE_INDEX}
     if not required <= names:
         fail("required package content missing")
+    if LICENSE_NOTICES not in names and LICENSE_NOTICES not in originals:
+        fail("required package notices missing from both standalone and bundled roles")
     for name, node in manifest["dependencies"].items():
         if name not in names:
             fail("dependency node missing its file")
@@ -686,6 +919,7 @@ def build():
             crt_sources.append({"path": dest.name, "source_relative_to_visual_studio": source.relative_to(vs).as_posix(), "sha256": digest(source), "size_bytes": source.stat().st_size, **info})
         dependencies = collect_dependencies(stage, redist, inspect, copy_crt)
         copy_licenses(stage, metadata, env)
+        consolidate_licenses(stage)
         replacements = [(str(ROOT), "<project>"), (str(vs), "<visual-studio>"), (os.environ.get("USERPROFILE", ""), "<user-profile>"), (str(Path(command(["rustc", "--print", "sysroot"], env))), "<rust-toolchain>")]
         public_identity = sanitize(identity, replacements)
         manifest = {
@@ -725,6 +959,7 @@ def build():
         crt_sources = []
         helper_dependencies = collect_dependencies(helper, redist, inspect, copy_crt, ("nexa-acceptance.exe",))
         copy_licenses(helper, metadata, env, roots=("xtask",))
+        consolidate_licenses(helper)
         helper_manifest = {k: v for k, v in manifest.items() if k not in ("files", "native_build", "native_archives", "cpu_baseline", "acceptance", "management_without_native")}
         helper_manifest.update(product="nexa-acceptance-tools", dependencies=helper_dependencies, crt_sources=crt_sources, files=entries(helper), native_inference_linkage=False, helper_without_native={"verified": True, "profile": "release", "dependencies": helper_tree})
         helper_manifest = sanitize(helper_manifest, replacements)

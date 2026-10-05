@@ -1,5 +1,47 @@
 # Nexa 当前状态
 
+## 2026-10-05 按操作身份手动停止加载（开发验证完成，Windows待验）
+
+用户要求加载耗时长时可以手动停止。在 `codex/dev` clean基线 `a5ba7388d23758d31e2bfbc94571ef906fd8e535` 实施[ADR0027](docs/decisions/0027-owned-model-load-cancellation.md)：模型库legacy/profile、添加/下载后的自动加载共用按次UUID，取消覆盖hash/切换/native load/本操作私有短测；不停止整个服务、不取消别的客户端、只在清理ACK后终态，旧令牌不能影响新工作。生成与LAN管理边界保持，已保存/登记不回滚。
+
+最终全workspace/all-targets42组539通过/0失败/7既有忽略，另doc-tests7；完整clippy/root与壳fmt、壳31项/clippy、Windows壳及关联后端all-targets交叉check（仅既有clang-cl探测warning）通过。前端695项/typecheck/lint/build、Python208通过/4平台skip通过；独立96项与最终稳定进程fixture复验为子集不累加，审查无剩余阻断。真实不合作Load在收到Load后的原子标记取消，5.07秒kill/reap后同supervisor正常重载；坏IPC/原生真实故障不再被Stop覆盖为正常取消。最终重建Linux固定Qwen0.6B实际loading阶段Stop，断言终态cancelled、无active/registry工作及旧ID无效，随后同服务重载、短测/聊天/证明与最终清理全部通过。详见[验证记录](docs/verification/2026-10-05-model-load-cancellation.md)及[脱敏真实报告](docs/verification/2026-10-05-model-load-cancellation-smoke.json)。
+
+本轮子任务没有提交、推送或触发Actions；新原生Windows/目标机结果尚无。由主代理统一提交并按当前授权运行标准GitHub Windows构建，不自动合并main，不把交叉check冒称Windows运行或新包交付。
+
+下文为以前阶段快照，不覆盖本节新任务与验证状态。
+
+## 2026-10-05 许可无损整合与整体桌面精简（进行中）
+
+当前源码基线为`codex/dev`的`a14eb6fdb1858baf507c8b9a8509b0ca30df1316`；最后实际交付仍为a14原Windows包，[Actions37216837409](https://github.com/Naza3/Nexa/actions/runs/37216837409)已成功。本节更新当前状态，下文保留各阶段历史，不将旧包CI证据转授本次源码。
+
+L01许可整合源码及针对性验证已完成：完整桌面目录含嵌套runtime/download至多10份许可文件，原生与已有交叉库存均为4+4+2，全部原文/NOTICE/版权HTML/原库存字节和来源映射保留。Microsoft原DOCX/PDF独立保留时，只把本层root notice完整并入文本。两份旧ZIP临时语料分别恢复748/760份原文，12个非许可payload及对应源码完全不变；未生成新ZIP。严格Python212项（208通过/4平台skip），Rust download-engine与xtask针对性77通过/1既有忽略、同范围clippy及格式检查通过；独立审查发现的验收器归属校验缺口已修复并实际执行反例回归。见[ADR0026](docs/decisions/0026-lossless-license-bundles.md)及[验证记录](docs/verification/2026-10-05-lossless-license-bundles.md)。
+
+整体桌面精简源码已冻结，前端654项测试、typecheck/lint/Vite构建通过；独立UI审查14项反例及88项永久回归子集通过，四处焦点/跨页失败反馈/过期证明状态问题均已修复。许可独立审查的伪归属与超界整数精度反例亦已关闭，无剩余源码阻断。产品方案见[精简桌面体验](docs/product/compact-desktop-experience.md)，本轮过程见[桌面验证记录](docs/verification/2026-10-05-compact-desktop-experience.md)。用户02:34:54 UTC最新要求“这批修改完成后github构建”，覆盖此前暂缓构建：本批源码验证及独立审查已收口，现在由主代理统一提交、推送并运行标准GitHub原生Windows构建；本次尚无新CI或新包结论。Win10窗口、两机LAN及离线/长期测试仍独立待验。
+
+## 2026-10-04 整体产品体验实施（进行中）
+
+四项修复6aa0e1f已通过[Actions37206035656](https://github.com/Naza3/Nexa/actions/runs/37206035656)并交付完整Windows包；[PR8](https://github.com/Naza3/Nexa/pull/8)仍未合并。随后完成整体流程审查与12页设计，用户15:05 UTC明确批准按方案实施。当前在同一codex/dev落实[整体体验契约](docs/product/experience-implementation.md)，先状态/配置/CAS与模型档案，再页面及任务流程，保持单actor、安全边界与原接口兼容。本批源码已冻结，联合Rust507/0/7、前端610、Python190/4skip、clippy/fmt及Windows交叉check通过；独立前后端审查无剩余阻断，Linux固定真实GGUF的档案/CAS/重载/空闲恢复/空model/SSE及坏配置停服13项通过。详见[实施验证](docs/verification/2026-10-04-unified-product-experience.md)。现在进入统一提交与GitHub原生Windows构建，尚不宣称新Windows包已通过。main仍e3c5，无自动合并或新功能分支。
+
+## 2026-10-04 四项修复统一提交与Windows构建（进行中）
+
+用户13:28明确要求“修复完成后再提交，在GitHub上构建”，解除下文13:01起暂缓安排。添加结果关闭、LAN网卡候选选择、侧栏统一服务主控、空model默认当前加载模型四项源码与独立审查已完成；联合Rust482通过/0失败/7既有忽略、前端508项、严格Python190通过/4平台skip、clippy/fmt及必要Windows交叉检查通过。现在在 `codex/dev` 统一提交并使用公开仓库标准Actions原生Windows构建；确切run与产物按提交后结果记录，尚不宣称新Windows包已通过。最后交付仍为e0ff1e6。main未自动合并；HTTPS、GPU和复制API ID不在本批。
+
+## 2026-10-04 空模型ID默认当前加载模型（源码验证完成、暂缓构建）
+
+用户明确确认“空模型ID就使用当前加载的模型”。按[ADR0024](docs/decisions/0024-current-loaded-model-chat-default.md)实现缺省/空串/全空白选择当前Ready/Generating模型，actor原子绑定并返回实际响应ID；无模型不加载，显式ID不回退/自动切换，null与其他类型仍非法。现有本机首次显式加载/同selected重载及LAN只允许本机已加载模型保持。仍按用户要求暂缓提交推送触发CI及新包，仅进行本地源码实现/验证。复制ID按钮仅为建议，未加入本轮实现。最终联合Rust482通过/0失败/7既有忽略、完整clippy/fmt通过；core/API独立133项子集审查通过，无阻断。详见[本轮验证](docs/verification/2026-10-04-current-model-api-default.md)。尚未重新运行真实GGUF/原生Windows，不将本地通过称为新包已交付。
+
+## 2026-10-04 桌面控制与本机网卡选择（源码验证完成、暂缓构建）
+
+在长期 `codex/dev` 按用户最新反馈改进三处交互：添加结果可关闭、局域网IPv4自动列出网卡供选择、左导航栏底部统一启动/停止服务主按钮。HTTPS明确暂缓；地址发现是本机只读操作，不自动启用服务或放宽网络配置。联合前端508项、Rust全workspace/all-targets472通过/7既有忽略、完整clippy/fmt、严格Python190通过/4平台skip及Windows交叉check通过；独立Rust/UI审查无阻断。原生Windows与新包尚未执行，详见[本轮记录](docs/verification/2026-10-04-desktop-controls-and-lan-discovery.md)。最后已交付仍为下文e0ff1e6包，不将开发中的功能称为已交付。用户随后反馈API缺失模型ID返回400，要求先不着急构建；当前暂停新包/Actions触发，仅继续本地回归及只读行为诊断，未改空ID或自动切换语义。
+
+## 2026-10-04 本批交付完成与长期分支切换
+
+最终源码 `e0ff1e6cbb03fde6ae91a5f7272cd73d62b3f1ce` 的[Windows Actions37199537016](https://github.com/Naza3/Nexa/actions/runs/37199537016)已全部success。原生Windows真实模型、HTTP/CLI、模型下载自动登记、managed/external加载与重复短测、停服离线记录及完整提取包验收通过。54证据文件和最终包独立字节/PE/许可/对应源码复核通过；Win10用户GUI/选择器/剪贴板、两机LAN、干净机器/离线/长期稳定性仍独立待验。
+
+完整桌面包已交付：16791161字节、766文件，SHA256 `ef74e136acde2e381254dd0b8f191a9fe397d9b1ccac938a774713253ffbcf63`。其源身份始终为e0ff1e6，不改写为后续文档或合并提交。按用户明确请求，[PR #7](https://github.com/Naza3/Nexa/pull/7)已合并main，merge `e3c5cf2658ed8501c74466f2533d13c56f45edf7` 与包源tree完全相同。
+
+用户最新指定以后从main统一使用 `codex/dev`。已从上述最新main创建该分支；后续功能均在此推进，交付前同步main并处理冲突。旧 `codex/nexa-add-model` 仅保留历史，不再作为后续开发入口。本次只同步分支名/CI触发与规范、状态，不改变产品代码；纯配置提交明确跳过重复整包CI，后续功能提交仍正常触发标准Actions。
+
 ## 2026-10-04 Actions第二轮短路径修复（待新CI验证）
 
 [run37198513508](https://github.com/Naza3/Nexa/actions/runs/37198513508)，head `82bd70fcd40c03760d59ed9850443e1dbbd97ffb`：Ubuntu同源组件成功，Windows下载probe实际32/32通过（3数字别名为resolver提前拒绝、4非法URI为明确DEBUG解析拒绝，均不宣称socket gate执行）。Rust1.98.1、CMake4.4.4、VS2022/MSVC14.44.35207及源身份准备成功。

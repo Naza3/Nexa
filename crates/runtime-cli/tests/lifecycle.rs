@@ -144,7 +144,14 @@ fn actual_serve_lock_discovery_proof_and_stop_lifecycle() {
     for args in [&["status"][..], &["devices"], &["models", "list"]] {
         assert!(run(&root, args).status.success(), "{args:?}");
     }
+    let token = fs::read(root.join("secrets/api-token")).unwrap();
+    fs::write(root.join("config.toml"), b"damaged configuration fixture").unwrap();
     assert!(run(&root, &["stop"]).status.success());
+    assert_eq!(
+        fs::read(root.join("config.toml")).unwrap(),
+        b"damaged configuration fixture"
+    );
+    assert_eq!(fs::read(root.join("secrets/api-token")).unwrap(), token);
     let deadline = Instant::now() + Duration::from_secs(10);
     while child.0.try_wait().unwrap().is_none() {
         assert!(Instant::now() < deadline);
@@ -242,4 +249,21 @@ fn bind_failure_preserves_existing_discovery_and_releases_lock() {
     );
     assert_eq!(Discovery::read(&root).unwrap(), record);
     assert!(InstanceLock::try_acquire(&root).unwrap().is_some());
+}
+
+#[test]
+fn init_refuses_free_lock_with_uncertain_discovery_without_creating_credentials() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
+    lock.publish(
+        &Discovery::current(uuid::Uuid::new_v4(), "127.0.0.1:18080".parse().unwrap()).unwrap(),
+    )
+    .unwrap();
+    drop(lock);
+    let result = run(&root, &["init"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("runtime_stop_unconfirmed"));
+    assert!(!root.join("config.toml").exists());
+    assert!(!root.join("secrets/api-token").exists());
 }

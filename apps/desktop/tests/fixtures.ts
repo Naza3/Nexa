@@ -109,8 +109,7 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
     unloadModel: vi.fn(async () => ({
       ...runtime(),
       state: "unloaded" as const,
-      selected_model: null,
-      load_options: null,
+      // The real actor preserves selected_model and load_options after unload.
     })),
     chatStart: vi.fn(async () => ({ request_id: "request-1" })),
     chatNext: vi.fn(
@@ -138,6 +137,7 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
     saveIdle: vi.fn(async () => snapshot()),
     saveVerificationTimeout: vi.fn(async () => snapshot()),
     copyToken: vi.fn(async () => ({ copied: true as const })),
+    lanAddresses: vi.fn(async () => ({ status: "empty" as const, addresses: [] })),
     saveLanSettings: vi.fn(async (lan_api) => ({ ...snapshot(), connection: "stopped" as const, runtime: null, lan_api })),
     copyLanToken: vi.fn(async () => ({ copied: true as const })),
     stop: vi.fn(async () => ({ stopped: true as const })),

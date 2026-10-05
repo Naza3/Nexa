@@ -1,0 +1,30 @@
+{
+  "verification": "temporary source-level corpus fixture; no new binaries or distribution",
+  "input_sha256": "4191ec7248a1413fed52d6ae03c43f31fd515a73271d47807ac42688f2428b40",
+  "input_project_commit": "1845f9360b0f89dc86d22f6f840aec92c77eaefa",
+  "input_desktop_prefix": "Nexa-Windows-cross-test/desktop-windows/",
+  "input_total_files": 778,
+  "input_license_notice_files": 760,
+  "recovered_original_files": 760,
+  "original_license_files_by_role": {
+    "desktop": 555,
+    "runtime": 194,
+    "download": 11
+  },
+  "fixture_license_notice_files": [
+    "download/licenses/THIRD_PARTY_LICENSES.txt",
+    "download/licenses/index.json",
+    "licenses/COPYRIGHT.html",
+    "licenses/ORIGINAL-original-3-vs2022-buildtools-license.docx",
+    "licenses/THIRD_PARTY_LICENSES.txt",
+    "licenses/index.json",
+    "runtime/licenses/COPYRIGHT.html",
+    "runtime/licenses/ORIGINAL-original-3-vs2022-buildtools-license.docx",
+    "runtime/licenses/THIRD_PARTY_LICENSES.txt",
+    "runtime/licenses/index.json"
+  ],
+  "fixture_total_files": 28,
+  "unchanged_non_license_payload_files": 12,
+  "corresponding_source_sha256": "d9a551e0fa366aafeb25816e62171b25c2619536b83f41e8d206e95e09e4c471",
+  "source_build_manifest_sha256": "b1fd304429dd3d0abc51c19bf27d342455b387094f66be9304788a6c598a35b9"
+}

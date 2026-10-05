@@ -14,6 +14,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Per-attempt cancellation identity. Clones only affect the load that received
+/// this control; they never refer to the currently selected model or request.
+#[derive(Clone, Default)]
+pub struct LoadControl(Arc<std::sync::OnceLock<Instant>>);
+impl LoadControl {
+    pub fn cancel(&self) {
+        let _ = self.0.set(Instant::now());
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.get().is_some()
+    }
+    fn cancelled_before(&self, deadline: Instant) -> bool {
+        self.0.get().is_some_and(|at| *at <= deadline)
+    }
+}
+
 type Reply<T> = mpsc::Sender<Result<T, RuntimeError>>;
 #[derive(Clone)]
 pub struct RuntimeHandle {
@@ -47,9 +63,17 @@ impl Drop for RegistryLease {
 }
 enum Command {
     Submit(GenerationRequest, Reply<EventReceiver>),
+    SubmitWithLoadOptions(GenerationRequest, LoadOptions, Reply<EventReceiver>),
     SubmitLoaded(GenerationRequest, Reply<EventReceiver>),
+    SubmitCurrent(
+        RequestId,
+        Vec<Message>,
+        GenerationOptions,
+        Reply<(ModelId, EventReceiver)>,
+    ),
     Load(ModelId, LoadOptions, Reply<()>),
     LoadIfUnloaded(ModelId, LoadOptions, Reply<()>),
+    LoadControlled(ModelId, LoadOptions, LoadControl, bool, Reply<()>),
     SubmitIfIdle(GenerationRequest, LoadOptions, Reply<EventReceiver>),
     Unload(Reply<()>),
     Cancel(RequestId, Reply<()>),
@@ -118,6 +142,16 @@ impl RuntimeHandle {
         request.validate()?;
         self.ask(|reply| Command::Submit(request, reply))
     }
+    /// Supply resolved defaults for a first cold selection only. A session
+    /// selection, including an idle-unloaded selection, keeps its actual options.
+    pub fn submit_with_load_options(
+        &self,
+        request: GenerationRequest,
+        options: LoadOptions,
+    ) -> Result<EventReceiver, RuntimeError> {
+        request.validate()?;
+        self.ask(|reply| Command::SubmitWithLoadOptions(request, options, reply))
+    }
     /// Admit inference only for an already loaded model, atomically in the
     /// scheduler. Unlike submit, this can never resolve or start loading a model.
     /// A running request may still accept bounded FIFO work for the same model.
@@ -125,9 +159,40 @@ impl RuntimeHandle {
         request.validate()?;
         self.ask(|reply| Command::SubmitLoaded(request, reply))
     }
+    /// Bind to the currently loaded model and admit the request in one actor
+    /// command. Never resolves, loads, reloads, or switches a model. The returned
+    /// identity is the concrete model bound to this request, including FIFO work.
+    pub fn submit_current(
+        &self,
+        request_id: RequestId,
+        messages: Vec<Message>,
+        options: GenerationOptions,
+    ) -> Result<(ModelId, EventReceiver), RuntimeError> {
+        validate_messages(&messages)?;
+        options.validate()?;
+        self.ask(|reply| Command::SubmitCurrent(request_id, messages, options, reply))
+    }
     pub fn load(&self, model: ModelId, options: LoadOptions) -> Result<(), RuntimeError> {
         options.validate()?;
         self.ask(|reply| Command::Load(model, options, reply))
+    }
+    pub fn load_controlled(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        control: LoadControl,
+    ) -> Result<(), RuntimeError> {
+        options.validate()?;
+        self.ask(|reply| Command::LoadControlled(model, options, control, false, reply))
+    }
+    pub fn load_if_unloaded_controlled(
+        &self,
+        model: ModelId,
+        options: LoadOptions,
+        control: LoadControl,
+    ) -> Result<(), RuntimeError> {
+        options.validate()?;
+        self.ask(|reply| Command::LoadControlled(model, options, control, true, reply))
     }
     /// Automatic onboarding must never evict a selection or wait behind work.
     pub fn load_if_unloaded(
@@ -308,6 +373,8 @@ struct Actor {
     queue: VecDeque<Job>,
     operation: Option<Operation>,
     operation_id: u64,
+    owned_load: Option<LoadControl>,
+    cancelled_load_reply: Option<Reply<()>>,
     last_error: Option<RuntimeError>,
     poison: Option<RuntimeError>,
     cleanup_error: Option<RuntimeError>,
@@ -340,6 +407,8 @@ impl Actor {
             queue: VecDeque::new(),
             operation: None,
             operation_id: 0,
+            owned_load: None,
+            cancelled_load_reply: None,
             last_error: None,
             poison: None,
             cleanup_error: None,
@@ -436,6 +505,10 @@ impl Actor {
                 let result = self.submit(request);
                 let _ = reply.send(result);
             }
+            Command::SubmitWithLoadOptions(request, options, reply) => {
+                let result = self.submit_with_options(request, options);
+                let _ = reply.send(result);
+            }
             Command::SubmitLoaded(request, reply) => {
                 let result = if !matches!(self.state, ModelState::Ready | ModelState::Generating)
                     || self.selected.is_none()
@@ -452,7 +525,37 @@ impl Actor {
                 };
                 let _ = reply.send(result);
             }
-            Command::Load(id, options, reply) => self.explicit_load(id, options, reply),
+            Command::SubmitCurrent(request_id, messages, options, reply) => {
+                let result = if matches!(self.state, ModelState::Ready | ModelState::Generating)
+                    && let Some(model) = self.selected.as_ref().map(|model| model.id.clone())
+                {
+                    self.submit(GenerationRequest {
+                        request_id,
+                        model: model.clone(),
+                        messages,
+                        options,
+                    })
+                    .map(|events| (model, events))
+                } else {
+                    Err(error(ErrorCode::ModelNotLoaded))
+                };
+                let _ = reply.send(result);
+            }
+            Command::Load(id, options, reply) => self.explicit_load(id, options, reply, None),
+            Command::LoadControlled(id, options, control, only_if_unloaded, reply) => {
+                if only_if_unloaded
+                    && (self.state != ModelState::Unloaded
+                        || self.selected.is_some()
+                        || self.busy_error().is_some())
+                {
+                    let _ = reply.send(Err(self
+                        .cleanup_error
+                        .clone()
+                        .unwrap_or_else(|| error(ErrorCode::RuntimeBusy))));
+                } else {
+                    self.explicit_load(id, options, reply, Some(control));
+                }
+            }
             Command::LoadIfUnloaded(id, options, reply) => {
                 if self.state != ModelState::Unloaded
                     || self.selected.is_some()
@@ -460,7 +563,7 @@ impl Actor {
                 {
                     let _ = reply.send(Err(error(ErrorCode::RuntimeBusy)));
                 } else {
-                    self.explicit_load(id, options, reply);
+                    self.explicit_load(id, options, reply, None);
                 }
             }
             Command::SubmitIfIdle(request, options, reply) => {
@@ -528,10 +631,18 @@ impl Actor {
         Ok(model)
     }
     fn submit(&mut self, request: GenerationRequest) -> Result<EventReceiver, RuntimeError> {
+        self.submit_with_options(request, self.config.load_options)
+    }
+    fn submit_with_options(
+        &mut self,
+        request: GenerationRequest,
+        cold_options: LoadOptions,
+    ) -> Result<EventReceiver, RuntimeError> {
         if self.stopping {
             return Err(stopped());
         }
-        if self.registry_busy()
+        if self.owned_load.is_some()
+            || self.registry_busy()
             || matches!(
                 self.operation,
                 Some(Operation::Unload { next: Some(_), .. })
@@ -569,7 +680,8 @@ impl Actor {
             return Err(error(ErrorCode::QueueFull));
         }
         if self.selected.is_none() {
-            let options = self.config.load_options;
+            let options = cold_options;
+            options.validate()?;
             let model = self.resolve(&request.model, options)?;
             self.selected = Some(model);
             self.options = Some(options);
@@ -602,9 +714,19 @@ impl Actor {
         }
         Ok(EventReceiver { output })
     }
-    fn explicit_load(&mut self, id: ModelId, options: LoadOptions, reply: Reply<()>) {
+    fn explicit_load(
+        &mut self,
+        id: ModelId,
+        options: LoadOptions,
+        reply: Reply<()>,
+        control: Option<LoadControl>,
+    ) {
         if let Some(error) = &self.cleanup_error {
             let _ = reply.send(Err(error.clone()));
+            return;
+        }
+        if control.as_ref().is_some_and(LoadControl::is_cancelled) {
+            let _ = reply.send(Err(error(ErrorCode::RequestCancelled)));
             return;
         }
         if let Some(err) = self.busy_error() {
@@ -625,6 +747,7 @@ impl Actor {
             let _ = reply.send(Ok(()));
             return;
         }
+        self.owned_load = control;
         if matches!(self.state, ModelState::Ready | ModelState::Faulted) {
             self.unload(None, Some((model, options, reply)));
         } else {
@@ -855,7 +978,10 @@ impl Actor {
         match &mut self.operation {
             Some(Operation::Load { start, timeout, .. })
                 if envelope.emitted_at.saturating_duration_since(*start)
-                    >= self.config.load_timeout =>
+                    >= self.config.load_timeout
+                    && !self.owned_load.as_ref().is_some_and(|control| {
+                        control.cancelled_before(*start + self.config.load_timeout)
+                    }) =>
             {
                 *timeout = true
             }
@@ -889,6 +1015,19 @@ impl Actor {
                     self.unload(None, None);
                     return;
                 }
+                if self
+                    .owned_load
+                    .as_ref()
+                    .is_some_and(LoadControl::is_cancelled)
+                {
+                    self.cancelled_load_reply = reply;
+                    // Loaded raced with cancellation. Keep ownership and defer
+                    // the terminal reply until the matching unload cleanup ACK.
+                    self.state = ModelState::Ready;
+                    self.unload(None, None);
+                    return;
+                }
+                self.owned_load = None;
                 if let Some(reply) = reply {
                     let _ = reply.send(Ok(()));
                 }
@@ -977,7 +1116,26 @@ impl Actor {
                 if let Some(reply) = reply {
                     let _ = reply.send(Ok(()));
                 }
+                if let Some(cancelled_reply) = self.cancelled_load_reply.take() {
+                    self.owned_load = None;
+                    self.selected = None;
+                    self.options = None;
+                    self.state = ModelState::Unloaded;
+                    let _ = cancelled_reply.send(Err(error(ErrorCode::RequestCancelled)));
+                }
                 if let Some((model, options, reply)) = next {
+                    if self
+                        .owned_load
+                        .as_ref()
+                        .is_some_and(LoadControl::is_cancelled)
+                    {
+                        self.owned_load = None;
+                        self.selected = None;
+                        self.options = None;
+                        self.state = ModelState::Unloaded;
+                        let _ = reply.send(Err(error(ErrorCode::RequestCancelled)));
+                        return;
+                    }
                     if self.stopping {
                         let _ = reply.send(Err(stopped()));
                         return;
@@ -989,7 +1147,21 @@ impl Actor {
                     self.start_active();
                 }
             }
-            ExecutorEvent::Faulted(err) => self.fault(err),
+            ExecutorEvent::Faulted(err) => {
+                if self
+                    .owned_load
+                    .as_ref()
+                    .is_some_and(LoadControl::is_cancelled)
+                    && matches!(self.operation, Some(Operation::Load { timeout: false, .. }))
+                    && is_cancellation(err.code)
+                {
+                    // ProcessHost emits Faulted only after the killed worker has
+                    // exited and been reaped. CleanupUnconfirmed is separate.
+                    self.operation_failed(err);
+                } else {
+                    self.fault(err);
+                }
+            }
             ExecutorEvent::CleanupUnconfirmed(_) => {
                 unreachable!("handled before operation matching")
             }
@@ -1020,6 +1192,10 @@ impl Actor {
             None => "executor cleanup could not be confirmed".into(),
         };
         let error = RuntimeError::new(ErrorCode::ExecutorCleanupUnconfirmed, message);
+        self.owned_load = None;
+        if let Some(reply) = self.cancelled_load_reply.take() {
+            let _ = reply.send(Err(error.clone()));
+        }
         self.cleanup_error = Some(error.clone());
         self.poison = None;
         if let Some(operation) = self.operation.take() {
@@ -1070,6 +1246,22 @@ impl Actor {
                 } else {
                     err
                 };
+                let cancelled = !timeout
+                    && self
+                        .owned_load
+                        .as_ref()
+                        .is_some_and(LoadControl::is_cancelled)
+                    && is_cancellation(err.code);
+                self.owned_load = None;
+                if cancelled {
+                    self.state = ModelState::Unloaded;
+                    self.selected = None;
+                    self.options = None;
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(error(ErrorCode::RequestCancelled)));
+                    }
+                    return;
+                }
                 if let Some(reply) = reply {
                     let _ = reply.send(Err(err.clone()));
                 }
@@ -1139,6 +1331,10 @@ impl Actor {
         if matches!(self.operation, Some(Operation::Load { timeout: true, .. })) {
             err = error(ErrorCode::LoadTimeout);
         }
+        self.owned_load = None;
+        if let Some(reply) = self.cancelled_load_reply.take() {
+            let _ = reply.send(Err(err.clone()));
+        }
         self.remember_shutdown_error(&err);
         self.poison = None;
         if let Some(operation) = self.operation.take() {
@@ -1193,6 +1389,14 @@ impl Actor {
         }
     }
     fn tick(&mut self) {
+        if self
+            .owned_load
+            .as_ref()
+            .is_some_and(LoadControl::is_cancelled)
+            && let Some(Operation::Load { cancel, .. }) = &self.operation
+        {
+            cancel.cancel();
+        }
         if !self.registry_busy() {
             self.registry = None;
         }
@@ -1220,7 +1424,12 @@ impl Actor {
                 cancel,
                 timeout,
                 ..
-            }) if start.elapsed() >= self.config.load_timeout && !*timeout => {
+            }) if start.elapsed() >= self.config.load_timeout
+                && !*timeout
+                && !self.owned_load.as_ref().is_some_and(|control| {
+                    control.cancelled_before(*start + self.config.load_timeout)
+                }) =>
+            {
                 *timeout = true;
                 cancel.cancel();
             }
@@ -1468,5 +1677,76 @@ mod ledger_tests {
             },
         );
         assert_eq!(actor.state, ModelState::Ready);
+    }
+    #[test]
+    fn configured_cold_selection_and_session_restore_keep_separate_options() {
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let (events, event_receiver) = mpsc::sync_channel(32);
+        let resolver = |id: &ModelId| {
+            Ok(ResolvedModel {
+                id: id.clone(),
+                path: "fake.gguf".into(),
+                context_limit: 8192,
+                default_context: 4096,
+                loadable: true,
+            })
+        };
+        let mut actor = Actor::new(
+            RuntimeConfig::default(),
+            Box::new(resolver),
+            Box::new(Noop),
+            rx,
+            events,
+            event_receiver,
+        );
+        let id = ModelId::new("a").unwrap();
+        let request = |id: ModelId| GenerationRequest {
+            request_id: RequestId::new(),
+            model: id,
+            messages: vec![Message::new(Role::User, "test")],
+            options: GenerationOptions::default(),
+        };
+        let profile = LoadOptions {
+            context_size: 2048,
+            threads: 2,
+            batch_size: 128,
+        };
+        let _first = actor
+            .submit_with_options(request(id.clone()), profile)
+            .unwrap();
+        assert_eq!(actor.options, Some(profile));
+        // Emulate a completed session followed by idle release: selection and
+        // actual options survive even though no model is resident.
+        actor.active = None;
+        actor.operation = None;
+        actor.state = ModelState::Unloaded;
+        let invalid = LoadOptions {
+            context_size: 0,
+            threads: 0,
+            batch_size: 0,
+        };
+        let _second = actor
+            .submit_with_options(request(id.clone()), invalid)
+            .unwrap();
+        assert_eq!(actor.options, Some(profile));
+        let failure = actor.submit_with_options(request(ModelId::new("b").unwrap()), invalid);
+        assert!(matches!(
+            failure,
+            Err(RuntimeError {
+                code: ErrorCode::ModelConflict,
+                ..
+            })
+        ));
+        actor.active = None;
+        actor.operation = None;
+        actor.state = ModelState::Unloaded;
+        let replacement = LoadOptions {
+            context_size: 4096,
+            threads: 3,
+            batch_size: 256,
+        };
+        let (reply, _receiver) = mpsc::channel();
+        actor.explicit_load(id, replacement, reply, None);
+        assert_eq!(actor.options, Some(replacement));
     }
 }
