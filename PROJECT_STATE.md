@@ -1,10 +1,16 @@
 # Nexa 当前状态
 
-## 2026-10-05 桌面源码清理（开发检查完成，待原生验证）
+## 2026-10-05 桌面源码清理（已完成：原生验证与产物复核通过）
 
 安装器前置任务已完成并交付后，按用户明确要求移除本项目移动代码及相关文档，后续只维护桌面主线。清理基线为长期 `codex/dev` 的干净 `de7732f031c11e44a27f86b33a341c48131a3906`。删除独立移动 workspace、验证器、MNN 适配/探针/补丁、专用脚本与 CI，以及对应设计/研究文档；同步共享配置、验证报告字段和 Windows 路径过滤。范围见[ADR0029](docs/decisions/0029-desktop-only-source-tree.md)，本批实际检查见[清理验证记录](docs/verification/2026-10-05-desktop-only-cleanup.md)。
 
-当前为源码与文档清理工作树；Python270项（266通过/4既有平台skip）、前端701项及typecheck/lint/build、4份工作流actionlint通过，文档99份/415本地链接/19锚点和围栏通过，独立11组审查无剩余源码或文档阻断；没有本批清理后的新 Windows 包或原生 CI 结论。既有 Windows actor/worker、GGUF/API、安全、数据及完整许可/对应源码边界不变；独立 `Naza3/MNN`、锁定 llama.cpp 上游完整源码和 Git 历史不动。原先保留移动源码、隔离 CI、B3b WIP 的要求已被本次明确删除授权替代。
+清理已提交并推送为 `f577a49861298ec278293ba2d7231e09c3c07022`，tree `f3ec548cc3049da7e7121d4866bcff07e360dfd4`。[Actions37313974388](https://github.com/Naza3/Nexa/actions/runs/37313974388)已于13:44:46 UTC成功：release-identity、同源aria2和native三项job成功，分支构建的Release job按条件跳过。Windows Server 2022上的根/壳Rust fmt、test与clippy、真实GGUF、HTTP/CLI、桌面bridge、三格式打包及全部13项安装生命周期通过。
+
+本次原生证据的精确计数：根Rust日志53组551通过/0失败/7忽略、独立桌面壳29通过、前端33文件701项通过、Python270项（268通过/2个平台skip）、CTest4/4。早期选择性回归不重复加总；本地清理时Python266通过/4skip是另一环境的结果。开发阶段99份Markdown/415本地链接/19锚点与独立11组源码审查已通过，具体命令和分层结果见[清理验证记录](docs/verification/2026-10-05-desktop-only-cleanup.md#f577a498精确提交原生windows验证)。
+
+本批[三格式Actions产物](https://github.com/Naza3/Nexa/actions/runs/37313974388/artifacts/11348344567)已通过独立Linux只读审计：2238项断言全部通过、0失败、无剩余产物阻断。这是本批新计数，含逐文件/许可检查，不是2238个独立产品功能测试。Setup内嵌MSI、MSI17张表与CAB28文件/42408929字节、独立portable/runtime、10许可恢复746份原文、aria2三补丁源码重放、54份原生证据及13项生命周期69事件均核验；435份源码重建Windows指纹与包来源一致。此处记录构建与复核完成，向用户交付另据实际发送记录。产物源身份始终为f577a498；随后仅补记状态的文档提交不冒称经过本次原生验证，也不为文档更新重跑整套构建。用户已接受当前约30分钟完整构建流程，暂不进行优化。
+
+既有Windows actor/worker、GGUF/API、安全、用户数据及完整许可/对应源码边界保持；独立 `Naza3/MNN`、锁定llama.cpp上游完整源码和Git历史不动。原先保留移动源码、隔离CI、B3b WIP的要求已由本次明确删除授权替代。安装器未签名，用户Win10/i5-8400、应用原生GUI、ICE、两机LAN、干净机器/离线、长期条件与真实tag发布仍未验；没有合并main或发布Release。
 
 ## 2026-10-05 三格式安装器完成并交付
 
