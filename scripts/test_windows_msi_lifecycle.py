@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import package_windows_msi as pack
 from windows_msi_api import Msi
@@ -81,6 +82,16 @@ def same_sentinels(sentinels):
 
 def state(api, version):
     return api.MsiQueryProductStateW(pack.product_code(version))
+
+
+def per_user_unchanged(api, version, root, files, sentinels, machine_targets):
+    contexts = api.product_contexts(pack.product_code(version))
+    require(contexts == [2] and state(api, version) == 5,
+            "Nexa must remain installed only in the current-user unmanaged context")
+    installed_payload(root, files)
+    same_sentinels(sentinels)
+    require(all(not target.exists() for target in machine_targets), "installer created a machine-wide target")
+    return contexts
 
 
 def short_path(path):
@@ -194,12 +205,19 @@ def wizard_apply(setup):
     raise ValueError("wizard Apply did not reach its final result")
 
 
-def add_reboot_fixture(msi):
+def add_reboot_fixture(msi, previous_package_code):
     api = Msi()
+    replacement = "{" + str(uuid.uuid4()).upper() + "}"
+    require(replacement != previous_package_code, "reboot fixture PackageCode was reused")
     with api.database(msi, 1) as database:
+        require(api.summary_string(database, 9) == previous_package_code, "reboot fixture prior PackageCode differs")
         api.execute(database, "INSERT INTO `InstallExecuteSequence` (`Action`,`Condition`,`Sequence`) VALUES (?,?,?)",
                     ["ScheduleReboot", "NOT Installed", 6550])
+        api.summary(database, {9: replacement})
         api.check(api.MsiDatabaseCommit(database), "commit test-only reboot fixture")
+    with api.database(msi) as database:
+        require(api.summary_string(database, 9) == replacement, "reboot fixture PackageCode update did not persist")
+    return replacement
 
 
 def lifecycle(msi, setup, payload, report):
@@ -214,6 +232,11 @@ def lifecycle(msi, setup, payload, report):
     data = Path(os.environ["LOCALAPPDATA"]) / "Nexa"
     require(not root.exists() and not data.exists(), "refusing to touch existing Nexa program/user data")
     require(state(api, version) == -1, "refusing an existing registered Nexa installation")
+    require(api.product_contexts(pack.product_code(version)) == [], "refusing an existing MSI product context")
+    machine_targets = [Path(os.environ["ProgramFiles"]) / "Nexa",
+                       Path(os.environ["ProgramFiles(x86)"]) / "Nexa",
+                       Path(os.environ["ProgramData"]) / "Microsoft/Windows/Start Menu/Programs/Nexa"]
+    require(all(not target.exists() for target in machine_targets), "refusing existing Nexa machine-wide targets")
     require(pack.setup_embedded_msi(setup) == msi.read_bytes(), "Setup resource differs from MSI")
     report = Path(report).resolve()
     require(not report.exists() and not report.is_relative_to(payload), "lifecycle report must be a new file outside payload")
@@ -236,6 +259,17 @@ def lifecycle(msi, setup, payload, report):
             invoke([setup, "/S", "/unknown"], (87,), stage="setup_invalid_option")
             invoke([setup, "/S", "/repair", "/install"], (87,), stage="setup_conflicting_actions")
             invoke([setup, "/S", "/uninstall"], (1605,), stage="setup_uninstall_absent")
+            # Fresh package overrides are actually rejected. Unlike maintenance,
+            # there is no existing installation context/path to normalize to.
+            for label, properties in (
+                ("fresh-wrong-scope", ["ALLUSERS=1"]),
+                ("fresh-wrong-directory", ["INSTALLFOLDER=" + str(work / "fresh-forbidden-target")]),
+            ):
+                msi_command(msi, "/i", logs / (label + ".log"), *properties, accepted=(1603,))
+                require(state(api, version) == -1 and api.product_contexts(pack.product_code(version)) == [], "fresh override registered a product")
+                require(not root.exists() and not data.exists() and not (work / "fresh-forbidden-target").exists(), "fresh override created user/program directories")
+                require(all(not target.exists() for target in machine_targets), "fresh override created machine target")
+            result["fresh_overrides_rejected"] = True
             # Default /i is the double-click entry; LIMITUI selects native Basic UI.
             invoke([Path(os.environ["SYSTEMROOT"]) / "System32/msiexec.exe", "/i", msi,
                     "/norestart", "/l*v", logs / "default-ui-install.log", "REBOOT=ReallySuppress"],
@@ -243,6 +277,7 @@ def lifecycle(msi, setup, payload, report):
             result["msi_default_basic_ui_installed"] = True
             require(state(api, version) == 5, "per-user product not registered")
             installed_payload(root, files)
+            require(api.product_contexts(pack.product_code(version)) == [2], "initial MSI was not current-user only")
             checks["install"] = True
             sentinels = {data / "config.toml": b"# CI preservation sentinel; not a usable configuration\n",
                          data / "auth.token": b"CI-NOT-A-CREDENTIAL\n",
@@ -299,10 +334,20 @@ def lifecycle(msi, setup, payload, report):
                     require(stopped.returncode == 0, "test runtime graceful stop failed")
                     service.wait(timeout=30)
                     trace("runtime_stop", "complete", exit_code=stopped.returncode)
-            # All install-owned locations must reject redirection/extra scope.
-            msi_command(msi, "/fa", logs / "wrong-scope.log", "ALLUSERS=1", accepted=(1603,))
-            msi_command(msi, "/fa", logs / "wrong-directory.log", "INSTALLFOLDER=" + str(work / "wrong-directory"), accepted=(1603,))
-            require(not (work / "wrong-directory").exists(), "installer accepted directory override")
+            # Maintenance can normalize requested properties back to the already
+            # registered context/path. Judge actual state, not a assumed error code.
+            contexts = per_user_unchanged(api, version, root, files, sentinels, machine_targets)
+            scope_code = msi_command(msi, "/fa", logs / "wrong-scope.log", "ALLUSERS=1", accepted=(0, 1603))
+            contexts = per_user_unchanged(api, version, root, files, sentinels, machine_targets)
+            trace("maintenance_scope_verified", "complete", exit_code=scope_code, expected=(0, 1603), contexts=contexts, targets_unchanged=True)
+            result["maintenance_scope"] = {"exit_code": scope_code, "contexts": contexts, "targets_unchanged": True}
+            destination = work / "wrong-directory"
+            require(not destination.exists(), "wrong-directory fixture already exists")
+            directory_code = msi_command(msi, "/fa", logs / "wrong-directory.log", "INSTALLFOLDER=" + str(destination), accepted=(0, 1603))
+            contexts = per_user_unchanged(api, version, root, files, sentinels, machine_targets)
+            require(not destination.exists(), "installer accepted directory override")
+            trace("maintenance_directory_verified", "complete", exit_code=directory_code, expected=(0, 1603), contexts=contexts, targets_unchanged=True)
+            result["maintenance_directory"] = {"exit_code": directory_code, "contexts": contexts, "targets_unchanged": True}
             original = root / "runtime"
             saved = root / "runtime-original"
             original.rename(saved)
@@ -361,8 +406,9 @@ def lifecycle(msi, setup, payload, report):
             # Test real msiexec 3010 propagation without rebooting the runner.
             trace("reboot_fixture_build", "start")
             reboot = work / "reboot.msi"
-            pack.write_msi(files, future, cab, guard, reboot)
-            add_reboot_fixture(reboot)
+            previous_package_code = pack.write_msi(files, future, cab, guard, reboot)
+            replacement_package_code = add_reboot_fixture(reboot, previous_package_code)
+            result["reboot_fixture_package_code_refreshed"] = replacement_package_code != previous_package_code
             reboot_setup, _ = pack.compile_native(work, reboot)
             trace("reboot_fixture_build", "complete")
             invoke([reboot_setup, "/S"], (3010,), stage="setup_reboot")

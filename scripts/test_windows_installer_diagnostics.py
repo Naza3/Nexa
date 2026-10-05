@@ -64,6 +64,17 @@ class InstallerDiagnosticsTests(unittest.TestCase):
             observed["legacy_os"][0]["major"] = 65536
             with self.assertRaises(ValueError): diag.validate_document(document, "a" * 40)
 
+    def test_unobserved_context_is_not_reported_as_absent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            document = self.document(Path(temporary))
+            self.assertIsNone(document["events"][0]["contexts"])
+            self.assertIsNone(document["events"][0]["targets_unchanged"])
+            for observed in ([], [2], [2, 4]):
+                document["events"][0]["contexts"] = observed
+                diag.validate_document(document, "a" * 40)
+            document["events"][0]["contexts"] = [True]
+            with self.assertRaises(ValueError): diag.validate_document(document, "a" * 40)
+
     def test_unknown_and_oversized_fields_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             original = self.document(Path(temporary))

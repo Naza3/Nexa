@@ -70,7 +70,7 @@ python scripts/test_windows_msi_lifecycle.py --payload dist/desktop-windows --ms
 
 第一步复用已经验收的便携目录，不重新构建应用；检查完整清单/依赖/许可/同源源码，逐文件生成标准 MSI 表及 CAB，再读取表和嵌入 CAB 校验。Setup 的资源必须与最终 MSI 完全相同，执行前在内存及提取后核对同一 SHA-256。提取使用不可预测且仅所有者/SYSTEM 可访问的临时目录，保持只读锁直到 msiexec 结束。
 
-第二步只允许一次性 GitHub Windows runner，且拒绝已有 Nexa 安装或数据目录。真实运行不带 `/q` 的默认 MSI 入口（`LIMITUI=1` 明确使用系统 Basic UI）、逐字节安装校验、MSI/EXE 修复、运行中拒绝、scope/path/junction 拒绝、失败升级回滚、升级、降级拒绝、卸载、模型/配置/密钥/外部文件保留、Setup 三动作向导的前进/后退/取消、真实 GUI 安装的 Apply→受保护进度→Finish，以及实际 MSI `3010` 的 EXE 返回传播。私有升级/故障/请求重启测试 MSI 不进入 Release。
+第二步只允许一次性 GitHub Windows runner，且拒绝已有 Nexa 安装或数据目录。真实运行不带 `/q` 的默认 MSI 入口（`LIMITUI=1` 明确使用系统 Basic UI）、逐字节安装校验、MSI/EXE 修复、运行中拒绝、首次安装 scope/path 拒绝、维护阶段实际范围/位置保留、junction 拒绝、失败升级回滚、升级、降级拒绝、卸载、模型/配置/密钥/外部文件保留、Setup 三动作向导的前进/后退/取消、真实 GUI 安装的 Apply→受保护进度→Finish，以及实际 MSI `3010` 的 EXE 返回传播。私有升级/故障/请求重启测试 MSI 不进入 Release。
 
 `--check-toolchain --report <路径>` 提前编译原生辅助程序并检查 inbox DLL 依赖；还通过真正的 `System32\msiexec.exe` 执行私有 MSI 的只读 OS/目录/进程门禁，60 秒内未完成即失败。私有 MSI 使用随机产品身份，没有 InstallInitialize、InstallFiles、WriteRegistryValues、RegisterProduct、PublishProduct 等动作，前后检查产品未登记、Nexa 程序与用户数据目录未创建。Installer 自身的临时提取/日志允许；这不是应用安装、载荷或完整生命周期通过证据。表结构/外键/读回校验也不冒称 Windows SDK ICE 验证；当前报告明确记录 ICE 未运行。尚未执行的 Windows 测试不得因为测试脚本存在而写成通过。
 
@@ -90,4 +90,16 @@ python scripts/test_windows_msi_lifecycle.py --payload dist/desktop-windows --ms
 
 OS 门禁现迁至自带 Windows 10 supportedOS manifest 的只读 EXE，和已在该 runner 实际运行过的 Setup 共用同一 `VerifyVersionInfoW` 谓词。MSI 的 `NexaOsGuard` 是同步、检查退出码的 Type 2 动作，必须在目录/进程 guard 和安装事务之前成功；`VersionNT64` 架构限制保留。不在 DLL 内改用同样可能受宿主兼容影响的版本查询，也不因诊断困难而跳过 OS 门禁。
 
-早期私有 MSI 与生产 MSI 使用相同 OS EXE 和完整目录/进程 guard；日志必须出现它们的成功结束动作，不能仅凭 msiexec 返回 0。旧文件查询仅保留在不会分发的诊断 DLL，输出固定阶段码、是否成功、major/minor/build 和 Win32 错误码六个数值，由封闭 schema 过滤后共享。新门禁和完整生命周期仍须下一次 Windows CI 验证。
+早期私有 MSI 与生产 MSI 使用相同 OS EXE 和完整目录/进程 guard；日志必须出现它们的成功结束动作，不能仅凭 msiexec 返回 0。旧文件查询仅保留在不会分发的诊断 DLL，输出固定阶段码、是否成功、major/minor/build 和 Win32 错误码六个数值，由封闭 schema 过滤后共享。第四轮 `4067823` 的私有真实 MSI 探针已确认旧查询取文件/查询均成功，但得到 `6.3.20348`（stage 7），因此旧阈值错误拒绝；新 EXE 与完整 guard 成功。默认 MSI 安装、完整字节/登记、三种修复以及运行中拒绝也已实测通过。升级、回滚、卸载和剩余完整生命周期仍待后续 CI，不能把这些部分结果称为整个发布通过。
+
+
+## 维护模式的范围验证
+
+Windows Installer 对已经按用户安装的产品继续按用户修复，并可把命令行 `ALLUSERS` 重设为既有安装上下文。因此 `/fa ... ALLUSERS=1` 的退出 0 本身不代表扩大权限，也不能仅凭 0 判安全。[官方维护上下文规则](https://learn.microsoft.com/en-us/windows/win32/msi/msiinstallperuser)
+
+测试区分两种情况：
+
+- 尚未登记的首次 `/i` 请求机器级范围或外部安装目录，必须明确拒绝，且没有产品登记、程序/用户目录或机器级目标；早期只读私有 MSI 和最终生产包分别验证
+- 已安装产品的维护请求，可以明确拒绝，或由 Windows Installer 恢复原位置。两者都必须通过 `MsiEnumProductsExW` 核对只存在当前用户 unmanaged 实例（上下文 2），无机器级/用户 managed 实例，产品状态为已安装；原载荷和用户哨兵逐字节不变，机器级/外部目标不存在
+
+枚举错误、未知产品、广告状态、重复或扩大上下文均不能当作验证成功。诊断仅记录数值上下文及目标保留布尔值，不读取或上传用户 SID。生产每用户/固定路径/运行中 guard 保持不变，不为满足测试而改变安全规则。3010 私有 fixture 每次修改 MSI 时刷新并读回 PackageCode；Setup 修复始终使用本次从原 EXE 中重新校验提取的相同 MSI，不依赖 Windows 缓存 CAB。

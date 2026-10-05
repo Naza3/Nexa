@@ -13,7 +13,7 @@ import tempfile
 import package_windows as base
 from release_version import validate_version
 
-STAGES = frozenset("installer_guard_preflight preflight wizard_cancel_install wizard_cancel_repair wizard_cancel_uninstall setup_invalid_option setup_conflicting_actions setup_uninstall_absent msi_default_ui_install msi_repair msi_alias_directory setup_repair runtime_init runtime_ready msi_busy_fa msi_busy_x setup_busy_repair runtime_stop msi_wrong_scope msi_wrong_directory msi_junction_rejected fixture_build msi_rollback msi_upgrade msi_downgrade msi_uninstall setup_gui_install setup_uninstall setup_silent_install setup_silent_uninstall reboot_fixture_build setup_reboot msi_reboot_fixture_remove complete".split())
+STAGES = frozenset("installer_guard_preflight preflight_wrong_scope preflight_wrong_directory maintenance_scope_verified maintenance_directory_verified preflight wizard_cancel_install wizard_cancel_repair wizard_cancel_uninstall setup_invalid_option setup_conflicting_actions setup_uninstall_absent msi_fresh_wrong_scope msi_fresh_wrong_directory msi_default_ui_install msi_repair msi_alias_directory setup_repair runtime_init runtime_ready msi_busy_fa msi_busy_x setup_busy_repair runtime_stop msi_wrong_scope msi_wrong_directory msi_junction_rejected fixture_build msi_rollback msi_upgrade msi_downgrade msi_uninstall setup_gui_install setup_uninstall setup_silent_install setup_silent_uninstall reboot_fixture_build setup_reboot msi_reboot_fixture_remove complete".split())
 ACTIONS = frozenset("INSTALL FindRelatedProducts LaunchConditions CostInitialize FileCost CostFinalize NexaOsGuard NexaLegacyOsProbe NexaGuard InstallValidate InstallInitialize RemoveExistingProducts ProcessComponents UnpublishFeatures RemoveRegistryValues RemoveShortcuts RemoveFiles RemoveFolders CreateFolders InstallFiles CreateShortcuts WriteRegistryValues RegisterUser RegisterProduct PublishFeatures PublishProduct InstallFinalize ExecuteAction ValidateProductID ResolveSource InstallExecute InstallExecuteAgain ScheduleReboot NexaTestRollback".split())
 REASON_TEXT = {
     "guard_scope": "only supports a current-user", "guard_os": "requires windows 10",
@@ -158,7 +158,7 @@ def validate_document(document, commit):
     if type(document["events"]) is not list or len(document["events"]) > MAX_EVENTS:
         raise ValueError("installer diagnostic event count invalid")
     for event in document["events"]:
-        exact_keys(event, ("stage", "state", "elapsed_ms", "exit_code", "expected_exit_codes", "msi_log", "windows"))
+        exact_keys(event, ("stage", "state", "elapsed_ms", "exit_code", "expected_exit_codes", "msi_log", "windows", "contexts", "targets_unchanged"))
         if event["stage"] not in STAGES or event["state"] not in ("start", "complete", "timeout", "error"):
             raise ValueError("installer diagnostic event stage/state invalid")
         bounded_integer(event["elapsed_ms"], 0, 2 * 60 * 60 * 1000)
@@ -166,6 +166,10 @@ def validate_document(document, commit):
         if type(event["expected_exit_codes"]) is not list or len(event["expected_exit_codes"]) > 8:
             raise ValueError("installer expected-code list invalid")
         for code in event["expected_exit_codes"]: bounded_integer(code, 0, 65535)
+        if event["contexts"] is not None and (type(event["contexts"]) is not list or len(event["contexts"]) > 3 or any(type(value) is not int or value not in (1, 2, 4) for value in event["contexts"])):
+            raise ValueError("installer registration context invalid")
+        if event["targets_unchanged"] is not None and type(event["targets_unchanged"]) is not bool:
+            raise ValueError("installer target observation invalid")
         log = event["msi_log"]
         exact_keys(log, ("present", "actions", "error_codes", "reason_codes", "legacy_os"))
         if type(log["present"]) is not bool or type(log["actions"]) is not list or len(log["actions"]) > 32:
@@ -216,17 +220,19 @@ class Trace:
         temporary.write_text(json.dumps(self.document, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.path)
 
-    def event(self, stage, state, *, exit_code=None, expected=(), log=None, pid=None):
+    def event(self, stage, state, *, exit_code=None, expected=(), log=None, pid=None, contexts=None, targets_unchanged=None):
         item = {"stage": stage, "state": state, "elapsed_ms": int((time.monotonic() - self.started) * 1000),
                 "exit_code": exit_code, "expected_exit_codes": list(expected), "msi_log": summarize_log(log),
-                "windows": summarize_windows(pid) if pid and state in ("timeout", "error") else []}
+                "windows": summarize_windows(pid) if pid and state in ("timeout", "error") else [],
+                "contexts": list(contexts) if contexts is not None else None, "targets_unchanged": targets_unchanged}
         self.document["last_stage"] = stage
         if state in ("timeout", "error"): self.document["status"] = "failed"
         self.document["events"].append(item)
         self.write()
         print(json.dumps({"installer_stage": stage, "state": state, "exit_code": exit_code,
                           "expected_exit_codes": list(expected), "elapsed_ms": item["elapsed_ms"],
-                          "msi_log": item["msi_log"], "windows": item["windows"]}, sort_keys=True), flush=True)
+                          "msi_log": item["msi_log"], "windows": item["windows"],
+                          "contexts": item["contexts"], "targets_unchanged": targets_unchanged}, sort_keys=True), flush=True)
 
     def finish(self, passed):
         self.document["status"] = "pass" if passed else "failed"

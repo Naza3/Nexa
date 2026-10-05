@@ -392,6 +392,8 @@ def write_msi(files, version, cab, guard, output, *, rollback_fixture=False, pre
         api.check(api.MsiDatabaseCommit(database), "commit")
     api.check(api.MsiVerifyPackageW(str(output)), "verify package")
     with api.database(output) as database:
+        if api.summary_string(database, 9) != package_code:
+            base.fail("MSI PackageCode readback mismatch")
         for table, expected in tables.items():
             if table == "Binary":
                 continue
@@ -454,10 +456,31 @@ def check_msi_guard_context(work, guard, os_guard):
         ended = {item["action"] for item in observation["actions"] if item["phase"] == "end" and item["return_code"] == 1}
         if not required <= ended or not observation["legacy_os"]:
             base.fail("real MSI-context guard execution was not observed")
+        rejected = {}
+        for stage, properties in (
+            ("preflight_wrong_scope", ["ALLUSERS=1"]),
+            ("preflight_wrong_directory", ["INSTALLFOLDER=" + str(work / "forbidden-target")]),
+        ):
+            negative_log = work / (stage + ".log")
+            trace.event(stage, "start", expected=(1603,))
+            negative = subprocess.Popen([str(executable), "/i", str(probe), "/qn", "/norestart", "/l*v", str(negative_log),
+                                         "REBOOT=ReallySuppress", *properties], stdin=subprocess.DEVNULL)
+            try:
+                rejected_code = negative.wait(timeout=60)
+            except subprocess.TimeoutExpired as error:
+                trace.event(stage, "timeout", expected=(1603,), log=negative_log, pid=negative.pid)
+                raise ValueError("read-only MSI rejection probe exceeded 60 seconds") from error
+            contexts = api.product_contexts(identity)
+            unchanged = api.MsiQueryProductStateW(identity) == -1 and not contexts and not root.exists() and not data.exists() and not (work / "forbidden-target").exists()
+            trace.event(stage, "complete" if rejected_code == 1603 and unchanged else "error", exit_code=rejected_code,
+                        expected=(1603,), log=negative_log, pid=negative.pid, contexts=contexts, targets_unchanged=unchanged)
+            if rejected_code != 1603 or not unchanged:
+                base.fail("fresh MSI override was not safely rejected: " + stage)
+            rejected[stage] = True
         # A passing preflight is still not a passing installation lifecycle.
         return {"direct_os_check_exit_code": direct.returncode, "msiexec_exit_code": code,
                 "private_product_registered": False, "nexa_directories_created": False,
-                "production_guards_executed": True, "legacy_os": observation["legacy_os"]}
+                "production_guards_executed": True, "legacy_os": observation["legacy_os"], "fresh_overrides_rejected": rejected}
     except (ValueError, OSError, subprocess.SubprocessError):
         if trace.document["status"] != "failed":
             trace.event("installer_guard_preflight", "error", expected=(0,), log=log)

@@ -28,8 +28,10 @@ class Msi:
         self.bind("MsiGetSummaryInformationW", [U, S, U, ctypes.POINTER(U)])
         self.bind("MsiSummaryInfoSetPropertyW", [U, U, U, ctypes.c_int, P, S])
         self.bind("MsiSummaryInfoPersist", [U])
+        self.bind("MsiSummaryInfoGetPropertyW", [U, U, ctypes.POINTER(U), ctypes.POINTER(ctypes.c_int), P, S, ctypes.POINTER(U)])
         self.bind("MsiVerifyPackageW", [S])
         self.bind("MsiQueryProductStateW", [S], ctypes.c_int)
+        self.bind("MsiEnumProductsExW", [S, S, U, U, S, ctypes.POINTER(U), S, ctypes.POINTER(U)])
 
     def bind(self, name, args, result=ctypes.c_uint):
         function = getattr(self.dll, name)
@@ -39,6 +41,21 @@ class Msi:
     def check(self, code, action):
         if code:
             raise ValueError(f"Windows Installer {action} failed: {code}")
+
+    def product_contexts(self, product):
+        """Current user's managed/unmanaged plus machine instances; never read SIDs."""
+        result = []
+        for index in range(8):
+            found = ctypes.create_unicode_buffer(39)
+            context = ctypes.c_uint()
+            code = self.MsiEnumProductsExW(product, None, 7, index, found, ctypes.byref(context), None, None)
+            if code in (259, 1605):
+                return result
+            self.check(code, "enumerate product contexts")
+            if found.value.casefold() != product.casefold() or context.value not in (1, 2, 4):
+                raise ValueError("unexpected Windows Installer product/context identity")
+            result.append(context.value)
+        raise ValueError("Windows Installer context enumeration exceeded its bound")
 
     @contextmanager
     def database(self, path, mode=0):
@@ -119,6 +136,21 @@ class Msi:
                         return bytes(result)
             finally:
                 self.MsiCloseHandle(record.value)
+
+    def summary_string(self, database, property_id):
+        handle, kind, size = ctypes.c_uint(), ctypes.c_uint(), ctypes.c_uint(4096)
+        number = ctypes.c_int()
+        filetime = (ctypes.c_uint32 * 2)()
+        buffer = ctypes.create_unicode_buffer(size.value)
+        self.check(self.MsiGetSummaryInformationW(database, None, 0, ctypes.byref(handle)), "read summary")
+        try:
+            self.check(self.MsiSummaryInfoGetPropertyW(handle.value, property_id, ctypes.byref(kind), ctypes.byref(number),
+                                                      ctypes.byref(filetime), buffer, ctypes.byref(size)), "read summary property")
+            if kind.value != 30:
+                raise ValueError("MSI summary property is not a string")
+            return buffer.value
+        finally:
+            self.MsiCloseHandle(handle.value)
 
     def summary(self, database, values):
         handle = ctypes.c_uint()

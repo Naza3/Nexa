@@ -56,3 +56,7 @@ Windows 10 目标机器原生窗口、无开发工具/离线及长期稳定性�
 ## 第三轮系统门禁边界与隔离修正
 
 第三轮37291142335（2bbd72d）确认默认MSI入口在NexaGuard的guard_os提示等待240秒，前面的wizard取消/非法参数/未安装卸载通过；版本查询具体内部原因仍未知。候选修正移用带兼容manifest的独立只读EXE、MSI Type2强制同步返回码，并保留目录/进程guard；新增长构建前真实msiexec只读探针及旧版本查询数字诊断。严格Python259项：255通过/4既有skip；独立20项installer/diagnostics、27项release、20项OS契约、13项诊断反例通过（子集不加总）。新实际安装、全部13项门槛与目标机仍待验，未放宽超时或绕过检查。
+
+## 第四轮实际安装通过后的维护范围修正
+
+第四轮37300524739（4067823）实际通过默认安装、MSI/Setup维修、alias目录维修及busy进程阻止，旧OS查询数字为6.3/build20348/error1150，新manifest EXE门禁有效。维修ALLUSERS=1返回0使旧硬编码断言失败；新测试必须通过官方API读出唯一USERUNMANAGED上下文并复核原路径/字节/数据和无机器/外部目录，不能只放宽返回码。首次安装不安全覆盖仍强拒绝；3010私有fixture重新生成PackageCode。严格265项：261通过/4既有skip；独立20项不变量、26项installer/diagnostics/context及27项release通过，均为子集。真实新上下文API与剩余13门槛待下一轮native，不提前宣称MSI/Setup交付。
