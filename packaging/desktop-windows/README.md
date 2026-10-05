@@ -1,4 +1,6 @@
-# Nexa Windows x64 CPU 桌面开发包
+# Nexa Windows x64 CPU 桌面包
+
+同一版本提供便携 ZIP、原生 MSI 和带向导的 Setup.exe。MSI/Setup 安装到当前用户 `%LOCALAPPDATA%\Programs\Nexa`，共享一套产品登记；Setup 内含同一 MSI，不联网安装依赖。升级/修复/卸载前先停止服务并关闭窗口；模型、配置、密钥和外部文件会保留。修复请保留相同版本安装源或重跑该版本 Setup。安装器未签名，请核对可信发布来源和 SHA-256。
 
 完整解压 ZIP 后双击 `nexa-desktop.exe`。保持 `runtime/` 子目录原样，不混用其他包的 EXE、DLL 或 manifest。本包不带模型、聊天记录或令牌。
 

@@ -11,7 +11,7 @@
 - 提交标题：`文档：聚焦Windows桌面CPU并规划DeepSeek Harness兼容`
 - 已经主代理独立审查、精确提交并推送，同开发分支远端commit已核验
 
-当前定位收敛为Windows桌面CPU本地runtime：固定llama.cpp/GGUF推理，保留Rust服务、模型、安全、单actor/队列、取消、worker和HTTP职责；Windows10 x64/i5-8400优先。Android设计退出主线但不删除研究源码或证据；Telegram仅可选参考，GPU/NPU不进入当前路线。
+当前定位收敛为Windows桌面CPU本地runtime：固定llama.cpp/GGUF推理，保留Rust服务、模型、安全、单actor/队列、取消、worker和HTTP职责；Windows10 x64/i5-8400优先。当时仅做文档范围收敛；后续源码清理以[ADR0029](../decisions/0029-desktop-only-source-tree.md)为准。Telegram仅可选参考，GPU/NPU不进入当前路线。
 
 新增[ADR0014](../decisions/0014-windows-desktop-cpu-runtime.md)和[dsh/pi-ai契约](../windows-harness-contract.md)，后续使用W00–W05。W01现包目标机短验与W04文本互通可以并行；真实工具闭环依赖W02模型工具能力，文本互通不等待W03托盘。离线、无开发工具、长期稳定性与Windows11保持后期独立验收。
 
@@ -21,7 +21,7 @@
 
 - 10份当前文档：AGENTS、README、PROJECT_INDEX、PROJECT_STATE、执行规格，以及docs下architecture、roadmap、build-lock、model-matrix、telegram-summary
 - 新增ADR0014和windows-harness-contract
-- [归档目录](../archive/windows-focus-2026-10-03/INDEX.md)内10份旧主文档快照及INDEX；快照仅新增历史说明和修正相对链接，INDEX记录原始内容SHA-256
+- 当时创建10份旧主文档快照及INDEX；这些跨端归档现已按ADR0029从当前树移除，原始提交仍可追溯
 
 | 检查 | 实际结果 | 边界 |
 | --- | --- | --- |
@@ -29,11 +29,10 @@
 | Python内联Markdown检查 | 23文件、377本地路径、15锚点、代码围栏通过 | 本地目标与锚点可定位，不替代外部网站或产品运行验证 |
 | 主线范围/依赖独立审查 | 通过；修正了W01/W04串行图与并行文字不一致 | 新方案不追溯修改历史通过结论 |
 | 历史归档审查 | 原文/归档身份与相对链接经独立复核 | 历史文档不作为当前实施指令 |
-| Android B3b WIP保护 | 14项文件Git状态及逐文件SHA-256与修改前一致 | 没有删除、覆盖、暂存或混入文档提交 |
 | 提交身份 | 本地commit/tree与上述精确值一致；主代理已核验同分支远端 | 无合并、部署或公开Release |
 | 构建/CI | 未运行；纯文档提交无CI运行符合预期 | 不生成新包、不授予功能或硬件支持 |
 
-本轮文档工作没有修改源码、工作流、依赖锁或Android未提交WIP。后续W04代码工作属于独立切片，不计入W00。
+该历史文档阶段没有修改产品源码、工作流或依赖锁。后续W04代码工作属于独立切片，不计入W00。
 
 ## W04：最小文本协议切片（局部验证通过，整体进行中）
 

@@ -36,4 +36,4 @@ selected仅记忆模型ID和加载参数。每次actual Load都重新调用有�
 
 ## 验证边界
 
-codec与permit逻辑测试不是模型推理。无native依赖harness证明父管理进程可独立构建；T03尚无HTTP，不能称HTTP/API存活验收已完成。真实GGUF、异常各阶段、取消强杀、正常和异常父退出、Windows Job与目标设备分别记录，不互相替代。T04、T05独立Windows无开发工具验收机和Android仍独立待办。
+codec与permit逻辑测试不是模型推理。无native依赖harness证明父管理进程可独立构建；T03尚无HTTP，不能称HTTP/API存活验收已完成。真实GGUF、异常各阶段、取消强杀、正常和异常父退出、Windows Job与目标设备分别记录，不互相替代。T04、T05独立Windows无开发工具验收机仍独立待办。

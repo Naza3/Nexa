@@ -3,16 +3,11 @@ name: Windows CPU native and runtime verification
 on:
   push:
     branches: ['codex/dev']
-    # Only known isolated Android/docs paths are excluded; unknown paths still trigger.
+    # The release workflow must already exist in the tagged commit.
+    # v* deliberately routes malformed/prerelease tags to the strict validator.
+    tags: ['v*']
+    # Only isolated probe/docs paths are excluded; unknown paths still trigger.
     paths-ignore:
-      - 'native/mnn-probe/**'
-      - 'native/mnn-shim/**'
-      - 'native/mnn-patches/**'
-      - 'scripts/android_mnn/**'
-      - 'mobile/**'
-      - 'apps/android-verifier/**'
-      - '.github/workflows/android-mnn-probe.yml'
-      - '.github/workflows/android-mnn-native.yml'
       - 'scripts/probe_aria2_windows.py'
       - 'scripts/test_aria2_windows.py'
       - '.github/workflows/aria2-windows-probe.yml'
@@ -29,11 +24,32 @@ permissions:
 
 concurrency:
   group: native-windows-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded branch builds may stop; a tag release is never cancelled by a rerun.
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
+  release-identity:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      project_commit: ${{ steps.identity.outputs.project_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify desktop-only source and build boundaries
+        run: python3 -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_desktop_scope.py'
+      - name: Test release version and publication boundaries
+        run: python3 -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_release*.py'
+      - name: Validate exact committed Cargo, Tauri, npm and MSI version
+        id: identity
+        run: python3 scripts/release_windows.py validate --github-output "$GITHUB_OUTPUT"
   download-component:
     if: ${{ !github.event.repository.private }}
+    needs: release-identity
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -55,13 +71,14 @@ jobs:
           retention-days: 7
   native:
     if: ${{ !github.event.repository.private }}
-    needs: download-component
+    needs: [release-identity, download-component]
     runs-on: windows-2022
-    timeout-minutes: 120
+    timeout-minutes: 150
     defaults:
       run:
         shell: pwsh
     env:
+      NEXA_RELEASE_VERSION: ${{ needs.release-identity.outputs.version }}
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
       CARGO_INCREMENTAL: '0'
       # Pin the effective toolchain too; a runner's stable alias is not evidence.
@@ -107,6 +124,13 @@ jobs:
           cargo --version
           cmake --version
           New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+      - name: Compile installer helpers early without asserting installation success
+        id: installer_compile
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/package_windows_msi.py --check-toolchain --report artifacts/verification/windows-installer-compile.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installer helper compilation failed before the full product build' }
       - name: Observe Windows detached startup context before desktop compilation
         id: desktop_launch_probe
         timeout-minutes: 10
@@ -414,6 +438,54 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --model models/qa-small.gguf --harness target/release/nexa-desktop-harness.exe
           if ($LASTEXITCODE -ne 0) { throw 'Extracted desktop/real bridge acceptance failed; native window interactions remain a separate gate' }
+      - name: Package MSI and Setup from the exact verified portable payload
+        id: windows_installers
+        if: ${{ success() && steps.desktop_acceptance.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = "dist/Nexa-${env:NEXA_RELEASE_VERSION}-windows-x64-setup"
+          python -X warn_default_encoding -W error::EncodingWarning scripts/package_windows_msi.py --payload dist/desktop-windows --version $env:NEXA_RELEASE_VERSION --output "$prefix.msi" --setup-output "$prefix.exe" --report dist/windows-msi-build-report.json
+          if ($LASTEXITCODE -ne 0) { throw 'MSI/Setup package closure failed' }
+      - name: Verify disposable MSI and Setup install repair upgrade rollback and uninstall
+        id: installer_acceptance
+        if: ${{ success() && steps.windows_installers.outcome == 'success' }}
+        timeout-minutes: 25
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = "dist/Nexa-${env:NEXA_RELEASE_VERSION}-windows-x64-setup"
+          python -X warn_default_encoding -W error::EncodingWarning scripts/test_windows_msi_lifecycle.py --msi "$prefix.msi" --setup "$prefix.exe" --payload dist/desktop-windows --report dist/windows-msi-lifecycle-report.json
+          if ($LASTEXITCODE -ne 0) { throw 'MSI/Setup lifecycle or user-data preservation failed' }
+      - name: Stage only validated sanitized installer diagnostics
+        id: installer_evidence
+        if: always()
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The closed-schema sidecar contains only reviewed enums/counts/codes.
+          # Raw msiexec logs, window text, user paths and dist/ are never uploaded.
+          python scripts/windows_installer_diagnostics.py --input dist/windows-msi-diagnostics.json --output artifacts/upload-installer-evidence --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Installer diagnostic schema validation failed; raw evidence will not be uploaded' }
+      - name: Preserve sanitized installer diagnostics on success or failure
+        if: ${{ always() && steps.installer_evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-windows-installer-evidence-${{ github.sha }}
+          path: artifacts/upload-installer-evidence/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve unverified installer binaries only for failed lifecycle diagnosis
+        if: ${{ always() && steps.windows_installers.outcome == 'success' && steps.installer_acceptance.outcome != 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # Diagnostic-only: the release job never downloads this artifact.
+          name: nexa-windows-installers-UNVERIFIED-${{ github.sha }}
+          path: |
+            dist/Nexa-${{ env.NEXA_RELEASE_VERSION }}-windows-x64-setup.msi
+            dist/Nexa-${{ env.NEXA_RELEASE_VERSION }}-windows-x64-setup.exe
+            dist/windows-msi-build-report.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Preserve desktop package
         if: ${{ success() && steps.desktop_acceptance.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -496,3 +568,43 @@ jobs:
           path: artifacts/upload-evidence/
           if-no-files-found: warn
           retention-days: 7
+      - name: Stage closed three-format release assets and corresponding source
+        if: ${{ success() && steps.installer_acceptance.outcome == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = "dist/Nexa-${env:NEXA_RELEASE_VERSION}-windows-x64-setup"
+          python scripts/release_windows.py stage --msi "$prefix.msi" --setup "$prefix.exe" --build-report dist/windows-msi-build-report.json --lifecycle-report dist/windows-msi-lifecycle-report.json
+          if ($LASTEXITCODE -ne 0) { throw 'Release identity/checksum/source closure failed' }
+      - name: Preserve validated portable MSI Setup and release inventory
+        if: ${{ success() && steps.installer_acceptance.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nexa-windows-release-${{ github.sha }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+  release:
+    # Branch/dispatch runs exercise packaging but can never publish a release.
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' && !github.event.repository.private }}
+    needs: [release-identity, download-component, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: nexa-windows-release-${{ github.sha }}
+          path: dist/release
+      - name: Recheck complete asset inventory before enabling publication
+        env:
+          NEXA_RELEASE_VERSION: ${{ needs.release-identity.outputs.version }}
+        run: python3 scripts/release_windows.py verify --directory dist/release --commit "$GITHUB_SHA" --version "$NEXA_RELEASE_VERSION"
+      - name: Publish all validated assets together without replacing existing bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_windows.py publish --directory dist/release

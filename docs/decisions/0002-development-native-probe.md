@@ -4,14 +4,14 @@
 
 ## 背景
 
-用户已授权按照文档规划实现。现场只有 Linux 云开发环境，没有连接的 Windows/Android 目标设备或已有源码。直接把 Linux 通过写成 Windows 通过会违反 T00 阶段门槛；完全等待目标设备又会阻断可以独立验证的 ABI 和所有权工作。
+用户已授权按照文档规划实现。现场只有 Linux 云开发环境，没有连接的 Windows 目标设备或已有源码。直接把 Linux 通过写成 Windows 通过会违反 T00 阶段门槛；完全等待目标设备又会阻断可以独立验证的 ABI 和所有权工作。
 
 ## 决定
 
-建立最小 workspace，仅加入本轮实际使用的 runtime-types、llama-adapter 和 xtask；固定上游、工具链和真实 Qwen3 0.6B 模型。先实现并验证 T00 的独立工程部分与 T01 原生探针，但 T00/T01 均不因 Linux 结果而标成完整阶段已完成。不创建空 runtime-core/API/UI/移动模块，不越过依赖门槛展开 T02。
+建立最小 workspace，仅加入本轮实际使用的 runtime-types、llama-adapter 和 xtask；固定上游、工具链和真实 Qwen3 0.6B 模型。先实现并验证 T00 的独立工程部分与 T01 原生探针，但 T00/T01 均不因 Linux 结果而标成完整阶段已完成。不创建空 runtime-core/API/UI模块，不越过依赖门槛展开 T02。
 
-开发探针使用原计划的自有 C ABI 与 common/chat 模板辅助层，不引入第二套生产推理实现。公开 HTTP/IPC/移动桥及产品默认参数保持原执行规格；本轮测试 context=2048 只是固定实验参数。
+开发探针使用原计划的自有 C ABI 与 common/chat 模板辅助层，不引入第二套生产推理实现。公开 HTTP/IPC及产品默认参数保持原执行规格；本轮测试 context=2048 只是固定实验参数。
 
 ## 后果
 
-交付可以本地编译、测试、运行真实模型的源码和复现入口。后续 Windows 测试可复用同一锁定输入；Windows CI 也不能替代用户 i5-8400、独立无工具验收机或 Android 真机。Windows 基线及 T01 相应用例补齐前，T02–T10 仍未开始。
+交付可以本地编译、测试、运行真实模型的源码和复现入口。后续 Windows 测试可复用同一锁定输入；Windows CI 也不能替代用户 i5-8400、独立无工具验收机。Windows 基线及 T01 相应用例补齐前，T02–T10 仍未开始。

@@ -101,11 +101,17 @@ class WindowsCiTests(unittest.TestCase):
     def test_workflow_retains_full_pipeline_with_public_standard_runners(self):
         workflow = (ci.base.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
         self.assertIn("branches: ['codex/dev']", workflow)
-        self.assertEqual(workflow.count("if: ${{ !github.event.repository.private }}"), 2)
-        self.assertEqual(workflow.count("runs-on:"), 2)
+        # Identity/download/native are read-only public builds; release has the
+        # stricter tag-push + public guard checked independently below.
+        self.assertEqual(workflow.count("if: ${{ !github.event.repository.private }}"), 3)
+        self.assertEqual(workflow.count("runs-on:"), 4)
         for runner in ("ubuntu-24.04", "windows-2022"):
             self.assertIn("runs-on: " + runner, workflow)
-        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.ref_type != 'tag' }}", workflow)
+        self.assertIn("github.event_name == 'push' && github.ref_type == 'tag' && !github.event.repository.private", workflow)
+        self.assertEqual(workflow.count("contents: write"), 1)
+        self.assertIn("needs: [release-identity, download-component, native]", workflow)
+        self.assertLess(workflow.index("--check-toolchain"), workflow.index("cargo build"))
         self.assertNotIn("pull_request:", workflow)
         self.assertNotIn("build/native-release", workflow)
         self.assertNotIn("cmake==", workflow)

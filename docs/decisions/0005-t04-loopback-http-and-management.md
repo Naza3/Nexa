@@ -52,4 +52,4 @@ HTTP shutdown、Ctrl+C、bind/启动失败和传输异常统一 ServiceShutdown�
 
 ## 验证职责
 
-协议 fake 仅验证边界和调度，不能替代真实 GGUF。Linux 开发验证、真实 HTTP/CLI smoke、无 native 管理端构建、Windows CPU CI、用户目标机与发行独立机分别记录。本文不声称尚未完成的 Windows/T05/Android 验收。
+协议 fake 仅验证边界和调度，不能替代真实 GGUF。Linux 开发验证、真实 HTTP/CLI smoke、无 native 管理端构建、Windows CPU CI、用户目标机与发行独立机分别记录。本文不声称尚未完成的 Windows/T05 验收。

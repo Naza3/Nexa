@@ -22,7 +22,7 @@
 - 桌面 UI 以模型/服务管理器为后续目标，聊天为辅助验证；当前已有能力和待开发增量必须分开
 - API兼容官方dsh为明确目标；以[harness契约](docs/windows-harness-contract.md)锁定的pi-ai自定义provider路线实施，实际联调另锁依赖。现有文本子集不等于工具闭环兼容，不静默吞掉不支持字段
 - 保持单模型、单运行任务、有限 FIFO。GPU/NPU、其他系统、完整聊天产品、模型市场、账户/云同步、公开远程服务不在当前主线
-- Android/MNN/Flutter 设计移至[历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md)。原源码、隔离 CI、证据和 `apps/android-verifier/` 未提交 B3b WIP 保留，不删除、覆盖或混入 Windows 变更；独立 MNN Chat fork 不动
+- 按[ADR0029](docs/decisions/0029-desktop-only-source-tree.md)，当前源码树仅维护桌面产品；项目自有移动源码、专用工作流与设计/研究文档已移除。旧“原位保留移动源码/WIP”规则不再适用；历史由 Git 追溯，独立 `Naza3/MNN` fork 与锁定 llama.cpp 上游完整源码不动
 - 用户已授权的可选局域网文本推理按 [ADR0020](docs/decisions/0020-opt-in-lan-inference-api.md) 实施：默认关闭，独立凭据和受限监听；本机管理继续回环，不开放公网、不自动改防火墙
 - Telegram 摘要是可选参考调用端，来源/账号、快照、分块、产物和持久化归调用层，不绑 runtime 发布
 
@@ -62,7 +62,7 @@
 
 2026-10-04用户已将Naza3/Nexa改为公开仓库，并明确恢复GitHub Actions构建；此最新要求覆盖此前因私有库额度停用Actions Rust的安排。使用标准GitHub托管runner，不启用收费larger runner或付费资源；保留同源aria2、原生Windows真实验证和完整包身份/依赖/许可闭包。CI、交叉编译、目标Windows10设备结果分开，不把启动任务当成成功。长期单开发分支与开发方负责同步main/解决冲突的规则不变。
 
-根据改动选择检查，实际命令从届时存在的项目配置取得。runtime 保留执行规格适用 Windows CPU 的 A 编号，新增范围使用路线 W 阶段门槛；历史 Android/GPU 项不重新编号、不纳入当前门槛。fake 仅用于协议/调度测试，不能替代真实 GGUF 与目标 Windows 设备验收。
+根据改动选择检查，实际命令从届时存在的项目配置取得。runtime 保留执行规格适用 Windows CPU 的 A 编号，新增范围使用路线 W 阶段门槛；退役平台/加速后端项不重新编号、不纳入当前门槛。fake 仅用于协议/调度测试，不能替代真实 GGUF 与目标 Windows 设备验收。
 
 每个任务结束记录：任务 ID、修改范围、实际命令与退出码、验证级别、证据路径、未验证条件、下一步。状态使用 `未开始 / 进行中 / 待验证 / 已完成 / 受阻`，具体转换规则见路线。依赖未完成属于未开始，不滥用受阻。
 

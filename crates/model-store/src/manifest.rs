@@ -356,7 +356,7 @@ fn validate_extra(extra: &BTreeMap<String, Value>) -> Result<()> {
 }
 
 /// IDs meet the shared protocol grammar. Reject Windows device names and trailing
-/// dots too, so a registry copied between Windows and Android remains unambiguous.
+/// dots too, so registries remain unambiguous across supported desktop paths.
 pub(crate) fn validate_portable_id(id: &ModelId) -> Result<()> {
     let name = id.as_str();
     let stem = name.split('.').next().unwrap_or(name);
@@ -443,7 +443,7 @@ mod tests {
         m.validation.as_mut().unwrap().threads = 4;
         alternatives.push(m);
         let mut m = known();
-        m.validation.as_mut().unwrap().platform = "android-arm64".into();
+        m.validation.as_mut().unwrap().platform = "windows-arm64".into();
         alternatives.push(m);
         let mut m = known();
         m.validated = false;

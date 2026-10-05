@@ -16,7 +16,7 @@
 
 stdout 专用于协议。独立 writer 持有最多一个编码帧，发送队列最多四个帧；生产路径的文本帧还必须持有父进程的一次性预算 reservation。父进程的 reservation 延续到最终消费者释放，worker 不建第二个文本预算、不因管道写成功而退款。信用等待与队列等待都可由 Cancel、EOF、Shutdown 或 writer 失败打断。
 
-正常退出先取消，等待原生终态，再提交内部 Unload，在原生资源释放确认后关闭 EngineHost mailbox。整个清理窗口最多4秒；不会无限 join 被堵塞的 stdin/stdout 或卡住的原生线程。超时退出失败，由操作系统及父进程的五秒 watchdog/进程 containment 最终回收。此机制属于进程隔离，不能用于 Android 强杀线程。
+正常退出先取消，等待原生终态，再提交内部 Unload，在原生资源释放确认后关闭 EngineHost mailbox。整个清理窗口最多4秒；不会无限 join 被堵塞的 stdin/stdout 或卡住的原生线程。超时退出失败，由操作系统及父进程的五秒 watchdog/进程 containment 最终回收。此机制回收整个隔离进程，不在线程仍使用资源时强行释放原生对象。
 
 原生 shim 的日志回调不输出正文；Rust 禁止输出 panic payload、路径、参数和生成文本。失败时 stderr 仅一条固定短诊断，不输出解析内容。父进程仍必须限量读取/丢弃 stderr，以覆盖异常二进制或系统诊断。
 

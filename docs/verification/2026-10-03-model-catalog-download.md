@@ -63,7 +63,7 @@
 
 实现提交为`817ad7d6174ea16ff6210438a8ea641562a9e84a`，tree为`31b6d681271f2bf4d814357b0307a81c0ab5ce03`。[Windows run37118858126 / job111190859892](https://github.com/Naza3/Nexa/actions/runs/37118858126/job/111190859892)失败于“Check independent desktop Rust graph + Tauri Release”步骤：2026-10-03 11:17:16–11:37:21 UTC达到20分钟步骤时限。主代理与独立审查核查日志：Windows壳23项测试于11:24:45通过，clippy于11:26:32通过；Release于11:26:33才开始，在共享步骤预算中实际得到10分48秒。最后在11:34 UTC仍为desktop-bridge/nexa-desktop正常编译，超时前未见编译错误。
 
-模型下载、native、全workspace与包步骤均未执行，本次不能证明模型运行成功或失败。重试准备仅将该步骤时限从20改为35分钟，全局90分钟和全部检查保持，独立审查通过；重试提交与结果另记。历史Android研究[run37118858122](https://github.com/Naza3/Nexa/actions/runs/37118858122)由根Cargo.lock变化另行触发，现已成功，仅为native研究回归，没有APK或设备验收，与Windows产品验收无关。该次失败时最新已发送产品仍为43ad5c2。
+模型下载、native、全workspace与包步骤均未执行，本次不能证明模型运行成功或失败。重试准备仅将该步骤时限从20改为35分钟，全局90分钟和全部检查保持，独立审查通过；重试提交与结果另记。该次失败时最新已发送产品仍为43ad5c2。
 
 ## 第二次 Windows CI：前端 preview 测试超时
 

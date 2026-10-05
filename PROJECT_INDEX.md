@@ -23,7 +23,7 @@
 | [工具契约草案](docs/windows-tools-contract.md) | 生产tools尚未实现；T0已有无模型parser观察并定位严格完整性/schema/普通文本缺口 |
 | [构建锁](docs/build-lock.md) / [模型矩阵](docs/model-matrix.md) | 固定工具链/llama与精确模型验证证据，非运行许可名单 |
 | [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |
-| [历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md) | 收敛前主文档、Android/MNN研究与历史状态，不驱动当前排期 |
+| [桌面源码边界 ADR0029](docs/decisions/0029-desktop-only-source-tree.md) | 安装器交付后移除本项目移动实现/专用文档，Git 历史与独立项目不变 |
 
 ## 实际 Windows 工程
 
@@ -44,9 +44,12 @@
 | `native/llama-shim/tests/tool_parser_test.cpp` | T0合成上游模板/parser诊断，13case/无权重，不是生产工具接受算法 |
 | `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
-`RuntimeConfig::android()` 等遗留源码、独立移动workspace和隔离CI仍原位保留，不因本次文档收敛修改。`.codex/agents/`是开发代理配置，不是产品运行依赖。
+根 workspace、桌面壳 workspace 与相关 Windows/Linux 开发验证是当前工程入口。`.codex/agents/`是开发代理配置，不是产品运行依赖；上游 llama.cpp 的跨平台源码保持完整。
 
 ## Windows 接口、发行与原生窗口
+
+- [Tag 自动发行](docs/windows-releases.md)：同一精确源码/payload 的便携 ZIP、MSI、Setup EXE、版本与对应源码闭包；分支构建不发布，平台/目标机验收分层
+- [Windows 安装器](docs/windows-installers.md) / [ADR0028](docs/decisions/0028-tagged-windows-installers.md)：当前用户 MSI 与同载荷 Setup、数据保留、生命周期与目标机验收边界
 
 - [HTTP/管理 ADR0005](docs/decisions/0005-t04-loopback-http-and-management.md)：鉴权、同连接proof、原子导入/输出预算与关停
 - [worker ADR0004](docs/decisions/0004-t03-process-isolation-and-credit-ledger.md)：进程隔离、单一信用账本与消费lease
@@ -79,11 +82,11 @@
 
 历史报告是当时精确源码/设备的证据，不追溯覆盖新功能或新硬件。当前W阶段结果仍以状态与各自新报告为准。
 
-## 可选调用层与历史
+## 可选调用层与后续验证
 
 [Telegram摘要方案](docs/telegram-summary.md)是可选参考，不是runtime发布前置；源码规划路径未创建，不自动导入Telegram SDK、账号、数据库或定时任务。
 
-Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告仅从[历史索引](docs/archive/windows-focus-2026-10-03/INDEX.md)进入，不放回当前推荐阅读顺序，不重新启动已暂停工作。
+当前源码树不保留项目自有移动工程、专用设计和研究报告。删除范围与开发验证见[桌面清理记录](docs/verification/2026-10-05-desktop-only-cleanup.md)，历史内容可由 Git 追溯。
 
 - [Windows本机测试记录修复验证](docs/verification/2026-10-04-windows-model-evidence.md)
 
@@ -112,3 +115,7 @@ Android/MNN/Flutter原计划、研究验证器、独立移动workspace与报告�
 - [本轮精简桌面验证](docs/verification/2026-10-05-compact-desktop-experience.md)：前端回归、独立审查与原生Windows验证边界
 
 - [手动停止加载ADR0027](docs/decisions/0027-owned-model-load-cancellation.md) / [本轮验证](docs/verification/2026-10-05-model-load-cancellation.md)：按次UUID、hash/切换/native/probe、回执恢复与worker回收；状态以当前状态为准
+
+- [Tag 发行开发验证](docs/verification/2026-10-05-tag-release.md)：版本、封闭资产、精确 tag/commit 与无覆盖发布反例；Windows 安装器结果分层记录
+
+- [LAN保存CI时序修复](docs/verification/2026-10-05-lan-save-ci-race.md)：mock持久状态与旧读取微任务竞争的确定性对照，安装器CI重跑前置

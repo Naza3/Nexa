@@ -34,7 +34,7 @@ CI继续固定llama源码与已选依赖、同source_commit真实构建aria2，�
 
 ### 以下保留历史构建锁与证据
 
-日期：2026-10-03。本文保留Windows/开发Linux的实际构建锁与历史证据；Linux是开发/验证环境，不是当前发布平台。已发送产品与当前实现以[当前状态](../PROJECT_STATE.md)为准；aria2下载器有独立来源锁与待验分支，不升级下述llama/推理工具链。Android构建锁已归历史快照，不驱动本轮开发。
+日期：2026-10-03。本文保留Windows/开发Linux的实际构建锁与历史证据；Linux是开发/验证环境，不是当前发布平台。已发送产品与当前实现以[当前状态](../PROJECT_STATE.md)为准；aria2下载器有独立来源锁与待验分支，不升级下述llama/推理工具链。移动工具链/研究构建锁已退出当前源码树，旧版由Git追溯。
 
 ## 固定输入
 
@@ -170,4 +170,4 @@ Tauri CLI2.12.1会在执行cargo前规范化依赖features。`tauri = { package 
 - 最新389eeef未升级上述llama/工具链；[最终CI/交付记录](verification/2026-10-02-windows-model-compatibility.md)覆盖模型兼容性增量
 - Windows10 x64/i5-8400是首要目标，其他Intel/AMD桌面CPU和Windows11按实际指令集/设备扩大；SSE4.2/AVX/AVX2/F16C/FMA/BMI2要求不能由GGML_NATIVE=OFF自动消除
 - W02新增模型、模板/工具能力或引擎升级分别锁定并回归；W04独立记录dsh/pi-ai精确依赖与真实出站fixture，不影响现有运行时依赖锁
-- 旧移动工具链/SDK和许可研究见[原构建锁快照](archive/windows-focus-2026-10-03/docs/build-lock.md)与[历史索引](archive/windows-focus-2026-10-03/INDEX.md)；源码/隔离CI不改
+- 项目移动工具链与专用CI已按[ADR0029](decisions/0029-desktop-only-source-tree.md)移除；桌面许可闭包及上游完整源码保持不变

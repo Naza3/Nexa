@@ -1,6 +1,6 @@
 # T00/T01 原生开发基线验证
 
-日期：2026-09-30；平台：Linux x86_64 开发容器。原始提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168`，本轮工作树尚待父任务提交。固定依赖/设备见 [构建锁](../build-lock.md)，模型见 [矩阵](../model-matrix.md)。本记录不把 Linux 结果标为 Windows 或 Android 验收。
+日期：2026-09-30；平台：Linux x86_64 开发容器。原始提交 `0d3a3cea32b813dad0857f9e1a1e41862ce27168`，本轮工作树尚待父任务提交。固定依赖/设备见 [构建锁](../build-lock.md)，模型见 [矩阵](../model-matrix.md)。本记录不把 Linux 结果标为 Windows 验收。
 
 ## 修改范围
 
@@ -28,7 +28,7 @@
 | 最终九场景 `xtask native-smoke` | pass / 0，9场景、10轮；每轮binary_unchanged=true | 中英文、长输入、预算、加载释放及取消功能；不替代完整A矩阵 |
 | `cargo fmt --all -- --check`；`cargo test --locked --workspace`；`cargo clippy --locked --workspace --all-targets -- -D warnings` | pass / 0，25单测+7 compile-fail；真实测试在普通workspace运行中明确ignored，已另行显式执行通过 | 最终集成检查，另含CTest与git diff --check均退出0 |
 | Windows workflow YAML解析 | pass / 0 | 语法检查，不证明Actions执行 |
-| Windows/Android设备验收 | unavailable | 本轮没有目标设备 |
+| Windows设备验收 | unavailable | 本轮没有目标设备 |
 
 真实Rust测试日志：`/tmp/nexa-rust-verification.log`，SHA-256 `99a2b6514da6e61d3b395956975a99f9e2f068e5ca07c6395a43d136e145c36c`。最终验证example SHA-256 `350c703e01d7ba9d0755313eb168e68fe4c550a5936f731dbf3ff22ab4b79e06`。日志和二进制为本机证据，不提交构建产物。
 
@@ -76,7 +76,7 @@ A02多轮测试与链接修复需要新提交的Windows CI，不能用Linux补�
 
 修复使用 `scripts/run_upstream_baseline.py`：每个上游进程分别300秒期限，stdin直接EOF，completion明确simple-io，stdout/stderr直接落文件，保存退出码/超时/耗时与SHA。超时自动kill并reap；未运行bench明确skipped。外层step12分钟，保留always-upload收集证据的余量。不绕过非思考、真实中文或5次benchmark采样检查。4项执行器测试通过，真实Linuxcompletion/bench均通过；Windows行为等待新提交重验。
 
-阶段判断：Windows真实上游固定模型基线尚未建立，所以T00不能完成。T01已经有Linux真实流式、停止、模板/预算和重复加载证据；Windowsnative suite与独立prefill取消观测仍待补。Android真机、独立无开发工具Windows机、100请求/20加载长期趋势与全性能矩阵属于T05/T07/T09，不能把它们误当作开始T02的全部前提；也不把这些缺项写成通过。下一有界步骤是结束Windows基线和native suite，补最小prefill取消观测，再依路线评估T02。
+阶段判断：Windows真实上游固定模型基线尚未建立，所以T00不能完成。T01已经有Linux真实流式、停止、模板/预算和重复加载证据；Windowsnative suite与独立prefill取消观测仍待补。独立无开发工具Windows机、100请求/20加载长期趋势与全性能矩阵属于T05/T09，不能把它们误当作开始T02的全部前提；也不把这些缺项写成通过。下一有界步骤是结束Windows基线和native suite，补最小prefill取消观测，再依路线评估T02。
 
 第三次Windows运行 [36743342648](https://github.com/Naza3/Nexa/actions/runs/36743342648) 再次通过原生/Rust/模型hash，但执行器测试在Windows默认cp1252写中文时暴露未指定编码（UnicodeEncodeError）。上游进程未启动。修复为测试全部文本读写显式UTF-8，并启用EncodingWarning-as-error回归；纯脚本测试前移工具准备阶段，以尽早发现平台脚本错误，不跳过验证。
 
@@ -110,4 +110,4 @@ artifact `11112772308` 的ZIP SHA-256为 `f50d169ca97890ad356ad38270b2d527b944eb
 
 验证 artifact `11132296863`，ZIP SHA-256 `4ca62c5f4ddc32492a915df69c3e4b79ab91f1cf81f1be2e87dc1e9628b8d74d`，已下载核对并安全解压至 `artifacts/verification/windows-run5/`。原始 `upstream-processes.json` 分别保存正常基线与探索诊断状态；native JSON 中平台验收字段是自动工具的保守占位，阶段结论在此按实际设备证据人工确认。编译工具 artifact `11132291996`，ZIP SHA-256 `4fad0b2fb4a9ee666cd71de722ae69bb2ff116b162df040744e8e9f9363083d7`，本轮仅核对远程 metadata，未下载或复用。
 
-T00 已满足固定 Windows CPU 上游真实输入/统计门槛；T01 已满足真实中英文流式、模板/特殊 token、重复加载释放和取消的最小交付。允许进入 T02。A08 的独立 prefill 中途取消耗时仍未测，须在 T02 A05–A12 集成验收补齐；100 请求/20 加载长期内存趋势、完整性能、无开发工具 Windows 发行与 Android 真机仍属于后续任务。以上结论更新此前各历史小节的“待验证”状态，不抹去旧失败。
+T00 已满足固定 Windows CPU 上游真实输入/统计门槛；T01 已满足真实中英文流式、模板/特殊 token、重复加载释放和取消的最小交付。允许进入 T02。A08 的独立 prefill 中途取消耗时仍未测，须在 T02 A05–A12 集成验收补齐；100 请求/20 加载长期内存趋势、完整性能、无开发工具 Windows 发行仍属于后续任务。以上结论更新此前各历史小节的“待验证”状态，不抹去旧失败。

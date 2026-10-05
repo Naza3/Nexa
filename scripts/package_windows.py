@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one private Windows x64 CPU package. No downloads, installers or model data.
+"""Build one Windows x64 CPU package. No downloads, installers or model data.
 
 Python, Cargo, CMake and the selected VS installation are build-time tools only.
 Runtime acceptance is a separate executable and a separate gate.
@@ -729,7 +729,7 @@ def visual_studio_redistribution(selected):
     year = {17: "2022", 18: "2026"}.get(version[0] if version else None)
     if year is None:
         fail("unsupported Visual Studio redistribution reference")
-    return {"purpose": "private development acceptance",
+    return {"purpose": "Windows x64 runtime redistribution with original license and source closure",
             "source_rule": "unmodified Release x64 files from the selected Visual Studio VC/Redist/MSVC tree",
             "redist_list": f"https://learn.microsoft.com/en-us/visualstudio/releases/{year}/redistribution",
             "community_terms_reference": ("https://visualstudio.microsoft.com/wp-content/uploads/2021/11/Visual-Studio-2022-Community-License-EN.docx" if year == "2022" else "https://visualstudio.microsoft.com/license-terms/vs2026-ga-community/"),

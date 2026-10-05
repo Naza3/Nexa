@@ -22,7 +22,7 @@ AIR_NATIVE_DIR="$PWD/build/native-release" cargo test --locked -p runtime-types 
 AIR_NATIVE_DIR="$PWD/build/native-release" cargo build --locked -p llama-adapter --example native-smoke
 ```
 
-当前构建入口支持 Linux 开发验证和 Windows MSVC（目标验收以实际 CI / 设备记录为准）。Android 原生工具链集成属于 T07，本入口会明确拒绝，不能把 Linux 通过称为 Android 可用。
+当前构建入口支持 Linux 开发验证和 Windows MSVC（目标验收以实际 CI / 设备记录为准）。其他目标会被构建入口明确拒绝，Linux 开发验证不能代替 Windows 实机验收。
 
 ## 真实模型验证
 
