@@ -1,6 +1,6 @@
 # Nexa 当前状态
 
-## 2026-10-06 模型移除与聊天 Markdown（开发验证完成，待原生构建）
+## 2026-10-06 模型移除与聊天 Markdown（已完成：原生验收及开发包交付）
 
 用户要求从模型库列表移除模型，并补充聊天回复 Markdown。开发沿用 `codex/dev`，已在本地同步用户合并的正式 `main` `5c26e34aa74bf5552b9455e65f42883acbd61d6f`，保留开发分支额外验收文档，不重写历史。既有 [v0.1.0 正式 Release](https://github.com/Naza3/Nexa/releases/tag/v0.1.0)已于2026-10-05发布；本轮不移动其标签、不替换公开附件或自动合并 main。
 
@@ -11,7 +11,11 @@
 
 发现并修正：Faulted服务不能卸载，移除指引改为用户显式停服；新嵌套npm依赖许可输出原路径被安全门禁拒绝，改用锁路径hash命名并保留lock_location归属，不放宽底层校验；深嵌套Markdown解析异常由单消息边界回退原文，保持会话和复制。107生产包109许可/110原件逐字节恢复，结合既有包许可验证仍10份文件，无许可删减。JS生产包约601kB、gzip约179kB，Vite大chunk提示保留，没有借此扩大功能或引入高亮引擎。
 
-源码审查无剩余阻断；精确提交后的完整原生Windows构建、真实模型与三格式包仍待执行。用户Win10窗口/离线/长期验收单独保留，不能以jsdom替代。详见[本批验证记录](docs/verification/2026-10-06-model-unregister-and-markdown.md)。
+精确代码提交 `09b9e0496f565e0e62859be2c7034e9ceb756325`、tree `bd33eb60826c40f6517b1beb3124afa8100f1645` 的[Windows CI37449560591](https://github.com/Naza3/Nexa/actions/runs/37449560591)于2026-10-06 11:08:26 UTC成功。Windows根Rust53组561通过/0失败/7忽略、壳29、前端790、Python271项（269通过/2skip）、CTest4/4，以及真实模型/HTTP/CLI/独立解压桌面和13项安装生命周期通过。分支Release job正确跳过。
+
+独立实际产物2659项断言全部通过：同28文件payload、48 IPC/权限、EXE内实际Markdown JS/CSS、10许可文件恢复849原件及107包/109npm许可归属、446源码Windows指纹、aria2三补丁、54证据与69安装诊断事件闭合。开发便携包16,256,952字节，SHA256 `0ebe57bf38cc5a2ec0c0298be2021773abe178b8a7adec210e4ec22c2245d843`；[下载入口](https://github.com/Naza3/Nexa/actions/runs/37449560591/artifacts/11409385193)已于11:20:05 UTC发给用户，有效期2026-10-13，不能据此认定用户已安装。
+
+本批版本仍0.1.0，仅为精确提交开发产物，未覆盖正式Release。MSI ProductCode与原正式版相同，13门槛中的升级/回滚使用私有未来版本fixture，不代表旧公开0.1.0到本批同版本包已验证升级；交付建议使用便携版。便携版不自动隔离既有数据，用户已被提醒停服并备份数据目录，schema3不能直接由旧版读取。目标Windows10窗口/干净机器/离线/长期条件仍独立待验。详见[本批验证记录](docs/verification/2026-10-06-model-unregister-and-markdown.md)。随后纯文档记录提交不改变本批产物源身份，不重跑完整构建。
 
 ## 2026-10-05 桌面源码清理（已完成：原生验证与产物复核通过）
 

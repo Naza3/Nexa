@@ -37,3 +37,17 @@
 本记录为开发验证。精确提交后的GitHub完整Windows构建、真实GGUF/HTTP/CLI/独立解压桌面与全部MSI/Setup安装生命周期仍待运行。没有用已发布v0.1.0的CI证据替代本批结果。目标Win10原生窗口、干净机器/离线、长期运行等仍独立待验。
 
 新schema3索引的版本回退限制见ADR0030；既有公开v0.1.0和其附件未被替换。此批不自动创建新发行标签。
+
+## 精确提交原生结果与交付
+
+代码 `09b9e0496f565e0e62859be2c7034e9ceb756325`、tree `bd33eb60826c40f6517b1beb3124afa8100f1645` 的[原生运行37449560591](https://github.com/Naza3/Nexa/actions/runs/37449560591)于2026-10-06 11:08:26 UTC成功；release-identity、download-component、native三项成功，分支release按条件跳过。原先“待运行”段落记录开发时状态，以本节最终结果为准。
+
+Windows实际结果：根Rust53组561通过/0失败/7既有忽略、独立壳29、前端36文件790项、Python271项（269通过/2skip）、CTest4/4；真实GGUF、调度/取消/故障恢复、HTTP/CLI、独立解压包与全部13项MSI/Setup生命周期通过。早期选择性回归不再次累加。
+
+独立Linux只读审计重新执行2659项断言，全部通过、0失败：六个包装API大小/hash、28文件/42,910,779字节同payload、MSI17表与CAB、Setup内嵌MSI、54原生证据与69事件、446源码Windows换行指纹、aria2三补丁重放一致。实际EXE内解出Brotli前端资源，601,209字节JS与当前dist逐字节一致，含安全Markdown及移除调用，48命令/原生权限严格闭合。10份许可恢复849个角色库存原件，107个npm lock_location与109份许可证完整归属。断言含逐文件/许可校验，不等于2659种独立产品功能。
+
+开发便携ZIP16,256,952字节，SHA256 `0ebe57bf38cc5a2ec0c0298be2021773abe178b8a7adec210e4ec22c2245d843`；[便携开发包](https://github.com/Naza3/Nexa/actions/runs/37449560591/artifacts/11409385193)已于11:20:05 UTC提供给用户（Actions有效期2026-10-13），不是新正式Release。对应三格式artifact为[11409330230](https://github.com/Naza3/Nexa/actions/runs/37449560591/artifacts/11409330230)。
+
+版本仍0.1.0，MSI ProductCode `{21794DE8-EC54-550C-97AD-A205D25ED3DD}` 与旧正式版相同；upgrade/rollback门槛为私有未来版本fixture，同版本覆盖升级没有测试，不推荐用MSI/Setup覆盖旧正式版。便携包也使用既有用户数据；已提醒停服、备份数据目录及schema3回退限制。安装器未签名，用户Win10应用GUI/真实剪贴板、干净机器/离线/长期稳定性和ICE仍未验证；只读PE/DOM检查不能替代窗口实测。原installer两份JSON未单独上传，生命周期使用严格发行清单、诊断和精确日志交叉验证。
+
+本节之后纯文档提交仅补记结果，原生验收和产物身份继续指向09b9e049；没有修改已发布v0.1.0或自动创建新tag。
