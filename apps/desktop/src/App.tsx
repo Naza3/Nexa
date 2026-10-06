@@ -1,5 +1,8 @@
 import { followOnLoadAction } from "./modelLoad";
 import { ModelLoadControl } from "./ModelLoadControl";
+import { ChatMarkdown } from "./ChatMarkdown";
+import { ModelRemoveAction } from "./ModelRemoveAction";
+import { modelRemovalBlocker } from "./modelRemoval";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
@@ -402,7 +405,7 @@ function DirectorySettings({
             <p>
               {confirm === "apply"
                 ? "仅保存默认下载目录，已有模型索引保留。不枚举或校验目录里的模型，不会自动启动运行服务；不会复制或删除模型文件。添加已有文件请回到模型页选择“添加模型”。"
-                : "手动扫描默认目录直接子级中未作为显式文件来源登记的 GGUF，不递归、不扫描其他来源。显式添加的模型保留，通过重新添加或加载复核；本次扫描不重新校验这些文件。不支持的候选逐个报告，其余合法候选一次保存。提交前取消或全部拒绝保留旧索引。若持久化确认失败，请核对实际配置，不假定已回滚。不会自动启动运行服务，也不会复制或删除模型文件。"}
+                : "手动扫描默认目录直接子级中未作为显式文件来源登记的 GGUF，不递归、不扫描其他来源。扫描命中的已移除模型会重新加入模型库，包括已移除的显式添加项。仍在库中的显式添加模型保留，通过重新添加或加载复核；本次扫描不重新校验这些在库文件。不支持的候选逐个报告，其余合法候选一次保存。提交前取消或全部拒绝保留旧索引。若持久化确认失败，请核对实际配置，不假定已回滚。不会自动启动运行服务，也不会复制或删除模型文件。"}
             </p>
           )}
         </Modal>
@@ -418,6 +421,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
   const setView = (view: "local" | "download") => setNavigation({ view, detailId: null });
   const setDetailId = (detailId: string | null) => setNavigation({ ...navigation, detailId });
   const [switchTo, setSwitchTo] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<{ model: ModelSummary; generation: string } | null>(null);
   const detailHeading = useRef<HTMLHeadingElement>(null);
   const listHeading = useRef<HTMLHeadingElement>(null);
   const lastDetail = useRef<string | null>(null);
@@ -433,6 +437,10 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
   useEffect(() => {
     if (detailId && !detailAvailable && document.activeElement === document.body) detailHeading.current?.focus();
   }, [detailId, detailAvailable]);
+  useEffect(() => {
+    if (state.model_removal && document.activeElement === document.body)
+      (listHeading.current ?? detailHeading.current)?.focus();
+  }, [state.model_removal]);
   const runtime = projection.runtime;
   const connected = state.snapshot?.connection === "connected";
   const browsable = connected || state.snapshot?.connection === "stopped";
@@ -440,6 +448,12 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
   const busy = !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" ||
     ["stale", "unsupported"].includes(state.snapshot?.model_directory.state ?? "") || state.chat_phase !== "idle" || projection.busy;
   const detail = state.models.data.find((model) => model.id === detailId);
+  const requestRemove = (model: ModelSummary) => {
+    if (!modelRemovalBlocker(state, model.id) && state.models.generation)
+      setRemoveTarget({ model, generation: state.models.generation });
+  };
+  const removeReason = removeTarget ? state.models.generation !== removeTarget.generation
+    ? "模型列表已变化，请取消后重新核对。" : modelRemovalBlocker(state, removeTarget.model.id)?.message ?? null : null;
   const actions = (model: ModelSummary, expanded = false) => {
     const current = model.id === projection.residentId;
     const switching = loaded && !current;
@@ -449,6 +463,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
                     className={current ? "loaded-button" : ""}
                     disabled={
                       !browsable ||
+                      !state.models.generation ||
                       !!state.snapshot?.configuration_error ||
                       state.snapshot?.configuration?.schema_version === 1 ||
                       state.snapshot?.configuration?.pending_restart ||
@@ -531,6 +546,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
       {!connected && model.available && model.loadable === true && <p className="small-note">加载将启动服务并短测</p>}
       {loaded && projection.residentId !== model.id && <p className="small-note">空闲时可显式切换；将释放当前模型，失败不自动恢复</p>}
       <p className="small-note">配置后端：CPU · 原生后端观测：{runtime?.backend ?? "unavailable"} · 内存观测：{runtime?.memory?.observation ?? "unavailable"}</p>
+      <div className="model-remove-detail"><button disabled={!!modelRemovalBlocker(state, model.id)} onClick={() => requestRemove(model)}>从模型库移除</button>{modelRemovalBlocker(state, model.id) && <span className="small-note">{modelRemovalBlocker(state, model.id)!.message}</span>}</div>
       </section>
     </article>;
   };
@@ -545,6 +561,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
         {state.snapshot?.configuration?.schema_version === 1 && <div className="notice-band warning"><p>请先确认旧配置迁移，再加载模型。</p><button onClick={goSettings}>处理配置迁移</button></div>}
         {state.snapshot?.configuration?.pending_restart && <p className="warning-text">已保存配置尚未被运行实例采用，请显式停止并重启后加载。</p>}
         {state.snapshot?.connection !== "connected" && state.models.data.length > 0 && <p className="small-note" role="status">{state.models.source === "local" ? "本地已登记模型 · 测试状态来自本机记录" : "上次读取的列表 · 可刷新核对"}</p>}
+        {!state.models.generation && state.models.data.length > 0 && <p className="warning-text small-note" role="status">模型列表待确认，当前显示上次读取结果；请刷新后再操作。</p>}
         {state.reconcile_status === "observing" && <p role="status" className="small-note">发现目录变化，等待文件稳定后登记</p>}
         {state.reconcile_status === "pending" && <p role="status" className="warning-text">有待登记文件，请显式停止服务后刷新</p>}
         <section className="library" aria-labelledby="library-title">
@@ -559,6 +576,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
               <div className="model-file"><Icon name="models" size={23} /></div>
               <div className="model-description"><div className="model-title"><h3>{model.display_name}</h3>{current && <span className="model-residency">当前驻留</span>}</div><div className="model-meta"><span>{model.quantization || "量化未知"}</span><span>{formatSize(model.size_bytes)}</span>{(!model.available || model.loadable !== true) && <span>{{ model_file_changed: "文件已变化", model_file_unavailable: "文件不可读", model_file_in_use: "文件被占用", model_directory_unavailable: "源目录不可读", unsupported_model: "引擎不支持" }[model.availability_error ?? ""] ?? "当前不可用"}</span>}{state.models.data.filter((entry) => entry.display_name === model.display_name).length > 1 && <span>{model.id.slice(-8)}</span>}</div></div>
               {status(model)}{actions(model)}<button className="text-button model-detail-button" ref={(button) => { if (button) detailButtons.current.set(model.id, button); else detailButtons.current.delete(model.id); }} aria-label={`查看 ${model.display_name} 的详情`} onClick={() => setDetailId(model.id)}>详情<Icon name="chevron" size={15} /></button>
+              <ModelRemoveAction name={model.display_name} reason={modelRemovalBlocker(state, model.id)?.message ?? null} onRemove={() => requestRemove(model)} />
             </article>;
           })}</div>}
           {(state.page_after || state.models.next_after) && <div className="pagination"><span>每页最多 64 个模型</span><div><button className="text-button" disabled={!state.page_after || state.models_loading || !browsable || busy} onClick={() => void controller.loadPage(null)}>回到首页</button><button disabled={!state.models.next_after || state.models_loading || !browsable || busy} onClick={() => void controller.loadPage(state.models.next_after)}>下一页<Icon name="chevron" size={14} /></button></div></div>}
@@ -566,6 +584,10 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
       </>}
     </>}
     {switchTo && <Modal title="切换驻留模型？" confirm="切换并测试" onCancel={() => setSwitchTo(null)} onConfirm={() => { const id = switchTo; setSwitchTo(null); void controller.loadModel(id); }}><p>将释放“{projection.residentName ?? "当前模型"}”，加载“{state.models.data.find((model) => model.id === switchTo)?.display_name ?? switchTo}”并进行短文本测试。忙碌时服务会拒绝切换；加载失败不会自动恢复旧模型，请查看真实状态后显式重载。</p></Modal>}
+    {removeTarget && <Modal title="从模型库移除？" confirm="确认移除" danger confirmDisabled={!!removeReason} onCancel={() => setRemoveTarget(null)} onConfirm={() => {
+      const target = removeTarget; setRemoveTarget(null);
+      void controller.unregisterModel(target.model.id, target.generation);
+    }}><p>将“{removeTarget.model.display_name}”从模型库列表移除。GGUF 文件、运行档案和历史测试记录均会保留。</p><p className="hash">模型 ID：{removeTarget.model.id}</p><p>可重新添加该文件恢复；手动扫描也会重新加入扫描命中的已移除模型。</p>{removeReason && <p className="warning-text" role="alert">{removeReason}</p>}</Modal>}
   </>;
 }
 function ChatPage({
@@ -696,7 +718,7 @@ function ChatPage({
                     )}
                   </div>
                   <div className="message-text">
-                    {message.content ||
+                    {message.content ? (message.role === "assistant" ? <ChatMarkdown content={message.content} /> : message.content) :
                       (message.state === "streaming" ? (
                         <span className="pending-text">
                           <Spinner />
@@ -1038,6 +1060,12 @@ export default function App({
   );
   const [page, setPage] = useState(initialPage);
   const [modelNavigation, setModelNavigation] = useState<{ view: "local" | "download"; detailId: string | null }>({ view: "local", detailId: null });
+  const [seenRemoval, setSeenRemoval] = useState(state.model_removal);
+  if (state.model_removal !== seenRemoval) {
+    setSeenRemoval(state.model_removal);
+    if (modelNavigation.detailId === state.model_removal?.model_id)
+      setModelNavigation({ ...modelNavigation, detailId: null });
+  }
   const [downloadFilter, setDownloadFilter] = useState("");
   const [settingsFromDownloads, setSettingsFromDownloads] = useState(false);
   const [chatReturn, setChatReturn] = useState(initialPage);

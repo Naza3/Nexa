@@ -57,7 +57,7 @@ pub struct ModelStore {
     _process_lock: fs::File,
     gate: Mutex<()>,
     verified: Mutex<BTreeMap<ModelId, VerifiedModel>>,
-    library: Option<ModelLibrary>,
+    library: Mutex<Option<ModelLibrary>>,
     external_prepared: Mutex<BTreeMap<ModelId, PreparedExternal>>,
 }
 impl ModelStore {
@@ -104,7 +104,7 @@ impl ModelStore {
             _process_lock: lock,
             gate: Mutex::new(()),
             verified: Mutex::new(BTreeMap::new()),
-            library,
+            library: Mutex::new(library),
             external_prepared: Mutex::new(BTreeMap::new()),
         };
         store.recover_imports()?;
@@ -324,6 +324,9 @@ impl ModelStore {
     /// resolve checks that the cached verified identity has not visibly changed.
     fn list_managed(&self) -> Result<Vec<ModelManifest>> {
         let _gate = self.acquire()?;
+        self.list_managed_locked()
+    }
+    fn list_managed_locked(&self) -> Result<Vec<ModelManifest>> {
         self.check_layout()?;
         let mut models = Vec::new();
         for entry in self.root.read_dir("models").map_err(io_error)? {
@@ -334,16 +337,32 @@ impl ModelStore {
                 .ok_or_else(|| invalid_manifest("non-UTF-8 model directory name"))?;
             let id = ModelId::new(name)
                 .map_err(|_| invalid_manifest("invalid registered model directory name"))?;
-            models.push(self.read_manifest(&id)?);
+            // Hidden managed copies still own their IDs; suppression must not
+            // hide a corrupt external/managed namespace collision.
+            if self.is_external(&id) {
+                return Err(library_error(ErrorCode::ModelLibraryChanged));
+            }
+            match self.read_manifest(&id) {
+                Ok(manifest) => models.push(manifest),
+                Err(error) if error.code == ErrorCode::ModelNotFound => (),
+                Err(error) => return Err(error),
+            }
         }
         models.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(models)
     }
 
     pub fn list(&self) -> Result<Vec<ModelManifest>> {
-        let mut models = self.list_managed()?;
-        if let Some(library) = &self.library {
-            models.extend(library.models.iter().map(|m| m.manifest.clone()));
+        let _gate = self.acquire()?;
+        let mut models = self.list_managed_locked()?;
+        if let Some(library) = &*self.library.lock().map_err(|_| cache_error())? {
+            models.extend(
+                library
+                    .models
+                    .iter()
+                    .filter(|m| !library.is_unregistered(&m.manifest))
+                    .map(|m| m.manifest.clone()),
+            );
         }
         models.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(models)
@@ -357,20 +376,32 @@ impl ModelStore {
             .clear();
     }
     pub fn library_info(&self) -> Option<LibraryDirectoryInfo> {
-        self.library.as_ref().and_then(ModelLibrary::info)
+        self.library
+            .lock()
+            .ok()?
+            .as_ref()
+            .and_then(ModelLibrary::info)
     }
     pub fn is_external(&self, id: &ModelId) -> bool {
-        self.library.as_ref().is_some_and(|l| l.entry(id).is_some())
+        self.library
+            .lock()
+            .map(|l| l.as_ref().is_some_and(|l| l.entry(id).is_some()))
+            .unwrap_or(true)
     }
     pub fn external_availability(&self, id: &ModelId) -> Option<ErrorCode> {
-        let library = self.library.as_ref()?;
+        let library_guard = self.library.lock().ok()?;
+        let library = library_guard.as_ref()?;
         let entry = library.entry(id)?;
+        if library.is_unregistered(&entry.manifest) {
+            return Some(ErrorCode::ModelNotFound);
+        }
         if !cfg!(windows) {
             return Some(ErrorCode::ModelDirectoryUnsupported);
         }
         library.availability(entry)
     }
     pub fn needs_external_preparation(&self, id: &ModelId) -> Result<bool> {
+        self.check_registered(id)?;
         if !self.is_external(id) {
             return Ok(false);
         }
@@ -384,7 +415,8 @@ impl ModelStore {
         }
     }
     pub fn prepare_external(&self, id: &ModelId, control: &ScanControl) -> Result<()> {
-        let Some(library) = &self.library else {
+        let library_snapshot = self.library.lock().map_err(|_| cache_error())?.clone();
+        let Some(library) = &library_snapshot else {
             return Ok(());
         };
         let Some(entry) = library.entry(id) else {
@@ -414,8 +446,16 @@ impl ModelStore {
         Ok(())
     }
     pub fn get(&self, id: &ModelId) -> Result<ModelManifest> {
-        if let Some(entry) = self.library.as_ref().and_then(|l| l.entry(id)) {
-            return Ok(entry.manifest.clone());
+        self.check_registered(id)?;
+        if let Some(entry) = self
+            .library
+            .lock()
+            .map_err(|_| cache_error())?
+            .as_ref()
+            .and_then(|l| l.entry(id))
+            .cloned()
+        {
+            return Ok(entry.manifest);
         }
         let _gate = self.acquire()?;
         self.check_layout()?;
@@ -430,6 +470,7 @@ impl ModelStore {
     /// Keep the store alive while using the result and coordinate remove/unload in
     /// the scheduler; a bare path is not a model lease.
     pub fn resolve(&self, id: &ModelId) -> Result<ResolvedModel> {
+        self.check_registered(id)?;
         if self.is_external(id) {
             return self
                 .external_prepared
@@ -515,6 +556,35 @@ impl ModelStore {
         Ok(manifest)
     }
 
+    fn check_registered(&self, id: &ModelId) -> Result<()> {
+        let library = self.library.lock().map_err(|_| cache_error())?;
+        if let Some(library) = library.as_ref()
+            && library
+                .entry(id)
+                .is_some_and(|entry| library.is_unregistered(&entry.manifest))
+        {
+            return Err(library_error(ErrorCode::ModelNotFound));
+        }
+        Ok(())
+    }
+    /// Unregister only. The actor lease must cover this call and its cache
+    /// publication. Prepared source guards remain alive until confirmed shutdown.
+    pub fn unregister(&self, id: &ModelId) -> Result<()> {
+        self.unregister_with_commit(id, || {})
+    }
+    /// Publish dependent registry observations at the same known commit point.
+    pub fn unregister_with_commit(&self, id: &ModelId, committed: impl FnOnce()) -> Result<()> {
+        let _gate = self.acquire()?;
+        self.check_layout()?;
+        let (next, _) = crate::unregister::prepare(&self.root_path, id)?;
+        let mut current = self.library.lock().map_err(|_| cache_error())?;
+        crate::unregister::publish_with_commit(&self.root_path, &next, || {
+            // The commit callback cannot fail and runs before durability sync.
+            // A later read/sync failure must never revive the old resolver view.
+            *current = Some(next.clone());
+            committed();
+        })
+    }
     /// Removes only a complete, registered managed copy. The user-selected source
     /// is never consulted or deleted. Callers must unload it before removal.
     /// A crash after the atomic rename leaves an unregistered tombstone, removed
@@ -663,6 +733,15 @@ impl ModelStore {
         }
         if manifest.id != *id {
             return Err(invalid_manifest("manifest ID differs from directory name"));
+        }
+        if self
+            .library
+            .lock()
+            .map_err(|_| cache_error())?
+            .as_ref()
+            .is_some_and(|l| l.is_unregistered(&manifest))
+        {
+            return Err(library_error(ErrorCode::ModelNotFound));
         }
         if ensure_regular(&self.root, &directory.join("model.gguf"))? != manifest.size_bytes {
             return Err(RuntimeError::new(

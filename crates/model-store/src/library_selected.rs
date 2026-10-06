@@ -176,15 +176,16 @@ pub fn register_selected(
 ) -> Result<SelectedRegistration> {
     validate_selection(&selected)?;
     let mut library = previous.cloned().unwrap_or_else(|| ModelLibrary {
-        schema_version: 2,
+        schema_version: 3,
         directory_id: None,
         library_generation: Uuid::new_v4(),
         directory: None,
         directory_identity: None,
         models: vec![],
+        unregistered: vec![],
     });
     library.validate()?;
-    library.schema_version = 2;
+    library.schema_version = 3;
     {
         let mut progress = control.progress.lock().unwrap();
         progress.phase = "verifying";
@@ -235,11 +236,18 @@ pub fn register_selected(
         };
         if let Some(manifest) = managed_target(root, file, &hash, &metadata)? {
             available_files += usize::from(manifest.load_candidate());
-            let id = manifest.id;
+            let id = manifest.id.clone();
+            if library.entry(&id).is_some() {
+                return Err(library_error(ErrorCode::ModelLibraryChanged));
+            }
+            let restored = library.is_unregistered(&manifest);
+            library.restore(&id);
             let mut results = results.lock().unwrap();
             results[index].status = SelectedStatus::NotCommitted;
             results[index].model_id = Some(id);
-            already.insert(index);
+            if !restored {
+                already.insert(index);
+            }
             control.progress.lock().unwrap().verified_files += 1;
             continue;
         }
@@ -259,7 +267,9 @@ pub fn register_selected(
                     .position(|entry| same_object(&entry.identity, &file.identity))
             });
         let same = existing.is_some_and(|i| {
-            library.models[i].identity == file.identity && library.models[i].manifest.sha256 == hash
+            !library.is_unregistered(&library.models[i].manifest)
+                && library.models[i].identity == file.identity
+                && library.models[i].manifest.sha256 == hash
         });
         let id = match existing {
             Some(i) => library.models[i].manifest.id.clone(),
@@ -300,6 +310,7 @@ pub fn register_selected(
                 library.models.push(entry);
             }
         }
+        library.restore(&id);
         // Adopt the explicitly selected spelling/source, even for a hard-link
         // alias. Keep the existing ID, never combine the new parent with an old basename.
         library.validate()?;
@@ -368,7 +379,7 @@ pub fn configure_directory(
         }
     }
     let library = ModelLibrary {
-        schema_version: 2,
+        schema_version: 3,
         directory_id: if same {
             previous.and_then(|old| old.directory_id)
         } else {
@@ -378,6 +389,7 @@ pub fn configure_directory(
         directory: Some(directory.to_owned()),
         directory_identity: Some(guard.identity.clone()),
         models,
+        unregistered: previous.map_or_else(Vec::new, |old| old.unregistered.clone()),
     };
     library.encode()?;
     control.check()?;

@@ -1068,3 +1068,99 @@ fn explicit_hard_link_alias_keeps_id_and_uses_the_correct_selected_basename() {
     assert_eq!(added.library.models[0].manifest.relative_file, "alias.gguf");
     assert_eq!(added.library.availability(&added.library.models[0]), None);
 }
+
+#[test]
+fn unregister_external_survives_restart_and_configure_then_only_verified_scan_restores() {
+    use model_store::{inventory, library::selected::configure_directory};
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("same.gguf"), gguf()).unwrap();
+    fs::write(other.path().join("same.gguf"), gguf()).unwrap();
+    let first = scan(data.path(), source.path(), None);
+    fs::write(data.path().join(LIBRARY_FILE), first.encode().unwrap()).unwrap();
+    let id = first.models[0].manifest.id.clone();
+    let store = ModelStore::open(data.path()).unwrap();
+    store.unregister(&id).unwrap();
+    assert!(store.list().unwrap().is_empty());
+    assert_eq!(store.get(&id).unwrap_err().code, ErrorCode::ModelNotFound);
+    assert_eq!(
+        store.resolve(&id).unwrap_err().code,
+        ErrorCode::ModelNotFound
+    );
+    drop(store);
+    assert!(
+        ModelStore::open(data.path())
+            .unwrap()
+            .list()
+            .unwrap()
+            .is_empty()
+    );
+    let hidden = ModelLibrary::read(data.path()).unwrap().unwrap();
+    fs::write(
+        source.path().join("unrelated.txt"),
+        b"directory identity metadata change",
+    )
+    .unwrap();
+    let configure =
+        configure_directory(source.path(), Some(&hidden), &ScanControl::default()).unwrap();
+    assert!(
+        configure
+            .library()
+            .unwrap()
+            .is_unregistered(&first.models[0].manifest)
+    );
+    model_store::unregister::publish(data.path(), configure.library().unwrap()).unwrap();
+    assert!(inventory::read(data.path()).unwrap().entries.is_empty());
+    let changed = scan(data.path(), other.path(), configure.library());
+    model_store::unregister::publish(data.path(), &changed).unwrap();
+    assert_eq!(inventory::read(data.path()).unwrap().entries.len(), 1);
+    assert!(changed.is_unregistered(&first.models[0].manifest));
+    assert_eq!(fs::read(source.path().join("same.gguf")).unwrap(), gguf());
+    // Scan the original configured source explicitly. The prior implicit source
+    // was frozen as a link; a hidden link must still be verified and restored.
+    let restored = scan(data.path(), source.path(), Some(&changed));
+    assert!(!restored.is_unregistered(&first.models[0].manifest));
+    assert!(restored.unregistered.is_empty());
+    model_store::unregister::publish(data.path(), &restored).unwrap();
+    assert_eq!(inventory::read(data.path()).unwrap().entries.len(), 2);
+}
+
+#[test]
+fn hidden_managed_copy_still_reserves_its_id_against_corrupt_external_aliases() {
+    use model_store::library::selected::{SelectedFile, register_selected};
+    let data = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("file.gguf"), gguf()).unwrap();
+    let id = ModelId::new("collision").unwrap();
+    let store = ModelStore::open(data.path()).unwrap();
+    store
+        .import_reader(
+            Cursor::new(gguf()),
+            gguf().len() as u64,
+            ImportRequest::new(id.clone(), "managed", ModelSource::local("fixture")),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    store.unregister(&id).unwrap();
+    drop(store);
+    let prior = ModelLibrary::read(data.path()).unwrap().unwrap();
+    let mut corrupt = scan(data.path(), source.path(), Some(&prior));
+    corrupt.models[0].manifest.id = id;
+    model_store::unregister::publish(data.path(), &corrupt).unwrap();
+    assert_eq!(
+        ModelStore::open(data.path()).err().unwrap().code,
+        ErrorCode::ModelLibraryChanged
+    );
+    assert!(model_store::inventory::read(data.path()).is_err());
+    assert!(
+        register_selected(
+            data.path(),
+            Some(&corrupt),
+            vec![SelectedFile::open(&data.path().join("models/collision/model.gguf")).unwrap()],
+            &ScanControl::default(),
+            &std::sync::Mutex::new(Vec::new())
+        )
+        .is_err()
+    );
+}

@@ -39,6 +39,7 @@ pub fn router(state: ApiState, security: Arc<SecurityContext>) -> Router {
         .route("/runtime/devices", get(devices))
         .route("/runtime/models", get(models))
         .route("/runtime/models/import", post(import))
+        .route("/runtime/models/unregister", post(unregister))
         .route("/runtime/load", post(load))
         .route("/runtime/load-operations", post(load_operation_start))
         .route("/runtime/load-operations/{id}", get(load_operation_next))
@@ -437,4 +438,16 @@ async fn configuration_model_get(
 ) -> Result<Json<crate::configuration::ModelConfiguration>, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::invalid("model_id", "Invalid model ID."))?;
     Ok(Json(state.configuration_model_get(id).await?))
+}
+
+async fn unregister(
+    State(state): State<ApiState>,
+    request: Request,
+) -> Result<Json<crate::dto::UnregisterModelResult>, ApiError> {
+    let bytes = json_body(request, state.config.api.max_body_bytes).await?;
+    Ok(Json(
+        state
+            .unregister(crate::dto::parse_unregister(&bytes)?)
+            .await?,
+    ))
 }

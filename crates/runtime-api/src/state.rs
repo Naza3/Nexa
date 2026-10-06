@@ -563,6 +563,85 @@ impl ApiState {
     {
         bounded(self.storage.clone(), action).await
     }
+    pub async fn unregister(
+        &self,
+        request: crate::dto::UnregisterModelRequest,
+    ) -> Result<crate::dto::UnregisterModelResult, ApiError> {
+        self.ensure_running()?;
+        if self
+            .load_operations
+            .lock()
+            .map_err(|_| ApiError::internal())?
+            .active()
+        {
+            return Err(ApiError::busy());
+        }
+        let permit = self
+            .storage
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ApiError::busy())?;
+        let id = request.model_id.clone();
+        let lease = self
+            .control(move |runtime| runtime.reserve_unregister(id))
+            .await
+            .map_err(|error| {
+                if error.error.code == "model_conflict" {
+                    ApiError::new(
+                        axum::http::StatusCode::CONFLICT,
+                        "model_unregister_loaded",
+                        "Unload this model before removing its registration.",
+                        Some("model_id"),
+                    )
+                } else {
+                    error
+                }
+            })?;
+        let store = self.store.clone();
+        let registry = self.registry.clone();
+        let runtime = self.runtime.clone();
+        let loads = self.load_operations.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _lease = lease;
+            if loads.lock().map_err(|_| ApiError::internal())?.active() {
+                return Err(ApiError::busy());
+            }
+            // The actor lease excludes all loads/queue admission until disk,
+            // resolver, inventory and historical selected identity agree.
+            let mut snapshot = registry.write().map_err(|_| ApiError::internal())?;
+            if snapshot.generation != request.generation {
+                return Err(model_store::library::library_error(ErrorCode::ModelListChanged).into());
+            }
+            if !snapshot.models.iter().any(|model| model.id == request.model_id) {
+                return Err(model_store::library::library_error(ErrorCode::ModelNotFound).into());
+            }
+            let mut committed = false;
+            let outcome = store.unregister_with_commit(&request.model_id, || committed = true);
+            if committed {
+                snapshot.models.retain(|model| model.id != request.model_id);
+                snapshot.generation = uuid::Uuid::new_v4();
+                runtime.forget_unregistered(request.model_id.clone())?;
+            }
+            if outcome.is_err() && committed {
+                return Err(ApiError::new(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "model_unregister_durability_unconfirmed",
+                    "Registration removal is visible but durability was not confirmed. Refresh before retrying.",
+                    None,
+                ));
+            }
+            outcome?;
+            Ok(crate::dto::UnregisterModelResult {
+                model_id: request.model_id,
+                removed: true,
+                files_preserved: true,
+            })
+        })
+        .await
+        .map_err(|_| ApiError::internal())?
+    }
+
     pub async fn import(&self, request: ImportModelRequest) -> Result<ModelSummary, ApiError> {
         self.ensure_running()?;
         // Acquire bounded storage capacity first; actor decides whether the

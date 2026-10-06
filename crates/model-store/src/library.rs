@@ -194,12 +194,21 @@ pub struct ExternalRegistration {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelLibrary {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unregistered: Vec<UnregisteredModel>,
     pub schema_version: u32,
     pub directory_id: Option<Uuid>,
     pub library_generation: Uuid,
     pub directory: Option<PathBuf>,
     pub directory_identity: Option<FileIdentity>,
     pub models: Vec<ExternalRegistration>,
+}
+/// A bounded registration suppression, never permission to delete a payload.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnregisteredModel {
+    pub model_id: ModelId,
+    pub registration_sha256: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LibraryDirectoryInfo {
@@ -208,6 +217,54 @@ pub struct LibraryDirectoryInfo {
     pub library_generation: Uuid,
 }
 impl ModelLibrary {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: 3,
+            directory_id: None,
+            library_generation: Uuid::new_v4(),
+            directory: None,
+            directory_identity: None,
+            models: Vec::new(),
+            unregistered: Vec::new(),
+        }
+    }
+    /// Uses persisted registration identity, not availability observations. A
+    /// missing/changed source must never silently resurrect a removed entry.
+    pub fn registration_key(&self, manifest: &ModelManifest) -> Result<String> {
+        let mut hash = Sha256::new();
+        hash.update(b"nexa-registration-v1");
+        hash.update(
+            serde_json::to_vec(manifest)
+                .map_err(|_| library_error(ErrorCode::ModelLibraryChanged))?,
+        );
+        if manifest.storage == ModelStorage::External {
+            let entry = self
+                .entry(&manifest.id)
+                .ok_or_else(|| library_error(ErrorCode::ModelLibraryChanged))?;
+            let source = self.source(entry)?;
+            hash.update(
+                serde_json::to_vec(&(
+                    path_key(source.0),
+                    source.1.volume,
+                    source.1.file,
+                    &entry.identity,
+                ))
+                .map_err(|_| library_error(ErrorCode::ModelLibraryChanged))?,
+            );
+        }
+        Ok(format!("{:x}", hash.finalize()))
+    }
+    pub fn is_unregistered(&self, manifest: &ModelManifest) -> bool {
+        self.unregistered.iter().any(|entry| {
+            entry.model_id == manifest.id
+                && self
+                    .registration_key(manifest)
+                    .is_ok_and(|key| key == entry.registration_sha256)
+        })
+    }
+    pub fn restore(&mut self, id: &ModelId) {
+        self.unregistered.retain(|entry| &entry.model_id != id);
+    }
     pub fn info(&self) -> Option<LibraryDirectoryInfo> {
         Some(LibraryDirectoryInfo {
             directory_id: self.directory_id?,
@@ -270,14 +327,31 @@ impl ModelLibrary {
     pub fn validate(&self) -> Result<()> {
         match (&self.directory, &self.directory_identity, self.directory_id) {
             (Some(path), Some(_), Some(id)) if !id.is_nil() => validate_directory_syntax(path)?,
-            (None, None, None) if self.schema_version == 2 => (),
+            (None, None, None) if matches!(self.schema_version, 2 | 3) => (),
             _ => return Err(library_error(ErrorCode::ModelLibraryChanged)),
         }
-        if !matches!(self.schema_version, 1 | 2)
+        if !matches!(self.schema_version, 1..=3)
             || self.library_generation.is_nil()
             || self.models.len() > MAX_EXTERNAL_MODELS
         {
             return Err(library_error(ErrorCode::ModelLibraryChanged));
+        }
+        if self.unregistered.len() > crate::inventory::MAX_INVENTORY_MODELS
+            || (self.schema_version != 3 && !self.unregistered.is_empty())
+        {
+            return Err(library_error(ErrorCode::ModelLibraryLimit));
+        }
+        let mut suppressed = BTreeSet::new();
+        for item in &self.unregistered {
+            if !suppressed.insert(&item.model_id)
+                || item.registration_sha256.len() != 64
+                || !item
+                    .registration_sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(library_error(ErrorCode::ModelLibraryChanged));
+            }
         }
         let mut ids = BTreeSet::new();
         let mut names = BTreeSet::new();
@@ -475,10 +549,11 @@ fn scan_directory_inner(
             (name.len() <= 1024).then(|| name.clone());
         if previous.is_some_and(|old| {
             old.models.iter().any(|entry| {
-                entry.source.as_ref().is_some_and(|source| {
-                    same_object(&source.directory_identity, &directory.identity)
-                        && file_key(&entry.manifest.relative_file) == file_key(&name)
-                })
+                !old.is_unregistered(&entry.manifest)
+                    && entry.source.as_ref().is_some_and(|source| {
+                        same_object(&source.directory_identity, &directory.identity)
+                            && file_key(&entry.manifest.relative_file) == file_key(&name)
+                    })
             })
         }) {
             continue;
@@ -601,6 +676,10 @@ fn scan_directory_inner(
         sources.push(source);
         control.progress.lock().unwrap().verified_files += 1;
     }
+    let verified_ids: BTreeSet<_> = models
+        .iter()
+        .map(|entry| entry.manifest.id.clone())
+        .collect();
     let rejected_all = models.is_empty() && !control.progress().file_errors.is_empty();
     // Directory maintenance only owns implicit entries in the configured directory.
     // Freeze an old configured directory before changing it, and preserve all links.
@@ -627,7 +706,14 @@ fn scan_directory_inner(
         }
     }
     let library = ModelLibrary {
-        schema_version: 2,
+        unregistered: previous.map_or_else(Vec::new, |old| {
+            old.unregistered
+                .iter()
+                .filter(|item| !verified_ids.contains(&item.model_id))
+                .cloned()
+                .collect()
+        }),
+        schema_version: 3,
         directory_id: Some(directory_id),
         library_generation: Uuid::new_v4(),
         directory: Some(directory.path.clone()),
@@ -1013,7 +1099,7 @@ fn directory_drive_present_with_policy(path: &Path, policy: DirectoryPolicy) -> 
         Ok(true)
     }
 }
-fn indirect(metadata: &fs::Metadata) -> bool {
+pub(crate) fn indirect(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

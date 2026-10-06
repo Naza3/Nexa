@@ -199,6 +199,11 @@ export interface ModelPage {
   next_after: string | null;
   generation: string;
 }
+export interface ModelUnregisterResult {
+  model_id: string;
+  removed: true;
+  files_preserved: true;
+}
 export interface WireMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -308,6 +313,7 @@ export interface DesktopApi {
     after: string | null,
     generation: string | null,
   ): Promise<ModelPage>;
+  unregisterModel(model_id: string, generation: string): Promise<ModelUnregisterResult>;
   loadModel(model_id: string, options: LoadOptions): Promise<RuntimeStatus>;
   testModel(model_id: string, options: LoadOptions): Promise<LocalValidation>;
   unloadModel(): Promise<RuntimeStatus>;

@@ -76,6 +76,7 @@ export const nativeApi: DesktopApi = {
   libraryCancel: (operation_id) =>
     call("model_library_cancel", { operation_id }),
   modelsPage: (after, generation) => call("models_page", { after, generation }),
+  unregisterModel: (model_id, generation) => call("model_unregister", { model_id, generation }),
   loadModel: (model_id, options) =>
     call("model_load", { model_id, ...options }),
   testModel: (model_id, options) =>

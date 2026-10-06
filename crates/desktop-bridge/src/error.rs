@@ -7,6 +7,11 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "model_unregister_loaded" => "请先卸载此模型，再从模型库移除。",
+            "model_unregister_durability_unconfirmed" => {
+                "移除登记可能已完成，但磁盘持久化未确认。请刷新模型库后再操作。"
+            }
+            "model_list_changed" => "模型库已变化，请刷新并重新确认要移除的模型。",
             "configuration_conflict" => "配置已被其他窗口或程序更改。请重读并比较草稿后再保存。",
             "configuration_migration_required" => {
                 "请先在设置中比较并确认旧桌面/API默认值，升级配置后再使用模型档案。"
@@ -204,6 +209,8 @@ impl BridgeError {
             "model_not_found",
             "request_not_found",
             "model_conflict",
+            "model_unregister_loaded",
+            "model_unregister_durability_unconfirmed",
             "runtime_busy",
             "already_exists",
             "duplicate_request_id",

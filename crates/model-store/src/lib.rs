@@ -1,8 +1,9 @@
 //! Offline model import and a crash-recoverable, native-free registry.
 //!
 //! A model directory, containing both the GGUF and manifest, is the commit unit.
-//! The registry index is derived from these directories while holding the store
-//! lock; there is no second mutable index file that can disagree with a manifest.
+//! Managed identities are derived from these directories under the store lock.
+//! The external library also holds the atomic, metadata-only visibility overlay;
+//! unregistering never changes a model directory or its manifest.
 //! The data directory must be private to the application. The process lock
 //! coordinates cooperative clients, not hostile writers with the same OS account.
 mod gguf;
@@ -11,6 +12,7 @@ pub mod library;
 pub mod local_validation;
 mod manifest;
 mod store;
+pub mod unregister;
 
 pub use manifest::{
     Capabilities, ImportRequest, ModelManifest, ModelSource, ModelStorage, ValidationEvidence,

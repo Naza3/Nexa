@@ -79,6 +79,8 @@ enum Command {
     Cancel(RequestId, Reply<()>),
     Status(Reply<RuntimeStatus>),
     ReserveRegistry(Reply<RegistryLease>),
+    ReserveUnregister(ModelId, Reply<RegistryLease>),
+    ForgetUnregistered(ModelId, Reply<()>),
     ReserveRegistryIfUnloaded(Reply<RegistryLease>),
     Shutdown(Option<Reply<()>>),
 }
@@ -227,6 +229,14 @@ impl RuntimeHandle {
     }
     pub fn reserve_registry_if_unloaded(&self) -> Result<RegistryLease, RuntimeError> {
         self.ask(Command::ReserveRegistryIfUnloaded)
+    }
+    /// Atomically reserves an idle unregister and refuses a resident target.
+    pub fn reserve_unregister(&self, id: ModelId) -> Result<RegistryLease, RuntimeError> {
+        self.ask(|reply| Command::ReserveUnregister(id, reply))
+    }
+    /// Called only after the registration commit, while its lease is held.
+    pub fn forget_unregistered(&self, id: ModelId) -> Result<(), RuntimeError> {
+        self.ask(|reply| Command::ForgetUnregistered(id, reply))
     }
     /// Request the same cleanup and error-reporting semantics as [`Runtime::shutdown`].
     pub fn shutdown(&self) -> Result<(), RuntimeError> {
@@ -475,6 +485,46 @@ impl Actor {
     }
     fn command(&mut self, command: Command) {
         match command {
+            Command::ReserveUnregister(id, reply) => {
+                if let Some(error) = self.busy_error() {
+                    let _ = reply.send(Err(error));
+                } else if self.state == ModelState::Faulted {
+                    let _ = reply.send(Err(error(ErrorCode::RuntimeFaulted)));
+                } else if self.state != ModelState::Unloaded
+                    && self
+                        .selected
+                        .as_ref()
+                        .is_some_and(|selected| selected.id == id)
+                {
+                    let _ = reply.send(Err(error(ErrorCode::ModelConflict)));
+                } else {
+                    self.command(Command::ReserveRegistry(reply));
+                }
+            }
+            Command::ForgetUnregistered(id, reply) => {
+                let result = if !self.registry_busy()
+                    || self.operation.is_some()
+                    || self.active.is_some()
+                    || !self.queue.is_empty()
+                {
+                    Err(error(ErrorCode::RuntimeBusy))
+                } else if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|selected| selected.id == id)
+                {
+                    if self.state != ModelState::Unloaded {
+                        Err(error(ErrorCode::RuntimeBusy))
+                    } else {
+                        self.selected = None;
+                        self.options = None;
+                        Ok(())
+                    }
+                } else {
+                    Ok(())
+                };
+                let _ = reply.send(result);
+            }
             Command::ReserveRegistryIfUnloaded(reply) => {
                 if self.state != ModelState::Unloaded
                     || self.selected.is_some()

@@ -813,3 +813,120 @@ fn canonical_store_inventory_evidence_roundtrip_replace_offline_and_stale() {
         ValidationState::Stale
     );
 }
+
+#[test]
+fn unregister_preserves_managed_bytes_metadata_and_restart_then_explicit_selected_restore() {
+    use model_store::{
+        inventory,
+        library::{
+            self, ScanControl,
+            selected::{SelectedFile, register_selected},
+        },
+    };
+    let (root, store) = store();
+    let bytes = fixture(128);
+    import(&store, &bytes, "keep-file").unwrap();
+    import(&store, &bytes, "other").unwrap();
+    let payload = root.path().join("models/keep-file/model.gguf");
+    let manifest = root.path().join("models/keep-file/manifest.json");
+    let original_manifest = fs::read(&manifest).unwrap();
+    let before = inventory::read(root.path()).unwrap().generation;
+    fs::write(root.path().join("config.toml"), "sentinel config").unwrap();
+    fs::write(
+        root.path().join("local-validation.json"),
+        "sentinel receipt",
+    )
+    .unwrap();
+    store.unregister(&id("keep-file")).unwrap();
+    assert_eq!(
+        store.get(&id("keep-file")).unwrap_err().code,
+        ErrorCode::ModelNotFound
+    );
+    assert_eq!(
+        store.resolve(&id("keep-file")).unwrap_err().code,
+        ErrorCode::ModelNotFound
+    );
+    assert_eq!(
+        store.verify(&id("keep-file")).unwrap_err().code,
+        ErrorCode::ModelNotFound
+    );
+    assert_eq!(
+        store.unregister(&id("keep-file")).unwrap_err().code,
+        ErrorCode::ModelNotFound
+    );
+    assert_eq!(store.list().unwrap().len(), 1);
+    assert_eq!(fs::read(&payload).unwrap(), bytes);
+    assert_eq!(fs::read(&manifest).unwrap(), original_manifest);
+    assert_eq!(
+        fs::read_to_string(root.path().join("config.toml")).unwrap(),
+        "sentinel config"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("local-validation.json")).unwrap(),
+        "sentinel receipt"
+    );
+    assert_ne!(inventory::read(root.path()).unwrap().generation, before);
+    assert!(model_store::unregister::CatalogLock::acquire(root.path()).is_err());
+    drop(store);
+    let reopened = ModelStore::open(root.path()).unwrap();
+    assert_eq!(reopened.list().unwrap().len(), 1);
+    drop(reopened);
+    let prior = library::ModelLibrary::read(root.path()).unwrap().unwrap();
+    let results = std::sync::Mutex::new(Vec::new());
+    let selected = register_selected(
+        root.path(),
+        Some(&prior),
+        vec![SelectedFile::open(&payload).unwrap()],
+        &ScanControl::default(),
+        &results,
+    )
+    .unwrap();
+    assert_eq!(selected.files[0].model_id, Some(id("keep-file")));
+    assert!(
+        selected.library.models.is_empty(),
+        "must not create an external alias for a managed copy"
+    );
+    assert!(selected.library.unregistered.is_empty());
+    selected.check().unwrap();
+    model_store::unregister::publish(root.path(), &selected.library).unwrap();
+    drop(selected);
+    assert_eq!(inventory::read(root.path()).unwrap().entries.len(), 2);
+    assert_eq!(fs::read(&payload).unwrap(), bytes);
+    assert_eq!(
+        ModelStore::open(root.path()).unwrap().list().unwrap().len(),
+        2
+    );
+}
+
+#[test]
+fn offline_unregister_never_hashes_recovers_or_deletes_models() {
+    let (root, store) = store();
+    import(&store, &fixture(128), "broken").unwrap();
+    drop(store);
+    // Invalid payload would fail a ModelStore::open full hash, but removal is
+    // metadata-only even when the source is unavailable or damaged.
+    fs::write(root.path().join("models/broken/model.gguf"), b"changed").unwrap();
+    fs::write(
+        root.path()
+            .join("imports/import-11111111111111111111111111111111.partial"),
+        b"keep",
+    )
+    .unwrap();
+    let _guard = model_store::unregister::CatalogLock::acquire(root.path()).unwrap();
+    let (next, _) = model_store::unregister::prepare(root.path(), &id("broken")).unwrap();
+    model_store::unregister::publish(root.path(), &next).unwrap();
+    assert!(
+        model_store::inventory::read(root.path())
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read(root.path().join("models/broken/model.gguf")).unwrap(),
+        b"changed"
+    );
+    assert_eq!(
+        fs::read_dir(root.path().join("imports")).unwrap().count(),
+        1
+    );
+}

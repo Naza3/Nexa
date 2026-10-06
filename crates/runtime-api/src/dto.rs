@@ -554,3 +554,29 @@ mod tests {
         );
     }
 }
+
+/// Removes only an exact observed registration; unknown/deletion fields fail.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnregisterModelRequest {
+    pub model_id: ModelId,
+    pub generation: uuid::Uuid,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnregisterModelResult {
+    pub model_id: ModelId,
+    pub removed: bool,
+    pub files_preserved: bool,
+}
+pub fn parse_unregister(bytes: &[u8]) -> Result<UnregisterModelRequest, ApiError> {
+    let value = parse_json(bytes)?;
+    let request: UnregisterModelRequest = decoded(value, "body")?;
+    if request.generation.is_nil() {
+        return Err(ApiError::invalid(
+            "generation",
+            "A current model list generation is required.",
+        ));
+    }
+    Ok(request)
+}

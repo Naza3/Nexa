@@ -1,5 +1,18 @@
 # Nexa 当前状态
 
+## 2026-10-06 模型移除与聊天 Markdown（开发验证完成，待原生构建）
+
+用户要求从模型库列表移除模型，并补充聊天回复 Markdown。开发沿用 `codex/dev`，已在本地同步用户合并的正式 `main` `5c26e34aa74bf5552b9455e65f42883acbd61d6f`，保留开发分支额外验收文档，不重写历史。既有 [v0.1.0 正式 Release](https://github.com/Naza3/Nexa/releases/tag/v0.1.0)已于2026-10-05发布；本轮不移动其标签、不替换公开附件或自动合并 main。
+
+- [ADR0030](docs/decisions/0030-nondestructive-model-unregistration.md)：只取消模型登记，保留GGUF/manifest、参数档案和历史记录；schema3同文件原子抑制，重启不复活，显式添加/扫描可恢复。在线由actor互斥，驻留先卸载、故障先显式停服，不打断其他调用；离线不启动服务或hash全库
+- [ADR0031](docs/decisions/0031-safe-chat-markdown.md)：模型回复安全Markdown/GFM展示，保留原文和请求语义，禁原始HTML执行、图片自动联网及WebView导航；实现与联合前端回归进行中
+
+模型移除后端四crate381通过/0失败/1既有忽略，壳Linux31通过，相关clippy/fmt通过；列表整锁调整后model-store88项与clippy复验。最终联合前端36文件790项、typecheck/lint/build全部通过。Python271项（267通过/4平台skip）通过，新增IPC命令保持精确ACL闭包。独立移除审查Rust5项/前端7项、Markdown50项恶意内容/流式/错误隔离回归全部通过；这些为分层或子集证据，不累加成产品用例总数。
+
+发现并修正：Faulted服务不能卸载，移除指引改为用户显式停服；新嵌套npm依赖许可输出原路径被安全门禁拒绝，改用锁路径hash命名并保留lock_location归属，不放宽底层校验；深嵌套Markdown解析异常由单消息边界回退原文，保持会话和复制。107生产包109许可/110原件逐字节恢复，结合既有包许可验证仍10份文件，无许可删减。JS生产包约601kB、gzip约179kB，Vite大chunk提示保留，没有借此扩大功能或引入高亮引擎。
+
+源码审查无剩余阻断；精确提交后的完整原生Windows构建、真实模型与三格式包仍待执行。用户Win10窗口/离线/长期验收单独保留，不能以jsdom替代。详见[本批验证记录](docs/verification/2026-10-06-model-unregister-and-markdown.md)。
+
 ## 2026-10-05 桌面源码清理（已完成：原生验证与产物复核通过）
 
 安装器前置任务已完成并交付后，按用户明确要求移除本项目移动代码及相关文档，后续只维护桌面主线。清理基线为长期 `codex/dev` 的干净 `de7732f031c11e44a27f86b33a341c48131a3906`。删除独立移动 workspace、验证器、MNN 适配/探针/补丁、专用脚本与 CI，以及对应设计/研究文档；同步共享配置、验证报告字段和 Windows 路径过滤。范围见[ADR0029](docs/decisions/0029-desktop-only-source-tree.md)，本批实际检查见[清理验证记录](docs/verification/2026-10-05-desktop-only-cleanup.md)。

@@ -875,3 +875,86 @@ async fn owned_load_routes_are_strict_scoped_and_return_json_for_bad_identity() 
     .unwrap();
     h.close().await;
 }
+
+#[tokio::test]
+async fn unregister_requires_exact_snapshot_is_strict_and_preserves_files_and_selected_safety() {
+    let h = Harness::new().await;
+    let source = h.root.join("original.gguf");
+    let bytes = synthetic_gguf();
+    std::fs::write(&source, &bytes).unwrap();
+    let (status, _) = h
+        .call(
+            "POST",
+            "/runtime/models/import",
+            &json!({"id":"remove-me","file":source}).to_string(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, page) = h.call("GET", "/runtime/models", "").await;
+    let body = json!({"model_id":"remove-me","generation":page["generation"]});
+    for invalid in [
+        json!({"model_id":"remove-me"}),
+        json!({"model_id":"remove-me","generation":uuid::Uuid::nil()}),
+        json!({"model_id":"remove-me","generation":page["generation"],"delete_files":true}),
+    ] {
+        assert_eq!(
+            h.call("POST", "/runtime/models/unregister", &invalid.to_string())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        h.call(
+            "POST",
+            "/runtime/models/unregister",
+            &json!({"model_id":"remove-me","generation":uuid::Uuid::new_v4()}).to_string()
+        )
+        .await
+        .1["error"]["code"],
+        "model_list_changed"
+    );
+    let (status, response) = h
+        .call("POST", "/runtime/load", r#"{"model":"remove-me"}"#)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let (_, rejected) = h
+        .call("POST", "/runtime/models/unregister", &body.to_string())
+        .await;
+    assert_eq!(rejected["error"]["code"], "model_unregister_loaded");
+    assert_eq!(
+        h.call("POST", "/runtime/unload", "{}").await.0,
+        StatusCode::OK
+    );
+    let (status, result) = h
+        .call("POST", "/runtime/models/unregister", &body.to_string())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(
+        result,
+        json!({"model_id":"remove-me","removed":true,"files_preserved":true})
+    );
+    let (_, status) = h.call("GET", "/runtime/status", "").await;
+    assert!(status["selected_model"].is_null());
+    assert!(status["load_options"].is_null());
+    assert_eq!(
+        h.call("POST", "/runtime/models/unregister", &body.to_string())
+            .await
+            .1["error"]["code"],
+        "model_list_changed"
+    );
+    let (_, page) = h.call("GET", "/runtime/models", "").await;
+    assert!(page["data"].as_array().unwrap().is_empty());
+    assert_eq!(
+        h.call("POST", "/runtime/load", r#"{"model":"remove-me"}"#)
+            .await
+            .1["error"]["code"],
+        "model_not_found"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(h.root.join("models/remove-me/model.gguf")).unwrap(),
+        bytes
+    );
+    h.close().await;
+}

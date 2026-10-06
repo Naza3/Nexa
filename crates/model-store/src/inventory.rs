@@ -26,16 +26,18 @@ pub fn validate_data_directory(root: &Path) -> Result<()> {
 }
 pub fn read(root: &Path) -> Result<Inventory> {
     let mut entries = Vec::new();
+    let mut registered_ids = BTreeSet::new();
     let mut metadata_bytes = 0u64;
     let _root = root
         .exists()
         .then(|| library::DirectoryGuard::open_data_directory(root))
         .transpose()?;
+    let library = ModelLibrary::read(root)?;
     let managed = root.join("models");
     if managed.exists() {
         let _managed = library::DirectoryGuard::open_data_directory(&managed)?;
-        for entry in fs::read_dir(&managed).map_err(crate::io_error)? {
-            if entries.len() >= MAX_INVENTORY_MODELS {
+        for (count, entry) in fs::read_dir(&managed).map_err(crate::io_error)?.enumerate() {
+            if count >= MAX_INVENTORY_MODELS {
                 return Err(library::library_error(ErrorCode::ModelLibraryLimit));
             }
             let entry = entry.map_err(crate::io_error)?;
@@ -44,6 +46,9 @@ pub fn read(root: &Path) -> Result<Inventory> {
                 name.to_str()
                     .ok_or_else(|| invalid_manifest("invalid model ID"))?,
             )?;
+            if !registered_ids.insert(id.clone()) {
+                return Err(library::library_error(ErrorCode::ModelLibraryChanged));
+            }
             let directory = entry.path();
             let _directory = library::DirectoryGuard::open_data_directory(&directory)?;
             let file = library::open_read_file(&directory.join("manifest.json"), false)?;
@@ -67,6 +72,12 @@ pub fn read(root: &Path) -> Result<Inventory> {
             if manifest.id != id || manifest.storage != ModelStorage::Managed {
                 return Err(invalid_manifest("manifest identity mismatch"));
             }
+            if library
+                .as_ref()
+                .is_some_and(|library| library.is_unregistered(&manifest))
+            {
+                continue;
+            }
             let stamp = library::open_read_file(&directory.join("model.gguf"), false)
                 .and_then(|f| library::identity(&f));
             let availability_error = match &stamp {
@@ -81,8 +92,14 @@ pub fn read(root: &Path) -> Result<Inventory> {
             });
         }
     }
-    if let Some(library) = ModelLibrary::read(root)? {
+    if let Some(library) = &library {
         for entry in &library.models {
+            if !registered_ids.insert(entry.manifest.id.clone()) {
+                return Err(library::library_error(ErrorCode::ModelLibraryChanged));
+            }
+            if library.is_unregistered(&entry.manifest) {
+                continue;
+            }
             if entries.len() >= MAX_INVENTORY_MODELS {
                 return Err(library::library_error(ErrorCode::ModelLibraryLimit));
             }
@@ -99,6 +116,9 @@ pub fn read(root: &Path) -> Result<Inventory> {
     let mut digest = Sha256::new();
     // The source discriminator makes a runtime cursor impossible to reuse here.
     digest.update(b"nexa-offline-inventory-v1");
+    if let Some(library) = &library {
+        digest.update(library.library_generation.as_bytes());
+    }
     for entry in &entries {
         if !ids.insert(&entry.manifest.id) {
             return Err(library::library_error(ErrorCode::ModelLibraryChanged));

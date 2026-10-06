@@ -105,6 +105,7 @@ export function makeApi(overrides: Partial<DesktopApi> = {}) {
       next_after: null,
       generation: "generation-1",
     })),
+    unregisterModel: vi.fn(async (model_id: string) => ({ model_id, removed: true as const, files_preserved: true as const })),
     loadModel: vi.fn(async () => runtime()),
     unloadModel: vi.fn(async () => ({
       ...runtime(),

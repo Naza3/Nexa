@@ -366,6 +366,56 @@ mod tests {
         fs::write(directory.join("model.gguf"), [0; 64]).unwrap();
     }
     #[tokio::test]
+    async fn stopped_unregister_uses_exact_overlay_and_never_hashes_payload_or_starts_service() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        runtime_api::token::create_private_dir(&root).unwrap();
+        runtime_api::token::create_private_dir(&root.join("runtime")).unwrap();
+        let id = runtime_types::ModelId::new("no-payload-hash").unwrap();
+        inventory_fixture(&root, id.clone()); // intentionally invalid GGUF bytes
+        fs::create_dir(root.join("imports")).unwrap();
+        let partial = root.join("imports/import-11111111111111111111111111111111.partial");
+        fs::write(&partial, b"untouched").unwrap();
+        let bridge = Arc::new(bridge(&root));
+        let page = bridge.models_page(None, None).await.unwrap();
+        let stale = UnregisterModelRequest {
+            model_id: id.clone(),
+            generation: Uuid::new_v4(),
+        };
+        assert_eq!(
+            bridge.unregister_model(stale).await.unwrap_err().code,
+            "model_list_changed"
+        );
+        let request = UnregisterModelRequest {
+            model_id: id.clone(),
+            generation: page.generation,
+        };
+        let result = bridge.unregister_model(request.clone()).await.unwrap();
+        assert_eq!(result.model_id, id);
+        assert!(result.removed && result.files_preserved);
+        assert!(
+            bridge
+                .models_page(None, None)
+                .await
+                .unwrap()
+                .data
+                .is_empty()
+        );
+        assert_eq!(
+            bridge.unregister_model(request).await.unwrap_err().code,
+            "model_list_changed"
+        );
+        assert_eq!(
+            fs::read(root.join("models/no-payload-hash/model.gguf")).unwrap(),
+            [0; 64]
+        );
+        assert_eq!(fs::read(partial).unwrap(), b"untouched");
+        assert!(!root.join("config.toml").exists());
+        assert!(!root.join("runtime/instance.json").exists());
+        assert!(!root.join("secrets").exists());
+    }
+
+    #[tokio::test]
     async fn stopped_inventory_does_not_initialize_spawn_recover_or_create_lock() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("private");

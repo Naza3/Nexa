@@ -629,6 +629,15 @@ async fn model_load(
     state.bridge.load_model(request).await
 }
 #[tauri::command]
+async fn model_unregister(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: UnregisterModelRequest,
+) -> Result<UnregisterModelResult> {
+    guard(&window, &state)?;
+    state.bridge.unregister_model(request).await
+}
+#[tauri::command]
 async fn model_unload(
     window: WebviewWindow,
     state: State<'_, Arc<Shell>>,
@@ -942,6 +951,7 @@ pub fn run() {
             models_page,
             model_load,
             model_unload,
+            model_unregister,
             chat_start,
             chat_next,
             chat_cancel,

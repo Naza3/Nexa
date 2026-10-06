@@ -279,6 +279,20 @@ export function createPreviewApi(): DesktopApi {
       next_after: null,
       generation: catalogGeneration,
     }),
+    unregisterModel: async (model_id, generation) => {
+      if (loadTask && !loadTask.progress.terminal || snapshot.connection === "connected" && (runtime.active_request || runtime.queued_jobs || runtime.registry_busy || runtime.stopping || ["loading", "generating", "unloading"].includes(runtime.state)))
+        throw new DesktopError("runtime_busy", "预览任务仍在进行。");
+      if (snapshot.connection === "connected" && runtime.selected_model === model_id && runtime.state !== "unloaded")
+        throw new DesktopError("model_unregister_loaded", "请先卸载当前模型。");
+      if (generation !== catalogGeneration) throw new DesktopError("model_list_changed", "列表已经变化。");
+      if (!models.some((model) => model.id === model_id)) throw new DesktopError("model_not_found", "模型已不在列表中。");
+      models = models.filter((model) => model.id !== model_id);
+      catalogGeneration = crypto.randomUUID();
+      if (runtime.selected_model === model_id) {
+        runtime.selected_model = null; runtime.selected_model_display_name = null; runtime.load_options = null;
+      }
+      return { model_id, removed: true, files_preserved: true };
+    },
     loadModel: async (id, options) => {
       runtime.state = "loading";
       await wait(1000);
