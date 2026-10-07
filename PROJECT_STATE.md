@@ -1,5 +1,15 @@
 # Nexa 当前状态
 
+## 2026-10-07 一键更新版本与 CI 修复（源码及 Linux 验证已完成，Windows 待验证）
+
+任务 W05-VERSION-1。用户要求修复 Actions 构建失败，并提供一次更新全部版本文件的工具。`codex/dev` 已同步最新 main `2abb7bef7329032fe755f19dc3605c863949cb4c`，保留用户选择的 `0.2.0`，补齐遗漏的 npm 锁文件版本。
+
+- 根目录 `update-version.cmd` 提供 Windows 双击输入及命令行入口；`scripts/set_version.py` 使用 Python 3.11+ 标准库离线同步七文件，支持 `--dry-run`、`--check`、已有错配修复及普通写入错误回滚，保留第三方依赖与 LF/CRLF；不会创建提交或 tag
+- 修复发布测试误改第三方同版本包的问题，生产版本门禁保持；真实开发分支 [Actions37599775078](https://github.com/Naza3/Nexa/actions/runs/37599775078) 另因漏编译 `air-ocr-template-test` 失败，已补固定构建目标并增加 CTest 目标覆盖回归
+- 严格编码完整 Python 288 项（283 通过/5 平台跳过）通过；两 workspace 离线锁定 Cargo metadata 版本均为 0.2.0；实际固定原生目标在 Linux 增量编译成功，CTest 5/5 通过。Windows cmd 入口测试已加入现有 CI，在 Linux 跳过
+
+使用方法见[版本更新说明](docs/windows-releases.md#版本规则)，证据与限制见[本轮验证](docs/verification/2026-10-07-release-version-tool.md)。Windows 原生新构建、安装器及目标机仍待验证；没有移动 tag、合并 main 或发布 Release。下一步是推送开发分支运行既有 Windows CI，由维护者在包含修复的提交上发行。
+
 ## 2026-10-07 本机单图 OCR（源码与 Linux 开发验证已完成，Windows 待验证）
 
 任务 W02-OCR-1。用户要求现有 Nexa 在 Windows10/i5-8400/16GB 纯CPU上传图片得到Markdown，并明确按实施顺序推进。`codex/dev`已快进到最新main `c559d7fc6a85313a46cd901868dcc1dd43446a5b`，保留最新模型移除与安全Markdown。固定llama提交已支持GLM-OCR，未升级引擎；先跑官方Q8双GGUF真实基线，再实现配对托管导入、CPU mtmd/worker图片路径、本机HTTP与桌面OCR。
