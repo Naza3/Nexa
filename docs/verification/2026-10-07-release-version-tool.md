@@ -45,3 +45,25 @@
 此处不把 Linux CTest、Cargo metadata 或 `.cmd` 静态审查当成 Windows 成功。新的完整原生 Windows 构建、三格式包、安装器生命周期、用户 Windows 10/i5-8400 双击使用仍待验证。临时日志不作为发行产物提交。
 
 推送开发分支后由既有 Actions 验证精确提交。发布时须先提交并推送七文件版本变更，再由维护者在包含全部修复的提交上创建匹配版本 tag；重跑指向旧源码的 tag 不会获得新代码。本轮没有移动已有 tag 或发布 Release。
+
+## 第二轮Windows路径修复
+
+任务 W05-VERSION-2。实际推送的 `75ff0c0` 对应 [Actions37603689299](https://github.com/Naza3/Nexa/actions/runs/37603689299)，版本身份与下载组件通过，Windows 在 `Install locked Rust and compatible CMake tools` 内的 Python suite 失败：288 项中唯一失败为 `test_updates_all_seven_files_and_is_idempotent`，285 通过/2 平台 skip。快照使用 `str(path.relative_to(root))` 得到 `apps\desktop\...`，预期七文件常量为 `apps/desktop/...`，同一批修改因此被字符串集合误判；该测试后续幂等断言尚未执行。
+
+失败日志中的预期 `Completion: failed` 和继承 PowerShell 环境诊断不构成其他测试失败；独立只读审查确认了其测试调用来源。Windows cmd 入口、换行及异常回滚用例均未失败。完整原生编译及安装器阶段尚未开始，不能转授前一轮 Linux CTest 结果。
+
+开发分支快进同步用户合并并升至 `0.2.1` 的 main `997117b` 后，仅把快照键改为 `path.relative_to(root).as_posix()`。实际二进制读取、七文件精确集合、幂等及回滚断言保持。
+
+- `python3 -B -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_*.py'`：Linux 288 项，283 通过/5 平台 skip，退出 0；日志 `/tmp/nexa-version-path-tests.log`
+- 相同七条路径用 `PureWindowsPath` / `PurePosixPath` 构造反例：旧 Windows 字符串集合不等，POSIX 集合相等；修复后两者均等，退出 0。这是路径逻辑验证，不冒充 Windows 文件系统运行
+- `python3 -B scripts/set_version.py --check`：0.2.1 一致，退出 0
+
+下一步推送修复并检查原生 Windows 原失败步骤。版本升级来自用户，修复不改版本、tag、发布权限或测试准入规则。
+
+### 精确修复提交的 Windows 步骤结果
+
+修复提交 `cdbc12a98dfe7b4f596d77f22f25ef8a06ae86dd` 已推送，对应 [Actions37605103921](https://github.com/Naza3/Nexa/actions/runs/37605103921)。第一次尝试在更早的 aria2 策略门禁失败，诊断报告32项中31项通过，唯一失败为 `untrusted_certificate`：`self-signed.badssl.com` 返回 `exit=2`、`bytes=0`、`AbstractCommand.cc errorCode=2 Timeout`，没有取得预期 Schannel 证书拒绝证据。报告保存在本机 `/tmp/nexa-37605103921-evidence/windows-aria2-policy.json`，远端为该 run 的 `windows-cpu-native-cdbc12a98dfe7b4f596d77f22f25ef8a06ae86dd` artifact；未据此推断具体 TCP/TLS 故障阶段。
+
+实际执行 `gh run rerun 37605103921 --repo Naza3/Nexa --failed`，仅对同提交失败 Windows job 重跑一次，复用已成功的来源构建。`gh api .../actions/runs/37605103921` 确认 `run_attempt=2`、源码 SHA 不变。第二次尝试中，组件门禁与 `Install locked Rust and compatible CMake tools` 步骤均已成功；后者包含完整严格 Python suite，并在非零退出时明确抛错，故此次 Windows 版本测试失败已恢复。独立审查确认 aria2 来源、补丁、探针及构建脚本与旧成功提交 `09b9e049` 相同，本轮未修改它们或放宽分类器。
+
+记录时完整 CI 仍处于后续安装器/应用构建阶段，不宣称整体或新安装包成功。随后仅补记本段的文档提交与本次精确代码验证分开；无需为记录更新重复启动完整构建。
