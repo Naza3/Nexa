@@ -1,7 +1,7 @@
 # Nexa Runtime v0.1 开发执行文档
 
-- 版本：2.1（Windows 开放模型开发契约）
-- 日期：2026-10-03
+- 版本：2.2（本机单图 OCR 开发契约）
+- 日期：2026-10-07
 - 项目名：Nexa；命令与原生符号沿用 `ai-runtime` / `ai-runtime-worker` / `air_*`
 - 文档对象：实现项目的开发者、编码 AI、验收人员
 
@@ -10,6 +10,8 @@
 > 2026-10-04：局域网推理增量按 [ADR0020](docs/decisions/0020-opt-in-lan-inference-api.md)，默认关闭、独立凭据/监听，只服务本机已加载模型；下面原回环约束仍完整适用于本机管理。实施与验收见当前状态。
 
 > 2026-10-04 模型登记行为按 [ADR0021](docs/decisions/0021-selected-file-model-registration.md)：添加仅核验选中文件、无复制，默认不自动全库扫描；下载目录配置与明确扫描分离，schema2兼容读取旧登记。实施/验收见当前状态。
+
+> 2026-10-07：[ADR0032](docs/decisions/0032-local-single-image-ocr.md)增加托管双 GGUF 和本机单图 OCR；原 external 单文件登记与LAN文本限制保持。具体新增请求/预算见ADR，本批Windows与目标设备独立待验。
 
 本文负责runtime具体契约；[架构](docs/architecture.md)负责职责，[ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)负责范围，[路线](docs/roadmap.md)负责W00–W05依赖，[当前状态](PROJECT_STATE.md)记录事实。deepseek harness接入新增门槛见[harness契约](docs/windows-harness-contract.md)。
 
@@ -24,7 +26,7 @@
 | 运行形态 | Rust管理进程 + 按需独立CPU worker；父端不链接原生库 |
 | UI | Tauri 2 + React/TypeScript/Vite；管理器增量见W03 |
 | HTTP | Axum + Tokio，默认`127.0.0.1:18080`，回环/Bearer/Host/Origin边界保持 |
-| 现有外部接口 | `/v1/models`、`/v1/chat/completions`严格文本子集及`/runtime/*` |
+| 现有外部接口 | `/v1/models`、`/v1/chat/completions`严格文本及本机单图 OCR 子集及`/runtime/*` |
 | 接入目标 | 官方dsh的pi-ai自定义openai-completions provider；兼容增量尚待实施/验证 |
 | 并发与历史 | 1个模型、1个运行槽、有限FIFO；调用方提交完整messages并保存业务历史 |
 | KV cache | 每请求独立，当前不跨请求复用 |
@@ -327,8 +329,8 @@ shutdown始终等待安全边界并调用close。关闭进行中新发生且未�
 使用逐行 JSON（NDJSON），每帧一行，字符串内换行由 JSON 转义。共享实现位于 runtime-ipc，父端 process-host 不链接原生库；runtime-worker 直接使用 EngineHost，不创建第二个 Runtime。父端仍是公共状态、FIFO、deadline 与 request seq 的唯一来源。
 
 - 每帧带 protocol_version、session_id（每次spawn的新UUID）、operation_id、request_id、kind、payload及seq。Hello和命令的seq为null；worker事件seq从1开始，在同session内严格递增，不重置为公共seq
-- 请求帧上限2 MiB，事件帧上限64 KiB，均包含最后LF。完整编码必须在首次写出前检查；读取在累积前检查上限，拒绝残缺EOF、非法UTF-8、未知字段/kind、重复字段、版本或身份不符
-- 父端先发送Hello并指定session；worker读取实际build_info，35bfd85基线双方严格核对protocol=1、shim=2、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
+- 图片请求帧上限8 MiB，纯文本Generate仍上限2 MiB，事件帧上限64 KiB，均包含最后LF。完整编码必须在首次写出前检查；读取在累积前检查上限，拒绝残缺EOF、非法UTF-8、未知字段/kind、重复字段、版本或身份不符
+- 父端先发送Hello并指定session；worker读取实际build_info，当前双方严格核对私有protocol=3、shim=4（公共HTTP/proof仍1）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
 - 命令为Load、Generate、Unload、Cancel、Credit、Shutdown。普通操作operation_id非零递增，Generate的request_id须与payload相同；Cancel/Credit只作用于绑定的session/operation/request。Shutdown为session控制帧，operation_id=0、request_id=null
 - 事件为原始ExecutorEvent，包括Prepared、TextDelta和清理后的终态；Loaded/Unloaded对应各自操作。Prepared只能一次，TextDelta/Completed不能抢在它前面，usage须匹配Prepared及请求max_tokens；每操作仅一次终态
 - 父端是唯一输出预算账本。每Generate预留16 KiB暂存和最多两个120 KiB信用，合计≤256 KiB。信用ID在session内非零严格递增，每个信用只准一次≤4 KiB UTF-8 delta，其完整编码≤25 KiB（最坏24 KiB转义正文+1 KiB封套）
@@ -347,14 +349,14 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 
 ### 7.1 兼容边界
 
-本产品只声明下表中的 Chat Completions 文本兼容子集。上游自己的 server 也未保证完整 OpenAI API 兼容，因此不能把“提供同名路由”等同于所有第三方软件无修改接入。[S6]
+本产品声明下表中的 Chat Completions 文本及ADR0032本机单图兼容子集。上游自己的 server 也未保证完整 OpenAI API 兼容，因此不能把“提供同名路由”等同于所有第三方软件无修改接入。[S6]
 
 | 路由 | 行为 |
 |---|---|
 | `GET /healthz` | 无鉴权，仅返回 API 进程是否存活；不暴露模型/路径 |
 | `GET /v1/models` | 可供使用的模型，标准 list/data 结构；有界 limit/after 分页 |
 | `GET /runtime/models` | 鉴权安全管理摘要，包含未验证模型；有界 limit/after 分页 |
-| `POST /v1/chat/completions` | 文本 messages，流式或非流式 |
+| `POST /v1/chat/completions` | 文本 messages 或本机单 user 的一个内联 PNG/JPEG image_url 与 text，流式或非流式；LAN仅文本 |
 | `GET /runtime/status` | 模型状态、队列数、活动 ID、后端、错误与内存指标 |
 | `GET /runtime/devices` | 本构建后端与设备探测结果 |
 | `POST /runtime/models/import` | 当前用户本地文件导入；只供受信任本机管理客户端 |
@@ -378,7 +380,7 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 
 ### 7.1.1 deepseek harness增量（W04规划，未实现）
 
-当前7.2及既有SSE仍是严格文本契约。工具定义、assistant.tool_calls、role:tool/null content、tool delta与finish_reason=tool_calls尚未由本次文档实现。新增字段须贯穿DTO/core/IPC/shim/模板/事件，并保持预算、终态、取消和安全边界；工具执行仍归调用方。
+当前7.2及既有SSE提供严格文本与ADR0032本机单图契约。工具定义、assistant.tool_calls、role:tool/null content、tool delta与finish_reason=tool_calls尚未由本次文档实现。新增字段须贯穿DTO/core/IPC/shim/模板/事件，并保持预算、终态、取消和安全边界；工具执行仍归调用方。
 
 接入使用dsh-llm-pi-ai自定义openai-completions provider，不先实现Messages。compat开关、真实请求fixture、工具/usage/错误/Stop/重试及H01–H12以[harness契约](docs/windows-harness-contract.md)为准。当前接口明确拒绝未支持字段，不能静默忽略来冒充兼容。
 
@@ -387,7 +389,7 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 | 字段 | 第一版规则 |
 |---|---|
 | `model` | 非空时为严格已注册ID；缺省/空串/全空白使用准入时当前已加载模型，详见ADR0024；null及其他类型仍400 |
-| `messages` | 必填，1–128 条；role 为 system/user/assistant；content 为字符串 |
+| `messages` | 文本：1–128 条，system/user/assistant、content字符串；本机OCR：仅一个user，content恰好一个内联image_url与一个非空text，顺序保留 |
 | 消息顺序 | 至多一个 system 且在首位；随后 user/assistant 交替；最后为 user |
 | `stream` | 默认 false |
 | `max_tokens` | 1–4096，默认由配置给出；仍受模型上下文余额约束 |
@@ -402,7 +404,9 @@ HTTP 默认不启用浏览器跨域访问；有 Origin 的请求只允许明确�
 
 空ID选择是[ADR0024](docs/decisions/0024-current-loaded-model-chat-default.md)的Nexa便利扩展，由actor原子绑定当前Ready/Generating模型；没有已加载模型时明确失败，不自动加载。显式ID不匹配时不回退或切换；LAN始终只用本机已加载模型。SSE/非流式响应返回实际绑定ID。实施与交付状态见当前状态，不追溯改变旧包行为。
 
-不支持的已知功能字段（如 tools、tool_choice、response_format、logprobs、非零 penalties、多模态 content）返回 400 `unsupported_parameter`，不得静默忽略。frequency_penalty/presence_penalty=0、logprobs=false、tool_choice="none" 可作为兼容空操作接受。其他未知字段返回 400，并指明字段名。
+不支持的已知功能字段（如 tools、tool_choice、response_format、logprobs、非零 penalties、ADR0032以外的多模态 content）返回 400 `unsupported_parameter`，不得静默忽略。frequency_penalty/presence_penalty=0、logprobs=false、tool_choice="none" 可作为兼容空操作接受。其他未知字段返回 400，并指明字段名。
+
+本机单图请求仅接受PNG/JPEG data URL，文件4 MiB、边长8192、总像素16,777,216、本机封套8 MiB；普通文本/管理继续按配置≤1 MiB，LAN拒绝图片。模板、图像位置与文字共同参与精确token预算。完整字段、双模型导入和生命周期见 [ADR0032](docs/decisions/0032-local-single-image-ocr.md)。
 
 当前已实现文本接口没有developer/tool角色、Responses API、会话恢复或服务端聊天历史。W04工具协议另行实施；文本smoke关闭工具并单独记录兼容结果，不把规划说成现版本行为。
 

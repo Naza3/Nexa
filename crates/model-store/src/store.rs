@@ -17,7 +17,10 @@ use crate::library::{
     LibraryDirectoryInfo, ModelLibrary, PreparedExternal, ScanControl, library_error,
 };
 use crate::manifest::validate_portable_id;
-use crate::{ImportRequest, ModelManifest, ModelStorage, Result, gguf, invalid_manifest, io_error};
+use crate::{
+    ImportRequest, ModelManifest, ModelStorage, ProjectorAsset, ProjectorImportRequest, Result,
+    gguf, invalid_manifest, io_error,
+};
 
 // A failed external cleanup permanently poisons this process's catalog owner.
 // This bounds fail-closed retained leases instead of accumulating rebuilt stores.
@@ -133,57 +136,59 @@ impl ModelStore {
                 "model ID already registered externally",
             ));
         }
-        #[cfg(windows)]
-        validate_local_source_path(source.as_ref())?;
-        let metadata = fs::symlink_metadata(source.as_ref()).map_err(io_error)?;
-        if !metadata.file_type().is_file() {
-            return Err(RuntimeError::invalid("model source must be a regular file"));
-        }
-        let mut options = fs::OpenOptions::new();
-        options.read(true);
-        // The preflight metadata check alone is insufficient: a source can be
-        // replaced by a symlink/FIFO between metadata and open. Never block on
-        // opening a special file or follow a final-component reparse point.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            options.custom_flags(
-                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
-            );
-        }
-        let source = options.open(source.as_ref()).map_err(io_error)?;
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
-            // SAFETY: the owned File keeps this valid handle alive during the
-            // query. Do not read a DOS character device or named pipe.
-            if unsafe { GetFileType(source.as_raw_handle().cast()) } != FILE_TYPE_DISK {
-                return Err(RuntimeError::invalid("model source must be a disk file"));
-            }
-        }
+        let source = open_import_source(source.as_ref())?;
         let opened = source.metadata().map_err(io_error)?;
-        if !opened.is_file() {
-            return Err(RuntimeError::invalid("model source must be a regular file"));
-        }
-        #[cfg(windows)]
+        self.import_reader(source, opened.len(), request, cancel)
+    }
+
+    /// Explicitly import a language model and its projector as one registration.
+    /// Both sources remain open through publication; no sibling discovery occurs.
+    pub fn import_file_pair(
+        &self,
+        source: impl AsRef<Path>,
+        projector_source: impl AsRef<Path>,
+        request: ImportRequest,
+        projector_request: ProjectorImportRequest,
+        cancel: &ImportCancellation,
+    ) -> Result<ModelManifest> {
+        request.validate()?;
+        projector_request.validate()?;
+        cancel.check()?;
+        let source_path = source.as_ref();
+        let projector_path = projector_source.as_ref();
+        let source = open_import_source(source_path)?;
+        let projector = open_import_source(projector_path)?;
+        let source_identity = crate::library::identity(&source)?;
+        let projector_identity = crate::library::identity(&projector)?;
+        if source_identity.volume == projector_identity.volume
+            && source_identity.file == projector_identity.file
         {
-            use std::os::windows::fs::MetadataExt;
-            if opened.file_attributes()
-                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-                != 0
+            return Err(invalid_manifest(
+                "model and projector must be distinct files",
+            ));
+        }
+        let check = || {
+            if crate::library::identity(&source)? != source_identity
+                || crate::library::identity(&projector)? != projector_identity
+                || crate::library::identity(&open_import_source(source_path)?)? != source_identity
+                || crate::library::identity(&open_import_source(projector_path)?)?
+                    != projector_identity
             {
-                return Err(RuntimeError::invalid(
-                    "model source must not be a reparse point",
+                return Err(RuntimeError::new(
+                    ErrorCode::IntegrityFailure,
+                    "paired model source changed during import",
                 ));
             }
-        }
-        self.import_reader(source, opened.len(), request, cancel)
+            Ok(())
+        };
+        self.import_readers(
+            source.try_clone().map_err(io_error)?,
+            source_identity.size,
+            request,
+            Some((projector.try_clone().map_err(io_error)?, projector_request)),
+            cancel,
+            check,
+        )
     }
 
     /// Imports a stream whose exact byte length is known. Stream acquisition
@@ -194,10 +199,22 @@ impl ModelStore {
     /// again at the atomic registration boundary.
     pub fn import_reader<R: Read>(
         &self,
-        mut source: R,
+        source: R,
         size_bytes: u64,
         request: ImportRequest,
         cancel: &ImportCancellation,
+    ) -> Result<ModelManifest> {
+        self.import_readers(source, size_bytes, request, None, cancel, || Ok(()))
+    }
+
+    fn import_readers<R: Read>(
+        &self,
+        mut source: R,
+        size_bytes: u64,
+        request: ImportRequest,
+        mut projector: Option<(fs::File, ProjectorImportRequest)>,
+        cancel: &ImportCancellation,
+        check_sources: impl Fn() -> Result<()>,
     ) -> Result<ModelManifest> {
         request.validate()?;
         cancel.check()?;
@@ -226,12 +243,25 @@ impl ModelStore {
                 "single GGUF exceeds the 16 GiB file budget",
             ));
         }
-        let required = size_bytes.checked_add(SPACE_RESERVE).ok_or_else(|| {
-            RuntimeError::new(
-                ErrorCode::InsufficientSpace,
-                "model size exceeds space-check bounds",
-            )
-        })?;
+        let projector_size = projector
+            .as_ref()
+            .map(|(file, _)| file.metadata().map(|m| m.len()).map_err(io_error))
+            .transpose()?
+            .unwrap_or(0);
+        if projector.is_some()
+            && (projector_size == 0 || projector_size > crate::library::MAX_MODEL_BYTES)
+        {
+            return Err(invalid_manifest("projector size outside supported bounds"));
+        }
+        let required = size_bytes
+            .checked_add(projector_size)
+            .and_then(|n| n.checked_add(SPACE_RESERVE))
+            .ok_or_else(|| {
+                RuntimeError::new(
+                    ErrorCode::InsufficientSpace,
+                    "model size exceeds space-check bounds",
+                )
+            })?;
         let available = fs2::available_space(&self.root_path).map_err(io_error)?;
         if available < required {
             return Err(RuntimeError::new(
@@ -284,18 +314,79 @@ impl ModelStore {
         output.seek(SeekFrom::Start(0)).map_err(io_error)?;
         let metadata = gguf::read(&mut output)?;
         cancel.check()?;
-        let manifest = ModelManifest::build(
+        let mut manifest = ModelManifest::build(
             request,
             copied,
             format!("{:x}", hasher.finalize()),
             metadata,
         )?;
-        let encoded = encode_manifest(&manifest)?;
         drop(output); // Windows rename must not retain an open writer.
         self.root.create_dir(&staged).map_err(io_error)?;
         self.root
             .rename(&partial, &self.root, staged.join("model.gguf"))
             .map_err(io_error)?;
+        if let Some((source, request)) = &mut projector {
+            cancel.check()?;
+            let path = staged.join("mmproj.gguf");
+            let mut output = self
+                .root
+                .open_with(
+                    &path,
+                    OpenOptions::new().write(true).read(true).create_new(true),
+                )
+                .map_err(io_error)?;
+            let mut hasher = Sha256::new();
+            let mut copied = 0u64;
+            loop {
+                cancel.check()?;
+                let count = match source.read(&mut buffer) {
+                    Ok(count) => count,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(io_error(error)),
+                };
+                if count == 0 {
+                    break;
+                }
+                copied = copied
+                    .checked_add(count as u64)
+                    .filter(|n| *n <= projector_size)
+                    .ok_or_else(|| invalid_manifest("projector exceeds declared size"))?;
+                output.write_all(&buffer[..count]).map_err(io_error)?;
+                hasher.update(&buffer[..count]);
+            }
+            if copied != projector_size {
+                return Err(invalid_manifest("projector is shorter than declared size"));
+            }
+            output.sync_all().map_err(io_error)?;
+            output.seek(SeekFrom::Start(0)).map_err(io_error)?;
+            let (architecture, projector_type) = gguf::read_projector(&mut output)?;
+            let sha256 = format!("{:x}", hasher.finalize());
+            if request
+                .expected_sha256
+                .as_ref()
+                .is_some_and(|expected| expected != &sha256)
+            {
+                return Err(RuntimeError::new(
+                    ErrorCode::IntegrityFailure,
+                    "projector SHA-256 does not match expected value",
+                ));
+            }
+            manifest.projector = Some(ProjectorAsset {
+                relative_file: "mmproj.gguf".into(),
+                size_bytes: copied,
+                sha256,
+                source: request.source.clone(),
+                architecture,
+                projector_type,
+            });
+            // Existing text-only evidence cannot validate a new two-file closure.
+            manifest.validated = false;
+            manifest.validation = None;
+            manifest.validated_llama_commit = None;
+            manifest.capabilities = crate::Capabilities::default();
+        }
+        manifest.validate()?;
+        let encoded = encode_manifest(&manifest)?;
         let mut file = self
             .root
             .open_with(
@@ -315,6 +406,8 @@ impl ModelStore {
                 "model ID appeared before registration",
             ));
         }
+        check_sources()?;
+        cancel.check()?;
         self.publish_import(&staged, &destination, &manifest, sync_committed_directory)?;
         Ok(manifest)
     }
@@ -493,11 +586,17 @@ impl ModelStore {
         let manifest = self.read_manifest(id)?;
         let relative = model_directory(id).join("model.gguf");
         let current = fingerprint(&self.root, &relative)?;
+        let projector_fingerprint = manifest
+            .projector
+            .as_ref()
+            .map(|asset| fingerprint(&self.root, &model_directory(id).join(&asset.relative_file)))
+            .transpose()?;
         let verified = self.verified.lock().map_err(|_| cache_error())?;
-        if !verified
-            .get(id)
-            .is_some_and(|cached| cached.manifest == manifest && cached.fingerprint == current)
-        {
+        if !verified.get(id).is_some_and(|cached| {
+            cached.manifest == manifest
+                && cached.fingerprint == current
+                && cached.projector_fingerprint == projector_fingerprint
+        }) {
             return Err(RuntimeError::new(
                 ErrorCode::IntegrityFailure,
                 "registered model changed; explicit verification required",
@@ -506,6 +605,11 @@ impl ModelStore {
         Ok(ResolvedModel {
             id: id.clone(),
             path: self.root_path.join(relative),
+            projector_path: manifest.projector.as_ref().map(|asset| {
+                self.root_path
+                    .join(model_directory(id))
+                    .join(&asset.relative_file)
+            }),
             context_limit: manifest.executable_context_limit(),
             default_context: manifest.default_context,
             loadable: manifest.load_candidate(),
@@ -546,11 +650,46 @@ impl ModelStore {
                 "registered model changed during verification or differs from manifest",
             ));
         }
+        let projector_fingerprint = if let Some(asset) = &manifest.projector {
+            let relative = model_directory(id).join(&asset.relative_file);
+            let before = fingerprint(&self.root, &relative)?;
+            let mut file = self.root.open(&relative).map_err(io_error)?;
+            let mut hasher = Sha256::new();
+            loop {
+                let count = file.read(&mut buffer).map_err(io_error)?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..count]);
+            }
+            file.seek(SeekFrom::Start(0)).map_err(io_error)?;
+            let (architecture, projector_type) = gguf::read_projector(&mut file)?;
+            if format!("{:x}", hasher.finalize()) != asset.sha256
+                || architecture != asset.architecture
+                || projector_type != asset.projector_type
+                || before != fingerprint(&self.root, &relative)?
+            {
+                return Err(RuntimeError::new(
+                    ErrorCode::IntegrityFailure,
+                    "registered projector changed or differs from manifest",
+                ));
+            }
+            Some(before)
+        } else {
+            None
+        };
+        if before != fingerprint(&self.root, &model_directory(id).join("model.gguf"))? {
+            return Err(RuntimeError::new(
+                ErrorCode::IntegrityFailure,
+                "registered model changed during pair verification",
+            ));
+        }
         self.verified.lock().map_err(|_| cache_error())?.insert(
             id.clone(),
             VerifiedModel {
                 manifest: manifest.clone(),
                 fingerprint: before,
+                projector_fingerprint,
             },
         );
         Ok(manifest)
@@ -596,7 +735,13 @@ impl ModelStore {
         let directory = model_directory(id);
         for entry in self.root.read_dir(&directory).map_err(io_error)? {
             let name = entry.map_err(io_error)?.file_name();
-            if name != "model.gguf" && name != "manifest.json" {
+            if name != "model.gguf"
+                && name != "manifest.json"
+                && !manifest
+                    .projector
+                    .as_ref()
+                    .is_some_and(|asset| name == std::ffi::OsStr::new(&asset.relative_file))
+            {
                 return Err(invalid_manifest(
                     "registered model directory contains unmanaged entries",
                 ));
@@ -647,6 +792,11 @@ impl ModelStore {
         sync: impl Fn(&Dir, &Path, &str) -> Result<()>,
     ) -> Result<()> {
         let fingerprint = fingerprint(&self.root, &staged.join("model.gguf"))?;
+        let projector_fingerprint = manifest
+            .projector
+            .as_ref()
+            .map(|asset| self::fingerprint(&self.root, &staged.join(&asset.relative_file)))
+            .transpose()?;
         if exists(&self.root, destination)? {
             return Err(RuntimeError::new(
                 ErrorCode::AlreadyExists,
@@ -671,6 +821,7 @@ impl ModelStore {
                 VerifiedModel {
                     manifest: manifest.clone(),
                     fingerprint,
+                    projector_fingerprint,
                 },
             );
         sync(
@@ -749,6 +900,15 @@ impl ModelStore {
                 "registered model size differs from manifest",
             ));
         }
+        if let Some(asset) = &manifest.projector
+            && ensure_regular(&self.root, &directory.join(&asset.relative_file))?
+                != asset.size_bytes
+        {
+            return Err(RuntimeError::new(
+                ErrorCode::IntegrityFailure,
+                "registered projector size differs from manifest",
+            ));
+        }
         Ok(manifest)
     }
     fn recover_imports(&self) -> Result<()> {
@@ -817,6 +977,58 @@ impl Drop for ImportCleanup<'_> {
         let _ = self.root.remove_file(&self.partial);
         let _ = self.root.remove_dir_all(&self.staged);
     }
+}
+fn open_import_source(path: &Path) -> Result<fs::File> {
+    #[cfg(windows)]
+    validate_local_source_path(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(io_error)?;
+    if !metadata.file_type().is_file() {
+        return Err(RuntimeError::invalid("model source must be a regular file"));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    // The preflight metadata check alone is insufficient: a source can be
+    // replaced by a symlink/FIFO between metadata and open. Never block on
+    // opening a special file or follow a final-component reparse point.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let source = options.open(path).map_err(io_error)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
+        // SAFETY: the owned File keeps this valid handle alive during the
+        // query. Do not read a DOS character device or named pipe.
+        if unsafe { GetFileType(source.as_raw_handle().cast()) } != FILE_TYPE_DISK {
+            return Err(RuntimeError::invalid("model source must be a disk file"));
+        }
+    }
+    let opened = source.metadata().map_err(io_error)?;
+    if !opened.is_file() {
+        return Err(RuntimeError::invalid("model source must be a regular file"));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if opened.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err(RuntimeError::invalid(
+                "model source must not be a reparse point",
+            ));
+        }
+    }
+    Ok(source)
 }
 fn model_directory(id: &ModelId) -> PathBuf {
     Path::new("models").join(id.as_str())
@@ -933,19 +1145,22 @@ struct Fingerprint {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    volume: u64,
+    #[cfg(windows)]
+    file: u64,
 }
 struct VerifiedModel {
     manifest: ModelManifest,
     fingerprint: Fingerprint,
+    projector_fingerprint: Option<Fingerprint>,
 }
 fn fingerprint(root: &Dir, path: &Path) -> Result<Fingerprint> {
     ensure_regular(root, path)?;
-    let metadata = root
-        .open(path)
-        .map_err(io_error)?
-        .into_std()
-        .metadata()
-        .map_err(io_error)?;
+    let file = root.open(path).map_err(io_error)?.into_std();
+    let metadata = file.metadata().map_err(io_error)?;
+    #[cfg(windows)]
+    let identity = crate::library::identity(&file)?;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     Ok(Fingerprint {
@@ -955,6 +1170,10 @@ fn fingerprint(root: &Dir, path: &Path) -> Result<Fingerprint> {
         device: metadata.dev(),
         #[cfg(unix)]
         inode: metadata.ino(),
+        #[cfg(windows)]
+        volume: identity.volume,
+        #[cfg(windows)]
+        file: identity.file,
     })
 }
 fn cache_error() -> RuntimeError {
@@ -1011,6 +1230,106 @@ fn validate_local_source_path(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::ModelSource;
+
+    fn pair_fixture(projector: bool) -> Vec<u8> {
+        fn string(bytes: &mut Vec<u8>, value: &str) {
+            bytes.extend((value.len() as u64).to_le_bytes());
+            bytes.extend(value.as_bytes());
+        }
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend(3u32.to_le_bytes());
+        bytes.extend(1u64.to_le_bytes());
+        bytes.extend(if projector { 2u64 } else { 4u64 }.to_le_bytes());
+        let values = if projector {
+            [
+                ("general.architecture", "clip"),
+                ("clip.projector_type", "glm4v"),
+            ]
+        } else {
+            [
+                ("general.architecture", "qwen3"),
+                ("tokenizer.chat_template", "fixture"),
+            ]
+        };
+        for (key, value) in values {
+            string(&mut bytes, key);
+            bytes.extend(8u32.to_le_bytes());
+            string(&mut bytes, value);
+        }
+        if !projector {
+            for (key, value) in [("general.file_type", 0u32), ("qwen3.context_length", 40960)] {
+                string(&mut bytes, key);
+                bytes.extend(4u32.to_le_bytes());
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        string(&mut bytes, "fixture.weight");
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(32u64.to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(0u64.to_le_bytes());
+        bytes.resize(bytes.len().next_multiple_of(32) + 128, 0);
+        bytes
+    }
+
+    #[test]
+    fn pair_cancellation_and_source_failure_at_publication_roll_back_both_assets() {
+        for cancelled in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let sources = tempfile::tempdir().unwrap();
+            let projector_path = sources.path().join("projector.gguf");
+            fs::write(&projector_path, pair_fixture(true)).unwrap();
+            let store = ModelStore::open(root.path()).unwrap();
+            let cancel = ImportCancellation::default();
+            let model = pair_fixture(false);
+            let id = ModelId::new("pair").unwrap();
+            let result = store.import_readers(
+                std::io::Cursor::new(&model),
+                model.len() as u64,
+                ImportRequest::new(id.clone(), "Pair", ModelSource::local("fixture")),
+                Some((
+                    fs::File::open(&projector_path).unwrap(),
+                    ProjectorImportRequest::new(ModelSource::local("fixture")),
+                )),
+                &cancel,
+                || {
+                    // Both fully verified copies have been staged, but neither is visible.
+                    assert!(!root.path().join("models/pair").exists());
+                    let entries: Vec<_> = fs::read_dir(root.path().join("imports"))
+                        .unwrap()
+                        .map(|e| e.unwrap().path())
+                        .collect();
+                    assert_eq!(entries.len(), 1);
+                    assert!(entries[0].join("model.gguf").exists());
+                    assert!(entries[0].join("mmproj.gguf").exists());
+                    if cancelled {
+                        cancel.cancel();
+                        Ok(())
+                    } else {
+                        Err(RuntimeError::new(
+                            ErrorCode::IntegrityFailure,
+                            "source changed",
+                        ))
+                    }
+                },
+            );
+            assert_eq!(
+                result.unwrap_err().code,
+                if cancelled {
+                    ErrorCode::RequestCancelled
+                } else {
+                    ErrorCode::IntegrityFailure
+                }
+            );
+            assert!(store.list().unwrap().is_empty());
+            assert!(store.resolve(&id).is_err());
+            assert_eq!(
+                fs::read_dir(root.path().join("imports")).unwrap().count(),
+                0
+            );
+            assert_eq!(fs::read(projector_path).unwrap(), pair_fixture(true));
+        }
+    }
 
     #[test]
     fn post_commit_sync_failure_reports_registration_and_cleanup_keeps_it() {

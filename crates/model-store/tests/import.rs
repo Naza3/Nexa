@@ -930,3 +930,304 @@ fn offline_unregister_never_hashes_recovers_or_deletes_models() {
         1
     );
 }
+
+fn projector_fixture() -> Vec<u8> {
+    let mut bytes = b"GGUF".to_vec();
+    bytes.extend(3_u32.to_le_bytes());
+    bytes.extend(1_u64.to_le_bytes());
+    bytes.extend(2_u64.to_le_bytes());
+    for (key, value) in [
+        ("general.architecture", "clip"),
+        ("clip.projector_type", "glm4v"),
+    ] {
+        string(&mut bytes, key);
+        bytes.extend(8_u32.to_le_bytes());
+        string(&mut bytes, value);
+    }
+    string(&mut bytes, "v.synthetic.weight");
+    bytes.extend(1_u32.to_le_bytes());
+    bytes.extend(32_u64.to_le_bytes());
+    bytes.extend(0_u32.to_le_bytes());
+    bytes.extend(0_u64.to_le_bytes());
+    bytes.resize(bytes.len().next_multiple_of(32) + 128, 0);
+    bytes
+}
+fn pair_sources() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("language.gguf");
+    let projector = dir.path().join("vision.gguf");
+    fs::write(&model, fixture(128)).unwrap();
+    fs::write(&projector, projector_fixture()).unwrap();
+    (dir, model, projector)
+}
+fn projector_request() -> model_store::ProjectorImportRequest {
+    model_store::ProjectorImportRequest::new(ModelSource::local("projector-test"))
+}
+#[test]
+fn pair_is_one_atomic_managed_registration_and_reopens_with_both_hashes() {
+    let (root, store) = store();
+    let (_sources, model, projector) = pair_sources();
+    let manifest = store
+        .import_file_pair(
+            &model,
+            &projector,
+            request("pair"),
+            projector_request(),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    let companion = manifest.projector.as_ref().unwrap();
+    assert_eq!(
+        companion.sha256,
+        format!("{:x}", Sha256::digest(projector_fixture()))
+    );
+    assert_eq!(companion.projector_type, "glm4v");
+    assert_eq!(companion.source.uri, "projector-test");
+    assert!(!manifest.validated);
+    assert_eq!(store.list().unwrap(), vec![manifest.clone()]);
+    let resolved = store.resolve(&id("pair")).unwrap();
+    assert_eq!(
+        fs::read(resolved.projector_path.unwrap()).unwrap(),
+        projector_fixture()
+    );
+    assert_eq!(store.verify(&id("pair")).unwrap(), manifest);
+    let inventory = model_store::inventory::read(root.path()).unwrap();
+    assert_eq!(inventory.entries.len(), 1);
+    assert!(inventory.entries[0].availability_error.is_none());
+    assert_eq!(
+        model_store::local_validation::scope(
+            root.path(),
+            &inventory.entries[0],
+            runtime_types::LoadOptions::default(),
+            "test"
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::UnsupportedModel
+    );
+    drop(store);
+    let store = ModelStore::open(root.path()).unwrap();
+    assert!(store.resolve(&id("pair")).unwrap().projector_path.is_some());
+    assert_eq!(store.remove(&id("pair")).unwrap(), manifest);
+    assert_eq!(fs::read(model).unwrap(), fixture(128));
+    assert_eq!(fs::read(projector).unwrap(), projector_fixture());
+    assert_clean(&root);
+}
+#[test]
+fn bad_pair_never_publishes_primary_or_leaves_staging() {
+    for bad in [
+        b"GGUF".to_vec(),
+        fixture(128),
+        projector_fixture()[..64].to_vec(),
+    ] {
+        let (root, store) = store();
+        let (_sources, model, projector) = pair_sources();
+        fs::write(&projector, bad).unwrap();
+        assert!(
+            store
+                .import_file_pair(
+                    &model,
+                    &projector,
+                    request("pair"),
+                    projector_request(),
+                    &ImportCancellation::default()
+                )
+                .is_err()
+        );
+        assert!(store.list().unwrap().is_empty());
+        assert!(!root.path().join("models/pair").exists());
+        assert_clean(&root);
+    }
+}
+#[test]
+fn pair_rejects_wrong_expected_hash_and_pre_cancel_without_partial_commit() {
+    let (root, store) = store();
+    let (_sources, model, projector) = pair_sources();
+    let mut expected = projector_request();
+    expected.expected_sha256 = Some("0".repeat(64));
+    assert_eq!(
+        store
+            .import_file_pair(
+                &model,
+                &projector,
+                request("pair"),
+                expected,
+                &ImportCancellation::default()
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::IntegrityFailure
+    );
+    let cancel = ImportCancellation::default();
+    cancel.cancel();
+    assert_eq!(
+        store
+            .import_file_pair(
+                &model,
+                &projector,
+                request("pair"),
+                projector_request(),
+                &cancel
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestCancelled
+    );
+    assert!(store.list().unwrap().is_empty());
+    assert_clean(&root);
+}
+#[test]
+fn projector_cannot_be_registered_as_an_independent_language_model() {
+    let (root, store) = store();
+    assert_eq!(
+        import(&store, &projector_fixture(), "projector")
+            .unwrap_err()
+            .code,
+        ErrorCode::UnsupportedModel
+    );
+    assert_clean(&root);
+}
+#[test]
+fn paired_companion_tamper_is_detected_and_failed_verify_clears_cache() {
+    let (root, store) = store();
+    let (_sources, model, projector) = pair_sources();
+    store
+        .import_file_pair(
+            &model,
+            &projector,
+            request("pair"),
+            projector_request(),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    let first_inventory = model_store::inventory::read(root.path()).unwrap();
+    let path = store.resolve(&id("pair")).unwrap().projector_path.unwrap();
+    let mut bytes = projector_fixture();
+    *bytes.last_mut().unwrap() = 1;
+    fs::remove_file(&path).unwrap();
+    fs::write(&path, bytes).unwrap();
+    assert_eq!(
+        store.resolve(&id("pair")).unwrap_err().code,
+        ErrorCode::IntegrityFailure
+    );
+    assert_eq!(
+        store.verify(&id("pair")).unwrap_err().code,
+        ErrorCode::IntegrityFailure
+    );
+    assert_ne!(
+        model_store::inventory::read(root.path())
+            .unwrap()
+            .generation,
+        first_inventory.generation
+    );
+    fs::write(&path, projector_fixture()).unwrap();
+    assert!(store.resolve(&id("pair")).is_err());
+    store.verify(&id("pair")).unwrap();
+    assert!(store.resolve(&id("pair")).is_ok());
+}
+#[test]
+fn missing_companion_is_unavailable_and_not_silently_downgraded_to_text() {
+    let (root, store) = store();
+    let (_sources, model, projector) = pair_sources();
+    store
+        .import_file_pair(
+            &model,
+            &projector,
+            request("pair"),
+            projector_request(),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    fs::remove_file(store.resolve(&id("pair")).unwrap().projector_path.unwrap()).unwrap();
+    assert!(store.resolve(&id("pair")).is_err());
+    let inventory = model_store::inventory::read(root.path()).unwrap();
+    assert!(inventory.entries[0].availability_error.is_some());
+    assert!(inventory.entries[0].manifest.projector.is_some());
+}
+#[test]
+fn single_file_serialization_and_suppression_keep_legacy_identity() {
+    let (root, store) = store();
+    let manifest = import(&store, &fixture(128), "legacy").unwrap();
+    assert!(manifest.projector.is_none());
+    assert!(
+        store
+            .resolve(&id("legacy"))
+            .unwrap()
+            .projector_path
+            .is_none()
+    );
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    assert!(
+        !String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains("projector")
+    );
+    let legacy: model_store::ModelManifest = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(serde_json::to_vec(&legacy).unwrap(), bytes);
+    store.unregister(&id("legacy")).unwrap();
+    drop(store);
+    let store = ModelStore::open(root.path()).unwrap();
+    assert!(store.list().unwrap().is_empty());
+}
+#[test]
+fn unregister_pair_preserves_both_files_and_does_not_resurrect_after_restart() {
+    let (root, store) = store();
+    let (_sources, model, projector) = pair_sources();
+    store
+        .import_file_pair(
+            &model,
+            &projector,
+            request("pair"),
+            projector_request(),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    let resolved = store.resolve(&id("pair")).unwrap();
+    store.unregister(&id("pair")).unwrap();
+    assert!(resolved.path.exists());
+    assert!(resolved.projector_path.unwrap().exists());
+    drop(store);
+    let store = ModelStore::open(root.path()).unwrap();
+    assert!(store.list().unwrap().is_empty());
+    assert!(
+        model_store::inventory::read(root.path())
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+}
+
+#[test]
+#[ignore = "requires NEXA_REAL_MODEL and NEXA_REAL_PROJECTOR local GGUF paths"]
+fn real_pair_import_and_reopen_verify_both_assets() {
+    let model = std::env::var_os("NEXA_REAL_MODEL").expect("NEXA_REAL_MODEL");
+    let projector = std::env::var_os("NEXA_REAL_PROJECTOR").expect("NEXA_REAL_PROJECTOR");
+    let (root, store) = store();
+    let manifest = store
+        .import_file_pair(
+            std::path::PathBuf::from(model),
+            std::path::PathBuf::from(projector),
+            request("real-pair"),
+            projector_request(),
+            &ImportCancellation::default(),
+        )
+        .unwrap();
+    assert!(manifest.projector.is_some());
+    assert!(
+        store
+            .resolve(&id("real-pair"))
+            .unwrap()
+            .projector_path
+            .is_some()
+    );
+    drop(store);
+    let store = ModelStore::open(root.path()).unwrap();
+    assert_eq!(store.get(&id("real-pair")).unwrap(), manifest);
+    assert!(
+        store
+            .resolve(&id("real-pair"))
+            .unwrap()
+            .projector_path
+            .is_some()
+    );
+}

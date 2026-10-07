@@ -4,7 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* ABI v2 layouts are unchanged; build_info behavior identity is shim_version 3.
+/* ABI v2 layouts are unchanged; build_info behavior identity is shim_version 4.
  * v1 entry points and layouts remain compatible. All strings are pointer + UTF-8 byte length, never NUL-terminated.
  * Borrowed inputs must remain alive for the call. Output buffers belong to
  * shim; release with air_buffer_free. Error outputs are reset on every fallible
@@ -59,6 +59,19 @@ void air_engine_destroy(air_engine *engine);
 int32_t air_model_load(air_engine *engine, air_string path,
                        air_load_options options, const air_cancel *cancel,
                        air_model **out, air_error *error);
+/* Additive OCR entries; existing ABI layouts remain unchanged. Projector and
+ * image storage are borrowed only for the call. Images are PNG/JPEG, <=4 MiB,
+ * <=8192 per dimension and <=16,777,216 pixels. image_after_text is 0 or 1.
+ * OCR accepts exactly one user prompt and one image, with no chat history. */
+int32_t air_model_load_with_projector(air_engine *engine, air_string path,
+                       air_string projector_path, air_load_options options,
+                       const air_cancel *cancel, air_model **out, air_error *error);
+int32_t air_prepare_image(air_model *model, air_string prompt,
+                    const uint8_t *image, uint64_t image_len,
+                    uint32_t image_after_text, air_generate_options options,
+                    const air_string *stops, uint64_t stop_count,
+                    const air_cancel *cancel, air_prepared **out,
+                    uint32_t *prompt_tokens, air_error *error);
 void air_model_unload(air_model *model);
 int32_t air_prepare(air_model *model, const air_message *messages,
                     uint64_t count, air_generate_options options,

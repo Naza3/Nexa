@@ -4,13 +4,13 @@
 
 ## 接口与边界
 
-- 父进程首先发送 `Hello`：非空 UUID session、operation=0、request/seq=null。worker 读取实际 `llama_adapter::build_info()`，核验私有protocol=2、shim行为身份=3（公共protocol仍1、C ABI布局v2）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc` 后回复
+- 父进程首先发送 `Hello`：非空 UUID session、operation=0、request/seq=null。worker 读取实际 `llama_adapter::build_info()`，核验私有protocol=3、shim行为身份=4（公共protocol仍1、C ABI布局v2）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc` 后回复
 - 之后 `Load` / `Generate` / `Unload` 的 operation ID 非零且严格递增，只有一个执行中的操作。Generate 的 envelope request ID 必须匹配请求内部 ID；Load/Unload 为 null
 - `Cancel` / `Credit` 使用对应 operation/request；`Shutdown` 使用 operation=0 且 request/seq=null。未知字段/帧、错误方向、版本/session/请求身份不符、重复操作、未握手命令、超限和截断帧导致安全取消并退出
 - Cancel 在控制线程直接设置独立 native 取消标志并唤醒条件变量。它不会排入原生 mailbox，也不会等待生成或 stdout writer
 - 信用 ID 全 session 非零严格递增；只允许活动 Generate 有最多两个未消费 credit。每个 text_delta ≤4096 UTF-8 bytes 且消耗恰好一个 credit；worker 从不自动补充 credit
 - 终态清空未用 credit。最近完成操作的新 credit 允许迟到但立即作废，绝不供下一请求使用；最近操作的迟到 Cancel 幂等处理，避免终态与在途控制帧竞争。父 supervisor 通过唯一FIFO writer串行命令及credit，观察终态后停止旧授信，再允许下一操作，因此合法在途控制帧不会跨过第二个后续操作。非邻近/重复/乱序 credit 仍拒绝
-- 事件 seq 从1开始，整个 session 连续递增。请求最大2MiB、事件最大64KiB，均包含LF；文本编码帧另受协议25KiB限制
+- 事件 seq 从1开始，整个 session 连续递增。图片请求最大8MiB、纯文本Generate仍最大2MiB、事件最大64KiB，均包含LF；文本编码帧另受协议25KiB限制
 
 ## 有界输出与退出
 

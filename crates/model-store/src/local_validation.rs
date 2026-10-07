@@ -190,6 +190,10 @@ pub fn scope(
     options: LoadOptions,
     engine_build: &str,
 ) -> Result<Scope> {
+    // Text-only receipts do not identify the companion or exercise vision.
+    if entry.manifest.projector.is_some() {
+        return Err(library::library_error(ErrorCode::UnsupportedModel));
+    }
     let (volume, file) = library::data_directory_object_identity(root)?;
     let installation = format!(
         "{:x}",

@@ -14,6 +14,77 @@ spec.loader.exec_module(pack)
 
 
 class PackageTests(unittest.TestCase):
+    def test_native_archive_contract_matches_locked_native_consumer(self):
+        import re
+        consumer = (pack.ROOT / "crates/llama-adapter/native_identity.rs").read_text(encoding="utf-8")
+        names = re.search(r"pub const LIBRARIES: \[&str; 10\] = \[(.*?)\];", consumer, re.S)
+        self.assertIsNotNone(names)
+        self.assertEqual(tuple(re.findall(r'"([^"\n]+)"', names[1])), pack.NATIVE_ARCHIVES)
+        self.assertEqual((pack.WORKER_PROTOCOL_VERSION, pack.SHIM_VERSION), (3, 4))
+
+    def test_native_archive_closure_rejects_missing_extra_empty_and_video(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fields = {"MTMD_VIDEO": "OFF"}
+            for name in pack.NATIVE_ARCHIVES:
+                path = root / (name + ".lib")
+                path.write_bytes(b"synthetic archive metadata")
+                fields["library." + name] = str(path)
+            records = pack.native_archive_records(root, fields)
+            self.assertEqual({record["name"] for record in records}, set(pack.NATIVE_ARCHIVES))
+            for missing in ("mtmd", "vendor-hash"):
+                bad = fields.copy()
+                del bad["library." + missing]
+                with self.assertRaisesRegex(ValueError, "closure"):
+                    pack.native_archive_records(root, bad)
+            for value in ("ON", None):
+                with self.assertRaisesRegex(ValueError, "MTMD_VIDEO"):
+                    pack.native_archive_records(root, {**fields, "MTMD_VIDEO": value})
+            with self.assertRaisesRegex(ValueError, "closure"):
+                pack.native_archive_records(root, {**fields, "library.extra": fields["library.mtmd"]})
+            (root / "mtmd.lib").write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "empty"):
+                pack.native_archive_records(root, fields)
+
+    def test_multimodal_embedded_licenses_survive_bundle_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = []
+            pack.copy_embedded_vendor_licenses(root, records)
+            self.assertEqual(len(records), 2)
+            original = {}
+            for record in records:
+                source = pack.ROOT / "vendor/llama.cpp" / record["source"].split(pack.LLAMA_COMMIT + "/")[1]
+                raw = (root / record["path"]).read_bytes()
+                self.assertIn(raw, source.read_bytes())
+                self.assertEqual(record["source_sha256"], pack.digest(source))
+                self.assertEqual(record["sha256"], pack.digest(root / record["path"]))
+                self.assertIn(b"Permission is hereby granted", raw)
+                self.assertIn(b"Public Domain", raw)
+                self.assertIn(b"THE SOFTWARE IS PROVIDED", raw)
+                self.assertTrue(raw.endswith(b"*/"))
+                original[record["path"]] = raw
+            self.assertIn(b"Copyright (c) 2017 Sean Barrett", original["licenses/llama.cpp/stb-image-LICENSE.txt"])
+            self.assertIn(b"Copyright 2026 David Reid", original["licenses/llama.cpp/miniaudio-LICENSE.txt"])
+            pack.write_json(root / "licenses/index.json", {"files": records})
+            pack.consolidate_licenses(root)
+            restored = pack.verify_license_bundle(root)
+            for name, raw in original.items():
+                self.assertEqual(restored[name]["raw"], raw)
+                self.assertEqual(restored[name]["document"]["attributions"][0]["source_sha256"], next(record["source_sha256"] for record in records if record["path"] == name))
+
+    def test_missing_embedded_license_fails_closed(self):
+        files = ("vendor/stb/stb_image.h", "vendor/miniaudio/miniaudio.h")
+        for bad in files:
+            with self.subTest(file=bad), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for file in files:
+                    source = root / "vendor/llama.cpp" / file
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(b"source without license" if file == bad else (pack.ROOT / "vendor/llama.cpp" / file).read_bytes())
+                with mock.patch.object(pack, "ROOT", root), self.assertRaisesRegex(ValueError, "original embedded"):
+                    pack.copy_embedded_vendor_licenses(root / "stage", [])
+
     def vs_fixture(self, root, major=18, edition="Community", version=None, tools=None, redist=None):
         version = version or ("18.0.10000.0" if major == 18 else "17.14.37710.0")
         tools = tools or ("14.50.35707" if major == 18 else "14.44.35207")

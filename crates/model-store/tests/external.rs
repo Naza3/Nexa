@@ -460,7 +460,7 @@ fn mixed_content_rejections_are_bounded_and_only_valid_models_are_publishable() 
         [
             "unsupported_model",
             "unsupported_chat_template",
-            "invalid_manifest",
+            "unsupported_model",
             "invalid_manifest",
             "invalid_manifest",
             "invalid_manifest"

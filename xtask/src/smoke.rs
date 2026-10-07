@@ -204,7 +204,7 @@ fn validate_output(
     }
     if summary["build_info"]["llama_commit"] != commit
         || summary["build_info"]["backend"] != "cpu"
-        || summary["build_info"]["shim_version"] != 3
+        || summary["build_info"]["shim_version"] != 4
     {
         return Err("smoke binary build identity differs from baseline".into());
     }
@@ -305,10 +305,19 @@ mod tests {
         let observation = json!({"iteration":1,"mode":"generate","prompt_tokens":20,
             "completion_tokens":5,"text_bytes":10,"callbacks":3,"finish_reason":reason});
         let summary = json!({"result":"pass","runs":1,
-            "build_info":{"llama_commit":"abc","backend":"cpu","shim_version":3},
+            "build_info":{"llama_commit":"abc","backend":"cpu","shim_version":4},
             "template_sha256":"template","thread_options":{"available_parallelism":2,"oversubscribed":true,"source":"cli"},"load_options":{"context_size":64,"threads":4,"batch_size":64},
             "generation_options":{"max_tokens":8,"seed":42,"stop_count":0,"temperature":0.0,"top_p":0.9}});
         format!("{observation}\n{summary}\n").into_bytes()
+    }
+    #[test]
+    fn old_shim_identity_cannot_be_reused_for_the_current_worker() {
+        let old = String::from_utf8(report("stop"))
+            .unwrap()
+            .replace("\"shim_version\":4", "\"shim_version\":3");
+        assert!(
+            validate_output(old.as_bytes(), "abc", "template", "generate", 1, 8, (64, 4)).is_err()
+        );
     }
     #[test]
     fn checks_observations_instead_of_trusting_exit_or_pass_label() {

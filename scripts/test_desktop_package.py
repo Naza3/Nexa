@@ -378,6 +378,7 @@ class DesktopPackageTests(unittest.TestCase):
         commands = {"desktop_snapshot", "runtime_start", "model_pick", "model_import", "model_directory_pick", "model_directory_apply", "models_scan", "model_library_next", "model_library_cancel", "models_page", "model_load", "model_unload", "chat_start", "chat_next", "chat_cancel", "settings_save", "runtime_idle_save", "token_copy", "runtime_stop", "desktop_close"}
         commands.update({"runtime_verification_save", "models_pick", "models_add", "models_selection_discard", "model_directory_configure", "runtime_lan_save", "runtime_lan_addresses", "lan_token_copy", "models_reconcile", "model_test", "model_directory_discover", "model_catalog", "model_download_start", "model_download_next", "model_download_cancel"})
         commands.update({"runtime_initialize", "configuration_get", "configuration_model_get", "configuration_save", "configuration_migrate", "model_load_profile", "model_load_start", "model_load_profile_start", "model_load_next", "model_load_cancel", "model_unregister", "ui_preferences_get", "ui_preferences_save"})
+        commands.update({"ocr_start", "ocr_save_markdown", "models_pair_pick", "models_pair_import"})
         self.assertEqual(set(capability["permissions"]), {"allow-" + name.replace("_", "-") for name in commands})
         native = (pack.SHELL / "src/windows.rs").read_text(encoding="utf-8")
         import re

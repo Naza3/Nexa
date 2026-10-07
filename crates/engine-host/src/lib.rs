@@ -183,7 +183,11 @@ fn loaded_session(
             return;
         }
     };
-    let loaded = engine.load(&resolved.path, options, &job.cancel);
+    let loaded = if let Some(projector_path) = &resolved.projector_path {
+        engine.load_with_projector(&resolved.path, projector_path, options, &job.cancel)
+    } else {
+        engine.load(&resolved.path, options, &job.cancel)
+    };
     if let Some(error) = loaded.as_ref().err().cloned() {
         // A failed/cancelled Load is a cleanup acknowledgment too. Drop the
         // borrowing result and engine before another thread can see it.

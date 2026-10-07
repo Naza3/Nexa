@@ -201,6 +201,13 @@ impl DesktopBridge {
         if !(1..=runtime_types::MAX_OUTPUT_TOKENS).contains(&request.max_output_tokens) {
             return Err(BridgeError::new("invalid_request"));
         }
+        if request
+            .messages
+            .iter()
+            .any(|message| message.image.is_some())
+        {
+            return Err(BridgeError::new("invalid_request"));
+        }
         let history: usize = request.messages.iter().map(|m| m.content.len()).sum();
         if history >= HISTORY_BYTES
             || request.messages.len() >= 128
@@ -215,6 +222,19 @@ impl DesktopBridge {
         if body.len() > HISTORY_BYTES {
             return Err(BridgeError::new("history_limit"));
         }
+        self.start_stream(request.model_id, body, HISTORY_BYTES - history)
+    }
+    pub fn ocr_start(self: &Arc<Self>, request: crate::OcrStartRequest) -> Result<RequestHandle> {
+        self.open()?;
+        let body = ocr_body(&request)?;
+        self.start_stream(request.model_id, body, REPLY_BYTES)
+    }
+    fn start_stream(
+        self: &Arc<Self>,
+        model_id: String,
+        body: Vec<u8>,
+        remaining: usize,
+    ) -> Result<RequestHandle> {
         let mut slot = self.chat.lock().unwrap();
         self.open()?;
         if let Some(current) = slot.current.as_ref() {
@@ -235,9 +255,7 @@ impl DesktopBridge {
         drop(slot);
         let bridge = self.clone();
         tokio::spawn(async move {
-            bridge
-                .run_chat(session, request.model_id, body, HISTORY_BYTES - history)
-                .await;
+            bridge.run_chat(session, model_id, body, remaining).await;
         });
         Ok(RequestHandle { request_id: id })
     }
@@ -455,6 +473,21 @@ impl DesktopBridge {
     }
 }
 
+fn ocr_body(request: &crate::OcrStartRequest) -> Result<Vec<u8>> {
+    runtime_types::ModelId::new(&request.model_id)
+        .map_err(|_| BridgeError::new("invalid_request"))?;
+    if request.prompt.trim().is_empty()
+        || request.prompt.len() > 4096
+        || !(1..=4096).contains(&request.max_output_tokens)
+    {
+        return Err(BridgeError::new("invalid_request"));
+    }
+    runtime_types::ImageInput::from_data_url(&request.image_data_url)
+        .map_err(|_| BridgeError::new("invalid_request"))?;
+    let body = serde_json::to_vec(&json!({"model":request.model_id,"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":request.image_data_url}},{"type":"text","text":request.prompt}]}],"temperature":0,"max_tokens":request.max_output_tokens,"stream":true,"stream_options":{"include_usage":true}})).map_err(|_| BridgeError::new("invalid_request"))?;
+    Ok(body)
+}
+
 async fn drain_events(
     session: &Session,
     decoder: &mut Decoder,
@@ -482,6 +515,42 @@ async fn drain_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn ocr_request() -> crate::OcrStartRequest {
+        crate::OcrStartRequest { model_id: "ocr-model".into(), image_data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=".into(), prompt: "Text Recognition:".into(), max_output_tokens: 4096 }
+    }
+    #[test]
+    fn ocr_uses_public_content_parts_without_private_image_or_history() {
+        let value: serde_json::Value =
+            serde_json::from_slice(&ocr_body(&ocr_request()).unwrap()).unwrap();
+        assert_eq!(value["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(value["messages"][0]["content"][0]["type"], "image_url");
+        assert_eq!(
+            value["messages"][0]["content"][1]["text"],
+            "Text Recognition:"
+        );
+        assert!(value["messages"][0].get("image").is_none());
+        assert_eq!(value["temperature"], 0);
+        assert_eq!(value["stream"], true);
+        assert_eq!(value["max_tokens"], 4096);
+    }
+    #[test]
+    fn ocr_rejects_remote_bad_images_empty_prompt_and_output_overflow() {
+        for url in [
+            "https://example.com/image.png",
+            "file:///tmp/image.png",
+            "data:image/png;base64,invalid",
+        ] {
+            let mut request = ocr_request();
+            request.image_data_url = url.into();
+            assert!(ocr_body(&request).is_err());
+        }
+        let mut request = ocr_request();
+        request.prompt = " ".into();
+        assert!(ocr_body(&request).is_err());
+        request = ocr_request();
+        request.max_output_tokens = 4097;
+        assert!(ocr_body(&request).is_err());
+    }
     #[tokio::test]
     async fn bounded_utf8_batches_terminal_once_and_repeat_summary() {
         let s = Session::new(Uuid::new_v4());

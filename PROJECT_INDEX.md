@@ -122,3 +122,7 @@
 - [Tag 发行开发验证](docs/verification/2026-10-05-tag-release.md)：版本、封闭资产、精确 tag/commit 与无覆盖发布反例；Windows 安装器结果分层记录
 
 - [LAN保存CI时序修复](docs/verification/2026-10-05-lan-save-ci-race.md)：mock持久状态与旧读取微任务竞争的确定性对照，安装器CI重跑前置
+
+- [本机单图OCR ADR0032](docs/decisions/0032-local-single-image-ocr.md)：配对GGUF、CPU mtmd、图片HTTP/IPC预算与桌面流程
+- [Windows CPU OCR使用说明](docs/ocr-windows-cpu.md)：双文件下载、显式加载、图片/Markdown及i5-8400参数建议
+- [单图OCR开发验证](docs/verification/2026-10-07-local-ocr.md)：Linux真实模型/HTTP及文本回归，Windows与目标机另验

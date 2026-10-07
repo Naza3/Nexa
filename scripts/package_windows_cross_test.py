@@ -192,17 +192,10 @@ def native_identity(native):
                 "compiler_simulate_id": "MSVC", "compiler_target": base.TARGET,
                 "c_compiler_id": "Clang", "c_compiler_frontend": "MSVC", "c_compiler_simulate_id": "MSVC",
                 "c_compiler_target": base.TARGET, "msvc_runtime_library": "MultiThreadedDLL", "cross_abi_verified": "1", "cross_cpu_baseline_verified": "1", "GGML_SSE42": "ON", "GGML_AVX": "ON", "GGML_AVX2": "ON", "GGML_FMA": "ON", "GGML_F16C": "ON", "GGML_BMI2": "ON", "GGML_AVX512": "OFF"}
-    expected.update(dict.fromkeys(("GGML_NATIVE", "GGML_BACKEND_DL", "GGML_OPENMP", "GGML_CUDA", "GGML_VULKAN", "GGML_METAL", "LLAMA_OPENSSL", "BUILD_SHARED_LIBS"), "OFF"))
+    expected.update(dict.fromkeys(("GGML_NATIVE", "GGML_BACKEND_DL", "GGML_OPENMP", "GGML_CUDA", "GGML_VULKAN", "GGML_METAL", "LLAMA_OPENSSL", "BUILD_SHARED_LIBS", "MTMD_VIDEO"), "OFF"))
     if any(fields.get(key) != value for key, value in expected.items()) or fields.get("processor", "").lower() not in {"amd64", "x86_64"}:
         base.fail("native Clang MSVC-ABI Release cross profile mismatch")
-    native_resolved = native.resolve(strict=True)
-    archives = []
-    for name in ("air_llama", "llama-common", "llama-common-base", "cpp-httplib", "llama", "ggml", "ggml-cpu", "ggml-base"):
-        path = base.regular(Path(fields["library." + name]))
-        if not path.resolve(strict=True).is_relative_to(native_resolved) or path.name != name + ".lib":
-            base.fail("native archive escaped the exact build directory")
-        archives.append({"name": name, "sha256": base.digest(path), "size_bytes": path.stat().st_size})
-    return fields, archives
+    return fields, base.native_archive_records(native, fields)
 
 
 def seal(stage, manifest, verify):
@@ -320,7 +313,7 @@ def package(args):
         write_crt_licenses(runtime, provenance)
         base.consolidate_licenses(runtime)
         manifest = {**common, "product": "nexa-runtime", "crt": "MD", "architecture": "x86_64", "protocol_version": 1,
-                    "worker_protocol_version": 2, "shim_version": 3, "project_tree": source["tree"],
+                    "worker_protocol_version": base.WORKER_PROTOCOL_VERSION, "shim_version": base.SHIM_VERSION, "project_tree": source["tree"],
                     "llama_commit": base.LLAMA_COMMIT, "cargo_lock_sha256": base.digest(ROOT / "Cargo.lock"),
                     "native_build": base.sanitize(identity, replacements), "native_archives": archives,
                     "cpu_baseline": [key.removeprefix("GGML_").lower() for key in ("GGML_SSE42", "GGML_AVX", "GGML_AVX2", "GGML_F16C", "GGML_FMA", "GGML_BMI2", "GGML_AVX512") if identity.get(key) == "ON"],

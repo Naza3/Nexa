@@ -1,6 +1,6 @@
 # runtime-api
 
-T04 纯 Rust 本机管理与文本 HTTP API；不链接 engine-host/llama-adapter/native。接口以[执行规格](../../ai-runtime-v0.1-execution-spec.md#7-http-与客户端契约)及[ADR0005](../../docs/decisions/0005-t04-loopback-http-and-management.md)为准，实施状态见[当前状态](../../PROJECT_STATE.md)。
+T04 纯 Rust 本机管理、文本与单图 OCR HTTP API；不链接 engine-host/llama-adapter/native。接口以[执行规格](../../ai-runtime-v0.1-execution-spec.md#7-http-与客户端契约)及[ADR0005](../../docs/decisions/0005-t04-loopback-http-and-management.md)为准，实施状态见[当前状态](../../PROJECT_STATE.md)。
 
 - 管理监听仅回环、精确 Host、默认拒绝 Origin、Bearer；健康正文仅存活
 - Chat 文本子集、严格未知/重复字段、统一错误；Started 后才正常 SSE
@@ -29,3 +29,7 @@ LAN router 仅开放 GET /v1/models 和 POST /v1/chat/completions；models 只�
 LAN 专用凭据仅显式 enabled 的服务启动生成至安全 secrets/lan-api-token；本机 init/浏览/status 不生成，配置/status/discovery 不含密钥。实际 running 观测与 saved enabled 分开。测试的真实 TCP 仅用 loopback，加测试层模拟私网 peer；不能当作 Windows 网卡/防火墙/两设备验收。
 
 手动停止加载按[ADR0027](../../docs/decisions/0027-owned-model-load-cancellation.md)：每次操作独立UUID/取消令牌，取消ACK与清理终态分离，覆盖准备/切换/加载及自有短测，不影响其他客户端或全服务。
+
+## 本机单图 OCR
+
+按 [ADR0032](../../docs/decisions/0032-local-single-image-ocr.md)，Chat Completions 可接收一个 user 的 image_url data URL 与 text，PNG/JPEG 文件≤4 MiB、本机封套≤8 MiB；普通文本/管理与LAN保持≤1 MiB，LAN拒绝图像。双文件导入在原管理import中增加 `projector:{file,expected_sha256?}`，摘要含 `has_projector` / `projector_size_bytes`；配对加载仅报告Loaded而非文本Passed。原取消、SSE和安全边界复用。

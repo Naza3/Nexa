@@ -254,6 +254,7 @@ impl Harness {
                 Ok(ResolvedModel {
                     id: id.clone(),
                     path: "synthetic-not-read".into(),
+                    projector_path: None,
                     context_limit: 4096,
                     default_context: 2048,
                     loadable: true,
@@ -537,6 +538,72 @@ async fn actual_http_stream_order_and_nonstream_json_are_exact() {
 // Fixed dsh/pi-ai text profile. The HTTP executor is synthetic; this does not
 // claim a real model, the DSH adapter, or an agent tool loop was executed.
 const HARNESS_TEXT: &str = include_str!("../../../examples/harness/fixtures/text-request.json");
+
+const OCR_PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX8AAAAASUVORK5CYII=";
+fn image_request(stream: bool) -> Value {
+    json!({"model":"fixture","messages":[{"role":"user","content":[
+        {"type":"image_url","image_url":{"url":OCR_PIXEL}},
+        {"type":"text","text":"Text Recognition:"}
+    ]}],"stream":stream,"max_tokens":128})
+}
+
+#[tokio::test]
+async fn local_image_reaches_actor_unchanged_with_existing_json_and_sse_contracts() {
+    let h = Harness::new(Mode::Success).await;
+    for stream in [false, true] {
+        let (status, _, body) = h
+            .reply_body(
+                &image_request(stream).to_string(),
+                Some(h.bearer.to_str().unwrap()),
+            )
+            .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body.contains("data: [DONE]"), stream);
+        let request = h.observed.request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.messages[0].content, "Text Recognition:");
+        assert_eq!(
+            request.messages[0].image.as_ref().unwrap().data_url(),
+            OCR_PIXEL
+        );
+        assert!(!request.messages[0].image.as_ref().unwrap().after_text);
+        h.clean().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test]
+async fn local_image_envelope_limit_does_not_expand_text_or_lan_permissions() {
+    // Trailing whitespace makes an otherwise valid image envelope exceed the
+    // text cap without manufacturing a decodable oversized image fixture.
+    let h = Harness::new(Mode::Success).await;
+    let mut image = image_request(false).to_string();
+    image.push_str(&" ".repeat(1024 * 1024));
+    let (status, _, body) = h.reply_body(&image, Some(h.bearer.to_str().unwrap())).await;
+    assert_eq!(status, 200, "{body}");
+    h.clean().await;
+    let mut text =
+        json!({"model":"fixture","messages":[{"role":"user","content":"hello"}]}).to_string();
+    text.push_str(&" ".repeat(1024 * 1024));
+    assert_eq!(
+        h.reply_body(&text, Some(h.bearer.to_str().unwrap()))
+            .await
+            .0,
+        413
+    );
+    h.close().await;
+    let h = Harness::with_lan(Mode::Success, true).await;
+    let (status, _, body) = h
+        .reply_body(
+            &image_request(false).to_string(),
+            Some(h.bearer.to_str().unwrap()),
+        )
+        .await;
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("unsupported_parameter"));
+    assert_eq!(h.observed.loads.load(Ordering::SeqCst), 0);
+    assert!(h.observed.request.lock().unwrap().is_none());
+    h.close().await;
+}
 
 #[tokio::test]
 #[ignore = "requires the isolated examples/harness/client npm lock and NEXA_PI_AI_ROOT"]
@@ -1019,7 +1086,7 @@ async fn oversize_declared_header_without_upload_returns_complete_413() {
     let h = Harness::new(Mode::Success).await;
     let mut socket = TcpStream::connect(h.address).await.unwrap();
     let headers = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nContent-Length: 1048577\r\n\r\n",
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nContent-Length: 8388609\r\n\r\n",
         h.address,
         h.bearer.to_str().unwrap()
     );
@@ -1069,7 +1136,7 @@ async fn oversize_eager_upload_with_delayed_client_read_preserves_complete_413()
         .header("content-type", "application/json")
         .body(http_body_util::Full::new(bytes::Bytes::from(vec![
             b' ';
-            1048577
+            8388609
         ])))
         .unwrap();
     tokio::spawn(async move {
@@ -1126,7 +1193,7 @@ async fn rejected_upload_discards_pipelined_followup_without_dispatch() {
     let socket = TcpStream::connect(h.address).await.unwrap();
     let (mut read, mut write) = socket.into_split();
     let first = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nContent-Length: 1048577\r\n\r\n",
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nContent-Length: 8388609\r\n\r\n",
         h.address,
         h.bearer.to_str().unwrap()
     );
@@ -1140,7 +1207,7 @@ async fn rejected_upload_discards_pipelined_followup_without_dispatch() {
     );
     let writer = tokio::spawn(async move {
         write.write_all(first.as_bytes()).await?;
-        write.write_all(&vec![b' '; 1048577]).await?;
+        write.write_all(&vec![b' '; 8388609]).await?;
         write.write_all(second.as_bytes()).await?;
         write.shutdown().await
     });

@@ -1,3 +1,4 @@
+import { OcrPage } from "./OcrPage";
 import { followOnLoadAction } from "./modelLoad";
 import { ModelLoadControl } from "./ModelLoadControl";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -489,11 +490,16 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
                           : switching ? "切换并测试" : "加载模型"}
                   </button>
                   {state.model_load?.model_id === model.id && <ModelLoadControl task={state.model_load} controller={controller} />}
-                  {expanded && current && <><button disabled={busy} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>{state.testing_model === model.id ? "测试中…" : "基础测试"}</button>{busy && state.testing_model !== model.id && <span className="small-note">当前有任务进行中，空闲后可基础测试</span>}<button disabled={busy} onClick={() => void controller.unload()}>卸载模型</button></>}
+                  {expanded && current && <><button disabled={busy || model.has_projector === true} aria-label={`测试 ${model.display_name}`} onClick={() => void controller.testModel(model.id)}>{state.testing_model === model.id ? "测试中…" : "基础测试"}</button>{busy && state.testing_model !== model.id && <span className="small-note">当前有任务进行中，空闲后可基础测试</span>}<button disabled={busy} onClick={() => void controller.unload()}>卸载模型</button></>}
 
                   </div>;
   };
   const status = (model: ModelSummary) => {
+    if (model.has_projector) {
+      const attempt = ownRecord(state.model_tests, model.id);
+      const loaded = model.local_validation?.state === "loaded" && model.local_validation.load_success;
+      return <span className="model-test-status neutral" role="status">{attempt?.phase === "running" ? "视觉模型加载中" : loaded ? "本机加载通过 · OCR 待实测" : "视觉配对 · OCR 待实测"}</span>;
+    }
     const test = modelTestStatus(model.local_validation, ownRecord(state.model_tests, model.id));
     return <span className={`model-test-status ${test.tone}`} role="status" aria-label={`${model.display_name}：${test.label}`}>
       {test.running ? <Spinner /> : <span aria-hidden="true">{test.tone === "passed" ? "✓" : test.tone === "failed" ? "!" : "·"}</span>}{test.label}
@@ -503,19 +509,19 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
     const attempt = ownRecord(state.model_tests, model.id);
     const compatibility = modelCompatibility(model);
     return <article className="model-detail" aria-label={`${model.display_name} 的详情`}>
-      <div className="page-heading"><div><span className="eyebrow">模型详情</span><h1 tabIndex={-1} ref={detailHeading}>{model.display_name}</h1><div className="model-detail-status">{status(model)}<span>{projection.residentId === model.id ? "当前驻留" : "未确认驻留"}</span></div></div>{actions(model, true)}</div>
+      <div className="page-heading"><div><span className="eyebrow">模型详情</span><h1 tabIndex={-1} ref={detailHeading}>{model.display_name}</h1><div className="model-detail-status">{model.has_projector && <span>视觉配对 · 请在图片 OCR 页实测</span>}{status(model)}<span>{projection.residentId === model.id ? "当前驻留" : "未确认驻留"}</span></div></div>{actions(model, true)}</div>
       <section className="settings-card model-detail-content"><div className="card-heading"><h2>模型信息与测试</h2><button onClick={goChat}>聊天测试</button></div><div className="model-meta"><span>{model.quantization || "量化未知"}</span><span>{model.architecture || "架构未知"}</span><span>{formatSize(model.size_bytes)}</span><span>登记时已识别 GGUF</span><span>{model.storage === "external" ? "本地文件 · 直接读取" : "原有管理模型"}</span></div>
       <div className="model-id-row"><span className="hash">API ID：{model.id}</span><button aria-label={`复制 ${model.display_name} 的模型 ID`} onClick={() => void controller.copyModelId(model.id)}>复制 ID</button></div>
                     <p className="small-note">{compatibility.architecture}</p>
-                    {attempt && <ModelTestFeedback attempt={attempt} currentEvidence={model.local_validation} loadTask={state.model_load?.attempt_id === attempt.id ? state.model_load : null} />}
-                    {model.local_validation ? <LocalValidationFeedback value={model.local_validation} history /> : <p className="small-note">本机记录未提供，尚未取得本机测试证明。</p>}
+                    {attempt && !model.has_projector && <ModelTestFeedback attempt={attempt} currentEvidence={model.local_validation} loadTask={state.model_load?.attempt_id === attempt.id ? state.model_load : null} />}
+                    {model.has_projector ? <p className="small-note">视觉配对模型跳过纯文本基础测试；请在图片 OCR 页使用实际图片核对结果。{attempt?.error && `本次加载未完成：${attempt.error.message}`}</p> : model.local_validation ? <LocalValidationFeedback value={model.local_validation} history /> : <p className="small-note">本机记录未提供，尚未取得本机测试证明。</p>}
                     <ModelProfile modelId={model.id} state={state} controller={controller} />
                     <details>
                       <summary>验证条件与能力边界</summary><p>加载最多 300 秒；短文本测试最多 30 秒，取消清理可能稍后完成。</p>
 
                       <p className="hash">登记时 SHA-256：{model.sha256}</p>
                       <p>历史矩阵验证记录：{model.validated ? "有精确模型验证记录" : "未实测"} · 历史验证上下文：{model.context_size ?? "未实测"}</p>
-                      {model.local_validation && <>
+                      {model.local_validation && !model.has_projector && <>
                         <p>本机加载证明：{model.local_validation.load_success ? "曾通过" : "未取得"} · 本机短文本证明：{model.local_validation.generation_pass ? "曾通过" : "未取得"}{model.local_validation.state === "stale" ? "（记录已过期，当前组合待重测）" : ""}</p>
                       </>}
                       <p>本机基础测试仅覆盖对应文件、引擎、设备和加载参数的加载与短文本生成；不证明回答质量、长上下文、工具调用或全部功能可用。</p>
@@ -574,7 +580,7 @@ function ModelsPage({ state, controller, goChat, goSettings, navigation, setNavi
             const test = modelTestStatus(model.local_validation, ownRecord(state.model_tests, model.id));
             return <article key={model.id} className={`model-row compact-model-row test-${test.tone}`} aria-label={model.display_name}>
               <div className="model-file"><Icon name="models" size={23} /></div>
-              <div className="model-description"><div className="model-title"><h3>{model.display_name}</h3>{current && <span className="model-residency">当前驻留</span>}</div><div className="model-meta"><span>{model.quantization || "量化未知"}</span><span>{formatSize(model.size_bytes)}</span>{(!model.available || model.loadable !== true) && <span>{{ model_file_changed: "文件已变化", model_file_unavailable: "文件不可读", model_file_in_use: "文件被占用", model_directory_unavailable: "源目录不可读", unsupported_model: "引擎不支持" }[model.availability_error ?? ""] ?? "当前不可用"}</span>}{state.models.data.filter((entry) => entry.display_name === model.display_name).length > 1 && <span>{model.id.slice(-8)}</span>}</div></div>
+              <div className="model-description"><div className="model-title"><h3>{model.display_name}</h3>{model.has_projector && <span className="badge">视觉配对</span>}{current && <span className="model-residency">当前驻留</span>}</div><div className="model-meta"><span>{model.quantization || "量化未知"}</span><span>{formatSize(model.size_bytes)}</span>{(!model.available || model.loadable !== true) && <span>{{ model_file_changed: "文件已变化", model_file_unavailable: "文件不可读", model_file_in_use: "文件被占用", model_directory_unavailable: "源目录不可读", unsupported_model: "引擎不支持" }[model.availability_error ?? ""] ?? "当前不可用"}</span>}{state.models.data.filter((entry) => entry.display_name === model.display_name).length > 1 && <span>{model.id.slice(-8)}</span>}</div></div>
               {status(model)}{actions(model)}<button className="text-button model-detail-button" ref={(button) => { if (button) detailButtons.current.set(model.id, button); else detailButtons.current.delete(model.id); }} aria-label={`查看 ${model.display_name} 的详情`} onClick={() => setDetailId(model.id)}>详情<Icon name="chevron" size={15} /></button>
               <ModelRemoveAction name={model.display_name} reason={modelRemovalBlocker(state, model.id)?.message ?? null} onRemove={() => requestRemove(model)} />
             </article>;
@@ -1052,13 +1058,14 @@ export default function App({
 }: {
   controller: DesktopController;
   preview?: boolean;
-  initialPage?: "overview" | "models" | "api" | "activity" | "chat" | "settings";
+  initialPage?: "ocr" | "overview" | "models" | "api" | "activity" | "chat" | "settings";
 }) {
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
   );
   const [page, setPage] = useState(initialPage);
+  const [ocrVisited, setOcrVisited] = useState(initialPage === "ocr");
   const [modelNavigation, setModelNavigation] = useState<{ view: "local" | "download"; detailId: string | null }>({ view: "local", detailId: null });
   const [seenRemoval, setSeenRemoval] = useState(state.model_removal);
   if (state.model_removal !== seenRemoval) {
@@ -1089,15 +1096,16 @@ export default function App({
     const handler = (event: KeyboardEvent) => {
       const target = event.target;
       if (event.isComposing || target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable)) return;
-      if (event.altKey && ["1", "2", "3", "4", "5"].includes(event.key)) {
+      if (event.altKey && ["1", "2", "3", "4", "5", "6"].includes(event.key)) {
         event.preventDefault();
         setConfirmStop(false);
         setConfirmClose(false);
         setConfirmAddStop(false);
         setConfirmRecoveryStop(false);
         setSettingsFromDownloads(false);
+        if (event.key === "6") setOcrVisited(true);
         setPage(
-          (["overview", "models", "api", "activity", "settings"] as const)[Number(event.key) - 1],
+          (["overview", "models", "api", "activity", "settings", "ocr"] as const)[Number(event.key) - 1],
         );
       }
     };
@@ -1109,6 +1117,7 @@ export default function App({
     { id: "models", title: "模型库", detail: "文件与运行档案", icon: "models" },
     { id: "api", title: "API 接入", detail: "连接你的应用", icon: "copy" },
     { id: "activity", title: "活动", detail: "任务与结果", icon: "refresh" },
+    { id: "ocr", title: "图片 OCR", detail: "单页图片识别", icon: "models" },
   ] as const;
   const latestModelAttempt = Object.values(state.model_tests).sort((a, b) => b.id - a.id)[0];
   const noticeInDetail = page === "models" && modelNavigation.detailId === latestModelAttempt?.model_id &&
@@ -1132,9 +1141,9 @@ export default function App({
               key={item.id}
               aria-current={page === item.id ? "page" : undefined}
               aria-label={item.title}
-              title={`${item.title}（Alt + ${index + 1}）`}
+              title={`${item.title}（Alt + ${item.id === "ocr" ? 6 : index + 1}）`}
               className={`nav-item ${page === item.id ? "active" : ""}`}
-              onClick={() => { setConfirmStop(false); setSettingsFromDownloads(false); setPage(item.id); }}
+              onClick={() => { setConfirmStop(false); setSettingsFromDownloads(false); setPage(item.id); if (item.id === "ocr") setOcrVisited(true); }}
             >
               <Icon name={item.icon} />
               <span>
@@ -1255,6 +1264,7 @@ export default function App({
             </div>
           )}
           <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0}>
+          {ocrVisited && <div hidden={page !== "ocr"}><OcrPage state={state} controller={controller} /></div>}
           {page === "overview" && <OverviewPage state={state} controller={controller} goModels={() => setPage("models")} goApi={() => setPage("api")} goActivity={() => setPage("activity")} goChat={enterChat} />}
           {page === "api" && <ApiPage state={state} controller={controller} goChat={enterChat} />}
           {page === "activity" && <ActivityPage state={state} controller={controller} goChat={enterChat} />}

@@ -1,0 +1,3 @@
+Nexa OCR baseline
+Invoice ID: INV-2026-1007
+Total: 123.45 USD

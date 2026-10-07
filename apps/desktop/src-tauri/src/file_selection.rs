@@ -48,6 +48,19 @@ impl<T> FileSelection<T> {
             .filter(|s| s.id == id && s.files.is_some())
             .ok_or("selection_expired")
     }
+    pub fn consume_pair(slot: &mut Option<Self>, id: Uuid) -> Result<Vec<T>, &'static str> {
+        let selection = Self::get(slot, id)?;
+        if selection
+            .files
+            .as_ref()
+            .is_none_or(|files| files.len() != 2)
+        {
+            return Err("invalid_request");
+        }
+        let files = selection.files.take().ok_or("selection_expired")?;
+        *slot = None;
+        Ok(files)
+    }
     pub fn discard(slot: &mut Option<Self>, id: Uuid) -> bool {
         if slot.as_ref().is_some_and(|s| s.id == id) {
             *slot = None;
@@ -69,6 +82,30 @@ mod tests {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
+    }
+    #[test]
+    fn pair_requires_two_files_and_is_single_use() {
+        let (selection, dto) = FileSelection::new(vec![1], vec![]);
+        let mut slot = Some(selection);
+        assert_eq!(
+            FileSelection::consume_pair(&mut slot, dto.selection_id),
+            Err("invalid_request")
+        );
+        assert!(slot.is_some());
+        let (selection, dto) = FileSelection::new(vec![1, 2], vec![]);
+        slot = Some(selection);
+        assert_eq!(
+            FileSelection::consume_pair(&mut slot, Uuid::new_v4()),
+            Err("selection_expired")
+        );
+        assert_eq!(
+            FileSelection::consume_pair(&mut slot, dto.selection_id).unwrap(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            FileSelection::consume_pair(&mut slot, dto.selection_id),
+            Err("selection_expired")
+        );
     }
     #[test]
     fn wrong_id_preserves_and_discard_releases_leases() {

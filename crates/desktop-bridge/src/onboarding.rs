@@ -338,6 +338,7 @@ mod tests {
         let directory = root.join("models").join(id.as_str());
         fs::create_dir_all(&directory).unwrap();
         let manifest = ModelManifest {
+            projector: None,
             schema_version: 1,
             storage: ModelStorage::Managed,
             id,

@@ -124,6 +124,7 @@ fn paths_and_arguments_with_spaces_and_unicode_are_preserved() {
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: "unused.gguf".into(),
+                projector_path: None,
                 context_limit: 4096,
                 default_context: 4096,
                 loadable: true,

@@ -84,3 +84,22 @@ managed导入前、manifest与load统一单文件≤16GiB；external原16GiB限�
 当前结构子集包括GGUF v2/v3及已实现常规/K tensor布局；未知layout、分片、无嵌入模板或非受支持执行方式明确拒绝。已发送50c9d41仍可能因单个不兼容文件整批登记失败；本轮[ADR0016](decisions/0016-mixed-model-directory-diagnostics.md)在完整安全扫描后一次发布合法集合，partial带完整有界诊断、全坏保旧、空目录可空提交。所有预算/IO/身份/路径/reparse/取消/timeout/save仍硬失败；实现及43ad5c2 WindowsCI/包发送已完成，用户目标机待验，见[新记录](verification/2026-10-03-mixed-model-directory.md)。候选扫描改进不新增任何模型实测标签。[W02记录](verification/2026-10-03-windows-open-models.md)单列逻辑、模板fixture、真实模型和WindowsCI，不混用通过结论。
 
 本矩阵只维护当前桌面证据；退役平台研究不作为Windows模型准入或发行依赖。
+
+
+## GLM-OCR 单图 CPU 开发证据（2026-10-07）
+
+按[ADR0032](decisions/0032-local-single-image-ocr.md)增加双文件视觉模型；本节是 Linux 开发证据，不扩大上面的 Windows 文本验证矩阵，不授予 OCR `validated` / `Passed` 标签。
+
+| 项目 | 实际输入 |
+| --- | --- |
+| 来源 | [ggml-org/GLM-OCR-GGUF](https://huggingface.co/ggml-org/GLM-OCR-GGUF/tree/65a42de1148dbed2297e922b5dbc7d9b70c36578) |
+| revision | `65a42de1148dbed2297e922b5dbc7d9b70c36578` |
+| 主 GGUF | `GLM-OCR-Q8_0.gguf`，950433408 bytes，SHA256 `45bc244a6446aff850521dc41f18bc8d7105ad5f0c2c8c28af04e7cc4f4d50b1` |
+| projector | `mmproj-GLM-OCR-Q8_0.gguf`，484403648 bytes，SHA256 `9c4b58e33e316ed142eb5dcb41abec3844d3e6e5dc361ffb782c3fa9d175141f` |
+| metadata | 主`glm4`；projector `clip` / `glm4v`，projection 1536；原始模板SHA256 `4a2644d74dd6c07c2990c5b289a56443982ee368d11fc4645e914e820eb0b4ba` |
+| 模型许可证 | 两个实际GGUF的general.license均MIT；不与SDK代码Apache-2.0混淆。GGUF发布卡未注明转换用原checkpoint的精确revision |
+| 引擎/设备 | 原锁定llama提交；Linux / Xeon Platinum8573C，4核CPU配额，32GiB内存配额；无GPU |
+| 实际HTTP | context8192/batch256/threads4/temp0，输出上限256；合成960×300图片3行全匹配，385输入token，已加载模型单次请求约17.8秒 |
+| 行为验证 | 真实双hash导入与关闭重开、native坏图/预算/取消/同模型恢复、HTTP SSE/取消/非流式恢复；普通Qwen文本回归另跑通过 |
+
+固定上游CLI对官方复杂`code.png`只命中4/5内容锚点，遗漏页眉并有XML错误；这条失败观察保留。小合成图通过不等价于表格/复杂版面准确率，也不等价于ocr.z.ai完整流水线。用户Windows10/i5-8400/16GB、其他量化/模板/模型及Windows原生包均另验。完整命令、分层结果和限制见[本轮验证](verification/2026-10-07-local-ocr.md)。

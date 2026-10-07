@@ -256,6 +256,7 @@ mod tests {
                 Ok(ResolvedModel {
                     id: id.clone(),
                     path: "fixture.gguf".into(),
+                    projector_path: None,
                     context_limit: 4096,
                     default_context: 4096,
                     loadable: true,

@@ -1,6 +1,6 @@
 use crate::{Config, errors::ApiError};
 use model_store::ModelManifest;
-use runtime_types::{GenerationOptions, LoadOptions, Message, ModelId, RequestId};
+use runtime_types::{GenerationOptions, ImageInput, LoadOptions, Message, ModelId, RequestId};
 use serde::{
     Deserialize, Serialize,
     de::{self, MapAccess, SeqAccess, Visitor},
@@ -220,16 +220,11 @@ pub fn parse_chat(
     if messages.is_empty() || messages.len() > 128 {
         return Err(ApiError::invalid("messages", "Expected 1..=128 messages."));
     }
+    let mut decoded_messages = Vec::with_capacity(messages.len());
     for (index, message) in messages.iter().enumerate() {
         let prefix = format!("messages.{index}");
         let message = object(message, &prefix)?;
         fields(message, &["role", "content"], &prefix)?;
-        if message
-            .get("content")
-            .is_some_and(|value| !value.is_string())
-        {
-            return Err(ApiError::unsupported(&format!("{prefix}.content")));
-        }
         if message
             .get("role")
             .and_then(Value::as_str)
@@ -237,9 +232,75 @@ pub fn parse_chat(
         {
             return Err(ApiError::unsupported(&format!("{prefix}.role")));
         }
+        let role = decoded(
+            message.get("role").cloned().unwrap_or(Value::Null),
+            &format!("{prefix}.role"),
+        )?;
+        let content = message
+            .get("content")
+            .ok_or_else(|| ApiError::invalid(&prefix, "Message content is required."))?;
+        if let Some(text) = content.as_str() {
+            decoded_messages.push(Message::new(role, text));
+        } else if let Some(parts) = content.as_array() {
+            if !parts
+                .iter()
+                .any(|part| part.get("type").and_then(Value::as_str) == Some("image_url"))
+            {
+                return Err(ApiError::unsupported(&format!("{prefix}.content")));
+            }
+            if parts.len() != 2 {
+                return Err(ApiError::invalid(
+                    &prefix,
+                    "OCR requires exactly one image_url and one text part.",
+                ));
+            }
+            let mut text = None;
+            let mut image = None;
+            for (part_index, part) in parts.iter().enumerate() {
+                let part = object(part, &prefix)?;
+                match part.get("type").and_then(Value::as_str) {
+                    Some("text") if text.is_none() => {
+                        fields(part, &["type", "text"], &prefix)?;
+                        text = Some(part.get("text").and_then(Value::as_str).ok_or_else(|| {
+                            ApiError::invalid(&prefix, "Text part must contain a string.")
+                        })?);
+                    }
+                    Some("image_url") if image.is_none() => {
+                        fields(part, &["type", "image_url"], &prefix)?;
+                        let image_url =
+                            object(part.get("image_url").unwrap_or(&Value::Null), &prefix)?;
+                        fields(image_url, &["url"], &prefix)?;
+                        let url =
+                            image_url
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    ApiError::invalid(
+                                        &prefix,
+                                        "Image URL must be a PNG/JPEG data URL.",
+                                    )
+                                })?;
+                        let mut input = ImageInput::from_data_url(url)
+                            .map_err(|_| ApiError::invalid(&prefix, "Invalid image: require inline PNG/JPEG, <=4 MiB, <=8192 pixels per side and <=16 megapixels."))?;
+                        input.after_text = part_index == 1;
+                        image = Some(input);
+                    }
+                    _ => return Err(ApiError::unsupported(&format!("{prefix}.content"))),
+                }
+            }
+            let mut decoded_message = Message::new(
+                role,
+                text.ok_or_else(|| ApiError::invalid(&prefix, "OCR text part is required."))?,
+            );
+            decoded_message.image = Some(
+                image.ok_or_else(|| ApiError::invalid(&prefix, "OCR image part is required."))?,
+            );
+            decoded_messages.push(decoded_message);
+        } else {
+            return Err(ApiError::unsupported(&format!("{prefix}.content")));
+        }
     }
-    let messages: Vec<runtime_types::Message> =
-        decoded(Value::Array(messages.clone()), "messages")?;
+    let messages = decoded_messages;
     let stream = optional(root, "stream")?.unwrap_or(false);
     let include_usage = if let Some(value) = root.get("stream_options") {
         if !stream {
@@ -299,6 +360,13 @@ pub fn parse_chat(
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ImportProjectorRequest {
+    pub file: PathBuf,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImportModelRequest {
     pub id: ModelId,
     pub file: PathBuf,
@@ -306,27 +374,33 @@ pub struct ImportModelRequest {
     pub display_name: Option<String>,
     #[serde(default)]
     pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub projector: Option<ImportProjectorRequest>,
 }
 impl ImportModelRequest {
     pub fn parse(bytes: &[u8]) -> Result<Self, ApiError> {
         let value = parse_json(bytes)?;
         fields(
             object(&value, "body")?,
-            &["id", "file", "display_name", "expected_sha256"],
+            &["id", "file", "display_name", "expected_sha256", "projector"],
             "",
         )?;
         let request: Self = decoded(value, "body")?;
-        let file = request.file.to_string_lossy();
-        if !request.file.is_absolute()
-            || file.contains("://")
-            || file.starts_with("\\\\")
-            || file.starts_with("//")
-            || file.contains('\0')
+        for selected in
+            std::iter::once(&request.file).chain(request.projector.as_ref().map(|p| &p.file))
         {
-            return Err(ApiError::invalid(
-                "file",
-                "Select an absolute local regular-file path; network and URL imports are unsupported.",
-            ));
+            let file = selected.to_string_lossy();
+            if !selected.is_absolute()
+                || file.contains("://")
+                || file.starts_with("\\\\")
+                || file.starts_with("//")
+                || file.contains('\0')
+            {
+                return Err(ApiError::invalid(
+                    "file",
+                    "Select an absolute local regular-file path; network and URL imports are unsupported.",
+                ));
+            }
         }
         Ok(request)
     }
@@ -405,11 +479,16 @@ pub struct ModelSummary {
     pub available: bool,
     pub context_limit: u32,
     pub context_size: Option<u32>,
+    /// A paired asset is an attempt capability, not a validation label.
+    pub has_projector: bool,
+    pub projector_size_bytes: Option<u64>,
 }
 impl From<ModelManifest> for ModelSummary {
     fn from(model: ModelManifest) -> Self {
         let loadable = model.load_candidate();
         Self {
+            has_projector: model.projector.is_some(),
+            projector_size_bytes: model.projector.as_ref().map(|p| p.size_bytes),
             compatibility: model.compatibility(),
             storage: model.storage,
             availability_error: (!loadable)
@@ -444,6 +523,91 @@ impl ModelSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX8AAAAASUVORK5CYII=";
+    fn ocr_body() -> Value {
+        serde_json::json!({"model":"glm-ocr","messages":[{"role":"user","content":[
+            {"type":"image_url","image_url":{"url":PIXEL}},
+            {"type":"text","text":"Text Recognition:"}
+        ]}],"max_tokens":2048,"temperature":0})
+    }
+    fn ocr_parse(body: &Value) -> Result<ValidatedChat, ApiError> {
+        parse_chat(
+            &serde_json::to_vec(body).unwrap(),
+            RequestId::new(),
+            &Config::default(),
+        )
+    }
+    #[test]
+    fn single_image_preserves_text_and_both_part_orders() {
+        let mut body = ocr_body();
+        for after_text in [false, true] {
+            if after_text {
+                body["messages"][0]["content"]
+                    .as_array_mut()
+                    .unwrap()
+                    .reverse();
+            }
+            let parsed = ocr_parse(&body).unwrap();
+            assert_eq!(parsed.messages.len(), 1);
+            assert_eq!(parsed.messages[0].content, "Text Recognition:");
+            let image = parsed.messages[0].image.as_ref().unwrap();
+            assert_eq!(image.after_text, after_text);
+            assert_eq!(image.data_url(), PIXEL);
+            assert_eq!(parsed.options.max_tokens, 2048);
+        }
+    }
+    #[test]
+    fn image_rejects_remote_files_ambiguous_parts_and_history() {
+        for url in [
+            "https://example.com/private.png",
+            "file:///tmp/private.png",
+            "data:image/gif;base64,AA==",
+            "data:image/png;base64,!",
+        ] {
+            let mut body = ocr_body();
+            body["messages"][0]["content"][0]["image_url"]["url"] = url.into();
+            assert!(ocr_parse(&body).is_err());
+        }
+        for role in ["system", "assistant"] {
+            let mut body = ocr_body();
+            body["messages"][0]["role"] = role.into();
+            assert!(ocr_parse(&body).is_err());
+        }
+        let mut body = ocr_body();
+        body["messages"][0]["content"][1]["text"] = "  ".into();
+        assert!(ocr_parse(&body).is_err());
+        let mut body = ocr_body();
+        body["messages"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, serde_json::json!({"role":"system","content":"test"}));
+        assert!(ocr_parse(&body).is_err());
+        let mut body = ocr_body();
+        body["messages"][0]["content"][1] = body["messages"][0]["content"][0].clone();
+        assert!(ocr_parse(&body).is_err());
+        let mut body = ocr_body();
+        body["messages"][0]["content"][0]["image_url"]["detail"] = "auto".into();
+        assert!(ocr_parse(&body).is_err());
+    }
+    #[test]
+    fn paired_import_keeps_projector_local_and_rejects_manifest_injection() {
+        let file = std::env::temp_dir().join("ocr-model.gguf");
+        let projector = std::env::temp_dir().join("mmproj.gguf");
+        let mut body = serde_json::json!({"id":"ocr","file":file,"projector":{"file":projector}});
+        let parsed = ImportModelRequest::parse(&serde_json::to_vec(&body).unwrap()).unwrap();
+        assert_eq!(parsed.projector.unwrap().file, projector);
+        for source in [
+            "relative.gguf",
+            "https://example.com/mmproj.gguf",
+            "//server/share/mmproj.gguf",
+        ] {
+            body["projector"]["file"] = source.into();
+            assert!(ImportModelRequest::parse(&serde_json::to_vec(&body).unwrap()).is_err());
+        }
+        body["projector"]["file"] = serde_json::to_value(projector).unwrap();
+        body["projector"]["validated"] = true.into();
+        assert!(ImportModelRequest::parse(&serde_json::to_vec(&body).unwrap()).is_err());
+    }
     fn chat(extra: &str) -> Result<ValidatedChat, ApiError> {
         parse_chat(
             format!(

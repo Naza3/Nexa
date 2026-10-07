@@ -95,3 +95,7 @@
 下载关闭动作复用独立cancel并最多等待10秒，未确认cleanup保留窗口和错误，不提前宣称已取消；禁止重复下载/扫描争用，snapshot仍可观察。下载网络只由明确点击触发；size/hash匹配仅说明保存完整，不表示GGUF登记、加载或16GB运行成功。
 
 当前没有必须先让用户决定的新产品分叉。WebView2存在性、Windows壳实际行为和依赖精确版本属于待验证工程事实；无开发工具/离线/长期稳定性与Win11继续分层保留，不阻塞已授权T06开发。
+
+## 单图 OCR 增量（ADR0032）
+
+见 [单图决策](decisions/0032-local-single-image-ocr.md)和[使用说明](ocr-windows-cpu.md)。新增四个精确ACL命令 `ocr_start`、`ocr_save_markdown`、`models_pair_pick`、`models_pair_import`。本地选择双文件发放一次性token，受管理复制导入，原单文件零复制保持。OCR显式加载本次参数，单图预览/可选缩放、流式原文/安全Markdown、复制与原生保存；与聊天共用一个ChatSlot、chat_next/chat_cancel及关窗清理。不把加载成功、旧文本凭据或上限截断输出显示为OCR质量验证。
