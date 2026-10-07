@@ -655,7 +655,12 @@ export class DesktopController {
     }
   };
   refreshModels = async () => {
-    if (!this.libraryTask) await this.loadPage(null);
+    if (this.libraryTask) return;
+    // A read started before an import acknowledgement cannot refresh that import.
+    ++this.modelsEpoch;
+    this.modelsLoaded = false;
+    if (this.modelsPromise) await this.modelsPromise;
+    await this.loadPage(null);
   };
   unregisterModel = async (modelId: string, generation: string): Promise<boolean> => {
     if (this.closing || this.state.operation) return false;

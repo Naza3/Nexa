@@ -19,6 +19,46 @@ pub struct Selection {
     path: PathBuf,
 }
 
+pub struct PairFile {
+    /// Preserve the native picker's DOS path for external leases and import.
+    pub source: PathBuf,
+    /// Canonical paths are only for comparison, never an external source.
+    pub canonical: PathBuf,
+}
+
+pub fn pair_file(path: &Path, previous_canonical: Option<&Path>) -> Result<PairFile, &'static str> {
+    #[cfg(windows)]
+    if !matches!(path.components().next(), Some(std::path::Component::Prefix(p)) if matches!(p.kind(), std::path::Prefix::Disk(_)))
+    {
+        return Err("selected_path_invalid");
+    }
+    let canonical = regular_file(path)?;
+    if !canonical
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+    {
+        return Err("selected_file_not_gguf");
+    }
+    if previous_canonical.is_some_and(|previous| {
+        #[cfg(windows)]
+        {
+            previous
+                .as_os_str()
+                .eq_ignore_ascii_case(canonical.as_os_str())
+        }
+        #[cfg(not(windows))]
+        {
+            previous == canonical
+        }
+    }) {
+        return Err("selected_pair_same_file");
+    }
+    Ok(PairFile {
+        source: path.to_path_buf(),
+        canonical,
+    })
+}
+
 pub fn regular_file(path: &Path) -> Result<PathBuf, &'static str> {
     if !path.is_absolute() {
         return Err("selected_path_invalid");
@@ -98,6 +138,98 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pair_preserves_both_picker_paths_and_checks_canonical_duplicates() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("主模型.GGUF");
+        let projector = temp.path().join("mmproj.gguf");
+        fs::write(&model, b"GGUF").unwrap();
+        fs::write(&projector, b"GGUF").unwrap();
+        let picked_model = temp.path().join(".").join("主模型.GGUF");
+        let first = pair_file(&picked_model, None).unwrap();
+        assert_eq!(first.source.as_os_str(), picked_model.as_os_str());
+        assert_eq!(first.canonical, fs::canonicalize(&model).unwrap());
+        assert!(matches!(
+            pair_file(&model, Some(&first.canonical)),
+            Err("selected_pair_same_file")
+        ));
+        let second = pair_file(&projector, Some(&first.canonical)).unwrap();
+        assert_eq!(second.source.as_os_str(), projector.as_os_str());
+        assert_ne!(first.canonical, second.canonical);
+    }
+
+    #[test]
+    fn pair_rejects_non_gguf_missing_relative_and_directory_sources() {
+        let temp = tempfile::tempdir().unwrap();
+        let wrong = temp.path().join("model.txt");
+        fs::write(&wrong, b"GGUF").unwrap();
+        assert!(matches!(
+            pair_file(&wrong, None),
+            Err("selected_file_not_gguf")
+        ));
+        assert!(pair_file(&temp.path().join("missing.gguf"), None).is_err());
+        assert!(pair_file(Path::new("model.gguf"), None).is_err());
+        assert!(pair_file(temp.path(), None).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pair_original_paths_pass_leases_and_both_import_source_checks() {
+        use std::path::{Component, Prefix};
+
+        let temp = tempfile::tempdir().unwrap();
+        let model = temp.path().join("主模型.gguf");
+        let projector = temp.path().join("mmproj.gguf");
+        fs::write(&model, b"GGUF").unwrap();
+        fs::write(&projector, b"GGUF").unwrap();
+        let first = pair_file(&model, None).unwrap();
+        let second = pair_file(&projector, Some(&first.canonical)).unwrap();
+        let mut leases = Vec::new();
+        for file in [&first, &second] {
+            assert!(matches!(
+                file.canonical.components().next(),
+                Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
+            ));
+            // The old picker passed this canonical path and failed before the
+            // second dialog. Preserve the external-source policy, not that path.
+            let old = desktop_bridge::SelectedFile::open(&file.canonical);
+            assert!(
+                matches!(old, Err(error) if error.code.as_str() == "model_directory_unsupported")
+            );
+            assert!(matches!(
+                pair_file(&file.canonical, None),
+                Err("selected_path_invalid")
+            ));
+            leases.push(desktop_bridge::SelectedFile::open(&file.source).unwrap());
+        }
+        let data_dir = temp.path().join("not-running");
+        let bridge = desktop_bridge::DesktopBridge::new(
+            data_dir.clone(),
+            temp.path().join("ai-runtime.exe"),
+        )
+        .unwrap();
+        tauri::async_runtime::block_on(async {
+            // No service is started: connection_failed proves both original
+            // sources passed local_source. This is admission, not import success.
+            let result = bridge
+                .import_model_pair(first.source.clone(), second.source.clone(), "pair".into())
+                .await;
+            assert_eq!(result.unwrap_err().code, "connection_failed");
+            for (model, projector) in [
+                (first.canonical.clone(), second.source.clone()),
+                (first.source.clone(), second.canonical.clone()),
+            ] {
+                let result = bridge
+                    .import_model_pair(model, projector, "pair".into())
+                    .await;
+                assert_eq!(result.unwrap_err().code, "invalid_model_source");
+            }
+        });
+        assert!(!data_dir.exists());
+        drop(leases);
+    }
+
     #[test]
     fn selections_are_one_time_and_wrong_id_does_not_consume() {
         let temp = tempfile::tempdir().unwrap();
@@ -134,8 +266,10 @@ mod tests {
         let link = temp.path().join("link.gguf");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(Selection::new(&link).is_err());
+        assert!(pair_file(&link, None).is_err());
         let dirlink = temp.path().join("linked");
         std::os::unix::fs::symlink(temp.path(), &dirlink).unwrap();
         assert!(Selection::new(&dirlink.join("model.gguf")).is_err());
+        assert!(pair_file(&dirlink.join("model.gguf"), None).is_err());
     }
 }

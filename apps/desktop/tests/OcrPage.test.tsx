@@ -4,9 +4,11 @@ import App from "../src/App";
 import { DesktopController } from "../src/controller";
 import { deferred, makeApi, model, snapshot } from "./fixtures";
 import { prepareOcrImage } from "../src/ocrImage";
-import type { ChatBatch, DesktopApi } from "../src/types";
+import type { ChatBatch, DesktopApi, ModelFileSelection, ModelSummary } from "../src/types";
+import { DesktopError } from "../src/adapter";
 vi.mock("../src/ocrImage", () => ({ prepareOcrImage: vi.fn() }));
 beforeEach(() => { vi.mocked(prepareOcrImage).mockResolvedValue("data:image/png;base64,AQ=="); });
+const pairedFiles: ModelFileSelection = { selection_id: "pair", expires_in_seconds: 600, files: [{ selection_index: 0, file_name: "model.gguf", size_bytes: 100 }, { selection_index: 1, file_name: "mmproj.gguf", size_bytes: 50 }] };
 async function mount(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi({ snapshot: vi.fn(async () => { const value = snapshot(); value.runtime!.load_options!.context_size = 8192; return value; }), ocrStart: vi.fn(async () => ({ request_id: "ocr-1" })), saveOcrMarkdown: vi.fn(async () => ({ saved: true })), modelsPage: vi.fn(async () => ({ generation: "g", data: [{ ...model, has_projector: true }], next_after: null })), ...overrides });
   const controller = new DesktopController(api);
@@ -61,7 +63,9 @@ it("rejects bad images and invalid token limits before any request", async () =>
   expect(api.ocrStart).not.toHaveBeenCalled();
 });
 it("imports the opaque paired selection only after both files and an id", async () => {
-  const api = await mount({ pickModelPair: vi.fn(async () => ({ selection_id: "pair", expires_in_seconds: 600, files: [{ selection_index: 0, file_name: "model.gguf", size_bytes: 100 }, { selection_index: 1, file_name: "mmproj.gguf", size_bytes: 50 }] })), importModelPair: vi.fn(async () => model) });
+  const pending = deferred<ModelSummary>();
+  const api = await mount({ pickModelPair: vi.fn(async () => pairedFiles), importModelPair: vi.fn(() => pending.promise) });
+  await upload();
   fireEvent.click(screen.getByText("导入 OCR 模型与视觉投影"));
   fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
   await screen.findByText("主模型：model.gguf");
@@ -69,6 +73,109 @@ it("imports the opaque paired selection only after both files and an id", async 
   fireEvent.change(screen.getByLabelText("模型 ID"), { target: { value: "ocr-model" } });
   fireEvent.click(screen.getByRole("button", { name: "复制并导入两个文件" }));
   await waitFor(() => expect(api.importModelPair).toHaveBeenCalledWith("pair", "ocr-model"));
+  expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("正在复制并校验两个模型文件");
+  expect(screen.getByRole("button", { name: "正在复制并校验…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "正在复制并校验…" }));
+  expect(api.importModelPair).toHaveBeenCalledTimes(1);
+  await act(async () => pending.resolve(model));
+  expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("双文件导入完成，源文件保留。");
+  expect(screen.queryByLabelText("模型 ID")).not.toBeInTheDocument();
+  expect(api.loadModel).not.toHaveBeenCalled();
+});
+it("shows pending selection beside the picker and blocks duplicate selection and OCR", async () => {
+  const pending = deferred<ModelFileSelection | null>();
+  const api = await mount({ pickModelPair: vi.fn(() => pending.promise) });
+  await upload();
+  fireEvent.click(screen.getByText("导入 OCR 模型与视觉投影"));
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("先选择主模型，再在第二个窗口选择 mmproj");
+  expect(screen.getByRole("button", { name: "正在选择配套文件…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "正在选择配套文件…" }));
+  expect(api.pickModelPair).toHaveBeenCalledTimes(1);
+  await act(async () => pending.resolve(pairedFiles));
+  expect(screen.getByText("主模型：model.gguf")).toBeVisible();
+  expect(screen.getByText("视觉投影：mmproj.gguf")).toBeVisible();
+  expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("两个文件已选好");
+});
+it("refreshes imported managed models even when the service and directory snapshot are unchanged", async () => {
+  let imported = false;
+  const added = { ...model, id: "glm-ocr-q8", display_name: "GLM OCR", has_projector: true };
+  const api = await mount({
+    modelsPage: vi.fn(async () => ({ generation: imported ? "after-import" : "before-import", data: [{ ...model, has_projector: true }, ...(imported ? [added] : [])], next_after: null })),
+    pickModelPair: vi.fn(async () => pairedFiles),
+    importModelPair: vi.fn(async () => { imported = true; return added; }),
+  });
+  fireEvent.click(screen.getByText("导入 OCR 模型与视觉投影"));
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  fireEvent.change(await screen.findByLabelText("模型 ID"), { target: { value: added.id } });
+  fireEvent.click(screen.getByRole("button", { name: "复制并导入两个文件" }));
+  expect(await screen.findByRole("option", { name: "GLM OCR · 视觉配对" })).toBeInTheDocument();
+  expect(api.modelsPage).toHaveBeenCalledTimes(2);
+  expect(api.loadModel).not.toHaveBeenCalled();
+});
+it("reports cancellation and drops an old pair instead of silently keeping it", async () => {
+  const pick = vi.fn<NonNullable<DesktopApi["pickModelPair"]>>().mockResolvedValueOnce(pairedFiles).mockResolvedValueOnce(null);
+  await mount({ pickModelPair: pick });
+  fireEvent.click(screen.getByText("导入 OCR 模型与视觉投影"));
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  await screen.findByText("主模型：model.gguf");
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  await waitFor(() => expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("已取消文件选择，尚未导入"));
+  expect(screen.queryByLabelText("模型 ID")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "选择两个配套文件" })).toBeEnabled();
+});
+it("keeps the first import confirmation visible when the empty model list becomes populated", async () => {
+  let imported = false;
+  const added = { ...model, id: "glm-ocr-q8", display_name: "GLM OCR", has_projector: true };
+  const api = makeApi({
+    modelsPage: vi.fn(async () => ({ generation: imported ? "after-import" : "before-import", data: imported ? [added] : [], next_after: null })),
+    pickModelPair: vi.fn(async () => pairedFiles),
+    importModelPair: vi.fn(async () => { imported = true; return added; }),
+  });
+  render(<App controller={new DesktopController(api)} initialPage="ocr" />);
+  await waitFor(() => expect(api.modelsPage).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  fireEvent.change(await screen.findByLabelText("模型 ID"), { target: { value: added.id } });
+  fireEvent.click(screen.getByRole("button", { name: "复制并导入两个文件" }));
+  await screen.findByRole("option", { name: "GLM OCR · 视觉配对" });
+  expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toBeVisible();
+  expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("双文件导入完成");
+  expect(api.loadModel).not.toHaveBeenCalled();
+});
+it("exposes the native first-file failure beside the picker and allows retry", async () => {
+  const pick = vi.fn<NonNullable<DesktopApi["pickModelPair"]>>().mockRejectedValueOnce(new DesktopError("model_directory_unsupported", "请选择本地普通目录中的文件。")).mockResolvedValueOnce(pairedFiles);
+  await mount({ pickModelPair: pick });
+  fireEvent.click(screen.getByText("导入 OCR 模型与视觉投影"));
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  await waitFor(() => expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("选择失败：请选择本地普通目录中的文件。（model_directory_unsupported）"));
+  expect(screen.queryByLabelText("模型 ID")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  await screen.findByText("视觉投影：mmproj.gguf");
+  expect(pick).toHaveBeenCalledTimes(2);
+});
+it.each([
+  { ...pairedFiles, files: pairedFiles.files.slice(0, 1) },
+  { ...pairedFiles, files: [...pairedFiles.files].reverse() },
+])("rejects incomplete or reversed native pair results before enabling import", async (selection) => {
+  const api = await mount({ pickModelPair: vi.fn(async () => selection), importModelPair: vi.fn() });
+  fireEvent.click(screen.getByText("导入 OCR 模型与视觉投影"));
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  await waitFor(() => expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("response_invalid"));
+  expect(screen.queryByLabelText("模型 ID")).not.toBeInTheDocument();
+  expect(api.importModelPair).not.toHaveBeenCalled();
+});
+it("reports consumed import errors without offering reuse of the stale selection", async () => {
+  const api = await mount({ pickModelPair: vi.fn(async () => pairedFiles), importModelPair: vi.fn(async () => { throw new DesktopError("selection_expired", "所选项目已过期，请重新选择。"); }) });
+  fireEvent.click(screen.getByText("导入 OCR 模型与视觉投影"));
+  fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
+  fireEvent.change(await screen.findByLabelText("模型 ID"), { target: { value: "ocr-model" } });
+  fireEvent.click(screen.getByRole("button", { name: "复制并导入两个文件" }));
+  await waitFor(() => expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("导入未完成：所选项目已过期，请重新选择。（selection_expired）"));
+  expect(screen.queryByLabelText("模型 ID")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "选择两个配套文件" })).toBeEnabled();
+  expect(api.importModelPair).toHaveBeenCalledTimes(1);
 });
 it("cancels this window's OCR task when its component unmounts", async () => {
   const finish = deferred<ChatBatch>();

@@ -275,6 +275,20 @@ describe("single streaming owner", () => {
   });
 });
 describe("controlled model and settings actions", () => {
+  it("refreshes models after an import instead of accepting an older in-flight page", async () => {
+    const oldPage = { data: [model], next_after: null, generation: "before-import" };
+    const stale = deferred<typeof oldPage>();
+    const added = { ...model, id: "glm-ocr-q8", has_projector: true };
+    const api = makeApi({ modelsPage: vi.fn().mockResolvedValueOnce(oldPage).mockImplementationOnce(() => stale.promise).mockResolvedValueOnce({ data: [model, added], next_after: null, generation: "after-import" }) });
+    const controller = await ready(api);
+    const oldRead = controller.loadPage(null);
+    const refreshed = controller.refreshModels();
+    stale.resolve(oldPage);
+    await Promise.all([oldRead, refreshed]);
+    expect(api.modelsPage).toHaveBeenCalledTimes(3);
+    expect(controller.getSnapshot().models.data.map((item) => item.id)).toEqual([model.id, added.id]);
+    expect(controller.getSnapshot().models.generation).toBe("after-import");
+  });
   it("retains only the current model page", async () => {
     const api = makeApi({
       modelsPage: vi

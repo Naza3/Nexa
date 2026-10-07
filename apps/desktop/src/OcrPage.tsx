@@ -4,6 +4,8 @@ import type { ModelFileSelection } from "./types";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ModelLoadControl } from "./ModelLoadControl";
 import { prepareOcrImage } from "./ocrImage";
+import { safeError } from "./adapter";
+import { validModelSelection } from "./modelSelection";
 
 export function OcrPage({ controller, state }: { controller: DesktopController; state: ViewState }) {
   const api = controller.api;
@@ -23,7 +25,10 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
   const [status, setStatus] = useState("");
   const [pair, setPair] = useState<ModelFileSelection | null>(null);
   const [pairId, setPairId] = useState("");
+  const [pairStatus, setPairStatus] = useState("");
+  const [selecting, setSelecting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const pairOperation = useRef(false);
   const task = useRef<{ id: string | null; cancelled: boolean; reading: boolean; hadReadFailure: boolean } | null>(null);
   const [preparing, setPreparing] = useState(false);
   const models = state.models?.data.filter((item) => item.has_projector) ?? [];
@@ -34,6 +39,50 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
   const outputFits = activeContext == null || tokens < activeContext;
   const ready = runtime?.state === "ready" && runtime.selected_model === model;
   const blocked = !!state.operation || state.chat_phase !== "idle" || state.library_phase !== "idle" || state.download_phase !== "idle";
+  const pickPair = async () => {
+    if (!api.pickModelPair || pairOperation.current || busy || blocked) return;
+    pairOperation.current = true;
+    setPair(null);
+    setSelecting(true);
+    setPairStatus("正在选择配套文件：先选择主模型，再在第二个窗口选择 mmproj 视觉投影。");
+    try {
+      const selection = await api.pickModelPair();
+      if (!selection) {
+        setPairStatus("已取消文件选择，尚未导入。请重新选择两个配套文件。");
+      } else if (!validModelSelection(selection) || selection.files.length !== 2) {
+        setPairStatus("文件选择结果不完整，请重新选择主模型和视觉投影。（response_invalid）");
+      } else {
+        setPair(selection);
+        setPairStatus("两个文件已选好。请核对下方文件名，填写模型 ID，再点击“复制并导入两个文件”。");
+      }
+    } catch (error) {
+      const failure = safeError(error);
+      setPairStatus(`选择失败：${failure.message}（${failure.code}）`);
+    } finally {
+      pairOperation.current = false;
+      setSelecting(false);
+    }
+  };
+  const importPair = async () => {
+    if (!api.importModelPair || !pair || !pairId.trim() || pairOperation.current || busy || blocked || state.snapshot?.connection !== "connected") return;
+    pairOperation.current = true;
+    setImporting(true);
+    setPairStatus("正在复制并校验两个模型文件，请等待。完成后还需要加载模型。");
+    try {
+      await api.importModelPair(pair.selection_id, pairId.trim());
+      setPair(null);
+      setPairStatus("双文件导入完成，源文件保留。请在上方“OCR 模型”中选择它，再点击“加载所选 OCR 模型”。");
+      await controller.refresh();
+      await controller.refreshModels();
+    } catch (error) {
+      const failure = safeError(error);
+      setPair(null);
+      setPairStatus(`导入未完成：${failure.message}（${failure.code}）请重新选择两个文件后再试。`);
+    } finally {
+      pairOperation.current = false;
+      setImporting(false);
+    }
+  };
   useEffect(() => () => { const current = task.current; if (current) { current.cancelled = true; if (current.id) void api.chatCancel(current.id).catch(() => {}); } }, [api]);
   useEffect(() => {
     let active = true;
@@ -88,7 +137,7 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
     await consume(current);
   };
   const start = async () => {
-    if (!api.ocrStart || !ready || !image || busy || blocked || !prompt.trim() || !Number.isInteger(tokens) || tokens < 1 || tokens > 4096 || !outputFits) return;
+    if (!api.ocrStart || !ready || !image || busy || pairOperation.current || blocked || !prompt.trim() || !Number.isInteger(tokens) || tokens < 1 || tokens > 4096 || !outputFits) return;
     const current = { id: null as string | null, cancelled: false, reading: false, hadReadFailure: false };
     task.current = current;
     setBusy(true); setRecovering(false); setText(""); setStatus("正在识别…");
@@ -104,30 +153,57 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
     await consume(current);
   };
   return <section className="ocr-page">
-    <div className="page-heading"><div><span className="eyebrow">本机单页识别</span><h1>图片 OCR</h1></div></div>
-    <p>选择已配对视觉投影的模型，显式加载后识别一张图片。加载成功不代表 OCR 已验证；识别结果需要人工核对。</p>
-    <fieldset disabled={busy || importing || blocked}>
-      <label>OCR 模型<select aria-label="OCR 模型" value={model} onChange={(event) => setModel(event.target.value)}><option value="">选择模型</option>{models.map((item) => <option key={item.id} value={item.id}>{item.display_name} · 视觉配对</option>)}</select></label>
-      <button disabled={!selected || !selected.available || !selected.loadable || !loadValid} onClick={() => void controller.loadModel(model, { context_size: contextSize, batch_size: batchSize, threads })}>加载所选 OCR 模型</button>
-      <p className="small-note">本次加载建议：上下文 8192、批次 256、线程 4（可按 CPU 改为 6）。下列值仅用于这次显式加载，不覆盖已保存档案。图片、提示词和输出共同占用上下文；模型上限：{selected?.context_limit ?? "未知"}。</p>
-      <label>本次上下文<input aria-label="OCR 加载上下文" type="number" min={512} value={contextSize} onChange={(event) => setContextSize(Number(event.target.value))} /></label>
-      <label>本次批次<input aria-label="OCR 加载批次" type="number" min={1} value={batchSize} onChange={(event) => setBatchSize(Number(event.target.value))} /></label>
-      <label>本次线程<input aria-label="OCR 加载线程" type="number" min={1} max={64} value={threads} onChange={(event) => setThreads(Number(event.target.value))} /></label>
-      <details><summary>导入 OCR 模型与视觉投影</summary><p>分别选择主 GGUF 和配套视觉 GGUF（mmproj）。将复制两个文件到托管模型目录，源文件保留；单文件添加仍为零复制。导入需要运行服务已启动。</p>
-        <button disabled={!api.pickModelPair} onClick={() => { setPair(null); void api.pickModelPair?.().then(setPair).catch(() => setStatus("选择模型失败。")); }}>选择两个配套文件</button>
-        {pair && <><ul>{pair.files.map((item) => <li key={item.selection_index}>{item.selection_index === 0 ? "主模型" : "视觉投影"}：{item.file_name}</li>)}</ul><label>模型 ID<input value={pairId} onChange={(event) => setPairId(event.target.value)} /></label><button disabled={!pairId.trim() || !api.importModelPair || state.snapshot?.connection !== "connected"} onClick={() => { setImporting(true); void api.importModelPair!(pair.selection_id, pairId.trim()).then(() => { setPair(null); setStatus("双文件导入完成，源文件保留。"); return controller.refresh(); }).catch(() => { setPair(null); setStatus("导入未完成，请检查运行服务并重新选择文件。"); }).finally(() => setImporting(false)); }}>复制并导入两个文件</button></>}
-      </details>
-      <label>图片（PNG / JPEG，最多 4 MiB）<input aria-label="OCR 图片" type="file" accept="image/png,image/jpeg" onChange={(event) => { setStatus(""); setImage(""); setPreparing(!!event.target.files?.[0]); setFile(event.target.files?.[0] ?? null); }} /></label>
-      <label>发送图片尺寸<select aria-label="发送图片尺寸" value={edge} onChange={(event) => { setImage(""); setPreparing(!!file); setEdge(Number(event.target.value)); }}><option value={0}>原图（不缩放）</option><option value={1600}>最长边 1600（缩放可能丢失细节）</option><option value={2048}>最长边 2048（缩放可能丢失细节）</option></select></label>
-      <label>识别提示词<textarea value={prompt} maxLength={4096} onChange={(event) => setPrompt(event.target.value)} /></label>
-      <label>最大输出 token<input aria-label="最大输出 token" type="number" min={1} max={4096} value={tokens} onChange={(event) => setTokens(Number(event.target.value))} /></label>
-    </fieldset>
-    <ModelLoadControl task={state.model_load} controller={controller} />
-    {image && <img className="ocr-preview" src={image} alt="待识别图片预览" />}
-    <div className="workspace-actions"><button className="primary" disabled={!ready || !image || busy || preparing || blocked || !prompt.trim() || tokens < 1 || tokens > 4096 || !Number.isInteger(tokens) || !outputFits} onClick={() => void start()}>识别图片</button><button disabled={!busy} onClick={() => void stop()}>停止识别</button>{recovering && <button onClick={() => void recover()}>重新确认识别任务</button>}</div>
-    <p className="small-note">当前模型加载上下文：{runtime?.selected_model === model ? runtime?.load_options?.context_size ?? "未知" : "未加载"}。输出还需为图像与提示词留出空间；总 token 超限时会明确报错，不自动截断或重新加载。</p>
-    <p role="status">{status || (ready ? "模型已加载，可开始识别。" : "请先加载所选 OCR 模型。")}</p>
-    <div className="workspace-actions"><button aria-pressed={!markdown} onClick={() => setMarkdown(false)}>原文</button><button aria-pressed={markdown} onClick={() => setMarkdown(true)}>Markdown</button><button disabled={!text} onClick={() => void navigator.clipboard.writeText(text).then(() => setStatus("已复制原文。")).catch(() => setStatus("复制失败，请手动复制原文。"))}>复制识别原文</button><button disabled={!text || !api.saveOcrMarkdown} onClick={() => void api.saveOcrMarkdown?.(text).then((result) => setStatus(result.saved ? "已保存 Markdown 原文。" : "已取消保存。")).catch(() => setStatus("保存失败，原文仍保留。"))}>保存 .md</button></div>
-    {markdown ? <ChatMarkdown content={text} /> : <pre className="ocr-result">{text}</pre>}
+    <div className="page-heading"><div><span className="eyebrow">本机单页识别</span><h1>图片 OCR</h1><p>选择图片，提取文字并保存为 Markdown。</p></div><span className="subtle-pill">{ready ? "OCR 模型已就绪" : "等待加载 OCR 模型"}</span></div>
+    <section className="ocr-card ocr-model-card" aria-labelledby="ocr-model-heading">
+      <div className="ocr-card-heading"><span className="ocr-step" aria-hidden="true">1</span><div><h2 id="ocr-model-heading">准备模型</h2><p>首次使用先导入两个配套文件，之后选择已导入的模型加载。</p></div></div>
+      <fieldset aria-label="OCR 模型准备" disabled={busy || selecting || importing || blocked}>
+        <div className="ocr-model-row">
+          <label className="ocr-model-select">OCR 模型<select aria-label="OCR 模型" value={model} onChange={(event) => setModel(event.target.value)}><option value="">{models.length ? "选择模型" : "暂无 OCR 模型，请先在下方导入"}</option>{models.map((item) => <option key={item.id} value={item.id}>{item.display_name} · 视觉配对</option>)}</select></label>
+          <button disabled={!selected || !selected.available || !selected.loadable || !loadValid} onClick={() => void controller.loadModel(model, { context_size: contextSize, batch_size: batchSize, threads })}>加载所选 OCR 模型</button>
+        </div>
+        <div className="ocr-parameter-grid">
+          <label>本次上下文<input aria-label="OCR 加载上下文" type="number" min={512} value={contextSize} onChange={(event) => setContextSize(Number(event.target.value))} /></label>
+          <label>本次批次<input aria-label="OCR 加载批次" type="number" min={1} value={batchSize} onChange={(event) => setBatchSize(Number(event.target.value))} /></label>
+          <label>本次线程<input aria-label="OCR 加载线程" type="number" min={1} max={64} value={threads} onChange={(event) => setThreads(Number(event.target.value))} /></label>
+        </div>
+        <p className="small-note">建议 8192 / 256 / 4；i5-8400 可对比 6 线程。修改后点击加载才生效，不改写已保存档案。</p>
+        <details className="ocr-import" open={models.length === 0 || pairStatus ? true : undefined}>
+          <summary>导入 OCR 模型与视觉投影</summary>
+          <div className="ocr-import-content">
+            <p className="small-note">先选主模型 GGUF，再选配套 mmproj GGUF；两个文件不必放在同一文件夹。导入需要先启动运行服务，并会复制文件，保留原件。</p>
+            <button disabled={!api.pickModelPair} onClick={() => void pickPair()}>{selecting ? "正在选择配套文件…" : "选择两个配套文件"}</button>
+            <p className="ocr-feedback" role="status" aria-label="OCR 模型导入状态">{pairStatus || "尚未选择文件。选好后会在这里显示两个文件名。"}</p>
+            {pair && <><ul className="ocr-pair-files">{pair.files.map((item) => <li key={item.selection_index}>{item.selection_index === 0 ? "主模型" : "视觉投影"}：{item.file_name}</li>)}</ul><div className="ocr-import-row"><label>模型 ID<input value={pairId} placeholder="例如 glm-ocr-q8" onChange={(event) => setPairId(event.target.value)} /></label><button disabled={!pairId.trim() || !api.importModelPair || state.snapshot?.connection !== "connected"} onClick={() => void importPair()}>{importing ? "正在复制并校验…" : "复制并导入两个文件"}</button></div></>}
+          </div>
+        </details>
+      </fieldset>
+      <ModelLoadControl task={state.model_load} controller={controller} />
+    </section>
+    <div className="ocr-workspace">
+      <section className="ocr-card ocr-image-card" aria-labelledby="ocr-image-heading">
+        <div className="ocr-card-heading"><span className="ocr-step" aria-hidden="true">2</span><div><h2 id="ocr-image-heading">选择图片</h2><p>一次识别一张图片，建议先用清晰的文字截图测试。</p></div></div>
+        <fieldset aria-label="OCR 图片与识别设置" disabled={busy || selecting || importing || blocked}>
+          <label className="ocr-upload">图片文件<span className="small-note">PNG / JPEG，最多 4 MiB</span><input aria-label="OCR 图片" type="file" accept="image/png,image/jpeg" onChange={(event) => { setStatus(""); setImage(""); setPreparing(!!event.target.files?.[0]); setFile(event.target.files?.[0] ?? null); }} /></label>
+          <div className="ocr-preview-frame">{image ? <img className="ocr-preview" src={image} alt="待识别图片预览" /> : <div className="ocr-empty-state"><strong>{preparing ? "正在准备图片…" : "图片预览"}</strong><p>{preparing ? "处理完成后即可查看本次发送的图片。" : "选择图片后，在这里检查方向和文字清晰度。"}</p></div>}</div>
+          <div className="ocr-image-settings">
+            <label>发送图片尺寸<select aria-label="发送图片尺寸" value={edge} onChange={(event) => { setImage(""); setPreparing(!!file); setEdge(Number(event.target.value)); }}><option value={0}>原图（不缩放）</option><option value={1600}>最长边 1600</option><option value={2048}>最长边 2048</option></select></label>
+            <label>最大输出 token<input aria-label="最大输出 token" type="number" min={1} max={4096} value={tokens} onChange={(event) => setTokens(Number(event.target.value))} /></label>
+          </div>
+          <p className="small-note">缩小图片可能丢失小字；输出达到上限时会提示内容可能截断。</p>
+          <label className="ocr-prompt">识别提示词<textarea value={prompt} rows={2} maxLength={4096} onChange={(event) => setPrompt(event.target.value)} /></label>
+        </fieldset>
+        <div className="ocr-run-actions"><button className="primary" disabled={!ready || !image || busy || selecting || importing || preparing || blocked || !prompt.trim() || tokens < 1 || tokens > 4096 || !Number.isInteger(tokens) || !outputFits} onClick={() => void start()}>识别图片</button><button disabled={!busy} onClick={() => void stop()}>停止识别</button>{recovering && <button onClick={() => void recover()}>重新确认识别任务</button>}</div>
+        <p className="ocr-feedback" role="status">{status || (ready ? "模型已加载，可开始识别。" : "请先加载所选 OCR 模型。")}</p>
+        <p className="small-note">当前加载上下文：{runtime?.selected_model === model ? runtime?.load_options?.context_size ?? "未知" : "未加载"}。图片、提示词和输出共同占用上下文。</p>
+      </section>
+      <section className="ocr-card ocr-output-card" aria-labelledby="ocr-output-heading">
+        <div className="ocr-card-heading"><span className="ocr-step" aria-hidden="true">3</span><div><h2 id="ocr-output-heading">识别结果</h2><p>文字会逐步显示，完成后请对照原图核对。</p></div></div>
+        <div className="ocr-result-toolbar">
+          <div className="ocr-view-switch" role="group" aria-label="结果显示方式"><button aria-pressed={!markdown} onClick={() => setMarkdown(false)}>原文</button><button aria-pressed={markdown} onClick={() => setMarkdown(true)}>Markdown</button></div>
+          <div className="ocr-export-actions"><button disabled={!text} onClick={() => void navigator.clipboard.writeText(text).then(() => setStatus("已复制原文。")).catch(() => setStatus("复制失败，请手动复制原文。"))}>复制识别原文</button><button disabled={!text || !api.saveOcrMarkdown} onClick={() => void api.saveOcrMarkdown?.(text).then((result) => setStatus(result.saved ? "已保存 Markdown 原文。" : "已取消保存。")).catch(() => setStatus("保存失败，原文仍保留。"))}>保存 .md</button></div>
+        </div>
+        <div className="ocr-result-body" tabIndex={0} role="region" aria-label="识别结果内容">{text ? markdown ? <ChatMarkdown content={text} /> : <pre className="ocr-result">{text}</pre> : <div className="ocr-empty-state"><strong>识别结果会显示在这里</strong><p>加载模型并选择图片后，点击“识别图片”。</p></div>}</div>
+      </section>
+    </div>
   </section>;
 }

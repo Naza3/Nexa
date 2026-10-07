@@ -130,3 +130,4 @@
 - [本机单图OCR ADR0032](docs/decisions/0032-local-single-image-ocr.md)：配对GGUF、CPU mtmd、图片HTTP/IPC预算与桌面流程
 - [Windows CPU OCR使用说明](docs/ocr-windows-cpu.md)：双文件下载、显式加载、图片/Markdown及i5-8400参数建议
 - [单图OCR开发验证](docs/verification/2026-10-07-local-ocr.md)：Linux真实模型/HTTP及文本回归，Windows与目标机另验
+- [OCR 配对与布局修复](docs/verification/2026-10-07-ocr-pair-and-layout.md)：Windows 选择路径、导入反馈/列表刷新及沿用全局风格的页面布局
