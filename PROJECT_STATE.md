@@ -1,16 +1,18 @@
 # Nexa 当前状态
 
-## 2026-10-07 版本0.2.3与tag发行（进行中）
+## 2026-10-07 版本0.2.3与tag（已完成；公开Release受阻）
 
-任务W05-VERSION-4。用户明确要求升级0.2.3并创建tag，七文件已通过工具统一更新、版本一致性/幂等与发行39项检查（38通过/1平台跳过）。新tag将包含2770b09的OCR预览及全部构建优化，最终验收转到0.2.3发行流水线；不自动合并main，不移动旧tag，不预建空Release。详见[版本验证记录](docs/verification/2026-10-07-release-version-tool.md#产品版本更新至023并创建tag)。
+任务W05-VERSION-4。七版本文件一致性、锁定metadata及发行39项检查通过；`6309dedf6e15019a93f51ca24a27442850e7575d`与附注tag `v0.2.3`已原子推送，包含本轮全部修复。main仍1c3650c，未自动合并或移动旧tag。
 
-## 2026-10-07 OCR 选图无预览（进行中）
+[正式Actions37638109341](https://github.com/Naza3/Nexa/actions/runs/37638109341)的五个构建/原生/安装器job全部成功，前端850项、壳33项及13安装生命周期通过；Release job启动前GitHub报Internal server error，整轮failure，两次rerun-failed均HTTP500。六个原始发行文件已独立验证；复用生产发布流程补发时附件上传又遇401，已保留带正确manifest marker的未公开空草稿，未修改旧Release。可先下载[已验证的CI发行资产](https://github.com/Naza3/Nexa/actions/runs/37638109341/artifacts/11492458105)。具体来源、摘要、错误与恢复条件见[版本验证记录](docs/verification/2026-10-07-release-version-tool.md#023-原生结果与发布阻塞)。
 
-任务 W02-OCR-3。构建解析修复`843251b`推送后，修复有效PNG被空或错误File.type误拒的问题；用户实机具体MIME仍未知。现按内容识别PNG/JPEG，预览旁显示文件名与准备/失败/成功，统一“选择图片”按钮，处理同文件重选及旧异步结果。最终前端850项、lint、typecheck/生产构建通过；真实Chromium的9组格式组合、原生file chooser事件、缩放和1440/1024/390px布局通过。后端回复为模拟，不能转授实际OCR或Windows WebView2结论；精确源码`2770b09`已推送，[Actions37636935709](https://github.com/Naza3/Nexa/actions/runs/37636935709)运行中。详见[验证记录](docs/verification/2026-10-07-ocr-image-preview.md)。
+## 2026-10-07 OCR 选图无预览（实现与原生构建已完成）
 
-## 2026-10-07 Windows CI 构建优化（原生成功，tag只读收尾复验中）
+任务W02-OCR-3。修复有效PNG/JPEG被空或错误File.type误拒；用户实机具体MIME仍未知。现按内容识别图片，预览旁显示文件名/准备/错误，统一“选择图片”按钮，正确处理同文件重选及旧异步结果。最终前端850项、lint/typecheck/生产构建、真实Chromium九组格式组合、file chooser、缩放及三尺寸布局通过；0.2.3 Windows桌面和整套产物验收通过。浏览器回复为模拟，用户Win10 WebView2及实际OCR质量仍独立待验。详见[验证记录](docs/verification/2026-10-07-ocr-image-preview.md)。
 
-任务 W05-CI-PERF-1。npm/Cargo缓存、Release依赖复用、前端去重与桌面/Runtime并行已实现；冷缓存metadata解析修复`843251b`的[Actions37632857580](https://github.com/Naza3/Nexa/actions/runs/37632857580)完整成功，含真实模型、打包及13项安装生命周期。实测等待29分02秒，相比旧基线36分56秒少7分54秒（约21.4%）；本轮桌面缓存命中、Runtime冷构建，不承诺固定耗时。按用户要求补齐tag只恢复、不保存，main构建提供后续tag缓存；`2770b09`最终联合CI运行中。见[ADR0033](docs/decisions/0033-parallel-windows-builds.md)及[验证记录](docs/verification/2026-10-07-ci-performance.md)。
+## 2026-10-07 Windows CI 构建优化（原生验证已完成）
+
+任务W05-CI-PERF-1。npm/Cargo缓存、Release依赖复用、前端去重、桌面/Runtime并行与冷缓存metadata修复完成。843的[Actions37632857580](https://github.com/Naza3/Nexa/actions/runs/37632857580)整轮成功，等待29分02秒，相比旧成功基线36分56秒少7分54秒（约21.4%），是桌面缓存命中/Runtime冷构建的一次观测。0.2.3 tag实跑确认五个Cargo save跳过、两套npm只恢复、tag缓存仍0条；main当前无缓存，尚无实际tag命中main的证据。发布平台错误单列，不计入成功加速。见[ADR0033](docs/decisions/0033-parallel-windows-builds.md)与[验证记录](docs/verification/2026-10-07-ci-performance.md)。
 
 ## 2026-10-07 产品版本 0.2.2（已完成版本同步，构建待验证）
 

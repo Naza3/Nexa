@@ -1,6 +1,6 @@
 # Windows CI 构建优化验证
 
-任务：W05-CI-PERF-1。状态：构建修复精确提交原生验证成功；tag只读收尾随OCR最终提交复验中。用户授权按分析方案依次优化；开发分支已快进同步 main `1c3650c352e56472f6ec7a5880b519f905ea6f8a`，产品版本保持 0.2.2。
+任务：W05-CI-PERF-1。状态：构建优化和tag只读缓存原生验证已完成；公开Release遇到外部平台/认证阻塞。用户授权按分析方案依次优化；开发分支已快进同步 main `1c3650c352e56472f6ec7a5880b519f905ea6f8a`，产品版本保持 0.2.2。
 
 ## 基线
 
@@ -48,10 +48,16 @@ Release harness实际仅有47条`Compiling`，旧独立目录为122条，确实�
 
 ## 构建修复精确提交原生成功
 
-`843251b0768d35a82f44547b2366f3aa2a3087c3`的[Actions37632857580](https://github.com/Naza3/Nexa/actions/runs/37632857580)于2026-10-07 14:27:46 UTC成功，创建于13:58:44 UTC，总等待时间**29分02秒**；桌面548秒、同源下载组件259秒、Runtime1244秒、最终native组装220秒、版本身份7秒。分支Release job正确跳过。相比旧成功基线36分56秒，这次缩短7分54秒（约21.4%）；这是一次实际运行对比，不是所有后续构建的固定承诺。并行job时长不能相加当成用户等待时间；上述job累计2278秒（37分58秒），总runner工作量没有等比例减少。
+`843251b0768d35a82f44547b2366f3aa2a3087c3`的[Actions37632857580](https://github.com/Naza3/Nexa/actions/runs/37632857580)于2026-10-07 14:27:46 UTC成功，创建于13:58:44 UTC，总等待时间**29分02秒**；桌面548秒、同源下载组件259秒、Runtime1244秒、最终native组装220秒、版本身份7秒。分支Release job正确跳过。相比旧成功基线36分56秒，这次缩短7分54秒（约21.4%）；这是一次实际运行对比，不是所有后续构建的固定承诺。并行job时长不能相加当成用户等待时间；上述job累计2278秒（37分58秒），旧基线2179秒（36分19秒），增加99秒（约4.54%），总runner工作量没有等比例减少。统计采用run创建/更新时间衡量用户等待；最后job结束到run更新存在约1秒差异。独立逐步对比见`/tmp/nexa-ci-performance-comparison-37632857580.json`。
 
 桌面命中Cargo输入85MB和Rust编译缓存约1.036GB，恢复分别约19/20秒，保存编译缓存29秒；Tauri检查/Release步骤298秒，旧基线525秒，本次最终Release仍248秒。Runtime镜像对应key从旧`eeaf1f…`换为`50559f…`，两层均未命中，因此本轮为桌面命中、Runtime冷构建，不能写成全链热缓存。Runtime原生C++276秒、Rust检查194秒、Release包138秒、harness76秒；执行完已成功保存新分区。
 
 此前失败的桌面包8秒、真实桌面bridge24秒均成功；两份handoff身份/字节验证、固定模型校验、真实模型/HTTP/CLI、独立解压、MSI/Setup以及13项安装生命周期全部通过，完整源码/许可闭包保持。最终组装还包括Cargo输入恢复15秒、Node含npm缓存10秒、npm许可原文安装19秒，不能忽略并行引入的准备开销。证据：`/tmp/nexa-ci-perf-37632857580.json`与该run的完整Actions日志。
 
 后续`9baff4f`只读缓存规则与OCR`2770b0937262b903cd4d7391dc6a04e1d6a1d44a`已推送；[联合Actions37636935709](https://github.com/Naza3/Nexa/actions/runs/37636935709)已开始独立验收；用户随后要求0.2.3与tag，最终验收转到该发行提交，不把843结果追溯覆盖新提交。
+
+## 0.2.3 Tag 实跑缓存收尾
+
+精确6309ded的tag运行37638109341中，desktop/runtime/native均成功。五个Cargo save全为skipped，两处tag npm locate/restore全部成功，实际目录均`C:\npm\cache`且key均为`node-cache-Windows-x64-npm-3a0bbc3e…`，setup-node没有注册缓存保存。结束后`refs/tags/v0.2.3`缓存数量为0；main范围也没有缓存，因此本次恢复未命中是预期冷构建，不能声称已实测tag命中main。证据：`/tmp/nexa-tag-cache-audit-37638109341/final.json`及三job原始日志。
+
+本次desktop15分56秒、Runtime22分59秒、同源组件4分13秒、最终native5分19秒。原生门禁全部通过，但Release job未创建时GitHub报告Internal server error，整轮failure；两次仅重跑失败阶段也HTTP500。后续复用已验证产物补发又遇上传401，草稿未公开。该受阻运行不纳入完整成功加速对比；29分02秒/约21.4%的结论仅指前述843运行。发行身份、资产和外部错误详见[0.2.3记录](2026-10-07-release-version-tool.md#023-原生结果与发布阻塞)。
