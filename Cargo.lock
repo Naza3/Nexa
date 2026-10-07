@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-bridge"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "download-engine",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "download-engine"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "libc",
  "serde",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "engine-host"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "llama-adapter",
  "model-store",
@@ -601,7 +601,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "llama-adapter"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "runtime-types",
  "serde_json",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "model-store"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cap-std",
  "fs2",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "process-host"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "libc",
  "runtime-core",
@@ -732,7 +732,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "runtime-api"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "bytes",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "fs2",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "runtime-types",
  "serde",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-ipc"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "runtime-core",
  "runtime-types",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-types"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "serde",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-worker"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "engine-host",
  "llama-adapter",
@@ -1408,7 +1408,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bytes",
  "http-body-util",
