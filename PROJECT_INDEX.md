@@ -48,6 +48,7 @@
 | `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
 - [Actions Node24 升级验证](docs/verification/2026-10-07-actions-node24.md)：四个自有工作流的官方固定版本、归档/缓存兼容性与验证边界
+- [并行构建 ADR0033](docs/decisions/0033-parallel-windows-builds.md) / [CI 优化验证](docs/verification/2026-10-07-ci-performance.md)：缓存、Release 依赖复用、桌面/Runtime 并行及同 run 产物校验
 
 根 workspace、桌面壳 workspace 与相关 Windows/Linux 开发验证是当前工程入口。`.codex/agents/`是开发代理配置，不是产品运行依赖；上游 llama.cpp 的跨平台源码保持完整。
 

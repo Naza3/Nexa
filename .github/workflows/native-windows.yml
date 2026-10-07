@@ -70,7 +70,7 @@ jobs:
           path: ${{ runner.temp }}/aria2-build/artifacts/
           if-no-files-found: error
           retention-days: 7
-  native:
+  runtime-build:
     if: ${{ !github.event.repository.private }}
     needs: [release-identity, download-component]
     runs-on: windows-2022
@@ -126,6 +126,26 @@ jobs:
           cargo --version
           cmake --version
           New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+      - name: Cache locked Cargo download inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/src/
+            ~/.cargo/git/db/
+          key: windows-cargo-inputs-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            windows-cargo-inputs-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-
+      - name: Cache runtime Rust compilation
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            target/debug/
+            build/windows-x64-cpu/cargo-*/
+          # Cargo still checks fingerprints and runs every requested build/test.
+          # Native CMake outputs and final packages are never cached.
+          key: windows-rust-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.toml', '**/build.rs', '.cargo/config*', 'apps/desktop/src-tauri/tauri.conf.json') }}
       - name: Compile installer helpers early without asserting installation success
         id: installer_compile
         timeout-minutes: 5
@@ -172,60 +192,6 @@ jobs:
             artifacts/verification/windows-desktop/launch-probe-inherit-job.json
           if-no-files-found: error
           retention-days: 7
-      - name: Install fixed desktop Node toolchain
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          package-manager-cache: false
-          node-version: '24.19.0'
-      - name: Check locked desktop frontend
-        id: desktop_frontend
-        working-directory: apps/desktop
-        run: |
-          $ErrorActionPreference = 'Stop'
-          npm install --global npm@11.9.0
-          if ($LASTEXITCODE -ne 0) { throw 'Fixed npm setup failed' }
-          if ((node --version) -ne 'v24.19.0' -or (npm --version) -ne '11.9.0') { throw 'Desktop Node/npm version mismatch' }
-          npm ci
-          if ($LASTEXITCODE -ne 0) { throw 'Locked frontend install failed' }
-          npm run lint
-          if ($LASTEXITCODE -ne 0) { throw 'Frontend lint failed' }
-          npm run test
-          if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
-          npm run build
-          if ($LASTEXITCODE -ne 0) { throw 'Frontend production build failed' }
-      - name: Check independent desktop Rust graph and build actual Tauri Release
-        id: desktop_build
-        # Cold Rust/Tauri + rustls/AWS-LC builds exceeded the former 20-minute
-        # step budget while still compiling; keep checks intact and bounded.
-        timeout-minutes: 35
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:CARGO_TARGET_DIR = Join-Path $PWD 'build/desktop/cargo'
-          $env:AIR_NATIVE_DIR = Join-Path $PWD 'deliberately-absent-native-libraries'
-          cargo tree --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --edges normal 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-dependencies.log
-          if ($LASTEXITCODE -ne 0) { throw 'Desktop independent locked graph failed' }
-          if (Select-String -Path artifacts/verification/windows-desktop-dependencies.log -Pattern 'engine-host|llama-adapter|runtime-worker') { throw 'Desktop links native inference' }
-          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
-          if ($LASTEXITCODE -ne 0) { throw 'Desktop Rust format failed' }
-          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-rust-tests.log
-          if ($LASTEXITCODE -ne 0) { throw 'Desktop Rust tests failed' }
-          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-clippy.log
-          if ($LASTEXITCODE -ne 0) { throw 'Desktop Rust clippy failed' }
-          Push-Location apps/desktop
-          try {
-            npm run tauri -- build --ci --no-bundle --target x86_64-pc-windows-msvc -- --locked 2>&1 | Tee-Object -FilePath ../../artifacts/verification/windows-desktop-build.log
-            if ($LASTEXITCODE -ne 0) { throw 'Actual Tauri Release build failed' }
-          } finally { Pop-Location }
-          # Tauri CLI can rewrite Cargo.toml features even when Cargo uses --locked.
-          # Refuse that source drift before spending time on the native build.
-          # Porcelain records only repo-relative paths, never changed contents.
-          $sourceStatus = @(git status --porcelain --untracked-files=all)
-          if ($LASTEXITCODE -ne 0) { throw 'Post-Tauri source status check failed' }
-          if ($sourceStatus.Count -gt 0) {
-            $sourceStatus | Tee-Object -FilePath artifacts/verification/windows-desktop-source-status.log
-            throw 'Tauri build left changed or untracked source; clean CI source is required'
-          }
-          'Source clean after actual Tauri build' | Set-Content -Encoding utf8 artifacts/verification/windows-desktop-source-status.log
       - name: Build management harness without native libraries
         run: |
           $ErrorActionPreference = 'Stop'
@@ -423,24 +389,371 @@ jobs:
             # Only this step's uniquely owned extraction directory is removed.
             Remove-Item -LiteralPath $root -Recurse -Force
           }
+      - name: Build desktop verifier using the Runtime Release dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CARGO_TARGET_DIR = $env:NEXA_RUNTIME_CARGO_TARGET_DIR
+          $env:AIR_NATIVE_DIR = Join-Path $PWD 'deliberately-absent-native-libraries'
+          cargo build --locked --release --target x86_64-pc-windows-msvc -p desktop-bridge --bin nexa-desktop-harness
+          if ($LASTEXITCODE -ne 0) { throw 'Independent real desktop bridge harness build failed' }
+          New-Item -ItemType Directory -Force build/ci-tools | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/nexa-desktop-harness.exe') -Destination build/ci-tools/nexa-desktop-harness.exe
+      - name: Preserve Windows CPU product package
+        if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: nexa-windows-x64-cpu-${{ github.sha }}
+          path: |
+            dist/windows-x64-cpu.zip
+            dist/windows-x64-cpu.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve separate acceptance tool package
+        if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: nexa-acceptance-tools-${{ github.sha }}
+          path: |
+            dist/acceptance-tools.zip
+            dist/acceptance-tools.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve Release symbols when produced
+        if: ${{ !cancelled() && steps.portable_package.outcome == 'success' && hashFiles('build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: nexa-windows-symbols-${{ github.sha }}
+          path: build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record reusable compiled-tool hashes
+        id: native_manifest
+        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
+        run: |
+          $files = @(Get-ChildItem -LiteralPath $env:AIR_NATIVE_DIR -Recurse -File | Where-Object { $_.Extension -eq '.lib' -or $_.Name -in @('llama-completion.exe', 'llama-bench.exe', 'air-stream-test.exe') })
+          if (Test-Path target/debug/examples/native-smoke.exe) { $files += Get-Item target/debug/examples/native-smoke.exe }
+          $entries = foreach ($file in $files) {
+            @{ path = [IO.Path]::GetRelativePath($PWD, $file.FullName).Replace('\', '/'); sha256 = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); size_bytes = $file.Length }
+          }
+          @{ schema_version = 1; project_commit = $env:GITHUB_SHA; files = @($entries) } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifacts/verification/native-build-manifest.json
+      - name: Preserve compiled diagnostic tools
+        if: ${{ failure() && !cancelled() && steps.native_manifest.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: windows-native-tools-${{ github.sha }}
+          path: |
+            artifacts/verification/native-build-manifest.json
+            ${{ env.AIR_NATIVE_DIR }}/**/*.lib
+            ${{ env.AIR_NATIVE_DIR }}/**/llama-completion.exe
+            ${{ env.AIR_NATIVE_DIR }}/**/llama-bench.exe
+            ${{ env.AIR_NATIVE_DIR }}/**/air-stream-test.exe
+            target/debug/examples/native-smoke.exe
+          retention-days: 7
+      - name: Stage current-run runtime build handoff
+        run: |
+          python scripts/ci_build_handoff.py stage --kind runtime --directory artifacts/handoff-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Build handoff identity/hash validation failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: nexa-build-runtime-${{ github.sha }}
+          path: artifacts/handoff-runtime/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Stage sanitized verification evidence
+        if: always()
+        env:
+          NEXA_CI_NATIVE_BUILD: ${{ steps.native_build.outcome }}
+          NEXA_CI_MODEL_IDENTITY: ${{ steps.model_identity.outcome }}
+          NEXA_CI_PORTABLE_PACKAGE: ${{ steps.portable_package.outcome }}
+          NEXA_CI_PACKAGE_ACCEPTANCE: ${{ steps.package_acceptance.outcome }}
+        run: |
+          python -X warn_default_encoding -W error::EncodingWarning scripts/stage_ci_evidence.py
+          if ($LASTEXITCODE -ne 0) { throw 'Evidence review/staging failed; no raw directory will be uploaded' }
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: windows-runtime-build-${{ github.sha }}
+          path: artifacts/upload-evidence/
+          if-no-files-found: warn
+          retention-days: 7
+  desktop-build:
+    if: ${{ !github.event.repository.private }}
+    needs: release-identity
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      NEXA_RELEASE_VERSION: ${{ needs.release-identity.outputs.version }}
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      CARGO_INCREMENTAL: '0'
+      # Pin the effective toolchain too; a runner's stable alias is not evidence.
+      RUSTUP_TOOLCHAIN: '1.98.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install locked Rust and compatible CMake tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy 2>&1 | Tee-Object -FilePath artifacts/verification/windows-rust-setup.log
+          if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
+          python -m pip install "cmake>=4.2" ninja==1.13.2 2>&1 | Tee-Object -FilePath artifacts/verification/windows-cmake-setup.log
+          if ($LASTEXITCODE -ne 0) { throw 'CMake setup failed' }
+          # Keep this installation ahead of VS's bundled CMake after every
+          # VsDevCmd entry. The shared packager validates both executables.
+          $env:NEXA_CMAKE_BIN = (python -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Installed CMake directory lookup failed' }
+          $env:PATH = "$env:NEXA_CMAKE_BIN;$env:PATH"
+          python scripts/build_windows_ci.py prepare 2>&1 | Tee-Object -FilePath artifacts/verification/windows-toolchain-identity.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native toolchain/source identity preparation failed' }
+          $threads = [Math]::Max(1, [Math]::Min(4, [Environment]::ProcessorCount))
+          "NEXA_TEST_THREADS=$threads" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "Inference threads=$threads; available=$([Environment]::ProcessorCount)"
+          rustc --version
+          cargo --version
+          cmake --version
+          New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+      - name: Compile installer helpers early without asserting installation success
+        id: installer_compile
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/package_windows_msi.py --check-toolchain --report artifacts/verification/windows-installer-compile.json
+          if ($LASTEXITCODE -ne 0) { throw 'Installer helper compilation failed before the full product build' }
+      - name: Cache locked Cargo download inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/src/
+            ~/.cargo/git/db/
+          key: windows-cargo-inputs-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            windows-cargo-inputs-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-
+      - name: Cache desktop Rust compilation
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            build/desktop/cargo/
+          # Cargo still checks fingerprints and runs every requested build/test.
+          # Native CMake outputs and final packages are never cached.
+          key: windows-rust-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.toml', '**/build.rs', '.cargo/config*', 'apps/desktop/src-tauri/tauri.conf.json') }}
+      - name: Install fixed desktop Node toolchain
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+          node-version: '24.19.0'
+      - name: Check locked desktop frontend
+        id: desktop_frontend
+        working-directory: apps/desktop
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --global npm@11.9.0
+          if ($LASTEXITCODE -ne 0) { throw 'Fixed npm setup failed' }
+          if ((node --version) -ne 'v24.19.0' -or (npm --version) -ne '11.9.0') { throw 'Desktop Node/npm version mismatch' }
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Locked frontend install failed' }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend lint failed' }
+          npm run test
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
+          # The Tauri beforeBuildCommand performs the single production build.
+      - name: Check independent desktop Rust graph and build actual Tauri Release
+        id: desktop_build
+        # Cold Rust/Tauri + rustls/AWS-LC builds exceeded the former 20-minute
+        # step budget while still compiling; keep checks intact and bounded.
+        timeout-minutes: 35
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CARGO_TARGET_DIR = Join-Path $PWD 'build/desktop/cargo'
+          $env:AIR_NATIVE_DIR = Join-Path $PWD 'deliberately-absent-native-libraries'
+          cargo tree --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --edges normal 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-dependencies.log
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop independent locked graph failed' }
+          if (Select-String -Path artifacts/verification/windows-desktop-dependencies.log -Pattern 'engine-host|llama-adapter|runtime-worker') { throw 'Desktop links native inference' }
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop Rust format failed' }
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-rust-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop Rust tests failed' }
+          cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets -- -D warnings 2>&1 | Tee-Object -FilePath artifacts/verification/windows-desktop-clippy.log
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop Rust clippy failed' }
+          Push-Location apps/desktop
+          try {
+            npm run tauri -- build --ci --no-bundle --target x86_64-pc-windows-msvc -- --locked 2>&1 | Tee-Object -FilePath ../../artifacts/verification/windows-desktop-build.log
+            if ($LASTEXITCODE -ne 0) { throw 'Actual Tauri Release build failed' }
+          } finally { Pop-Location }
+          # Tauri CLI can rewrite Cargo.toml features even when Cargo uses --locked.
+          # Refuse that source drift before spending time on the native build.
+          # Porcelain records only repo-relative paths, never changed contents.
+          $sourceStatus = @(git status --porcelain --untracked-files=all)
+          if ($LASTEXITCODE -ne 0) { throw 'Post-Tauri source status check failed' }
+          if ($sourceStatus.Count -gt 0) {
+            $sourceStatus | Tee-Object -FilePath artifacts/verification/windows-desktop-source-status.log
+            throw 'Tauri build left changed or untracked source; clean CI source is required'
+          }
+          'Source clean after actual Tauri build' | Set-Content -Encoding utf8 artifacts/verification/windows-desktop-source-status.log
+      - name: Stage current-run desktop build handoff
+        run: |
+          python scripts/ci_build_handoff.py stage --kind desktop --directory artifacts/handoff-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Build handoff identity/hash validation failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: nexa-build-desktop-${{ github.sha }}
+          path: artifacts/handoff-desktop/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Stage sanitized verification evidence
+        if: always()
+        env:
+          NEXA_CI_DESKTOP_BUILD: ${{ steps.desktop_build.outcome }}
+        run: |
+          python -X warn_default_encoding -W error::EncodingWarning scripts/stage_ci_evidence.py
+          if ($LASTEXITCODE -ne 0) { throw 'Evidence review/staging failed; no raw directory will be uploaded' }
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: windows-desktop-build-${{ github.sha }}
+          path: artifacts/upload-evidence/
+          if-no-files-found: warn
+          retention-days: 7
+  native:
+    if: ${{ !github.event.repository.private }}
+    needs: [release-identity, download-component, runtime-build, desktop-build]
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      NEXA_RELEASE_VERSION: ${{ needs.release-identity.outputs.version }}
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      CARGO_INCREMENTAL: '0'
+      # Pin the effective toolchain too; a runner's stable alias is not evidence.
+      RUSTUP_TOOLCHAIN: '1.98.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install locked Rust and compatible CMake tools
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy 2>&1 | Tee-Object -FilePath artifacts/verification/windows-rust-setup.log
+          if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
+          python -m pip install "cmake>=4.2" ninja==1.13.2 2>&1 | Tee-Object -FilePath artifacts/verification/windows-cmake-setup.log
+          if ($LASTEXITCODE -ne 0) { throw 'CMake setup failed' }
+          # Keep this installation ahead of VS's bundled CMake after every
+          # VsDevCmd entry. The shared packager validates both executables.
+          $env:NEXA_CMAKE_BIN = (python -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Installed CMake directory lookup failed' }
+          $env:PATH = "$env:NEXA_CMAKE_BIN;$env:PATH"
+          python scripts/build_windows_ci.py prepare 2>&1 | Tee-Object -FilePath artifacts/verification/windows-toolchain-identity.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native toolchain/source identity preparation failed' }
+          $threads = [Math]::Max(1, [Math]::Min(4, [Environment]::ProcessorCount))
+          "NEXA_TEST_THREADS=$threads" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "Inference threads=$threads; available=$([Environment]::ProcessorCount)"
+          rustc --version
+          cargo --version
+          cmake --version
+          New-Item -ItemType Directory -Force artifacts/verification | Out-Null
+      - name: Cache locked Cargo download inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/src/
+            ~/.cargo/git/db/
+          key: windows-cargo-inputs-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            windows-cargo-inputs-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-
+      - name: Install fixed desktop Node toolchain
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+          node-version: '24.19.0'
+      - name: Install locked frontend license originals
+        working-directory: apps/desktop
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --global npm@11.9.0
+          if ($LASTEXITCODE -ne 0) { throw 'Fixed npm setup failed' }
+          if ((node --version) -ne 'v24.19.0' -or (npm --version) -ne '11.9.0') { throw 'Desktop Node/npm version mismatch' }
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Locked frontend install failed' }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          digest-mismatch: error
+          name: nexa-download-source-build-${{ github.sha }}
+          path: artifacts/aria2-build
+      - name: Prepare verified same-source download component
+        run: |
+          python scripts/package_desktop_windows.py --prepare-download-component artifacts/aria2-build --component-dir build/download
+          if ($LASTEXITCODE -ne 0) { throw 'Download component source/hash closure failed' }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          digest-mismatch: error
+          name: nexa-build-desktop-${{ github.sha }}
+          path: artifacts/handoff-desktop
+      - name: Verify and restore current-run desktop build
+        run: |
+          python scripts/ci_build_handoff.py restore --kind desktop --directory artifacts/handoff-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Build handoff source/toolchain/hash mismatch' }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          digest-mismatch: error
+          name: nexa-build-runtime-${{ github.sha }}
+          path: artifacts/handoff-runtime
+      - name: Verify and restore current-run runtime build
+        run: |
+          python scripts/ci_build_handoff.py restore --kind runtime --directory artifacts/handoff-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Build handoff source/toolchain/hash mismatch' }
+      - name: Download exact assembly test model and verify SHA256
+        id: model_identity
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $model = (Get-Content -Raw tests/fixtures/baseline.json | ConvertFrom-Json).model
+          New-Item -ItemType Directory -Force models | Out-Null
+          $url = "$($model.source)/resolve/$($model.revision)/$($model.filename)"
+          curl.exe --fail --location --retry 3 --connect-timeout 30 --max-time 600 --output models/qa-small.gguf $url
+          if ($LASTEXITCODE -ne 0) { throw 'Exact assembly model download failed' }
+          if ((Get-FileHash -LiteralPath models/qa-small.gguf -Algorithm SHA256).Hash.ToLowerInvariant() -ne $model.sha256) { throw 'Assembly model SHA256 mismatch' }
       - name: Package desktop with intact matching CPU runtime
         id: desktop_package
-        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' && steps.portable_package.outcome == 'success' }}
         timeout-minutes: 10
         run: |
           $ErrorActionPreference = 'Stop'
           python -X warn_default_encoding -W error::EncodingWarning scripts/package_desktop_windows.py
           if ($LASTEXITCODE -ne 0) { throw 'Desktop PE/license/package verification failed' }
-          $env:AIR_NATIVE_DIR = Join-Path $PWD 'deliberately-absent-native-libraries'
-          cargo build --locked --release -p desktop-bridge --bin nexa-desktop-harness
-          if ($LASTEXITCODE -ne 0) { throw 'Independent real desktop bridge harness build failed' }
       - name: Verify extracted desktop package and real bridge lifecycle
         id: desktop_acceptance
         if: ${{ !cancelled() && steps.desktop_package.outcome == 'success' && steps.model_identity.outcome == 'success' }}
         timeout-minutes: 15
         run: |
           $ErrorActionPreference = 'Stop'
-          python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --model models/qa-small.gguf --harness target/release/nexa-desktop-harness.exe
+          python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --model models/qa-small.gguf --harness build/ci-tools/nexa-desktop-harness.exe
           if ($LASTEXITCODE -ne 0) { throw 'Extracted desktop/real bridge acceptance failed; native window interactions remain a separate gate' }
       - name: Package MSI and Setup from the exact verified portable payload
         id: windows_installers
@@ -503,69 +816,10 @@ jobs:
             dist/desktop-windows.zip.sha256
           if-no-files-found: error
           retention-days: 7
-      - name: Preserve Windows CPU product package
-        if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          archive: true
-          name: nexa-windows-x64-cpu-${{ github.sha }}
-          path: |
-            dist/windows-x64-cpu.zip
-            dist/windows-x64-cpu.zip.sha256
-          if-no-files-found: error
-          retention-days: 7
-      - name: Preserve separate acceptance tool package
-        if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          archive: true
-          name: nexa-acceptance-tools-${{ github.sha }}
-          path: |
-            dist/acceptance-tools.zip
-            dist/acceptance-tools.zip.sha256
-          if-no-files-found: error
-          retention-days: 7
-      - name: Preserve Release symbols when produced
-        if: ${{ !cancelled() && steps.portable_package.outcome == 'success' && hashFiles('build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb') != '' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          archive: true
-          name: nexa-windows-symbols-${{ github.sha }}
-          path: build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb
-          if-no-files-found: error
-          retention-days: 7
-      - name: Record reusable compiled-tool hashes
-        id: native_manifest
-        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
-        run: |
-          $files = @(Get-ChildItem -LiteralPath $env:AIR_NATIVE_DIR -Recurse -File | Where-Object { $_.Extension -eq '.lib' -or $_.Name -in @('llama-completion.exe', 'llama-bench.exe', 'air-stream-test.exe') })
-          if (Test-Path target/debug/examples/native-smoke.exe) { $files += Get-Item target/debug/examples/native-smoke.exe }
-          $entries = foreach ($file in $files) {
-            @{ path = [IO.Path]::GetRelativePath($PWD, $file.FullName).Replace('\', '/'); sha256 = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); size_bytes = $file.Length }
-          }
-          @{ schema_version = 1; project_commit = $env:GITHUB_SHA; files = @($entries) } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifacts/verification/native-build-manifest.json
-      - name: Preserve compiled diagnostic tools
-        if: ${{ failure() && !cancelled() && steps.native_manifest.outcome == 'success' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          archive: true
-          name: windows-native-tools-${{ github.sha }}
-          path: |
-            artifacts/verification/native-build-manifest.json
-            ${{ env.AIR_NATIVE_DIR }}/**/*.lib
-            ${{ env.AIR_NATIVE_DIR }}/**/llama-completion.exe
-            ${{ env.AIR_NATIVE_DIR }}/**/llama-bench.exe
-            ${{ env.AIR_NATIVE_DIR }}/**/air-stream-test.exe
-            target/debug/examples/native-smoke.exe
-          retention-days: 7
       - name: Stage sanitized verification evidence
         if: always()
         env:
-          NEXA_CI_NATIVE_BUILD: ${{ steps.native_build.outcome }}
           NEXA_CI_MODEL_IDENTITY: ${{ steps.model_identity.outcome }}
-          NEXA_CI_PORTABLE_PACKAGE: ${{ steps.portable_package.outcome }}
-          NEXA_CI_PACKAGE_ACCEPTANCE: ${{ steps.package_acceptance.outcome }}
-          NEXA_CI_DESKTOP_BUILD: ${{ steps.desktop_build.outcome }}
           NEXA_CI_DESKTOP_PACKAGE: ${{ steps.desktop_package.outcome }}
           NEXA_CI_DESKTOP_ACCEPTANCE: ${{ steps.desktop_acceptance.outcome }}
         run: |
