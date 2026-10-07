@@ -342,7 +342,7 @@ def build(executable, component):
     graph = base.command(["cargo", "tree", "--locked", "--manifest-path", SHELL / "Cargo.toml", "--target", base.TARGET, "--edges", "normal"], env)
     if re.search(r"\b(engine-host|llama-adapter|runtime-worker)\b", graph):
         base.fail("desktop process links native inference dependencies")
-    metadata = json.loads(base.command(["cargo", "metadata", "--locked", "--manifest-path", SHELL / "Cargo.toml", "--format-version", "1", "--filter-platform", base.TARGET], env))
+    metadata = json.loads(base.command(["cargo", "metadata", "--locked", "--manifest-path", SHELL / "Cargo.toml", "--format-version", "1", "--filter-platform", base.TARGET], env, merge_stderr=False))
     dumpbin = base.regular(Path(base.command(["where.exe", "dumpbin.exe"], env).splitlines()[0]))
     if not dumpbin.resolve().is_relative_to(vs):
         base.fail("desktop PE inspector is not from selected Visual Studio")

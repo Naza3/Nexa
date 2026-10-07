@@ -2,7 +2,8 @@ name: Windows CPU native and runtime verification
 
 on:
   push:
-    branches: ['codex/dev']
+    # Default-branch caches can also be restored by later version tags.
+    branches: ['codex/dev', 'main']
     # The release workflow must already exist in the tagged commit.
     # v* deliberately routes malformed/prerelease tags to the strict validator.
     tags: ['v*']
@@ -145,7 +146,10 @@ jobs:
             build/windows-x64-cpu/cargo-*/
           # Cargo still checks fingerprints and runs every requested build/test.
           # Native CMake outputs and final packages are never cached.
-          key: windows-rust-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.toml', '**/build.rs', '.cargo/config*', 'apps/desktop/src-tauri/tauri.conf.json') }}
+          key: windows-rust-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.toml', '**/build.rs', '.cargo/config*', 'apps/desktop/src-tauri/tauri.conf.json') }}-${{ github.sha }}
+          restore-keys: |
+            windows-rust-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-
+            windows-rust-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-
       - name: Compile installer helpers early without asserting installation success
         id: installer_compile
         timeout-minutes: 5
@@ -550,7 +554,10 @@ jobs:
             build/desktop/cargo/
           # Cargo still checks fingerprints and runs every requested build/test.
           # Native CMake outputs and final packages are never cached.
-          key: windows-rust-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.toml', '**/build.rs', '.cargo/config*', 'apps/desktop/src-tauri/tauri.conf.json') }}
+          key: windows-rust-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.toml', '**/build.rs', '.cargo/config*', 'apps/desktop/src-tauri/tauri.conf.json') }}-${{ github.sha }}
+          restore-keys: |
+            windows-rust-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}-
+            windows-rust-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-
       - name: Install fixed desktop Node toolchain
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

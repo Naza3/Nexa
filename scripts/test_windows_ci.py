@@ -203,7 +203,7 @@ class WindowsCiTests(unittest.TestCase):
 
     def test_workflow_retains_full_pipeline_with_public_standard_runners(self):
         workflow = (ci.base.ROOT / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
-        self.assertIn("branches: ['codex/dev']", workflow)
+        self.assertIn("branches: ['codex/dev', 'main']", workflow)
         # Each independent job must keep its own public-repository guard;
         # release also retains the stricter tag-push condition below.
         job_section = workflow.split("jobs:\n", 1)[1]

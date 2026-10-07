@@ -374,7 +374,7 @@ class ReleaseTests(unittest.TestCase):
         import re
         for action in re.findall(r"uses: ([^\s]+)", text):
             self.assertRegex(action, r"^[A-Za-z0-9_./-]+@[0-9a-f]{40}$")
-        self.assertIn("branches: ['codex/dev']", text)
+        self.assertIn("branches: ['codex/dev', 'main']", text)
         self.assertIn("tags: ['v*']", text)
         self.assertEqual(text.count("contents: write"), 1)
         self.assertNotIn("pull_request_target", text)

@@ -1,7 +1,10 @@
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import struct
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +17,34 @@ spec.loader.exec_module(pack)
 
 
 class PackageTests(unittest.TestCase):
+    def test_structured_command_separates_dependency_progress_from_json(self):
+        child = [sys.executable, "-c", "import sys; print('Downloading crates ...', file=sys.stderr); print('{\"packages\": []}')"]
+        diagnostics = io.StringIO()
+        with contextlib.redirect_stderr(diagnostics):
+            metadata = json.loads(pack.command(child, merge_stderr=False))
+        self.assertEqual(metadata, {"packages": []})
+        self.assertIn("Downloading crates ...", diagnostics.getvalue())
+
+    def test_structured_command_rejects_nonzero_exit_with_valid_json(self):
+        child = [sys.executable, "-c", "import sys; print('{}'); print('dependency download failed', file=sys.stderr); sys.exit(7)"]
+        with self.assertRaises(ValueError) as failure:
+            json.loads(pack.command(child, merge_stderr=False))
+        self.assertIn("command failed (7)", str(failure.exception))
+        self.assertIn("dependency download failed", str(failure.exception))
+
+    def test_structured_command_does_not_recover_invalid_stdout_from_stderr(self):
+        child = [sys.executable, "-c", "import sys; print('not JSON'); print('{}', file=sys.stderr)"]
+        diagnostics = io.StringIO()
+        with contextlib.redirect_stderr(diagnostics), self.assertRaises(json.JSONDecodeError):
+            json.loads(pack.command(child, merge_stderr=False))
+        self.assertEqual(diagnostics.getvalue().strip(), "{}")
+
+    def test_default_command_still_returns_combined_output(self):
+        child = [sys.executable, "-c", "import sys; print('stdout diagnostic'); print('stderr diagnostic', file=sys.stderr)"]
+        output = pack.command(child)
+        self.assertIn("stdout diagnostic", output)
+        self.assertIn("stderr diagnostic", output)
+
     def test_native_archive_contract_matches_locked_native_consumer(self):
         import re
         consumer = (pack.ROOT / "crates/llama-adapter/native_identity.rs").read_text(encoding="utf-8")

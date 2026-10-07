@@ -2,7 +2,7 @@
 
 ## 2026-10-07 Windows CI 构建优化（进行中）
 
-任务 W05-CI-PERF-1。按用户授权，已同步 main `1c3650c` 并实现 npm/Cargo 缓存、桌面验证器复用 Runtime Release 依赖、前端构建去重，以及桌面/Runtime 并行后统一装配。跨 job 输入绑定同 run、干净精确源码、工具链和封闭文件哈希，保留完整真实模型、许可及安装器门禁。严格 Python315项（310通过/5平台跳过）、actionlint、版本和差异检查及独立审查通过；原生 Windows 冷/热缓存耗时待实测，不继承旧运行的通过结论。见[ADR0033](docs/decisions/0033-parallel-windows-builds.md)及[验证记录](docs/verification/2026-10-07-ci-performance.md)。
+任务 W05-CI-PERF-1。已实现 npm/Cargo 缓存、Release依赖复用、前端去重和桌面/Runtime并行，main成功构建供后续tag复用缓存。精确`d7b84ce`的[首轮Actions](https://github.com/Naza3/Nexa/actions/runs/37627550537)两条构建链/真实模型/Runtime解压及handoff均通过，最终桌面打包因冷缓存下载进度混入Cargo metadata JSON失败。已分离结构化stdout和诊断stderr，严格Python319项（314通过/5平台跳过）、actionlint、版本和差异检查通过，原生复验与耗时测量待完成。用户新增的OCR选图无预览/无法识别随后处理。见[ADR0033](docs/decisions/0033-parallel-windows-builds.md)及[验证记录](docs/verification/2026-10-07-ci-performance.md)。
 
 ## 2026-10-07 产品版本 0.2.2（已完成版本同步，构建待验证）
 

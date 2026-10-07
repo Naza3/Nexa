@@ -126,11 +126,17 @@ def write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def command(args, env=None, cwd=ROOT, allowed=(0,)):
+def command(args, env=None, cwd=ROOT, allowed=(0,), *, merge_stderr=True):
+    # Structured stdout (such as Cargo metadata) must not include download
+    # progress or warnings from stderr, even on a fresh dependency cache.
     result = subprocess.run([str(a) for a in args], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace", check=False)
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+                            encoding="utf-8", errors="replace", check=False)
     if result.returncode not in allowed:
-        fail(f"command failed ({result.returncode}): {args[0]}\n{result.stdout[-6000:]}")
+        diagnostics = result.stdout + (result.stderr or "")
+        fail(f"command failed ({result.returncode}): {args[0]}\n{diagnostics[-6000:]}")
+    if not merge_stderr and result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
     return result.stdout.strip()
 
 
@@ -927,7 +933,7 @@ def build():
     if re.search(r"\b(engine-host|llama-adapter|runtime-worker)\b", helper_tree):
         fail("acceptance tool has an unexpected native inference dependency")
     command(["cargo", "build", "--locked", "--release", "--target", TARGET, "-p", "xtask", "--bin", "nexa-acceptance"], env)
-    metadata = json.loads(command(["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", TARGET], env))
+    metadata = json.loads(command(["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", TARGET], env, merge_stderr=False))
     identity = dict(line.split("=", 1) for line in (native / "air-native-Release.txt").read_text(encoding="utf-8").splitlines())
     if identity.get("system") != "Windows" or identity.get("configuration") != "Release" or identity.get("crt") != "MD":
         fail("native Release /MD build identity mismatch")
