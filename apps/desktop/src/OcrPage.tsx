@@ -131,4 +131,3 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
     {markdown ? <ChatMarkdown content={text} /> : <pre className="ocr-result">{text}</pre>}
   </section>;
 }
-
