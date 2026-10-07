@@ -1,5 +1,6 @@
 import { projectActivities, recordActivity, readActivityHistory, createActivitySessionId, persistActivitySummaries } from "./activity";
 import { validModelLoadOperation, validOptionalLoadPhase } from "./modelLoad";
+import { modelRemovalBlocker } from "./modelRemoval";
 import { ownRecord } from "./records";
 import type { Activity } from "./activity";
 import { localBaseUrl } from "./runtimeView";
@@ -154,7 +155,7 @@ function modelSignature(model: ModelSummary): string {
 function loadOptions(value: LoadOptions): string {
   return JSON.stringify([value.context_size, value.threads, value.batch_size]);
 }
-export interface CommandOperation { id: number; kind: "start" | "stop" | "check" | "pick_models" | "read_models" | "configuration" | "initialize" | "management"; label: string }
+export interface CommandOperation { id: number; kind: "start" | "stop" | "check" | "pick_models" | "read_models" | "remove_model" | "configuration" | "initialize" | "management"; label: string }
 export interface ModelLoadTaskView {
   attempt_id: number;
   model_id: string;
@@ -174,6 +175,7 @@ interface ModelLoadTask {
   resume: (() => void) | null;
 }
 export interface ViewState {
+  model_removal: { model_id: string; id: number } | null;
   model_load: ModelLoadTaskView | null;
   activities: Activity[];
   activity_session_id: string;
@@ -281,6 +283,7 @@ export function checkSubmission(
 export class DesktopController {
   private activityHistory = readActivityHistory();
   private state: ViewState = {
+    model_removal: null,
     model_load: null,
     activities: this.activityHistory.records,
     activity_session_id: createActivitySessionId(),
@@ -338,6 +341,7 @@ export class DesktopController {
   private downloadTask: { id: string | null; catalog_id: string; source: Settings["download_source"]; directory_id: string; cancel: boolean; cancelSent: boolean; reading: boolean; lastPull: number } | null = null;
   private selectionEpoch = 0;
   private modelsEpoch = 0;
+  private modelRemovalPending = false;
   private nextMessage = 0;
   private nextOperation = 0;
   private nextTask = 0;
@@ -436,6 +440,7 @@ export class DesktopController {
           ["connected", "stopped"].includes(snapshot.connection) &&
           !["stale", "unsupported"].includes(snapshot.model_directory.state) &&
           !this.libraryTask &&
+          !this.modelRemovalPending &&
           !this.modelsLoaded &&
           !this.state.models_loading
         )
@@ -518,6 +523,7 @@ export class DesktopController {
     if (
       !this.state.snapshot || !["connected", "stopped"].includes(this.state.snapshot.connection) ||
       this.libraryTask ||
+      this.modelRemovalPending ||
       ["stale", "unsupported"].includes(
         this.state.snapshot.model_directory.state,
       )
@@ -650,6 +656,63 @@ export class DesktopController {
   };
   refreshModels = async () => {
     if (!this.libraryTask) await this.loadPage(null);
+  };
+  unregisterModel = async (modelId: string, generation: string): Promise<boolean> => {
+    if (this.closing || this.state.operation) return false;
+    const blocker = modelRemovalBlocker(this.state, modelId);
+    if (blocker) { this.report(blocker); return false; }
+    if (generation !== this.state.models.generation) {
+      this.report(new DesktopError("model_list_changed", "模型列表已变化，请重新打开移除确认。")); return false;
+    }
+    const model = this.state.models.data.find((entry) => entry.id === modelId)!;
+    let removed = false;
+    await this.action("正在从模型库移除", async () => {
+      this.modelRemovalPending = true;
+      ++this.modelsEpoch;
+      ++this.modelFeedbackEpoch;
+      this.modelConfigurationReads.set(modelId, (this.modelConfigurationReads.get(modelId) ?? 0) + 1);
+      let failure: unknown;
+      try {
+        const result = await this.api.unregisterModel(modelId, generation);
+        if (!result || result.model_id !== modelId || result.removed !== true || result.files_preserved !== true)
+          throw new DesktopError("model_unregister_unconfirmed", "移除结果尚未确认，请刷新模型列表核对；未自动重试。" );
+        // Fence pre-ACK reads before publishing the confirmed removal.
+        ++this.snapshotEpoch;
+        ++this.modelsEpoch;
+        this.modelConfigurationReads.set(modelId, (this.modelConfigurationReads.get(modelId) ?? 0) + 1);
+        const model_tests = { ...this.state.model_tests }; delete model_tests[modelId];
+        const model_configurations = { ...this.state.model_configurations }; delete model_configurations[modelId];
+        const model_configuration_errors = { ...this.state.model_configuration_errors }; delete model_configuration_errors[modelId];
+        const snapshot = this.state.snapshot;
+        const runtime = snapshot?.runtime;
+        this.update({
+          models: { ...this.state.models, data: this.state.models.data.filter((entry) => entry.id !== modelId), next_after: null, generation: null },
+          page_after: null, model_tests, model_configurations, model_configuration_errors,
+          model_removal: { model_id: modelId, id: this.state.operation!.id },
+          ...(snapshot && runtime?.selected_model === modelId && ["unloaded", "faulted"].includes(runtime.state)
+            ? { snapshot: { ...snapshot, runtime: { ...runtime, selected_model: null, selected_model_display_name: null, load_options: null } } } : {}),
+          notice: `已从模型库移除“${model.display_name}”，模型文件已保留。`,
+        });
+        removed = true;
+      } catch (error) {
+        const safe = safeError(error);
+        failure = ["model_unregister_unconfirmed", "model_list_changed", "model_not_found", "model_unregister_loaded", "runtime_busy", "runtime_running", "invalid_request"].includes(safe.code)
+          ? safe : { ...safe, message: "移除结果尚未确认，请刷新模型列表核对；未自动重试。" };
+        // Preserve the last observed rows without treating them as current authority.
+        // Even a rejection can race another client's mutation before this reread.
+        this.update({ models: { ...this.state.models, next_after: null, generation: null }, page_after: null });
+      } finally {
+        ++this.modelsEpoch;
+        ++this.snapshotEpoch;
+        this.modelsLoaded = false;
+        if (this.modelsPromise) await this.modelsPromise;
+        this.modelRemovalPending = false;
+      }
+      await this.refreshAfterMutation();
+      if (!this.modelsLoaded) await this.loadPage(null);
+      if (failure) throw failure;
+    }, false, false, "remove_model");
+    return removed;
   };
   private async beginLibrary(kind: "apply" | "scan" | "discover" | "reconcile" | "add" | "configure") {
     if (this.closing || this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
@@ -1141,6 +1204,9 @@ export class DesktopController {
   }
   private runModelTest = async (modelId: string, mode: "load" | "test", temporary?: Partial<LoadOptions>) => {
     if (this.closing) return;
+    if (!this.state.models.generation) {
+      this.report(new DesktopError("model_list_changed", "模型列表待确认，请刷新后再操作。")); return;
+    }
     const model = this.state.models.data.find((entry) => entry.id === modelId);
     if (!model) { this.report(new DesktopError("model_not_ready", validationErrorReason("model_not_ready"))); return; }
     const snapshot = this.state.snapshot;
@@ -1473,7 +1539,7 @@ export class DesktopController {
     catch (error) { if (epoch === this.configurationReadEpoch) this.report(error); }
   };
   refreshModelConfiguration = async (modelId: string) => {
-    if (!this.api.configurationModelGet || !this.state.snapshot?.configuration) return;
+    if (!this.api.configurationModelGet || !this.state.snapshot?.configuration || this.modelRemovalPending) return;
     const epoch = (this.modelConfigurationReads.get(modelId) ?? 0) + 1;
     this.modelConfigurationReads.set(modelId, epoch);
     try {

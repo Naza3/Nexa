@@ -11,6 +11,7 @@ mod loading;
 mod onboarding;
 mod settings;
 mod sse;
+mod unregister;
 pub use dto::*;
 pub use error::{BridgeError, Result};
 use hyper::Method;

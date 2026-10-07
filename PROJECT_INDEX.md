@@ -25,6 +25,9 @@
 | [代理协作](docs/agent-workflow.md) | 单写入者、检查和交接 |
 | [桌面源码边界 ADR0029](docs/decisions/0029-desktop-only-source-tree.md) | 安装器交付后移除本项目移动实现/专用文档，Git 历史与独立项目不变 |
 
+- [模型移除 ADR0030](docs/decisions/0030-nondestructive-model-unregistration.md)：仅取消登记、文件保留、schema3原子可见性及在线/离线互斥
+- [聊天 Markdown ADR0031](docs/decisions/0031-safe-chat-markdown.md)：安全GFM显示、原文保持与离线链接/图片边界
+
 ## 实际 Windows 工程
 
 | 路径 | 作用 / 说明 |

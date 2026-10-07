@@ -239,12 +239,16 @@ def npm_licenses(stage):
         if not files:
             base.fail(f"original npm license missing: {location}")
         for source in files:
-            destination = "licenses/npm/" + location.removeprefix("node_modules/") + "/" + source.relative_to(directory).as_posix()
+            # Lock locations can contain nested node_modules directories. Keep
+            # their exact identity in the inventory, not in the license-only
+            # output path (whose safety rules intentionally reject that name).
+            package_key = hashlib.sha256(location.encode("utf-8")).hexdigest()
+            destination = "licenses/npm/packages/" + package_key + "/" + source.relative_to(directory).as_posix()
             base.relative(destination)
             target = stage / destination
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(base.regular(source), target)
-            records.append({"component": manifest["name"], "version": manifest["version"], "source": package.get("resolved"), "integrity": package.get("integrity"), "path": destination, "sha256": base.digest(target)})
+            records.append({"component": manifest["name"], "version": manifest["version"], "lock_location": location, "source": package.get("resolved"), "integrity": package.get("integrity"), "path": destination, "sha256": base.digest(target)})
     if not records:
         base.fail("npm production license closure is empty")
     base.write_json(stage / "licenses/npm-index.json", {"scope": "locked embedded frontend production dependency license originals", "files": records})

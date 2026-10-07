@@ -2228,3 +2228,70 @@ fn manual_stop_before_deadline_is_not_reclassified_while_cleanup_runs() {
     assert_eq!(h.handle.status().unwrap().state, ModelState::Unloaded);
     h.finish();
 }
+
+#[test]
+fn unregister_reservation_refuses_resident_target_but_forgets_only_after_commit() {
+    let h = Harness::new(config(), true);
+    let id = ModelId::new("qa-small").unwrap();
+    h.handle.load(id.clone(), LoadOptions::default()).unwrap();
+    assert_eq!(
+        h.handle.reserve_unregister(id.clone()).err().unwrap().code,
+        ErrorCode::ModelConflict
+    );
+    let other = ModelId::new("other").unwrap();
+    let lease = h.handle.reserve_unregister(other.clone()).unwrap();
+    h.handle.forget_unregistered(other).unwrap();
+    assert_eq!(h.handle.status().unwrap().selected_model, Some(id.clone()));
+    drop(lease);
+    h.handle.unload().unwrap();
+    let lease = h.handle.reserve_unregister(id.clone()).unwrap();
+    assert_eq!(
+        h.handle.status().unwrap().selected_model,
+        Some(id.clone()),
+        "admission is not commit"
+    );
+    assert_eq!(
+        h.handle.submit(request()).err().unwrap().code,
+        ErrorCode::RuntimeBusy
+    );
+    h.handle.forget_unregistered(id).unwrap();
+    let state = h.handle.status().unwrap();
+    assert!(state.selected_model.is_none());
+    assert!(state.load_options.is_none());
+    drop(lease);
+    h.finish();
+}
+
+#[test]
+fn unregister_cannot_cancel_or_cut_across_active_and_queued_work() {
+    let h = Harness::new(config(), true);
+    let first = h.handle.submit(request()).unwrap();
+    let pending = h.pending();
+    let second = h.handle.submit(request()).unwrap();
+    assert_eq!(
+        h.handle
+            .reserve_unregister(ModelId::new("other").unwrap())
+            .err()
+            .unwrap()
+            .code,
+        ErrorCode::RuntimeBusy
+    );
+    assert!(!pending.cancelled.load(Ordering::SeqCst));
+    assert_eq!(h.handle.status().unwrap().queued_jobs, 1);
+    pending.prepared();
+    pending.complete();
+    assert!(matches!(
+        terminal(&first),
+        RequestEventKind::Completed { .. }
+    ));
+    let queued = h.pending();
+    queued.prepared();
+    queued.complete();
+    assert!(matches!(
+        terminal(&second),
+        RequestEventKind::Completed { .. }
+    ));
+    drop(first);
+    drop(second);
+    h.finish();
+}

@@ -10,6 +10,7 @@
 - `resolve`：已验证缓存 + 有界 manifest / 文件 fingerprint 检查；导入或重验占用写锁时立即返回 `RuntimeBusy`，不等待大文件操作，也不在调度 actor 内重新 hash
 - `verify`：显式完整 hash 与 GGUF 重验，刷新缓存；适合阻塞执行器。`open` 与导入同样是阻塞操作
 - `remove`：只删除受控注册副本；调用方应先卸载并协调执行器使用，返回路径不等于持有模型租约
+- `unregister` 模块及对应 store 操作：只修改同一 `model-library.json` 的登记可见性，保留外部/受控模型文件、manifest、档案和测试历史；不是调用上述破坏性 `remove`。在线须持有 actor 登记租约，离线须持有停止实例锁和存储锁，详见[ADR0030](../../docs/decisions/0030-nondestructive-model-unregistration.md)
 
 `ImportCancellation` 可跨线程设置；每个复制块及提交前检查。外部流的阻塞 `Read` 必须由流适配器自行提供返回机制，本模块不能打断任意调用方的阻塞读取。文件系统同步也不能被安全强杀。
 
@@ -21,7 +22,7 @@
 4. 在 imports 的 `.staged` 目录放入 `model.gguf` 与已 flush 的 `manifest.json`
 5. 同一文件系统目录 rename 到 `models/<id>`，两个文件一起成为注册项
 
-不写独立 `index.json`：index 从完整注册目录派生，因此不存在两个文件各自提交产生的索引/manifest分歧。协作进程遵守 `runtime/model-store.lock`；同实例修改互斥，默认拒绝任何已有目标（包括空目录、符号链接和不完整目录）。`.partial/.staged` 出错或取消时清理；中断残留只按本模块 UUID 命名空间恢复，不删除未知临时名称。删除先把注册目录原子移动为 `.deleted`，再清理，重启可续清。
+不写独立 `index.json`：受控身份从完整注册目录派生，schema3 library 仅增加登记可见性覆盖层；移除/显式恢复与 external 索引同文件原子提交，不修改受控 manifest。协作进程遵守 `runtime/model-store.lock`；同实例修改互斥，默认拒绝任何已有目标（包括空目录、符号链接和不完整目录）。`.partial/.staged` 出错或取消时清理；中断残留只按本模块 UUID 命名空间恢复，不删除未知临时名称。删除先把注册目录原子移动为 `.deleted`，再清理，重启可续清。
 
 Unix 同步文件与可 fsync 的目录；Windows 文件在 rename 前同步，但标准库没有可移植目录 flush，本阶段只声明原子可见性，不声明断电耐久性。提交后的 sync/cleanup 失败明确说明注册或注销已发生；不能把这类错误理解为事务从未提交。网络文件系统、跨挂载 imports/models、非原子 rename 文件系统不属于当前支持条件。
 

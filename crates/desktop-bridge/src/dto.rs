@@ -646,3 +646,5 @@ pub struct ModelLoadProfileStartRequest {
     #[serde(flatten)]
     pub load: ModelLoadProfileRequest,
 }
+
+pub use runtime_api::dto::{UnregisterModelRequest, UnregisterModelResult};

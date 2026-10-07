@@ -11,6 +11,42 @@ from test_license_bundle import compact_fixture, crt_original_fixture
 
 
 class DesktopPackageTests(unittest.TestCase):
+    def test_nested_npm_licenses_preserve_distinct_lock_identities_and_original_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            stage = Path(temporary) / "stage"
+            frontend = root / "apps/desktop"
+            packages = {}
+            originals = {}
+            locations = ["node_modules/escape-string-regexp",
+                         "node_modules/parser/node_modules/escape-string-regexp",
+                         "node_modules/parser/node_modules/@types/unist"]
+            for index, location in enumerate(locations):
+                directory = frontend / location
+                directory.mkdir(parents=True)
+                name = "@types/unist" if "@types" in location else "escape-string-regexp"
+                version = f"{index + 1}.0.0"
+                packages[location] = {"version": version, "resolved": "https://registry.npmjs.org/fixture", "integrity": "sha512-fixture"}
+                (directory / "package.json").write_text(json.dumps({"name": name, "version": version}), encoding="utf-8")
+                originals[location] = f"Original copyright {index}\r\n".encode()
+                (directory / "LICENSE").write_bytes(originals[location])
+            (frontend / "package-lock.json").write_text(json.dumps({"packages": packages}), encoding="utf-8")
+            with mock.patch.object(pack, "ROOT", root):
+                pack.npm_licenses(stage)
+            records = json.loads((stage / "licenses/npm-index.json").read_text(encoding="utf-8"))["files"]
+            self.assertEqual({r["lock_location"] for r in records}, set(locations))
+            self.assertEqual(len({r["path"] for r in records}), 3)
+            for record in records:
+                self.assertNotIn("node_modules", record["path"].split("/"))
+                self.assertEqual((stage / record["path"]).read_bytes(), originals[record["lock_location"]])
+                self.assertEqual(record["version"], packages[record["lock_location"]]["version"])
+            before = {p.relative_to(stage).as_posix(): p.read_bytes() for p in (stage / "licenses").rglob("*") if p.is_file()}
+            pack.base.consolidate_licenses(stage)
+            recovered = pack.base.verify_license_bundle(stage)
+            self.assertEqual(set(recovered), set(before))
+            self.assertTrue(all(recovered[path]["raw"] == raw for path, raw in before.items()))
+            self.assertEqual(len(pack.base.license_related_files(stage)), 2)
+
     def download_fixture(self, root):
         component = root / "download"
         component.mkdir()
@@ -341,7 +377,7 @@ class DesktopPackageTests(unittest.TestCase):
         self.assertNotIn("remote", capability)
         commands = {"desktop_snapshot", "runtime_start", "model_pick", "model_import", "model_directory_pick", "model_directory_apply", "models_scan", "model_library_next", "model_library_cancel", "models_page", "model_load", "model_unload", "chat_start", "chat_next", "chat_cancel", "settings_save", "runtime_idle_save", "token_copy", "runtime_stop", "desktop_close"}
         commands.update({"runtime_verification_save", "models_pick", "models_add", "models_selection_discard", "model_directory_configure", "runtime_lan_save", "runtime_lan_addresses", "lan_token_copy", "models_reconcile", "model_test", "model_directory_discover", "model_catalog", "model_download_start", "model_download_next", "model_download_cancel"})
-        commands.update({"runtime_initialize", "configuration_get", "configuration_model_get", "configuration_save", "configuration_migrate", "model_load_profile", "model_load_start", "model_load_profile_start", "model_load_next", "model_load_cancel", "ui_preferences_get", "ui_preferences_save"})
+        commands.update({"runtime_initialize", "configuration_get", "configuration_model_get", "configuration_save", "configuration_migrate", "model_load_profile", "model_load_start", "model_load_profile_start", "model_load_next", "model_load_cancel", "model_unregister", "ui_preferences_get", "ui_preferences_save"})
         self.assertEqual(set(capability["permissions"]), {"allow-" + name.replace("_", "-") for name in commands})
         native = (pack.SHELL / "src/windows.rs").read_text(encoding="utf-8")
         import re

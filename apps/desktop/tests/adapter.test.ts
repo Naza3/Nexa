@@ -103,6 +103,8 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("models_page", {
       request: { after: "cursor", generation: "version" },
     });
+    await nativeApi.unregisterModel("registered-model", "generation");
+    expect(invoke).toHaveBeenLastCalledWith("model_unregister", { request: { model_id: "registered-model", generation: "generation" } });
   });
   it("never falls back to mock when native desktop is missing", async () => {
     isTauri.mockReturnValue(false);

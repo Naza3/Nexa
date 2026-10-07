@@ -1,10 +1,33 @@
 # Nexa 当前状态
 
-## 2026-10-05 桌面源码清理（开发检查完成，待原生验证）
+## 2026-10-06 模型移除与聊天 Markdown（已完成：原生验收及开发包交付）
+
+用户要求从模型库列表移除模型，并补充聊天回复 Markdown。开发沿用 `codex/dev`，已在本地同步用户合并的正式 `main` `5c26e34aa74bf5552b9455e65f42883acbd61d6f`，保留开发分支额外验收文档，不重写历史。既有 [v0.1.0 正式 Release](https://github.com/Naza3/Nexa/releases/tag/v0.1.0)已于2026-10-05发布；本轮不移动其标签、不替换公开附件或自动合并 main。
+
+- [ADR0030](docs/decisions/0030-nondestructive-model-unregistration.md)：只取消模型登记，保留GGUF/manifest、参数档案和历史记录；schema3同文件原子抑制，重启不复活，显式添加/扫描可恢复。在线由actor互斥，驻留先卸载、故障先显式停服，不打断其他调用；离线不启动服务或hash全库
+- [ADR0031](docs/decisions/0031-safe-chat-markdown.md)：模型回复安全Markdown/GFM展示，保留原文和请求语义，禁原始HTML执行、图片自动联网及WebView导航；实现与联合前端回归进行中
+
+模型移除后端四crate381通过/0失败/1既有忽略，壳Linux31通过，相关clippy/fmt通过；列表整锁调整后model-store88项与clippy复验。最终联合前端36文件790项、typecheck/lint/build全部通过。Python271项（267通过/4平台skip）通过，新增IPC命令保持精确ACL闭包。独立移除审查Rust5项/前端7项、Markdown50项恶意内容/流式/错误隔离回归全部通过；这些为分层或子集证据，不累加成产品用例总数。
+
+发现并修正：Faulted服务不能卸载，移除指引改为用户显式停服；新嵌套npm依赖许可输出原路径被安全门禁拒绝，改用锁路径hash命名并保留lock_location归属，不放宽底层校验；深嵌套Markdown解析异常由单消息边界回退原文，保持会话和复制。107生产包109许可/110原件逐字节恢复，结合既有包许可验证仍10份文件，无许可删减。JS生产包约601kB、gzip约179kB，Vite大chunk提示保留，没有借此扩大功能或引入高亮引擎。
+
+精确代码提交 `09b9e0496f565e0e62859be2c7034e9ceb756325`、tree `bd33eb60826c40f6517b1beb3124afa8100f1645` 的[Windows CI37449560591](https://github.com/Naza3/Nexa/actions/runs/37449560591)于2026-10-06 11:08:26 UTC成功。Windows根Rust53组561通过/0失败/7忽略、壳29、前端790、Python271项（269通过/2skip）、CTest4/4，以及真实模型/HTTP/CLI/独立解压桌面和13项安装生命周期通过。分支Release job正确跳过。
+
+独立实际产物2659项断言全部通过：同28文件payload、48 IPC/权限、EXE内实际Markdown JS/CSS、10许可文件恢复849原件及107包/109npm许可归属、446源码Windows指纹、aria2三补丁、54证据与69安装诊断事件闭合。开发便携包16,256,952字节，SHA256 `0ebe57bf38cc5a2ec0c0298be2021773abe178b8a7adec210e4ec22c2245d843`；[下载入口](https://github.com/Naza3/Nexa/actions/runs/37449560591/artifacts/11409385193)已于11:20:05 UTC发给用户，有效期2026-10-13，不能据此认定用户已安装。
+
+本批版本仍0.1.0，仅为精确提交开发产物，未覆盖正式Release。MSI ProductCode与原正式版相同，13门槛中的升级/回滚使用私有未来版本fixture，不代表旧公开0.1.0到本批同版本包已验证升级；交付建议使用便携版。便携版不自动隔离既有数据，用户已被提醒停服并备份数据目录，schema3不能直接由旧版读取。目标Windows10窗口/干净机器/离线/长期条件仍独立待验。详见[本批验证记录](docs/verification/2026-10-06-model-unregister-and-markdown.md)。随后纯文档记录提交不改变本批产物源身份，不重跑完整构建。
+
+## 2026-10-05 桌面源码清理（已完成：原生验证与产物复核通过）
 
 安装器前置任务已完成并交付后，按用户明确要求移除本项目移动代码及相关文档，后续只维护桌面主线。清理基线为长期 `codex/dev` 的干净 `de7732f031c11e44a27f86b33a341c48131a3906`。删除独立移动 workspace、验证器、MNN 适配/探针/补丁、专用脚本与 CI，以及对应设计/研究文档；同步共享配置、验证报告字段和 Windows 路径过滤。范围见[ADR0029](docs/decisions/0029-desktop-only-source-tree.md)，本批实际检查见[清理验证记录](docs/verification/2026-10-05-desktop-only-cleanup.md)。
 
-当前为源码与文档清理工作树；Python270项（266通过/4既有平台skip）、前端701项及typecheck/lint/build、4份工作流actionlint通过，文档99份/415本地链接/19锚点和围栏通过，独立11组审查无剩余源码或文档阻断；没有本批清理后的新 Windows 包或原生 CI 结论。既有 Windows actor/worker、GGUF/API、安全、数据及完整许可/对应源码边界不变；独立 `Naza3/MNN`、锁定 llama.cpp 上游完整源码和 Git 历史不动。原先保留移动源码、隔离 CI、B3b WIP 的要求已被本次明确删除授权替代。
+清理已提交并推送为 `f577a49861298ec278293ba2d7231e09c3c07022`，tree `f3ec548cc3049da7e7121d4866bcff07e360dfd4`。[Actions37313974388](https://github.com/Naza3/Nexa/actions/runs/37313974388)已于13:44:46 UTC成功：release-identity、同源aria2和native三项job成功，分支构建的Release job按条件跳过。Windows Server 2022上的根/壳Rust fmt、test与clippy、真实GGUF、HTTP/CLI、桌面bridge、三格式打包及全部13项安装生命周期通过。
+
+本次原生证据的精确计数：根Rust日志53组551通过/0失败/7忽略、独立桌面壳29通过、前端33文件701项通过、Python270项（268通过/2个平台skip）、CTest4/4。早期选择性回归不重复加总；本地清理时Python266通过/4skip是另一环境的结果。开发阶段99份Markdown/415本地链接/19锚点与独立11组源码审查已通过，具体命令和分层结果见[清理验证记录](docs/verification/2026-10-05-desktop-only-cleanup.md#f577a498精确提交原生windows验证)。
+
+本批[三格式Actions产物](https://github.com/Naza3/Nexa/actions/runs/37313974388/artifacts/11348344567)已通过独立Linux只读审计：2238项断言全部通过、0失败、无剩余产物阻断。这是本批新计数，含逐文件/许可检查，不是2238个独立产品功能测试。Setup内嵌MSI、MSI17张表与CAB28文件/42408929字节、独立portable/runtime、10许可恢复746份原文、aria2三补丁源码重放、54份原生证据及13项生命周期69事件均核验；435份源码重建Windows指纹与包来源一致。此处记录构建与复核完成，向用户交付另据实际发送记录。产物源身份始终为f577a498；随后仅补记状态的文档提交不冒称经过本次原生验证，也不为文档更新重跑整套构建。用户已接受当前约30分钟完整构建流程，暂不进行优化。
+
+既有Windows actor/worker、GGUF/API、安全、用户数据及完整许可/对应源码边界保持；独立 `Naza3/MNN`、锁定llama.cpp上游完整源码和Git历史不动。原先保留移动源码、隔离CI、B3b WIP的要求已由本次明确删除授权替代。安装器未签名，用户Win10/i5-8400、应用原生GUI、ICE、两机LAN、干净机器/离线、长期条件与真实tag发布仍未验；没有合并main或发布Release。
 
 ## 2026-10-05 三格式安装器完成并交付
 

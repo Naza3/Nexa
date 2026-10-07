@@ -273,11 +273,11 @@ pub fn now_ms() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 #[cfg(not(windows))]
-fn replace(source: &Path, target: &Path) -> std::io::Result<()> {
+pub(crate) fn replace(source: &Path, target: &Path) -> std::io::Result<()> {
     fs::rename(source, target)
 }
 #[cfg(windows)]
-fn replace(source: &Path, target: &Path) -> std::io::Result<()> {
+pub(crate) fn replace(source: &Path, target: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,

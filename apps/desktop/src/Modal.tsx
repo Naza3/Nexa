@@ -8,6 +8,7 @@ export function Modal({
   onConfirm,
   onCancel,
   danger = false,
+  confirmDisabled = false,
 }: {
   title: string;
   children: ReactNode;
@@ -15,6 +16,7 @@ export function Modal({
   onConfirm: () => void;
   onCancel: () => void;
   danger?: boolean;
+  confirmDisabled?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const cancel = useEffectEvent(onCancel);
@@ -33,7 +35,10 @@ export function Modal({
         if (!items?.length) return;
         const first = items[0],
           last = items[items.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
+        if (![...items].includes(document.activeElement as HTMLButtonElement)) {
+          event.preventDefault();
+          first.focus();
+        } else if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
@@ -45,7 +50,7 @@ export function Modal({
     document.addEventListener("keydown", handle);
     return () => {
       document.removeEventListener("keydown", handle);
-      if (previous?.isConnected) previous.focus();
+      if (previous?.isConnected && !previous.matches(":disabled")) previous.focus();
       else {
         const heading = document.querySelector<HTMLElement>(".workspace-pages h1");
         if (heading) { heading.tabIndex = -1; heading.focus(); }
@@ -68,6 +73,7 @@ export function Modal({
           <button onClick={onCancel}>取消</button>
           <button
             className={danger ? "danger-button" : "primary"}
+            disabled={confirmDisabled}
             onClick={onConfirm}
           >
             {confirm}

@@ -13,6 +13,13 @@ pub(crate) struct LoadOperations {
     current: Option<Arc<LoadOperation>>,
     previous: Option<Arc<LoadOperation>>,
 }
+impl LoadOperations {
+    pub(crate) fn active(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|task| !task.state.lock().unwrap().terminal)
+    }
+}
 pub(crate) struct LoadOperation {
     id: Uuid,
     model: ModelId,

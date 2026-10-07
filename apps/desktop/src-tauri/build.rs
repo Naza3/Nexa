@@ -37,6 +37,7 @@ fn main() {
                 "models_page",
                 "model_load",
                 "model_unload",
+                "model_unregister",
                 "chat_start",
                 "chat_next",
                 "chat_cancel",
