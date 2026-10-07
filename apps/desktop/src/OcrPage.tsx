@@ -136,7 +136,7 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
           if (event.type === "delta") setText((value) => value + event.text);
           if (event.type === "completed") setStatus(event.finish_reason === "length" ? `已达到输出 token 上限，内容可能截断；请核对原图，可调整上限后手动重试。${current.hadReadFailure ? "读取曾中断，原文还可能缺失内容。" : ""}` : current.hadReadFailure ? "终态已确认，但读取曾中断，原文可能缺失内容；请核对原图。" : "识别完成，请核对原图。");
           if (event.type === "cancelled") setStatus("已停止，已生成内容可能不完整。");
-          if (event.type === "failed") setStatus(`识别失败：${event.message}（${event.code}）。已生成内容可能不完整。`);
+          if (event.type === "failed") setStatus(event.code === "execution_timeout" ? "推理执行超时（execution_timeout）。已保留已生成内容，但可能不完整，不会自动重试。可将图片裁成较小区域分别识别，或停止服务后在“设置→资源与校验”中适当调大“推理执行超时”，再启动服务、重新加载模型并手动重试。" : `识别失败：${event.message}（${event.code}）。已生成内容可能不完整。`);
         }
         terminal = batch.terminal;
       }

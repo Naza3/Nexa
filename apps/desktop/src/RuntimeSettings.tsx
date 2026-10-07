@@ -1,7 +1,7 @@
 import { useConfigDraft } from "./configDraft";
 import { DraftConflict } from "./Configuration";
 import type { DesktopController, ViewState } from "./controller";
-import { DEFAULT_VERIFICATION_SECONDS, MAX_VERIFICATION_SECONDS, MIN_VERIFICATION_SECONDS, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
+import { DEFAULT_VERIFICATION_SECONDS, MAX_VERIFICATION_SECONDS, MIN_VERIFICATION_SECONDS, validateExecutionSeconds, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 
 type Props = { state: ViewState; controller: DesktopController };
 function settingsAccess(state: ViewState) {
@@ -98,5 +98,38 @@ export function VerificationTimeoutSettings({ state, controller }: Props) {
         <button disabled={!editable || !changed || !!validation || form.conflict} onClick={() => void (state.snapshot?.configuration ? controller.saveConfiguration({ expected_revision: form.baseRevision!, update: { kind: "runtime", runtime: { ...state.snapshot.configuration.saved.runtime, model_verification_timeout_seconds: seconds } } }) : controller.saveVerificationTimeout(seconds))}>保存模型文件校验超时</button>
       </div>
     </div>
+  </section>;
+}
+
+export function ExecutionTimeoutSettings({ state, controller }: Props) {
+  const configuration = state.snapshot?.configuration;
+  const saved = configuration?.saved.runtime.execution_timeout_seconds;
+  const supported = typeof saved === "number";
+  const form = useConfigDraft(saved, configuration?.revision, "execution_policy");
+  const seconds = form.draft;
+  const access = settingsAccess(state);
+  const editable = access.editable && supported && configuration?.migration.state !== "required";
+  const validation = supported ? validateExecutionSeconds(seconds ?? NaN) : null;
+  const changed = seconds !== saved;
+  return <section className="settings-card idle-card" aria-labelledby="execution-title">
+    <div className="card-heading"><div><h2 id="execution-title">推理执行超时</h2>
+      <p>适用于聊天与图片 OCR，包括图片处理与生成，不含模型文件校验。必须先停止服务修改；保存仅在下次启动运行服务后生效。</p></div><span className="mini-label">独立保存</span></div>
+    {form.conflict && <DraftConflict reset={form.reset} rebase={form.rebase} draft={seconds} saved={saved} />}
+    <div className="idle-controls"><label htmlFor="execution-timeout">推理执行时间上限<div className="number-field">
+      <input type="number" id="execution-timeout" min={1} max={86400} step={1}
+        value={seconds === undefined || Number.isNaN(seconds) ? "" : seconds} disabled={!editable} aria-describedby="execution-range" aria-invalid={!!validation}
+        onChange={(event) => form.setDraft(event.target.valueAsNumber)} /><span>秒</span>
+    </div></label></div>
+    <p id="execution-range" className="small-note">1–86400 秒，默认 300 秒。较慢 CPU 进行图片 OCR 时推荐设为 1800 秒；超时会保留已生成内容，不会自动重试。</p>
+    <p className="small-note" aria-label="已保存推理执行超时">{supported ? `已保存配置：${saved} 秒` : "当前版本未报告推理执行超时"}</p>
+    {!supported && <p className="warning-text">当前桌面版本不支持推理执行超时设置，请更新整套 Nexa 并重新启动服务。</p>}
+    {access.reason && <p className="warning-text">{access.reason}</p>}
+    {validation && <p role="alert" className="warning-text">{validation}</p>}
+    <div className="save-row runtime-settings-save"><span className="muted">{changed ? "有未保存的更改" : "配置与已保存内容一致"}</span><div className="runtime-settings-actions">
+      <button disabled={!editable || !changed} onClick={form.reset}>取消推理超时更改</button>
+      <button disabled={!editable || !changed || !!validation || form.conflict} onClick={() => {
+        if (configuration && supported && seconds !== undefined && !validateExecutionSeconds(seconds) && !form.conflict) void controller.saveConfiguration({ expected_revision: form.baseRevision!, update: { kind: "runtime", runtime: { ...configuration.saved.runtime, execution_timeout_seconds: seconds } } });
+      }}>保存推理执行超时</button>
+    </div></div>
   </section>;
 }

@@ -344,7 +344,7 @@ export interface DesktopApi {
 export interface LoadDefaults { context_size: number; threads: number | null; batch_size: number }
 export interface LoadOverrides { context_size: number | null; threads: number | null; batch_size: number | null }
 export interface RequestDefaults { max_output_tokens: number; temperature: number; top_p: number }
-export interface RuntimePolicies { idle_unload_enabled: boolean; idle_unload_seconds: number; model_verification_timeout_seconds: number }
+export interface RuntimePolicies { execution_timeout_seconds: number; idle_unload_enabled: boolean; idle_unload_seconds: number; model_verification_timeout_seconds: number }
 export interface ConfigurationValues {
   global_defaults: LoadDefaults;
   request_defaults: RequestDefaults;
@@ -357,7 +357,7 @@ export interface ConfigurationSnapshot {
   schema_version: 1 | 2;
   revision: string;
   saved: ConfigurationValues;
-  runtime_effective: { revision: string; values: ConfigurationValues } | null;
+  runtime_effective: { revision: string; values: ConfigurationValues; chat_response_timeout_seconds: number } | null;
   pending_restart: boolean;
   migration: {
     state: "not_needed" | "legacy_compatible" | "required" | "complete";

@@ -29,7 +29,7 @@ import { OverviewPage, ApiPage, ActivityPage } from "./Workspaces";
 import { runtimeView } from "./runtimeView";
 import { useConfigDraft, ConfigDraftContext, createDraftStore, hasDirtyDrafts } from "./configDraft";
 import { preferencesOnly } from "./runtimeSettingsValues";
-import { IdleUnloadSettings, VerificationTimeoutSettings } from "./RuntimeSettings";
+import { ExecutionTimeoutSettings, IdleUnloadSettings, VerificationTimeoutSettings } from "./RuntimeSettings";
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -1046,7 +1046,7 @@ function SettingsPage({
           </button>
         </div>
       </form></DetailsGroup>}
-      <DetailsGroup title="资源与校验" description="空闲卸载、文件校验超时" status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["idle_policy", "verification_policy"]}><IdleUnloadSettings state={state} controller={controller} /><VerificationTimeoutSettings state={state} controller={controller} /></DetailsGroup>
+      <DetailsGroup title="资源与校验" description="空闲卸载、文件校验与推理超时" status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["idle_policy", "verification_policy", "execution_policy"]}><IdleUnloadSettings state={state} controller={controller} /><VerificationTimeoutSettings state={state} controller={controller} /><ExecutionTimeoutSettings state={state} controller={controller} /></DetailsGroup>
 
     </>
   );

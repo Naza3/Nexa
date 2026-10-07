@@ -960,3 +960,47 @@ async fn unregister_requires_exact_snapshot_is_strict_and_preserves_files_and_se
     );
     h.close().await;
 }
+
+#[tokio::test]
+async fn execution_timeout_configuration_requires_auth_and_stopped_runtime() {
+    let h = Harness::configured(true).await;
+    let (status, initial) = h.call("GET", "/runtime/configuration", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        initial["saved"]["runtime"]["execution_timeout_seconds"],
+        300
+    );
+    let before = std::fs::read(h.root.join("config.toml")).unwrap();
+    let mut policies = initial["saved"]["runtime"].clone();
+    policies["execution_timeout_seconds"] = json!(600);
+    let body = json!({"expected_revision": initial["revision"], "update": {
+        "kind": "runtime", "runtime": policies
+    }})
+    .to_string();
+    let mut request = Request::builder()
+        .method("PUT")
+        .uri("/runtime/configuration")
+        .header("host", "127.0.0.1:18080")
+        .header("content-type", "application/json")
+        .body(Body::from(body.clone()))
+        .unwrap();
+    request.extensions_mut().insert(PeerEndpoints {
+        client: "127.0.0.1:30000".parse().unwrap(),
+        server: "127.0.0.1:18080".parse().unwrap(),
+    });
+    let response = h.router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(std::fs::read(h.root.join("config.toml")).unwrap(), before);
+    let (status, error) = h.call("PUT", "/runtime/configuration", &body).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "runtime_running");
+    assert_eq!(std::fs::read(h.root.join("config.toml")).unwrap(), before);
+    let (_, unchanged) = h.call("GET", "/runtime/configuration", "").await;
+    assert_eq!(unchanged["revision"], initial["revision"]);
+    assert_eq!(
+        unchanged["runtime_effective"]["values"]["runtime"]["execution_timeout_seconds"],
+        300
+    );
+    assert_eq!(unchanged["pending_restart"], false);
+    h.close().await;
+}

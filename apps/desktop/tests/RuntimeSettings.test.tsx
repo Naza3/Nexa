@@ -113,7 +113,7 @@ describe("separate idle and verification settings", () => {
   it("leaves uninitialized setup read-only", async () => {
     const { api } = await setup({ ...stopped(), initialized: false });
     expect(noUnload()).toBeDisabled(); expect(idleInput()).toBeDisabled(); expect(verificationInput()).toBeDisabled();
-    expect(screen.getAllByText(/保存不会初始化或启动服务/)).toHaveLength(2); expect(api.start).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/保存不会初始化或启动服务/)).toHaveLength(3); expect(api.start).not.toHaveBeenCalled();
   });
   it("handles an old DTO without claiming new capabilities and preserves legacy idle save", async () => {
     const old = stopped(); delete old.settings.idle_unload_enabled; delete old.settings.model_verification_timeout_seconds;
@@ -140,7 +140,7 @@ describe("separate idle and verification settings", () => {
     fireEvent.change(verificationInput(), { target: { value: "600" } }); const save = saveVerification(); fireEvent.click(save); fireEvent.click(save);
     expect(api.saveVerificationTimeout).toHaveBeenCalledTimes(1); expect(verificationInput()).toBeDisabled(); expect(noUnload()).toBeDisabled();
     expect(screen.getByRole("button", { name: "关闭窗口并保留服务" })).toBeDisabled();
-    expect(screen.getAllByText(/有其他操作正在进行/)).toHaveLength(2);
+    expect(screen.getAllByText(/有其他操作正在进行/)).toHaveLength(3);
     await user.click(screen.getByRole("button", { name: "API 接入" }));
     expect(screen.getByRole("switch", { name: "启用局域网 API" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "模型库" }));

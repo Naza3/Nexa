@@ -395,3 +395,16 @@ it("keeps incomplete provenance when recovery confirms completed after a lost re
   expect(screen.getByText("后续片段")).toBeVisible();
   expect(screen.getByRole("button", { name: "识别图片" })).toBeEnabled();
 });
+
+it("keeps partial OCR output and offers actionable timeout guidance without replay", async () => {
+  const api = await mount({ chatNext: vi.fn(async (): Promise<ChatBatch> => ({ request_id: "ocr-1", terminal: true, events: [
+    { type: "delta", text: "已识别的部分内容" },
+    { type: "failed", code: "execution_timeout", message: "execution timeout" },
+  ] })) });
+  await upload(); fireEvent.click(screen.getByRole("button", { name: "识别图片" }));
+  expect(await screen.findByText(/推理执行超时（execution_timeout）/)).toHaveTextContent("适当调大“推理执行超时”");
+  expect(screen.getByText(/推理执行超时（execution_timeout）/)).toHaveTextContent("重新加载模型并手动重试");
+  expect(screen.getByText(/推理执行超时（execution_timeout）/)).toHaveTextContent("不会自动重试");
+  expect(screen.getByText("已识别的部分内容")).toBeInTheDocument();
+  expect(api.ocrStart).toHaveBeenCalledTimes(1); expect(api.chatNext).toHaveBeenCalledTimes(1);
+});

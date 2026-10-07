@@ -6,7 +6,7 @@
 
 使用一个共享解析器和权威配置源，让UI和API的明确加载遵循本次覆盖、模型档案、全局默认的优先级。保留原actor会话快照、单驻留模型、worker隔离、具体ModelId IPC和LAN只允许调用已加载模型。
 
-复用config.toml并升级schema2；不建立额外数据库。运行中的profile和请求默认可CAS保存，后者只影响新解析请求。全局加载、监听、idle和文件校验策略仍停服保存。迁移冲突必须由用户选择，不重置数据或凭据。
+复用config.toml并升级schema2；不建立额外数据库。运行中的profile和请求默认可CAS保存，后者只影响新解析请求。全局加载、监听、idle、文件校验和推理执行超时策略仍停服保存。迁移冲突必须由用户选择，不重置数据或凭据。
 
 下面为已冻结v1.1实施合同；若实现发生必要调整，须先同步此决策和跨层测试。
 
@@ -65,7 +65,7 @@ interface LoadDefaults { context_size:number; threads:number|null; batch_size:nu
 interface LoadOverrides { context_size:number|null; threads:number|null; batch_size:number|null }
 interface LoadOptions { context_size:number; threads:number; batch_size:number }
 interface RequestDefaults { max_output_tokens:number; temperature:number; top_p:number }
-interface RuntimePolicies { idle_unload_enabled:boolean; idle_unload_seconds:number; model_verification_timeout_seconds:number }
+interface RuntimePolicies { execution_timeout_seconds:number; idle_unload_enabled:boolean; idle_unload_seconds:number; model_verification_timeout_seconds:number }
 interface ProfileEntry { model_id:string; load_overrides:LoadOverrides }
 interface ConfigurationValues {
   global_defaults:LoadDefaults;
@@ -89,7 +89,7 @@ interface ConfigurationSnapshot {
   schema_version:1|2;
   revision:Revision; // 当前磁盘config版本，供CAS；未初始化为"absent"
   saved:ConfigurationValues;
-  runtime_effective:{revision:Revision;values:ConfigurationValues}|null;
+  runtime_effective:{revision:Revision;chat_response_timeout_seconds:number;values:ConfigurationValues}|null;
   pending_restart:boolean;
   migration:MigrationStatus;
 }
@@ -112,6 +112,8 @@ interface ModelConfiguration {
 - sources只描述saved解析值；真实options来自session snapshot。不能从值相等猜测真实加载来源或伪造精确已应用revision。
 - `context_limit`来自已有有界库存metadata，不读/哈希GGUF。已知上限保存/加载皆校验；未知明确标未知，不发明数值。
 - DTO不包含token、token_file、源文件完整路径、可信origin任意编辑口、system/raw error。
+- 按[ADR0034](0034-configurable-execution-timeout.md)，`runtime.execution_timeout_seconds` 是唯一新增可编辑超时，默认300秒。统一runtime整组JSON更新必须显式携带该字段，范围1..86400；缺省、null或类型错误拒绝，不用默认值覆盖用户已有设置。旧TOML缺省仍取300，已有合法超大正数继续可读，不阻塞其他组保存。保存runtime组超界返回 `configuration_invalid`，param 为 `update.runtime.execution_timeout_seconds`。
+- `runtime_effective.chat_response_timeout_seconds` 是只读预算：从实际active配置的文件校验、排队、加载、执行秒数依次饱和相加，再饱和加30。磁盘pending值不参与，溢出饱和至u64上限仍允许GET；桌面转成单调时钟截止点不可表示时返回 `response_invalid`。该字段不是第二个用户设置，stream预算由同一effective执行秒数加30派生。
 
 ### 3.2 CAS写请求
 
@@ -141,6 +143,7 @@ interface UiPreferencesSaveRequest {
 ```
 
 - Save每次只有一个kind，保持影响和锁需求明确，返回完整ConfigurationSnapshot。成功发布但fsync失败返回configuration_durability_unconfirmed，客户端先重读，禁止自动重复提交。
+- runtime策略只允许停服持锁CAS保存，执行超时重启服务后生效；运行中提交返回 `runtime_running`，不改变active计时。
 - UI只提交用户本次确认的组。每组全量字段受CAS保护；冲突保留dirty草稿，重读比较后仅重新应用已确认字段，不能用新revision自动重发旧全表单。
 - `model_load_profile`平时只传model_id；只有“本次临时覆盖”发load_overrides。不能把显示出来的saved_effective全部回传成request覆盖，否则profile来源被永久遮蔽。
 - 临时load_overrides的null非法，缺省=未覆盖；backend/gpu固定cpu/0，不添加新选择。

@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-08 可配置推理执行超时（源码与Linux检查完成，Windows待验证）
+
+任务W02-OCR-4。新增“设置 → 资源与校验 → 推理执行超时”，复用既有执行秒数，默认300、停服可保存1–86400，重启服务生效。桌面聊天/OCR通过同一认证连接读取运行有效配置，响应头等待与流式等待同时跟随配置，移除这两处固定750秒限制；旧TOML兼容、CAS、取消、不重放和部分输出保留保持。浏览器发现并修复新设置草稿恢复白名单遗漏，补中文超时指引。
+
+相关Rust258通过/2既有忽略、Linux壳34、前端868及最后preview定向18项、fmt/clippy/typecheck/lint/生产构建和独立审查通过；Chromium保存、启动应用、刷新恢复/冲突及1440/1024/390布局通过，后端为模拟。版本仍0.2.3，Windows原生新包和用户CPU长图仍待验。见[ADR0034](docs/decisions/0034-configurable-execution-timeout.md)、[验证记录](docs/verification/2026-10-08-configurable-execution-timeout.md)及[使用说明](docs/ocr-windows-cpu.md)。
+
 ## 2026-10-07 版本0.2.3与tag（已完成；公开Release受阻）
 
 任务W05-VERSION-4。七版本文件一致性、锁定metadata及发行39项检查通过；`6309dedf6e15019a93f51ca24a27442850e7575d`与附注tag `v0.2.3`已原子推送，包含本轮全部修复。main仍1c3650c，未自动合并或移动旧tag。

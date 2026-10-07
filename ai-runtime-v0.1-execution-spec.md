@@ -250,6 +250,8 @@ gpu_layers = 0
 
 按[ADR0023](docs/decisions/0023-model-verification-and-idle-policy.md)，文件校验超时范围30..7200秒，整次校验共用预算，不改变下载传输、原生加载或短文本计时；缺省300秒。`idle_unload_enabled=false`明确关闭空闲卸载，保留等待秒数（桌面新保存1..86400秒，旧手工长TTL读取保持兼容），显式卸载/切换/关停继续有效。旧配置缺少字段按true/300秒读取；新字段不保证旧版程序可读。运行策略须停服持锁保存，新操作/下次启动生效。
 
+按[ADR0034](docs/decisions/0034-configurable-execution-timeout.md)，统一设置暴露既有 `runtime.execution_timeout_seconds`：默认300秒，新保存1..86400秒，完整runtime更新必填；旧TOML缺省300、合法超大正数读取兼容。仅停服持锁CAS保存，重启服务后生效。执行预算覆盖prepare、图像编码、prefill和decode，排队、加载及文件校验继续分别计时。
+
 ### 5.3 CPU设备与资源
 
 当前仅CPU，显式请求其他backend或gpu_layers非零必须拒绝，不假装回退成功。status/devices区分配置与实际观察；未知指标保持null/unavailable。构建关闭GGML_NATIVE但仍有实际指令集要求，见[构建锁](docs/build-lock.md)，不能宣称任意x64兼容。
@@ -461,6 +463,8 @@ data: [DONE]
 正常结束 reason 为 stop 或 length。请求 include_usage=true 时，在 finish chunk 与 [DONE] 之间发送 choices=[] 的 usage chunk；统计字段与非流式一致。
 
 发出 SSE 响应前完成排队、加载、模板和上下文预算检查，错误可使用对应 HTTP 状态。等待期间客户端 read timeout 应覆盖排队、加载和首 token 处理，不以服务暂未返回正文判定卡死。
+
+桌面文本聊天与图片OCR在同一已证明身份的管理连接上先GET `/runtime/configuration`，再POST聊天请求；使用 `runtime_effective.chat_response_timeout_seconds` 等待响应，其值为实际active文件校验+排队+加载+执行+30秒（u64逐项饱和加法）。收到响应后的stream使用同一快照的执行超时+30秒，不读取pending磁盘值。这两个聊天路径移除固定750秒兜底；缺失/无效effective预算或无法构造截止点返回 `response_invalid`，不静默退回固定值。其他管理路径的预算不变；SSE事件/正文和输出上限、取消及断流清理、不自动重放规则保持。
 
 SSE 已开始后出错，发送一个 `data: {"error":{...}}` 事件后关闭连接，不发送成功 finish 或 [DONE]。这是本产品的错误扩展，客户端必须处理。显式取消也按此路径返回 `request_cancelled`；客户端断开时无需向断开的连接发送终态。
 

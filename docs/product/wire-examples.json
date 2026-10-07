@@ -55,5 +55,86 @@
       "close_runtime_on_exit": false,
       "download_source": "modelscope"
     }
+  },
+  "save_execution_timeout": {
+    "expected_revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "update": {
+      "kind": "runtime",
+      "runtime": {
+        "execution_timeout_seconds": 1800,
+        "idle_unload_enabled": true,
+        "idle_unload_seconds": 300,
+        "model_verification_timeout_seconds": 300
+      }
+    }
+  },
+  "configuration_execution_timeout_active": {
+    "schema_version": 2,
+    "revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "saved": {
+      "global_defaults": {
+        "context_size": 4096,
+        "threads": null,
+        "batch_size": 512
+      },
+      "request_defaults": {
+        "max_output_tokens": 512,
+        "temperature": 0.7,
+        "top_p": 0.9
+      },
+      "runtime": {
+        "execution_timeout_seconds": 1800,
+        "idle_unload_enabled": true,
+        "idle_unload_seconds": 300,
+        "model_verification_timeout_seconds": 300
+      },
+      "local_api": {
+        "listen": "127.0.0.1:18080"
+      },
+      "lan_api": {
+        "enabled": false,
+        "listen": null,
+        "allowed_cidrs": []
+      },
+      "model_profiles": []
+    },
+    "runtime_effective": {
+      "revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "chat_response_timeout_seconds": 2550,
+      "values": {
+        "global_defaults": {
+          "context_size": 4096,
+          "threads": null,
+          "batch_size": 512
+        },
+        "request_defaults": {
+          "max_output_tokens": 512,
+          "temperature": 0.7,
+          "top_p": 0.9
+        },
+        "runtime": {
+          "execution_timeout_seconds": 1800,
+          "idle_unload_enabled": true,
+          "idle_unload_seconds": 300,
+          "model_verification_timeout_seconds": 300
+        },
+        "local_api": {
+          "listen": "127.0.0.1:18080"
+        },
+        "lan_api": {
+          "enabled": false,
+          "listen": null,
+          "allowed_cidrs": []
+        },
+        "model_profiles": []
+      }
+    },
+    "pending_restart": false,
+    "migration": {
+      "state": "not_needed",
+      "preferences_revision": null,
+      "differences": [],
+      "backup_available": false
+    }
   }
 }

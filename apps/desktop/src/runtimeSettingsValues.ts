@@ -23,3 +23,8 @@ export function preferencesOnly(settings: Preferences): Preferences {
     download_source: settings.download_source,
   };
 }
+
+export function validateExecutionSeconds(seconds: number): string | null {
+  return Number.isSafeInteger(seconds) && seconds >= 1 && seconds <= 86400
+    ? null : "推理执行超时须为 1–86400 秒的整数。";
+}

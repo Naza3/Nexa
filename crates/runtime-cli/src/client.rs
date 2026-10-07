@@ -319,6 +319,32 @@ impl VerifiedConnection {
         verification: Option<Duration>,
     ) -> Result<Response<Incoming>> {
         let response_timeout = request_timeout(&method, path, verification)?;
+        self.request_with_timeout(method, path, body, extra, response_timeout)
+            .await
+    }
+    /// Submit chat once on this proved connection, using the running service's
+    /// effective wait budget, including preparation before SSE headers.
+    pub async fn request_chat_with_timeout(
+        &mut self,
+        body: RequestBody,
+        extra: HeaderMap,
+        budget: Duration,
+    ) -> Result<Response<Incoming>> {
+        self.request_with_timeout(Method::POST, "/v1/chat/completions", body, extra, budget)
+            .await
+    }
+    async fn request_with_timeout(
+        &mut self,
+        method: Method,
+        path: &str,
+        body: RequestBody,
+        extra: HeaderMap,
+        response_timeout: Duration,
+    ) -> Result<Response<Incoming>> {
+        let deadline = tokio::time::Instant::now()
+            .checked_add(response_timeout)
+            .filter(|_| !response_timeout.is_zero())
+            .ok_or(ClientError::Connection("invalid local request wait budget"))?;
         if !path.starts_with('/')
             || path.starts_with("//")
             || extra.contains_key("authorization")
@@ -341,7 +367,7 @@ impl VerifiedConnection {
         // allowance was consumed by the proof, a temporarily unready dispatcher
         // rejects immediately with is_canceled even if the socket remains open.
         // Readiness and exactly one send share the original total deadline.
-        timeout(response_timeout, async {
+        tokio::time::timeout_at(deadline, async {
             if let Err(error) = self.sender.ready().await {
                 return Err(ClientError::Transport {
                     stage: "sender_ready",

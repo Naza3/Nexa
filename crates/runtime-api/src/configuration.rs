@@ -113,6 +113,7 @@ pub struct RequestDefaults {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimePolicies {
+    pub execution_timeout_seconds: u64,
     pub idle_unload_enabled: bool,
     pub idle_unload_seconds: u64,
     pub model_verification_timeout_seconds: u64,
@@ -150,6 +151,7 @@ impl From<&Config> for ConfigurationValues {
                 top_p: c.inference.top_p,
             },
             runtime: RuntimePolicies {
+                execution_timeout_seconds: c.runtime.execution_timeout_seconds,
                 idle_unload_enabled: c.runtime.idle_unload_enabled,
                 idle_unload_seconds: c.runtime.idle_unload_seconds,
                 model_verification_timeout_seconds: c.runtime.model_verification_timeout_seconds,
@@ -213,6 +215,8 @@ pub struct MigrationStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EffectiveConfiguration {
     pub revision: String,
+    /// Total response budget from the running service, including pre-stream preparation.
+    pub chat_response_timeout_seconds: u64,
     pub values: ConfigurationValues,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -685,6 +689,14 @@ pub fn snapshot(
         saved: (&document.config).into(),
         runtime_effective: active.map(|a| EffectiveConfiguration {
             revision: a.revision.clone(),
+            chat_response_timeout_seconds: a
+                .config
+                .runtime
+                .model_verification_timeout_seconds
+                .saturating_add(a.config.runtime.queue_timeout_seconds)
+                .saturating_add(a.config.runtime.load_timeout_seconds)
+                .saturating_add(a.config.runtime.execution_timeout_seconds)
+                .saturating_add(30),
             values: (&a.config).into(),
         }),
         pending_restart: active.is_some_and(|a| a.revision != document.revision),
@@ -965,6 +977,13 @@ pub fn save(
             c.inference.top_p = request_defaults.top_p;
         }
         ConfigurationUpdate::Runtime { runtime } => {
+            if !(1..=86400).contains(&runtime.execution_timeout_seconds) {
+                return Err(error_at(
+                    "configuration_invalid",
+                    "update.runtime.execution_timeout_seconds",
+                ));
+            }
+            c.runtime.execution_timeout_seconds = runtime.execution_timeout_seconds;
             if !(1..=86400).contains(&runtime.idle_unload_seconds) {
                 return Err(error_at(
                     "configuration_invalid",
@@ -1104,6 +1123,229 @@ mod tests {
         );
         assert_eq!(fs::read_dir(t.path()).unwrap().count(), before);
         assert!(!t.path().join("runtime").exists());
+    }
+    fn runtime_request(document: &Document, seconds: u64) -> ConfigurationSaveRequest {
+        let mut runtime = ConfigurationValues::from(&document.config).runtime;
+        runtime.execution_timeout_seconds = seconds;
+        ConfigurationSaveRequest {
+            expected_revision: document.revision.clone(),
+            update: ConfigurationUpdate::Runtime { runtime },
+        }
+    }
+    #[test]
+    fn execution_timeout_is_required_in_full_runtime_updates() {
+        let complete = serde_json::json!({
+            "expected_revision": "x",
+            "update": {"kind": "runtime", "runtime": {
+                "execution_timeout_seconds": 600,
+                "idle_unload_enabled": true,
+                "idle_unload_seconds": 300,
+                "model_verification_timeout_seconds": 300
+            }}
+        });
+        assert!(serde_json::from_value::<ConfigurationSaveRequest>(complete.clone()).is_ok());
+        let mut missing = complete.clone();
+        missing["update"]["runtime"]
+            .as_object_mut()
+            .unwrap()
+            .remove("execution_timeout_seconds");
+        assert!(serde_json::from_value::<ConfigurationSaveRequest>(missing).is_err());
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("600"),
+        ] {
+            let mut request = complete.clone();
+            request["update"]["runtime"]["execution_timeout_seconds"] = invalid;
+            assert!(serde_json::from_value::<ConfigurationSaveRequest>(request).is_err());
+        }
+    }
+    #[test]
+    fn execution_timeout_offline_cas_bounds_and_restart_snapshot() {
+        let t = root();
+        initialize(t.path()).unwrap();
+        let active = read(t.path()).unwrap();
+        assert_eq!(preview().saved.runtime.execution_timeout_seconds, 300);
+        assert_eq!(
+            snapshot(t.path(), &active, Some(&active))
+                .unwrap()
+                .runtime_effective
+                .unwrap()
+                .values
+                .runtime
+                .execution_timeout_seconds,
+            300
+        );
+        let online = save(
+            t.path(),
+            runtime_request(&active, 600),
+            Some(&active),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert_eq!(online.code, "runtime_running");
+        assert_eq!(read(t.path()).unwrap().bytes, active.bytes);
+        let mut current = read(t.path()).unwrap();
+        for seconds in [1, 86400, 600] {
+            let saved = save(
+                t.path(),
+                runtime_request(&current, seconds),
+                None,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+            let disk = read(t.path()).unwrap();
+            assert_eq!(disk.config.runtime.execution_timeout_seconds, seconds);
+            assert_eq!(
+                disk.config.runtime_config().execution_timeout,
+                std::time::Duration::from_secs(seconds)
+            );
+            assert_eq!(disk.config.inference, active.config.inference);
+            assert_eq!(disk.config.api, active.config.api);
+            assert_eq!(disk.config.lan_api, active.config.lan_api);
+            assert_eq!(
+                disk.config.runtime.idle_unload_seconds,
+                active.config.runtime.idle_unload_seconds
+            );
+            let conflict = save(
+                t.path(),
+                runtime_request(&current, 30),
+                None,
+                &BTreeMap::new(),
+            )
+            .unwrap_err();
+            assert_eq!(conflict.code, "configuration_conflict");
+            assert_eq!(read(t.path()).unwrap().bytes, saved.bytes);
+            current = disk;
+        }
+        for seconds in [0, 86401, u64::MAX] {
+            let mut request = runtime_request(&current, seconds);
+            if let ConfigurationUpdate::Runtime { runtime } = &mut request.update {
+                runtime.idle_unload_enabled = false;
+                runtime.idle_unload_seconds = 120;
+            }
+            let invalid = save(t.path(), request, None, &BTreeMap::new()).unwrap_err();
+            assert_eq!(invalid.code, "configuration_invalid");
+            assert_eq!(
+                invalid.param,
+                Some("update.runtime.execution_timeout_seconds")
+            );
+            assert_eq!(read(t.path()).unwrap().bytes, current.bytes);
+        }
+        let pending = snapshot(t.path(), &current, Some(&active)).unwrap();
+        assert!(pending.pending_restart);
+        assert_eq!(pending.saved.runtime.execution_timeout_seconds, 600);
+        assert_eq!(
+            pending
+                .runtime_effective
+                .unwrap()
+                .values
+                .runtime
+                .execution_timeout_seconds,
+            300
+        );
+        let restarted = snapshot(t.path(), &current, Some(&current)).unwrap();
+        assert!(!restarted.pending_restart);
+        assert_eq!(
+            restarted
+                .runtime_effective
+                .unwrap()
+                .values
+                .runtime
+                .execution_timeout_seconds,
+            600
+        );
+    }
+    #[test]
+    fn chat_response_budget_uses_active_stages_despite_pending_disk_changes() {
+        let t = root();
+        let mut config = Config {
+            schema_version: 2,
+            ..Default::default()
+        };
+        config.runtime.model_verification_timeout_seconds = 31;
+        config.runtime.queue_timeout_seconds = 41;
+        config.runtime.load_timeout_seconds = 51;
+        config.runtime.execution_timeout_seconds = 61;
+        write(t.path(), &config);
+        let active = read(t.path()).unwrap();
+        let initial = snapshot(t.path(), &active, Some(&active)).unwrap();
+        assert!(!initial.pending_restart);
+        assert_eq!(
+            initial
+                .runtime_effective
+                .unwrap()
+                .chat_response_timeout_seconds,
+            214
+        );
+        let saved = save(
+            t.path(),
+            runtime_request(&active, 600),
+            None,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let pending = snapshot(t.path(), &saved, Some(&active)).unwrap();
+        assert!(pending.pending_restart);
+        assert_eq!(pending.saved.runtime.execution_timeout_seconds, 600);
+        let effective = pending.runtime_effective.unwrap();
+        assert_eq!(effective.chat_response_timeout_seconds, 214);
+        assert_eq!(effective.values.runtime.execution_timeout_seconds, 61);
+        let restarted = snapshot(t.path(), &saved, Some(&saved)).unwrap();
+        assert!(!restarted.pending_restart);
+        assert_eq!(
+            restarted
+                .runtime_effective
+                .unwrap()
+                .chat_response_timeout_seconds,
+            753
+        );
+    }
+    #[test]
+    fn chat_response_budget_saturates_for_readable_legacy_timeouts() {
+        let t = root();
+        let mut config = Config::default();
+        // Every individual value is TOML-representable and previously readable;
+        // their total must not overflow or make configuration GET fail.
+        config.runtime.queue_timeout_seconds = i64::MAX as u64;
+        config.runtime.load_timeout_seconds = i64::MAX as u64;
+        config.runtime.execution_timeout_seconds = i64::MAX as u64;
+        write(t.path(), &config);
+        let active = read(t.path()).unwrap();
+        let snapshot = snapshot(t.path(), &active, Some(&active)).unwrap();
+        assert_eq!(
+            snapshot
+                .runtime_effective
+                .unwrap()
+                .chat_response_timeout_seconds,
+            u64::MAX
+        );
+    }
+    #[test]
+    fn oversized_legacy_execution_timeout_allows_unrelated_saves() {
+        let t = root();
+        let mut config = Config::default();
+        config.runtime.execution_timeout_seconds = 86401;
+        write(t.path(), &config);
+        let before = read(t.path()).unwrap();
+        let after = save(
+            t.path(),
+            profile(&before.revision, "a", 2048),
+            None,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(after.config.runtime.execution_timeout_seconds, 86401);
+        assert_eq!(after.config.schema_version, 2);
+        assert_eq!(
+            snapshot(t.path(), &after, None)
+                .unwrap()
+                .saved
+                .runtime
+                .execution_timeout_seconds,
+            86401
+        );
     }
     #[test]
     fn schema_and_bounds_are_fail_closed() {

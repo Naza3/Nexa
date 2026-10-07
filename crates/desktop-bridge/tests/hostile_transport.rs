@@ -42,6 +42,10 @@ enum Mode {
     HeldLoadStart,
     LostLoadStart,
     InvalidLoadState,
+    LongPreparation,
+    LongStream,
+    InvalidChatBudget(&'static str),
+    PendingConfiguration,
 }
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -99,11 +103,49 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("private");
         init_private_token(&root).unwrap();
+        let mut config = Config::default();
+        if matches!(mode, Mode::LongPreparation | Mode::LongStream) {
+            config.runtime.execution_timeout_seconds = 1800;
+        }
         write_private_new(
             &root.join("config.toml"),
-            Config::default().to_toml().unwrap().as_bytes(),
+            config.to_toml().unwrap().as_bytes(),
         )
         .unwrap();
+        let document = runtime_api::configuration::read(&root).unwrap();
+        let mut configuration = serde_json::to_value(
+            runtime_api::configuration::snapshot(&root, &document, Some(&document)).unwrap(),
+        )
+        .unwrap();
+        if matches!(mode, Mode::LongPreparation | Mode::LongStream) {
+            // A saved value awaiting restart must not shorten this live request.
+            configuration["saved"]["runtime"]["execution_timeout_seconds"] = json!(1);
+            configuration["pending_restart"] = json!(true);
+        }
+        if let Mode::InvalidChatBudget(kind) = mode {
+            match kind {
+                "missing" => {
+                    configuration["runtime_effective"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("chat_response_timeout_seconds");
+                }
+                "inactive" => configuration["runtime_effective"] = json!(null),
+                "overflow" => {
+                    configuration["runtime_effective"]["chat_response_timeout_seconds"] =
+                        json!(u64::MAX)
+                }
+                "zero" => {
+                    configuration["runtime_effective"]["values"]["runtime"]["execution_timeout_seconds"] =
+                        json!(0)
+                }
+                "too_short" => {
+                    configuration["runtime_effective"]["chat_response_timeout_seconds"] = json!(1)
+                }
+                _ => unreachable!(),
+            }
+        }
+        let configuration = Arc::new(configuration.to_string());
         let lock = InstanceLock::try_acquire(&root).unwrap().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -145,6 +187,7 @@ impl Fixture {
                 let dc = dc.clone();
                 let g = g.clone();
                 let load_operation = load_operation.clone();
+                let configuration = configuration.clone();
                 tokio::spawn(async move {
                     let first = read_request(&mut socket).await;
                     if first.is_empty() {
@@ -175,7 +218,7 @@ impl Fixture {
                     if socket.write_all(proof_response.as_bytes()).await.is_err() {
                         return;
                     }
-                    let request = read_request(&mut socket).await;
+                    let mut request = read_request(&mut socket).await;
                     if request.is_empty() {
                         return;
                     }
@@ -183,6 +226,29 @@ impl Fixture {
                         header(&request, "authorization").unwrap().as_bytes()
                     ));
                     a.fetch_add(1, Ordering::SeqCst);
+                    if request.starts_with("GET /runtime/configuration ") {
+                        if matches!(mode, Mode::PendingConfiguration) {
+                            let mut byte = [0];
+                            let _ = socket.read(&mut byte).await;
+                            dc.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{configuration}",
+                            configuration.len()
+                        );
+                        if socket.write_all(response.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        request = read_request(&mut socket).await;
+                        if request.is_empty() {
+                            return;
+                        }
+                        assert!(token.matches_authorization(
+                            header(&request, "authorization").unwrap().as_bytes()
+                        ));
+                        a.fetch_add(1, Ordering::SeqCst);
+                    }
                     if request.starts_with("POST /runtime/load-operations ") {
                         let body: serde_json::Value =
                             serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
@@ -305,6 +371,9 @@ impl Fixture {
                     }
                     assert!(request.starts_with("POST /v1/chat/completions "));
                     c.fetch_add(1, Ordering::SeqCst);
+                    if matches!(mode, Mode::LongPreparation) {
+                        g.notified().await;
+                    }
                     if matches!(mode, Mode::Redirect) {
                         let _=socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/stolen\r\nContent-Length: 2\r\n\r\n{}").await;
                         return;
@@ -362,6 +431,15 @@ impl Fixture {
                         body.len()
                     );
                     let _ = socket.write_all(head.as_bytes()).await;
+                    if matches!(mode, Mode::LongStream) {
+                        let split = body.match_indices("\n\n").nth(1).unwrap().0 + 2;
+                        if socket.write_all(&body.as_bytes()[..split]).await.is_err() {
+                            return;
+                        }
+                        g.notified().await;
+                        let _ = socket.write_all(&body.as_bytes()[split..]).await;
+                        return;
+                    }
                     // Deliberately split all UTF-8 code points and JSON/SSE separators.
                     let transport_chunk =
                         if matches!(mode, Mode::LargeValid | Mode::OverReply | Mode::OverHistory) {
@@ -428,7 +506,7 @@ async fn valid_same_connection_unicode_usage_and_repeat_terminal() {
     assert!(matches!(events.last(),Some(ChatEvent::Completed{usage,..}) if usage.total_tokens==5));
     let again = f.bridge.chat_next(id).await.unwrap();
     assert_eq!(again.events, vec![events.last().unwrap().clone()]);
-    assert_eq!(f.auth.load(Ordering::SeqCst), 1);
+    assert_eq!(f.auth.load(Ordering::SeqCst), 2);
 }
 #[tokio::test]
 async fn proof_failure_never_releases_bearer() {
@@ -1010,4 +1088,101 @@ async fn ocr_disconnect_is_failed_and_not_replayed() {
     let events = f.terminal(id).await;
     assert!(matches!(events.last(), Some(ChatEvent::Failed { .. })));
     assert_eq!(f.chats.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn effective_budget_allows_chat_and_ocr_preparation_past_750_seconds() {
+    for ocr in [false, true] {
+        let f = Fixture::new(Mode::LongPreparation).await;
+        let id = if ocr {
+            f.bridge.ocr_start(ocr_request()).unwrap().request_id
+        } else {
+            f.start()
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while f.chats.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(751)).await;
+        assert!(!f.bridge.chat_next(id).await.unwrap().terminal);
+        tokio::time::resume();
+        f.gate.notify_one();
+        assert!(matches!(
+            f.terminal(id).await.last(),
+            Some(ChatEvent::Completed { .. })
+        ));
+        assert_eq!(f.chats.load(Ordering::SeqCst), 1);
+        assert_eq!(f.cancels.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn effective_stream_budget_survives_750_then_expires_without_replaying_partial_ocr() {
+    let f = Fixture::new(Mode::LongStream).await;
+    let id = f.bridge.ocr_start(ocr_request()).unwrap().request_id;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let batch = f.bridge.chat_next(id).await.unwrap();
+            assert!(!batch.terminal);
+            if batch
+                .events
+                .iter()
+                .any(|e| matches!(e, ChatEvent::Delta { text } if text == "你好😀"))
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(751)).await;
+    assert!(!f.bridge.chat_next(id).await.unwrap().terminal);
+    tokio::time::advance(Duration::from_secs(1080)).await;
+    tokio::time::resume();
+    let events = f.terminal(id).await;
+    assert!(
+        matches!(events.last(), Some(ChatEvent::Failed { code, .. }) if code == "execution_timeout")
+    );
+    assert_eq!(f.chats.load(Ordering::SeqCst), 1);
+    assert_eq!(f.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        f.bridge.chat_next(id).await.unwrap().events,
+        vec![events.last().unwrap().clone()]
+    );
+}
+
+#[tokio::test]
+async fn missing_inactive_and_invalid_effective_budgets_never_submit_generation() {
+    for kind in ["missing", "inactive", "zero", "overflow", "too_short"] {
+        let f = Fixture::new(Mode::InvalidChatBudget(kind)).await;
+        let id = f.start();
+        assert!(
+            matches!(f.terminal(id).await.last(), Some(ChatEvent::Failed { code, .. }) if code == "response_invalid"),
+            "{kind}"
+        );
+        assert_eq!(f.chats.load(Ordering::SeqCst), 0, "{kind}");
+        assert_eq!(f.cancels.load(Ordering::SeqCst), 0, "{kind}");
+    }
+}
+
+#[tokio::test]
+async fn cancellation_during_configuration_read_never_submits_generation() {
+    let f = Fixture::new(Mode::PendingConfiguration).await;
+    let id = f.start();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while f.auth.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    f.bridge.chat_cancel(id).await.unwrap();
+    assert_eq!(f.terminal(id).await.last(), Some(&ChatEvent::Cancelled));
+    assert_eq!(f.chats.load(Ordering::SeqCst), 0);
+    assert_eq!(f.cancels.load(Ordering::SeqCst), 0);
 }

@@ -27,6 +27,7 @@
 
 - [模型移除 ADR0030](docs/decisions/0030-nondestructive-model-unregistration.md)：仅取消登记、文件保留、schema3原子可见性及在线/离线互斥
 - [聊天 Markdown ADR0031](docs/decisions/0031-safe-chat-markdown.md)：安全GFM显示、原文保持与离线链接/图片边界
+- [统一推理超时 ADR0034](docs/decisions/0034-configurable-execution-timeout.md)：单项执行超时、桌面有效配置预算、停服保存与重启生效
 
 ## 实际 Windows 工程
 

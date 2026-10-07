@@ -105,6 +105,12 @@ impl BridgeError {
             "response_limit" => {
                 "The reply exceeded the output limit. The partial reply is incomplete."
             }
+            "response_invalid" => {
+                "运行服务响应不完整或与当前桌面版本不兼容。请刷新状态；仍失败时，请显式停止服务并使用同一完整安装包重新启动。"
+            }
+            "execution_timeout" => {
+                "推理执行超时，已生成内容可能不完整。可减少输入，或停止服务后在设置中调大推理执行超时，再启动服务并手动重试。"
+            }
             "slow_consumer" => {
                 "The window stopped consuming output. The partial reply is incomplete."
             }

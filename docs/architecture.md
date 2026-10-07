@@ -121,6 +121,10 @@ Jinja目前没有循环、操作数或中间分配预算；4MiB限制在render�
 
 Windows产品worker由父进程独立计时：加载使用load_timeout，prepare属于Generate的execution_timeout，默认各300秒；超时发取消，5秒宽限后可调用TerminateJobObject，再至多等待5秒确认并有界清理。取消标志不能保证中断正在执行的Jinja；未确认回收则fail-closed，不宣称已停止或另起worker。该机制避免父端无界等待，不构成Job RAM硬限制，超时前仍可能OOM或拖慢16GB系统；直接进程内使用adapter没有这层父进程强杀保护。
 
+按[ADR0034](decisions/0034-configurable-execution-timeout.md)，既有execution_timeout统一暴露为“推理执行超时”，默认300秒，UI/API新保存1..86400秒。runtime整组更新必填、停服CAS保存、重启生效；旧TOML缺省300，合法超大正数继续可读。设置只改变同一调度执行预算，不创建OCR专属计时器。
+
+桌面文本聊天和单图OCR使用同一已证明身份的Connection先GET配置再POST请求；只读 `runtime_effective.chat_response_timeout_seconds` 来自实际active文件校验+排队+加载+执行+30秒的饱和和，stream使用同一effective执行秒数+30秒。pending磁盘值不参与预算，巨大旧配置不会让GET溢出；桌面无法构造单调截止点时报 `response_invalid`。这两个聊天路径取消固定750秒兜底，使SSE响应头前的prepare与响应头后的stream均跟随实际执行预算；其他管理路径预算、SSE正文/输出上限、取消清理与不自动重放保持。
+
 复杂模板的执行/分配预算属于后续待办，不扩入本切片；当前不作全部模板安全或全进程内存安全承诺。
 
 ## 8. 交付与演进

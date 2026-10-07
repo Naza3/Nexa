@@ -107,3 +107,68 @@ fn temporary_overrides_are_sparse_explicit_and_null_is_invalid() {
         .is_ok()
     );
 }
+
+#[tokio::test]
+async fn execution_timeout_persists_offline_with_cas_and_atomic_invalid_updates() {
+    let temp = tempfile::tempdir().unwrap();
+    let b = bridge(&temp);
+    let preview = b.configuration_get().await.unwrap();
+    assert_eq!(preview.saved.runtime.execution_timeout_seconds, 300);
+    let initial = b.initialize().await.unwrap().configuration.unwrap();
+    let mut runtime = initial.saved.runtime.clone();
+    runtime.execution_timeout_seconds = 86400;
+    let saved = b
+        .configuration_save(ConfigurationSaveRequest {
+            expected_revision: initial.revision.clone(),
+            update: ConfigurationUpdate::Runtime {
+                runtime: runtime.clone(),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(saved.saved.runtime.execution_timeout_seconds, 86400);
+    assert!(!saved.pending_restart);
+    assert!(saved.runtime_effective.is_none());
+    assert_eq!(
+        bridge(&temp)
+            .configuration_get()
+            .await
+            .unwrap()
+            .saved
+            .runtime
+            .execution_timeout_seconds,
+        86400
+    );
+    let root = temp.path().join("private");
+    let disk = read(&root).unwrap();
+    assert_eq!(
+        disk.config.runtime_config().execution_timeout,
+        std::time::Duration::from_secs(86400)
+    );
+    assert_eq!(
+        b.configuration_save(ConfigurationSaveRequest {
+            expected_revision: initial.revision,
+            update: ConfigurationUpdate::Runtime {
+                runtime: runtime.clone()
+            },
+        })
+        .await
+        .unwrap_err()
+        .code,
+        "configuration_conflict"
+    );
+    for seconds in [0, 86401] {
+        runtime.execution_timeout_seconds = seconds;
+        let error = b
+            .configuration_save(ConfigurationSaveRequest {
+                expected_revision: saved.revision.clone(),
+                update: ConfigurationUpdate::Runtime {
+                    runtime: runtime.clone(),
+                },
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "configuration_invalid");
+        assert_eq!(read(&root).unwrap().bytes, disk.bytes);
+    }
+}
