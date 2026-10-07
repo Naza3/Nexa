@@ -1,13 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { DesktopController } from "../src/controller";
 import { deferred, makeApi, model, snapshot } from "./fixtures";
-import { prepareOcrImage } from "../src/ocrImage";
+import * as ocrImage from "../src/ocrImage";
 import type { ChatBatch, DesktopApi, ModelFileSelection, ModelSummary } from "../src/types";
 import { DesktopError } from "../src/adapter";
-vi.mock("../src/ocrImage", () => ({ prepareOcrImage: vi.fn() }));
-beforeEach(() => { vi.mocked(prepareOcrImage).mockResolvedValue("data:image/png;base64,AQ=="); });
+beforeEach(() => { vi.spyOn(ocrImage, "prepareOcrImage").mockResolvedValue("data:image/png;base64,AQ=="); });
+afterEach(() => vi.unstubAllGlobals());
 const pairedFiles: ModelFileSelection = { selection_id: "pair", expires_in_seconds: 600, files: [{ selection_index: 0, file_name: "model.gguf", size_bytes: 100 }, { selection_index: 1, file_name: "mmproj.gguf", size_bytes: 50 }] };
 async function mount(overrides: Partial<DesktopApi> = {}) {
   const api = makeApi({ snapshot: vi.fn(async () => { const value = snapshot(); value.runtime!.load_options!.context_size = 8192; return value; }), ocrStart: vi.fn(async () => ({ request_id: "ocr-1" })), saveOcrMarkdown: vi.fn(async () => ({ saved: true })), modelsPage: vi.fn(async () => ({ generation: "g", data: [{ ...model, has_projector: true }], next_after: null })), ...overrides });
@@ -21,6 +21,114 @@ async function upload() {
   fireEvent.change(screen.getByLabelText("OCR 图片"), { target: { files: [new File(["png"], "page.png", { type: "image/png" })] } });
   await screen.findByAltText("待识别图片预览");
 }
+it("opens the hidden native image input through the visible labeled button", async () => {
+  await mount();
+  const input = screen.getByLabelText("OCR 图片");
+  const open = vi.spyOn(input, "click").mockImplementation(() => {});
+  const button = screen.getByRole("button", { name: "选择图片" });
+  expect(input).not.toBeVisible();
+  expect(button).toBeVisible();
+  expect(button).toHaveAccessibleDescription(/PNG \/ JPEG，最多 4 MiB/);
+  fireEvent.click(button);
+  expect(open).toHaveBeenCalledTimes(1);
+});
+it("requires a prepared image even when the selected OCR model is already loaded", async () => {
+  const api = await mount();
+  expect(screen.getByText("模型已加载，请先选择图片。")).toBeVisible();
+  expect(screen.getByRole("status", { name: "OCR 图片准备状态" })).toHaveTextContent("尚未选择图片。");
+  expect(screen.getByLabelText("OCR 图片")).toHaveAttribute("accept", ".png,.jpg,.jpeg,image/png,image/jpeg");
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
+  await upload();
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeEnabled();
+  fireEvent.change(screen.getByLabelText("OCR 图片"), { target: { files: [] } });
+  expect(screen.queryByAltText("待识别图片预览")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
+  expect(screen.getByText("模型已加载，请先选择图片。")).toBeVisible();
+  expect(api.ocrStart).not.toHaveBeenCalled();
+});
+it("shows preparation and failure beside the preview and retries the same File object", async () => {
+  const pending = deferred<string>();
+  vi.mocked(ocrImage.prepareOcrImage).mockImplementationOnce(() => pending.promise);
+  const api = await mount();
+  const file = new File(["png"], "retry.png", { type: "image/png" });
+  const input = screen.getByLabelText("OCR 图片");
+  fireEvent.change(input, { target: { files: [file] } });
+  const feedback = screen.getByRole("status", { name: "OCR 图片准备状态" });
+  expect(feedback).toHaveTextContent("已选择：retry.png");
+  expect(feedback).toHaveTextContent("正在检查原图");
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
+  await act(async () => pending.reject(new Error("图片损坏或无法解码。")));
+  expect(feedback).toHaveTextContent("图片损坏或无法解码。");
+  expect(screen.getByText("图片准备失败，请重新选择图片。")).toBeVisible();
+  expect(screen.queryByAltText("待识别图片预览")).not.toBeInTheDocument();
+  fireEvent.change(input, { target: { files: [file] } });
+  await screen.findByAltText("待识别图片预览");
+  expect(ocrImage.prepareOcrImage).toHaveBeenCalledTimes(2);
+  expect(feedback).toHaveTextContent("原图已准备完成");
+  expect(screen.queryByText("图片损坏或无法解码。")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeEnabled();
+  expect(input).toHaveValue("");
+  expect(api.ocrStart).not.toHaveBeenCalled();
+});
+it.each(["success", "failure"])("ignores the previous image's late %s after selecting a new image", async (outcome) => {
+  const old = deferred<string>();
+  vi.mocked(ocrImage.prepareOcrImage).mockImplementationOnce(() => old.promise).mockResolvedValueOnce("data:image/png;base64,TkVX");
+  const api = await mount();
+  const input = screen.getByLabelText("OCR 图片");
+  fireEvent.change(input, { target: { files: [new File(["old"], "old.png")] } });
+  fireEvent.change(input, { target: { files: [new File(["new"], "new.png")] } });
+  expect(await screen.findByAltText("待识别图片预览")).toHaveAttribute("src", "data:image/png;base64,TkVX");
+  await act(async () => { if (outcome === "success") old.resolve("data:image/png;base64,T0xE"); else old.reject(new Error("旧图片解码失败")); });
+  expect(screen.getByAltText("待识别图片预览")).toHaveAttribute("src", "data:image/png;base64,TkVX");
+  expect(screen.getByRole("status", { name: "OCR 图片准备状态" })).toHaveTextContent("已选择：new.png");
+  expect(screen.queryByText("旧图片解码失败")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeEnabled();
+  expect(api.ocrStart).not.toHaveBeenCalled();
+});
+it("waits for the current resize operation and never sends an older preparation", async () => {
+  const original = deferred<string>();
+  const resized = deferred<string>();
+  vi.mocked(ocrImage.prepareOcrImage).mockImplementationOnce(() => original.promise).mockImplementationOnce(() => resized.promise);
+  const api = await mount();
+  const file = new File(["png"], "resize.png");
+  fireEvent.change(screen.getByLabelText("OCR 图片"), { target: { files: [file] } });
+  fireEvent.change(screen.getByLabelText("发送图片尺寸"), { target: { value: "1600" } });
+  expect(screen.getByRole("status", { name: "OCR 图片准备状态" })).toHaveTextContent("正在检查并准备所选尺寸的图片");
+  await act(async () => original.resolve("data:image/png;base64,T0xE"));
+  expect(screen.queryByAltText("待识别图片预览")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "识别图片" }));
+  expect(api.ocrStart).not.toHaveBeenCalled();
+  await act(async () => resized.resolve("data:image/png;base64,TkVX"));
+  expect(ocrImage.prepareOcrImage).toHaveBeenNthCalledWith(2, file, 1600);
+  expect(screen.getByRole("status", { name: "OCR 图片准备状态" })).toHaveTextContent("预览为本次将发送的图片");
+  fireEvent.click(screen.getByRole("button", { name: "识别图片" }));
+  expect(api.ocrStart).toHaveBeenCalledWith(expect.objectContaining({ image_data_url: "data:image/png;base64,TkVX" }));
+});
+it("previews an empty-MIME PNG through the real preparation helper and sends normalized bytes", async () => {
+  vi.mocked(ocrImage.prepareOcrImage).mockRestore();
+  expect(vi.isMockFunction(ocrImage.prepareOcrImage)).toBe(false);
+  const decoded: string[] = [];
+  class DecodedImage {
+    width = 1;
+    height = 1;
+    onload = () => {};
+    set src(value: string) { decoded.push(value); queueMicrotask(() => this.onload()); }
+  }
+  vi.stubGlobal("Image", DecodedImage);
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+  const bytes = Uint8Array.from(atob(png), (value) => value.charCodeAt(0));
+  const file = new File([bytes], "扫描页.PNG");
+  expect(file.type).toBe("");
+  const api = await mount({ chatNext: vi.fn(async (): Promise<ChatBatch> => ({ request_id: "ocr-1", terminal: true, events: [{ type: "cancelled" }] })) });
+  fireEvent.change(screen.getByLabelText("OCR 图片"), { target: { files: [file] } });
+  const normalized = `data:image/png;base64,${png}`;
+  expect(await screen.findByAltText("待识别图片预览")).toHaveAttribute("src", normalized);
+  expect(decoded).toEqual([normalized]);
+  expect(screen.getByRole("status", { name: "OCR 图片准备状态" })).toHaveTextContent("已选择：扫描页.PNG");
+  fireEvent.click(screen.getByRole("button", { name: "识别图片" }));
+  await waitFor(() => expect(api.ocrStart).toHaveBeenCalledWith({ model_id: model.id, image_data_url: normalized, prompt: "Text Recognition:", max_output_tokens: 2048 }));
+});
 it("sends one image and prompt, preserves raw text for copy and native save", async () => {
   const writeText = vi.fn(async () => {});
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
@@ -51,12 +159,12 @@ it("retains early cancellation until the request id arrives", async () => {
   expect(screen.getByText(/已停止，已生成内容可能不完整/)).toBeVisible();
 });
 it("rejects bad images and invalid token limits before any request", async () => {
-  vi.mocked(prepareOcrImage).mockRejectedValue(new Error("图片损坏或无法解码。"));
+  vi.mocked(ocrImage.prepareOcrImage).mockRejectedValue(new Error("图片损坏或无法解码。"));
   const api = await mount();
   fireEvent.change(screen.getByLabelText("OCR 图片"), { target: { files: [new File(["bad"], "bad.png", { type: "image/png" })] } });
   expect(await screen.findByText("图片损坏或无法解码。")).toBeVisible();
   expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
-  vi.mocked(prepareOcrImage).mockResolvedValue("data:image/png;base64,AQ==");
+  vi.mocked(ocrImage.prepareOcrImage).mockResolvedValue("data:image/png;base64,AQ==");
   await upload();
   fireEvent.change(screen.getByLabelText("最大输出 token"), { target: { value: "4097" } });
   expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
@@ -91,6 +199,7 @@ it("shows pending selection beside the picker and blocks duplicate selection and
   fireEvent.click(screen.getByRole("button", { name: "选择两个配套文件" }));
   expect(screen.getByRole("status", { name: "OCR 模型导入状态" })).toHaveTextContent("先选择主模型，再在第二个窗口选择 mmproj");
   expect(screen.getByRole("button", { name: "正在选择配套文件…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "选择图片" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "正在选择配套文件…" }));
   expect(api.pickModelPair).toHaveBeenCalledTimes(1);

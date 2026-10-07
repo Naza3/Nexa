@@ -10,8 +10,13 @@ import { validModelSelection } from "./modelSelection";
 export function OcrPage({ controller, state }: { controller: DesktopController; state: ViewState }) {
   const api = controller.api;
   const [model, setModel] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [imageSelection, setImageSelection] = useState<{ file: File; edge: number; generation: number } | null>(null);
+  const file = imageSelection?.file ?? null;
   const [image, setImage] = useState("");
+  const [imageError, setImageError] = useState("");
+  const imageInput = useRef<HTMLInputElement>(null);
+  const imageGeneration = useRef(0);
+  const preparedGeneration = useRef(-1);
   const [edge, setEdge] = useState(0);
   const [prompt, setPrompt] = useState("Text Recognition:");
   const [tokens, setTokens] = useState(2048);
@@ -39,6 +44,16 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
   const outputFits = activeContext == null || tokens < activeContext;
   const ready = runtime?.state === "ready" && runtime.selected_model === model;
   const blocked = !!state.operation || state.chat_phase !== "idle" || state.library_phase !== "idle" || state.download_phase !== "idle";
+  const selectImage = (nextFile: File | null, nextEdge: number) => {
+    // Invalidate the previous preparation before its promise can settle.
+    const generation = ++imageGeneration.current;
+    setImage("");
+    setImageError("");
+    setStatus("");
+    setPreparing(!!nextFile);
+    setEdge(nextEdge);
+    setImageSelection(nextFile ? { file: nextFile, edge: nextEdge, generation } : null);
+  };
   const pickPair = async () => {
     if (!api.pickModelPair || pairOperation.current || busy || blocked) return;
     pairOperation.current = true;
@@ -86,9 +101,19 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
   useEffect(() => () => { const current = task.current; if (current) { current.cancelled = true; if (current.id) void api.chatCancel(current.id).catch(() => {}); } }, [api]);
   useEffect(() => {
     let active = true;
-    if (file) void prepareOcrImage(file, edge).then((value) => { if (active) setImage(value); }).catch((error: Error) => { if (active) setStatus(error.message); }).finally(() => { if (active) setPreparing(false); });
+    if (imageSelection) {
+      const current = () => active && imageGeneration.current === imageSelection.generation;
+      void prepareOcrImage(imageSelection.file, imageSelection.edge).then((value) => {
+        if (!current()) return;
+        preparedGeneration.current = imageSelection.generation;
+        setImage(value);
+        setImageError("");
+      }).catch((error: unknown) => {
+        if (current()) setImageError(error instanceof Error ? error.message : "图片准备失败，请重新选择图片。");
+      }).finally(() => { if (current()) setPreparing(false); });
+    }
     return () => { active = false; };
-  }, [file, edge]);
+  }, [imageSelection]);
   const stop = async () => {
     const current = task.current;
     if (!current) return;
@@ -137,7 +162,7 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
     await consume(current);
   };
   const start = async () => {
-    if (!api.ocrStart || !ready || !image || busy || pairOperation.current || blocked || !prompt.trim() || !Number.isInteger(tokens) || tokens < 1 || tokens > 4096 || !outputFits) return;
+    if (!api.ocrStart || !ready || !image || preparing || preparedGeneration.current !== imageGeneration.current || task.current || busy || pairOperation.current || blocked || !prompt.trim() || !Number.isInteger(tokens) || tokens < 1 || tokens > 4096 || !outputFits) return;
     const current = { id: null as string | null, cancelled: false, reading: false, hadReadFailure: false };
     task.current = current;
     setBusy(true); setRecovering(false); setText(""); setStatus("正在识别…");
@@ -183,17 +208,27 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
       <section className="ocr-card ocr-image-card" aria-labelledby="ocr-image-heading">
         <div className="ocr-card-heading"><span className="ocr-step" aria-hidden="true">2</span><div><h2 id="ocr-image-heading">选择图片</h2><p>一次识别一张图片，建议先用清晰的文字截图测试。</p></div></div>
         <fieldset aria-label="OCR 图片与识别设置" disabled={busy || selecting || importing || blocked}>
-          <label className="ocr-upload">图片文件<span className="small-note">PNG / JPEG，最多 4 MiB</span><input aria-label="OCR 图片" type="file" accept="image/png,image/jpeg" onChange={(event) => { setStatus(""); setImage(""); setPreparing(!!event.target.files?.[0]); setFile(event.target.files?.[0] ?? null); }} /></label>
-          <div className="ocr-preview-frame">{image ? <img className="ocr-preview" src={image} alt="待识别图片预览" /> : <div className="ocr-empty-state"><strong>{preparing ? "正在准备图片…" : "图片预览"}</strong><p>{preparing ? "处理完成后即可查看本次发送的图片。" : "选择图片后，在这里检查方向和文字清晰度。"}</p></div>}</div>
+          <div className="ocr-upload">
+            <div><label htmlFor="ocr-image-input">图片文件</label><p id="ocr-image-format" className="small-note">PNG / JPEG，最多 4 MiB</p></div>
+            <button type="button" aria-describedby="ocr-image-format ocr-image-feedback" onClick={() => imageInput.current?.click()}>选择图片</button>
+            <input ref={imageInput} id="ocr-image-input" hidden aria-label="OCR 图片" type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" aria-describedby="ocr-image-feedback" onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; selectImage(nextFile, edge); event.target.value = ""; }} />
+          </div>
+          <div className="ocr-image-preview">
+            <div className="ocr-preview-frame">{image ? <img className="ocr-preview" src={image} alt="待识别图片预览" /> : <div className="ocr-empty-state"><strong>{preparing ? "正在准备图片…" : imageError ? "图片未能准备完成" : "图片预览"}</strong><p>{preparing ? "正在读取和检查图片，请稍候。" : imageError ? "请查看下方原因，重新选择图片后再试。" : "选择图片后，在这里检查方向和文字清晰度。"}</p></div>}</div>
+            <div id="ocr-image-feedback" className={`ocr-feedback ocr-image-feedback${imageError ? " warning-text" : ""}`} role="status" aria-label="OCR 图片准备状态">
+              {file && <p className="ocr-selected-image">已选择：{file.name}</p>}
+              <p>{imageError || (preparing ? edge ? "正在检查并准备所选尺寸的图片…" : "正在检查原图…" : image ? edge ? "图片已准备完成，预览为本次将发送的图片。" : "原图已准备完成，可在预览中核对文字清晰度。" : "尚未选择图片。")}</p>
+            </div>
+          </div>
           <div className="ocr-image-settings">
-            <label>发送图片尺寸<select aria-label="发送图片尺寸" value={edge} onChange={(event) => { setImage(""); setPreparing(!!file); setEdge(Number(event.target.value)); }}><option value={0}>原图（不缩放）</option><option value={1600}>最长边 1600</option><option value={2048}>最长边 2048</option></select></label>
+            <label>发送图片尺寸<select aria-label="发送图片尺寸" value={edge} onChange={(event) => selectImage(file, Number(event.target.value))}><option value={0}>原图（不缩放）</option><option value={1600}>最长边 1600</option><option value={2048}>最长边 2048</option></select></label>
             <label>最大输出 token<input aria-label="最大输出 token" type="number" min={1} max={4096} value={tokens} onChange={(event) => setTokens(Number(event.target.value))} /></label>
           </div>
           <p className="small-note">缩小图片可能丢失小字；输出达到上限时会提示内容可能截断。</p>
           <label className="ocr-prompt">识别提示词<textarea value={prompt} rows={2} maxLength={4096} onChange={(event) => setPrompt(event.target.value)} /></label>
         </fieldset>
         <div className="ocr-run-actions"><button className="primary" disabled={!ready || !image || busy || selecting || importing || preparing || blocked || !prompt.trim() || tokens < 1 || tokens > 4096 || !Number.isInteger(tokens) || !outputFits} onClick={() => void start()}>识别图片</button><button disabled={!busy} onClick={() => void stop()}>停止识别</button>{recovering && <button onClick={() => void recover()}>重新确认识别任务</button>}</div>
-        <p className="ocr-feedback" role="status">{status || (ready ? "模型已加载，可开始识别。" : "请先加载所选 OCR 模型。")}</p>
+        <p className="ocr-feedback" role="status">{status || (!ready ? "请先加载所选 OCR 模型。" : preparing ? "图片正在准备，请稍候。" : imageError ? "图片准备失败，请重新选择图片。" : image ? "模型和图片已就绪，可开始识别。" : "模型已加载，请先选择图片。")}</p>
         <p className="small-note">当前加载上下文：{runtime?.selected_model === model ? runtime?.load_options?.context_size ?? "未知" : "未加载"}。图片、提示词和输出共同占用上下文。</p>
       </section>
       <section className="ocr-card ocr-output-card" aria-labelledby="ocr-output-heading">

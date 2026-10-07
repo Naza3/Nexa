@@ -1822,7 +1822,9 @@ h3 {
 }
 .ocr-feedback:empty { display: none; }
 .ocr-workspace { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 20px; }
-.ocr-upload input[type="file"] { font-size: 12px; }
+.ocr-upload { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.ocr-image-preview { display: grid; gap: 10px; min-width: 0; }
+.ocr-selected-image { margin-bottom: 4px; font-weight: 500; }
 .ocr-preview-frame {
   display: grid;
   place-items: center;

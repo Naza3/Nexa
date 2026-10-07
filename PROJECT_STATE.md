@@ -1,5 +1,9 @@
 # Nexa 当前状态
 
+## 2026-10-07 OCR 选图无预览（进行中）
+
+任务 W02-OCR-3。构建解析修复`843251b`推送后，修复有效PNG被空或错误File.type误拒的问题；用户实机具体MIME仍未知。现按内容识别PNG/JPEG，预览旁显示文件名与准备/失败/成功，统一“选择图片”按钮，处理同文件重选及旧异步结果。最终前端850项、lint、typecheck/生产构建通过；真实Chromium的9组格式组合、原生file chooser事件、缩放和1440/1024/390px布局通过。后端回复为模拟，不能转授实际OCR或Windows WebView2结论；精确源码原生CI待验。详见[验证记录](docs/verification/2026-10-07-ocr-image-preview.md)。
+
 ## 2026-10-07 Windows CI 构建优化（进行中）
 
 任务 W05-CI-PERF-1。已实现 npm/Cargo 缓存、Release依赖复用、前端去重和桌面/Runtime并行，main成功构建供后续tag复用缓存。精确`d7b84ce`的[首轮Actions](https://github.com/Naza3/Nexa/actions/runs/37627550537)两条构建链/真实模型/Runtime解压及handoff均通过，最终桌面打包因冷缓存下载进度混入Cargo metadata JSON失败。已分离结构化stdout和诊断stderr，严格Python319项（314通过/5平台跳过）、actionlint、版本和差异检查通过，原生复验与耗时测量待完成。用户新增的OCR选图无预览/无法识别随后处理。见[ADR0033](docs/decisions/0033-parallel-windows-builds.md)及[验证记录](docs/verification/2026-10-07-ci-performance.md)。
