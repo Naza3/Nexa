@@ -45,3 +45,17 @@
 此处不把 Linux CTest、Cargo metadata 或 `.cmd` 静态审查当成 Windows 成功。新的完整原生 Windows 构建、三格式包、安装器生命周期、用户 Windows 10/i5-8400 双击使用仍待验证。临时日志不作为发行产物提交。
 
 推送开发分支后由既有 Actions 验证精确提交。发布时须先提交并推送七文件版本变更，再由维护者在包含全部修复的提交上创建匹配版本 tag；重跑指向旧源码的 tag 不会获得新代码。本轮没有移动已有 tag 或发布 Release。
+
+## 第二轮Windows路径修复
+
+任务 W05-VERSION-2。实际推送的 `75ff0c0` 对应 [Actions37603689299](https://github.com/Naza3/Nexa/actions/runs/37603689299)，版本身份与下载组件通过，Windows 在 `Install locked Rust and compatible CMake tools` 内的 Python suite 失败：288 项中唯一失败为 `test_updates_all_seven_files_and_is_idempotent`，285 通过/2 平台 skip。快照使用 `str(path.relative_to(root))` 得到 `apps\desktop\...`，预期七文件常量为 `apps/desktop/...`，同一批修改因此被字符串集合误判；该测试后续幂等断言尚未执行。
+
+失败日志中的预期 `Completion: failed` 和继承 PowerShell 环境诊断不构成其他测试失败；独立只读审查确认了其测试调用来源。Windows cmd 入口、换行及异常回滚用例均未失败。完整原生编译及安装器阶段尚未开始，不能转授前一轮 Linux CTest 结果。
+
+开发分支快进同步用户合并并升至 `0.2.1` 的 main `997117b` 后，仅把快照键改为 `path.relative_to(root).as_posix()`。实际二进制读取、七文件精确集合、幂等及回滚断言保持。
+
+- `python3 -B -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_*.py'`：Linux 288 项，283 通过/5 平台 skip，退出 0；日志 `/tmp/nexa-version-path-tests.log`
+- 相同七条路径用 `PureWindowsPath` / `PurePosixPath` 构造反例：旧 Windows 字符串集合不等，POSIX 集合相等；修复后两者均等，退出 0。这是路径逻辑验证，不冒充 Windows 文件系统运行
+- `python3 -B scripts/set_version.py --check`：0.2.1 一致，退出 0
+
+下一步推送修复并检查原生 Windows 原失败步骤。版本升级来自用户，修复不改版本、tag、发布权限或测试准入规则。

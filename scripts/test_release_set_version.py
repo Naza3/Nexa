@@ -37,7 +37,7 @@ class SetVersionTests(unittest.TestCase):
         self.target = "0.2.1" if self.current != "0.2.1" else "0.2.2"
 
     def snapshot(self):
-        return {str(path.relative_to(self.root)): path.read_bytes()
+        return {path.relative_to(self.root).as_posix(): path.read_bytes()
                 for path in self.root.rglob("*") if path.is_file()}
 
     def packages(self, relative):

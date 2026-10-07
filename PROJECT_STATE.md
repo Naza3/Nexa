@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-07 Windows 版本工具测试路径修复（本地已验证，原生 CI 待验证）
+
+任务 W05-VERSION-2。[Actions37603689299](https://github.com/Naza3/Nexa/actions/runs/37603689299) 在 Windows Python suite 的版本工具测试失败：快照键使用平台原生反斜杠，与七文件清单的正斜杠字符串比较，误报修改库存不同。唯一测试失败已经日志确认；Windows cmd 入口及其它版本工具测试未失败。修正快照为 `relative_to(...).as_posix()`，保留实际文件与内容比较。
+
+同步用户已合并并升级的 main `997117b`，产品版本保持 `0.2.1` 且一致性检查通过；Linux 完整严格 Python 288 项（283 通过/5 平台跳过）通过，Windows/POSIX 路径反例复现旧比较差异并验证修复。[补充验证](docs/verification/2026-10-07-release-version-tool.md#第二轮windows路径修复)区分本地与原生结果。下一步推送精确修复并跟进 Windows 原失败步骤；没有移动 tag 或发布 Release。
+
 ## 2026-10-07 一键更新版本与 CI 修复（源码及 Linux 验证已完成，Windows 待验证）
 
 任务 W05-VERSION-1。用户要求修复 Actions 构建失败，并提供一次更新全部版本文件的工具。`codex/dev` 已同步最新 main `2abb7bef7329032fe755f19dc3605c863949cb4c`，保留用户选择的 `0.2.0`，补齐遗漏的 npm 锁文件版本。
