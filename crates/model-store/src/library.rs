@@ -932,6 +932,7 @@ impl PreparedExternal {
                 model: ResolvedModel {
                     id: entry.manifest.id.clone(),
                     path,
+                    projector_path: None,
                     context_limit: entry.manifest.executable_context_limit(),
                     default_context: entry.manifest.default_context,
                     loadable: true,
@@ -1263,6 +1264,7 @@ pub(crate) fn prepared_guard_fixture(path: &Path) -> Result<PreparedExternal> {
         model: ResolvedModel {
             id: ModelId::new("fixture")?,
             path: path.to_owned(),
+            projector_path: None,
             context_limit: 32,
             default_context: 32,
             loadable: false,

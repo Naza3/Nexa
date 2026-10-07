@@ -183,6 +183,7 @@ fn native_load_failure_is_bounded_and_session_remains_usable() {
                     "private-user-text-{}-missing.gguf",
                     SessionId::new_v4()
                 )),
+                projector_path: None,
                 context_limit: 2048,
                 default_context: 2048,
                 loadable: true,

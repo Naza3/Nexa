@@ -188,6 +188,10 @@ pub struct MemoryStatus {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelSummary {
+    #[serde(default)]
+    pub has_projector: bool,
+    #[serde(default)]
+    pub projector_size_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_validation: Option<model_store::local_validation::LocalValidation>,
     #[serde(default)]
@@ -232,6 +236,14 @@ pub struct LoadModelRequest {
     pub context_size: u32,
     pub threads: u32,
     pub batch_size: u32,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OcrStartRequest {
+    pub model_id: String,
+    pub image_data_url: String,
+    pub prompt: String,
+    pub max_output_tokens: u32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -405,16 +417,25 @@ mod compatibility_tests {
                 "sha256":"0".repeat(64), "architecture":"qwen3", "quantization":"Q8_0",
                 "validated":false, "loadable":true, "available":false, "context_size":null, "context_limit":40960,
                 "storage":"external", "availability_error":"model_file_changed",
-                "compatibility":compatibility
+                "compatibility":compatibility, "has_projector":false, "projector_size_bytes":null
             });
             let summary: ModelSummary = serde_json::from_value(value.clone()).unwrap();
             assert_eq!(serde_json::to_value(summary).unwrap(), value);
             let mut legacy = value;
             legacy.as_object_mut().unwrap().remove("compatibility");
+            legacy.as_object_mut().unwrap().remove("has_projector");
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("projector_size_bytes");
             let summary: ModelSummary = serde_json::from_value(legacy.clone()).unwrap();
+            assert!(!summary.has_projector);
+            assert_eq!(summary.projector_size_bytes, None);
             assert_eq!(summary.compatibility, ModelCompatibility::Unknown);
             legacy["compatibility"] = json!("future_status");
             let summary: ModelSummary = serde_json::from_value(legacy).unwrap();
+            assert!(!summary.has_projector);
+            assert_eq!(summary.projector_size_bytes, None);
             assert_eq!(summary.compatibility, ModelCompatibility::Unknown);
             assert_eq!(
                 summary.availability_error.as_deref(),

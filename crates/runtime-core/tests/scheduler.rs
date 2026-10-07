@@ -118,6 +118,7 @@ impl Harness {
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: PathBuf::from("controlled.gguf"),
+                projector_path: None,
                 context_limit: 4096,
                 default_context: 4096,
                 loadable: true,
@@ -1287,6 +1288,75 @@ fn load_deadline_reason_survives_transport_force_kill_ack() {
 }
 
 #[test]
+fn explicit_load_reloads_changed_projector_even_with_same_id_and_options() {
+    struct Recording(Arc<Mutex<Vec<Option<ResolvedModel>>>>);
+    impl Executor for Recording {
+        fn start(
+            &mut self,
+            command: ExecutorCommand,
+            events: ExecutionEvents,
+        ) -> Result<CancellationHandle, RuntimeError> {
+            match command {
+                ExecutorCommand::Load { model, .. } => {
+                    self.0.lock().unwrap().push(Some(model));
+                    events.emit(ExecutorEvent::Loaded);
+                }
+                ExecutorCommand::Unload => {
+                    self.0.lock().unwrap().push(None);
+                    events.emit(ExecutorEvent::Unloaded);
+                }
+                _ => panic!("unexpected generation"),
+            }
+            Ok(CancellationHandle::noop())
+        }
+    }
+    let identity = Arc::new(AtomicUsize::new(0));
+    let current = identity.clone();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let runtime = Runtime::spawn(
+        config(),
+        move |id: &ModelId| {
+            let revision = current.load(Ordering::SeqCst);
+            Ok(ResolvedModel {
+                id: id.clone(),
+                path: "language.gguf".into(),
+                projector_path: (revision != 0)
+                    .then(|| PathBuf::from(format!("projector-{revision}.gguf"))),
+                context_limit: 4096,
+                default_context: 2048,
+                loadable: true,
+            })
+        },
+        Recording(log.clone()),
+    )
+    .unwrap();
+    let handle = runtime.handle();
+    let model = ModelId::new("ocr").unwrap();
+    for revision in 0..3 {
+        identity.store(revision, Ordering::SeqCst);
+        handle.load(model.clone(), LoadOptions::default()).unwrap();
+        {
+            let recorded = log.lock().unwrap();
+            assert_eq!(recorded.len(), revision * 2 + 1);
+            if revision > 0 {
+                assert!(recorded[revision * 2 - 1].is_none());
+            }
+            assert_eq!(
+                recorded.last().unwrap().as_ref().unwrap().projector_path,
+                (revision != 0).then(|| PathBuf::from(format!("projector-{revision}.gguf")))
+            );
+        }
+        handle.load(model.clone(), LoadOptions::default()).unwrap();
+        assert_eq!(
+            log.lock().unwrap().len(),
+            revision * 2 + 1,
+            "unchanged identity should reuse resident model"
+        );
+    }
+    runtime.shutdown().unwrap();
+}
+
+#[test]
 fn every_actual_load_rechecks_model_identity_validation_and_context_without_native_dispatch() {
     use std::sync::atomic::AtomicUsize;
     struct Recording(Arc<Mutex<Vec<(ResolvedModel, LoadOptions)>>>);
@@ -1348,6 +1418,7 @@ fn every_actual_load_rechecks_model_identity_validation_and_context_without_nati
                         } else {
                             "original.gguf".into()
                         },
+                        projector_path: None,
                         context_limit: if mode == 3 { 1024 } else { 4096 },
                         default_context: 2048,
                         loadable: mode != 1,

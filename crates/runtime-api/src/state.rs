@@ -680,7 +680,15 @@ impl ApiState {
             // Only exact ModelNotFound establishes that a later visible entry
             // was newly committed under this actor/store transaction.
             let was_missing = matches!(store.get(&request.id), Err(error) if error.code == ErrorCode::ModelNotFound);
-            let imported = store.import_file(request.file, import, &cancel);
+            let imported = if let Some(projector) = request.projector {
+                let projector_request = model_store::ProjectorImportRequest {
+                    expected_sha256: projector.expected_sha256,
+                    source: ModelSource::local("user-selected local projector"),
+                };
+                store.import_file_pair(request.file, projector.file, import, projector_request, &cancel)
+            } else {
+                store.import_file(request.file, import, &cancel)
+            };
             let observed = (was_missing && imported.is_err()).then(|| store.get(&request.id));
             let executable = observed.as_ref().is_some_and(Result::is_ok)
                 && store.resolve(&request.id).is_ok_and(|model| model.loadable);
@@ -844,6 +852,7 @@ mod import_outcome_tests {
             id: ModelId::new("new-model").unwrap(),
             display_name: "Synthetic metadata".into(),
             relative_file: "model.gguf".into(),
+            projector: None,
             size_bytes: 64,
             sha256: "0".repeat(64),
             source: ModelSource::local("test"),

@@ -101,6 +101,8 @@ export type ModelCompatibility =
   | "unvalidated"
   | "unknown";
 export interface ModelSummary {
+  has_projector?: boolean;
+  projector_size_bytes?: number | null;
   /** Local proof is separate from the historical validated matrix. */
   local_validation?: LocalValidation | null;
   /** Absent on older services; never infer detailed support from the filename. */
@@ -277,7 +279,12 @@ export interface ModelLoadOperation {
   local_validation: LocalValidation | null;
   error: SafeError | null;
 }
+export interface OcrRequest { model_id: string; image_data_url: string; prompt: string; max_output_tokens: number }
 export interface DesktopApi {
+  ocrStart?(request: OcrRequest): Promise<{ request_id: string }>;
+  saveOcrMarkdown?(text: string): Promise<{ saved: boolean }>;
+  pickModelPair?(): Promise<ModelFileSelection | null>;
+  importModelPair?(selection_id: string, model_id: string): Promise<ModelSummary>;
   initialize?(): Promise<Snapshot>;
   configurationGet?(): Promise<ConfigurationSnapshot>;
   configurationModelGet?(model_id: string): Promise<ModelConfiguration>;

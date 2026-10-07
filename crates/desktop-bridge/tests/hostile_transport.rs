@@ -960,3 +960,54 @@ fn scoped_start_dtos_flatten_existing_fields_and_reject_unknowns() {
         serde_json::from_value::<desktop_bridge::ModelLoadProfileStartRequest>(unknown).is_err()
     );
 }
+
+fn ocr_request() -> desktop_bridge::OcrStartRequest {
+    desktop_bridge::OcrStartRequest {
+        model_id: "a".into(),
+        image_data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=".into(),
+        prompt: "Text Recognition:".into(), max_output_tokens: 32,
+    }
+}
+#[tokio::test]
+async fn ocr_and_chat_share_one_owned_slot_and_cancellation() {
+    let f = Fixture::new(Mode::Pending).await;
+    let id = f.bridge.ocr_start(ocr_request()).unwrap().request_id;
+    assert_eq!(
+        f.bridge.ocr_start(ocr_request()).unwrap_err().code,
+        "desktop_busy"
+    );
+    assert_eq!(
+        f.bridge
+            .chat_start(ChatStartRequest {
+                model_id: "a".into(),
+                messages: vec![Message::new(Role::User, "text")],
+                max_output_tokens: 8
+            })
+            .unwrap_err()
+            .code,
+        "desktop_busy"
+    );
+    f.bridge.chat_cancel(id).await.unwrap();
+    let events = f.terminal(id).await;
+    assert_eq!(events.last(), Some(&ChatEvent::Cancelled));
+    let text_id = f.start();
+    f.bridge.chat_cancel(text_id).await.unwrap();
+    assert_eq!(
+        f.terminal(text_id).await.last(),
+        Some(&ChatEvent::Cancelled)
+    );
+    let next_ocr = f.bridge.ocr_start(ocr_request()).unwrap().request_id;
+    f.bridge.chat_cancel(next_ocr).await.unwrap();
+    assert_eq!(
+        f.terminal(next_ocr).await.last(),
+        Some(&ChatEvent::Cancelled)
+    );
+}
+#[tokio::test]
+async fn ocr_disconnect_is_failed_and_not_replayed() {
+    let f = Fixture::new(Mode::Eof).await;
+    let id = f.bridge.ocr_start(ocr_request()).unwrap().request_id;
+    let events = f.terminal(id).await;
+    assert!(matches!(events.last(), Some(ChatEvent::Failed { .. })));
+    assert_eq!(f.chats.load(Ordering::SeqCst), 1);
+}

@@ -1,5 +1,17 @@
 # Nexa 当前状态
 
+## 2026-10-07 本机单图 OCR（源码与 Linux 开发验证已完成，Windows 待验证）
+
+任务 W02-OCR-1。用户要求现有 Nexa 在 Windows10/i5-8400/16GB 纯CPU上传图片得到Markdown，并明确按实施顺序推进。`codex/dev`已快进到最新main `c559d7fc6a85313a46cd901868dcc1dd43446a5b`，保留最新模型移除与安全Markdown。固定llama提交已支持GLM-OCR，未升级引擎；先跑官方Q8双GGUF真实基线，再实现配对托管导入、CPU mtmd/worker图片路径、本机HTTP与桌面OCR。
+
+- [ADR0032](docs/decisions/0032-local-single-image-ocr.md)：单user/单PNG或JPEG/单提示词，保留图文顺序及真实图像token预算；LAN文本、现有单actor/取消/worker隔离保持。双文件hash/结构/身份一起校验，旧单文件零复制保持
+- 新增OCR页面、双原生选择、可选图片缩放、显式8192/256/4加载参数、流式原文/安全Markdown、复制和原生保存。读取异常保留任务直到终态确认，读取缺批次和length截断明确提示；不会自动重生成
+- 私有worker3/shim4、公共HTTP1；静态闭包10库含mtmd/vendor-hash，新内嵌许可完整打包。配对仅报告Loaded，旧文本Passed不升级为OCR证明
+- 最终根Rust45组576通过/0失败/10忽略，前端38文件809项，Python275项（271通过/4平台skip），Linux壳32、CTest5/5，相关fmt/clippy/typecheck/lint/build全部通过；分层子集不重复加总
+- 真实GLM配对导入/关闭重开、native坏图/预算/取消恢复、HTTP SSE三行/控制取消/非流式恢复通过，JPEG补测三行通过；固定Qwen原adapter3项和engine-host1项真实文本回归通过。复杂官方页只4/5锚点的质量失败完整保留
+
+开发环境为Linux Xeon8573C/4核配额，不是用户目标机；没有本批Windows原生编译、GUI手验、安装包、i5速度或官方网站复杂版面质量结论。独立审查发现的旧projector复用及三处UI恢复/完整性问题已修复并复验。详见[本轮验证](docs/verification/2026-10-07-local-ocr.md)与[Windows CPU使用说明](docs/ocr-windows-cpu.md)。修改仅本地提交，未推送/合并/发布；下一步是精确源码的原生Windows构建和目标机验收。
+
 ## 2026-10-06 模型移除与聊天 Markdown（已完成：原生验收及开发包交付）
 
 用户要求从模型库列表移除模型，并补充聊天回复 Markdown。开发沿用 `codex/dev`，已在本地同步用户合并的正式 `main` `5c26e34aa74bf5552b9455e65f42883acbd61d6f`，保留开发分支额外验收文档，不重写历史。既有 [v0.1.0 正式 Release](https://github.com/Naza3/Nexa/releases/tag/v0.1.0)已于2026-10-05发布；本轮不移动其标签、不替换公开附件或自动合并 main。
@@ -261,7 +273,7 @@ Windows本机记录/反馈修复已在同一长期分支推送 `abcb1a0a9b448915
 
 - 当前 Windows CI 主要证据来自 Server2022/EPYC/2逻辑CPU，不能推广成 i5-8400 或任意 Intel/AMD 支持；历史4线程超配探针60秒超时完整保留
 - 默认API配置context4096/batch512，桌面验证档2048/2线程/128；历史真实证据仅覆盖其精确组合。开放切片的模型metadata/131072硬限不代表16GB可运行该窗口；无新增Job RAM硬限，不宣传OOM绝对隔离
-- 接口现为严格文本 Chat Completions 子集，不包含已验证的工具调用、结构化输出或完整 harness 兼容性
+- 接口现为严格文本与ADR0032本机单图 Chat Completions 子集，LAN仍仅文本；不包含已验证的工具调用、结构化输出或完整 harness 兼容性
 - `status/devices` 未知 native 指标为 null/unavailable；配置值不伪装成实测值
 - Windows worker清理未获OS确认时fail-closed，不假称已回收；已有跨层取消/真实故障优先级修复保留
 - ASan/UBSan纯流缓冲测试不是全原生库无泄漏证明；长期100请求/20加载趋势仍后期验收

@@ -13,6 +13,31 @@ fn request() -> GenerationRequest {
         options: GenerationOptions::default(),
     }
 }
+#[test]
+fn image_request_roundtrip_preserves_order_and_remains_bounded() {
+    let mut req = request();
+    let mut image = runtime_types::ImageInput::from_data_url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX8AAAAASUVORK5CYII=").unwrap();
+    image.after_text = true;
+    req.messages[0].image = Some(image.clone());
+    let mut frame = Frame::command(
+        SessionId::new_v4(),
+        1,
+        Some(req.request_id),
+        Message::Generate { request: req },
+    );
+    let encoded = encode_frame(&frame, MAX_REQUEST_FRAME_BYTES).unwrap();
+    let decoded = read_frame(&mut Cursor::new(encoded), MAX_REQUEST_FRAME_BYTES)
+        .unwrap()
+        .unwrap();
+    let Message::Generate { request } = decoded.message else {
+        panic!()
+    };
+    assert_eq!(request.messages[0].image, Some(image));
+    if let Message::Generate { request } = &mut frame.message {
+        request.messages[0].image.as_mut().unwrap().data = "A".repeat(6 * 1024 * 1024);
+    }
+    assert!(encode_frame(&frame, MAX_REQUEST_FRAME_BYTES).is_err());
+}
 fn ready() -> (SessionId, RequestId, EventValidator) {
     let session = SessionId::new_v4();
     let mut validator = EventValidator::new(session);
@@ -82,9 +107,9 @@ fn malformed_frames_fail_without_unbounded_reads_or_partial_writes() {
     let raw = String::from_utf8(encode_frame(&frame, 4096).unwrap()).unwrap();
     for invalid in [
         raw.replace("\"hello\"", "\"unknown\""),
-        raw.replacen("\"protocol_version\":2", "\"protocol_version\":1", 1),
+        raw.replacen("\"protocol_version\":3", "\"protocol_version\":1", 1),
         raw.replace(LLAMA_COMMIT, "wrong"),
-        raw.replace("\"shim_version\":3", "\"shim_version\":1"),
+        raw.replace("\"shim_version\":4", "\"shim_version\":1"),
     ] {
         assert!(read_frame(&mut Cursor::new(invalid), 4096).is_err());
     }
@@ -328,13 +353,13 @@ fn unknown_fields_and_duplicate_json_keys_are_rejected_at_each_layer() {
         hello.replacen('{', "{\"unknown\":true,", 1),
         hello.replacen("\"payload\":{", "\"payload\":{\"unknown\":true,", 1),
         hello.replacen(
-            "\"protocol_version\":2",
-            "\"protocol_version\":2,\"protocol_version\":2",
+            "\"protocol_version\":3",
+            "\"protocol_version\":3,\"protocol_version\":3",
             1,
         ),
         hello.replacen(
-            "\"shim_version\":3",
-            "\"shim_version\":3,\"shim_version\":3",
+            "\"shim_version\":4",
+            "\"shim_version\":4,\"shim_version\":4",
             1,
         ),
         hello.replacen(
@@ -451,6 +476,7 @@ fn load_eligibility_is_required_and_old_validation_claim_is_rejected() {
     let model = runtime_types::ResolvedModel {
         id: ModelId::new("candidate").unwrap(),
         path: "controlled.gguf".into(),
+        projector_path: None,
         context_limit: 4096,
         default_context: 2048,
         loadable: true,

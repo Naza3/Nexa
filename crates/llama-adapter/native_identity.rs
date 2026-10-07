@@ -4,8 +4,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-pub const LIBRARIES: [&str; 8] = [
+pub const LIBRARIES: [&str; 10] = [
     "air_llama",
+    "mtmd",
+    "vendor-hash",
     "llama-common",
     "llama-common-base",
     "cpp-httplib",
@@ -123,6 +125,7 @@ pub fn validate(
         "GGML_METAL",
         "LLAMA_OPENSSL",
         "BUILD_SHARED_LIBS",
+        "MTMD_VIDEO",
     ] {
         if get(option) != "OFF" {
             return Err(format!("unsupported native option {option}"));
@@ -186,7 +189,7 @@ pub fn libraries(
 mod tests {
     use super::*;
     fn valid() -> BTreeMap<String, String> {
-        parse(&format!("schema=1\nsystem=Windows\nprocessor=AMD64\npointer_bytes=8\nconfiguration=Release\ncrt=MD\nllama_commit={LLAMA_COMMIT}\ncompiler_id=MSVC\nGGML_NATIVE=OFF\nGGML_BACKEND_DL=OFF\nGGML_OPENMP=OFF\nGGML_CUDA=OFF\nGGML_VULKAN=OFF\nGGML_METAL=OFF\nLLAMA_OPENSSL=OFF\nBUILD_SHARED_LIBS=OFF\n")).unwrap()
+        parse(&format!("schema=1\nsystem=Windows\nprocessor=AMD64\npointer_bytes=8\nconfiguration=Release\ncrt=MD\nllama_commit={LLAMA_COMMIT}\ncompiler_id=MSVC\nGGML_NATIVE=OFF\nGGML_BACKEND_DL=OFF\nGGML_OPENMP=OFF\nGGML_CUDA=OFF\nGGML_VULKAN=OFF\nGGML_METAL=OFF\nLLAMA_OPENSSL=OFF\nBUILD_SHARED_LIBS=OFF\nMTMD_VIDEO=OFF\n")).unwrap()
     }
     #[test]
     fn rejects_platform_configuration_crt_and_cpu_mismatches() {
@@ -340,6 +343,7 @@ mod tests {
             "GGML_BACKEND_DL",
             "LLAMA_OPENSSL",
             "BUILD_SHARED_LIBS",
+            "MTMD_VIDEO",
         ] {
             let mut bad = fields.clone();
             bad.insert(key.into(), "wrong".into());
@@ -408,7 +412,7 @@ mod path_tests {
                 path.to_str().unwrap().to_string(),
             );
         }
-        assert_eq!(libraries(&root, &fields, false).unwrap().len(), 8);
+        assert_eq!(libraries(&root, &fields, false).unwrap().len(), 10);
         let outside = base.join("libair_llama.a");
         fs::write(&outside, b"not in native root").unwrap();
         fields.insert("library.air_llama".into(), outside.to_str().unwrap().into());

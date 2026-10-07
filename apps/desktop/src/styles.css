@@ -1720,3 +1720,8 @@ h3 {
 .message.user .message-text { min-width: 0; max-width: 100%; }
 
 .chat-markdown .markdown-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.ocr-page fieldset { display: grid; gap: 16px; border: 0; padding: 0; }
+.ocr-page label { display: grid; gap: 6px; }
+.ocr-preview { display: block; max-width: 100%; max-height: 420px; margin: 16px 0; object-fit: contain; }
+.ocr-result { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; }

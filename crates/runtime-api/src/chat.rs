@@ -468,18 +468,58 @@ async fn chat_request(
             None,
         )
     };
+    let read_limit = if loaded_only {
+        state.config.api.max_body_bytes
+    } else {
+        crate::config::MAX_IMAGE_BODY_BYTES
+    };
     if one_header(request.headers(), "content-length")?
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
-        .is_some_and(|v| v > state.config.api.max_body_bytes as u64)
+        .is_some_and(|v| v > read_limit as u64)
     {
         return Err(too_large());
     }
-    let bytes = to_bytes(request.into_body(), state.config.api.max_body_bytes)
+    let bytes = to_bytes(request.into_body(), read_limit)
         .await
         .map_err(|_| too_large())?;
     let defaults = state.active_config()?;
+    // Only the image envelope gets the larger local read budget. Oversized
+    // ordinary text retains its existing 413 response before field validation.
+    if bytes.len() > state.config.api.max_body_bytes {
+        let image_envelope = crate::dto::parse_json(&bytes).ok().is_some_and(|value| {
+            value
+                .get("messages")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|messages| {
+                    messages.iter().any(|message| {
+                        message
+                            .get("content")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|parts| {
+                                parts.iter().any(|part| {
+                                    part.get("type").and_then(serde_json::Value::as_str)
+                                        == Some("image_url")
+                                })
+                            })
+                    })
+                })
+        });
+        if loaded_only || !image_envelope {
+            return Err(too_large());
+        }
+    }
     let validated = parse_chat(&bytes, id, &defaults)?;
+    let has_image = validated
+        .messages
+        .iter()
+        .any(|message| message.image.is_some());
+    if loaded_only && has_image {
+        return Err(ApiError::unsupported("messages.content.image_url"));
+    }
+    if !has_image && bytes.len() > state.config.api.max_body_bytes {
+        return Err(too_large());
+    }
     drop(bytes);
     let (model, events) = if let Some(model) = validated.model {
         let request = runtime_types::GenerationRequest {

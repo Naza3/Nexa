@@ -395,6 +395,7 @@ async fn current_model_submission_never_prepares_an_external_registration() {
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: "not-read".into(),
+                projector_path: None,
                 context_limit: 4096,
                 default_context: 4096,
                 loadable: true,
@@ -661,6 +662,7 @@ async fn http_busy_profile_and_sampling_saves_preserve_queued_requests_and_idle_
             Ok(runtime_types::ResolvedModel {
                 id: id.clone(),
                 path: "synthetic".into(),
+                projector_path: None,
                 context_limit: 4096,
                 default_context: 2048,
                 loadable: true,

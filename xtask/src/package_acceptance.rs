@@ -20,6 +20,18 @@ use tokio::process::Child;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const MODEL_HASH: &str = "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031";
 const LLAMA_COMMIT: &str = "2149c00f4442dc59302e134a02e4c99d5f7ed9fc";
+const NATIVE_ARCHIVES: [&str; 10] = [
+    "air_llama",
+    "mtmd",
+    "vendor-hash",
+    "llama-common",
+    "llama-common-base",
+    "cpp-httplib",
+    "llama",
+    "ggml",
+    "ggml-cpu",
+    "ggml-base",
+];
 const MODEL_ID: &str = "acceptance-qwen3-06b-q8";
 const HELP: &str = "Nexa standalone package acceptance\n\
 Usage: nexa-acceptance --model MODEL.gguf --out REPORT.json [--package DIRECTORY] [--machine-role target|ci|unknown] [--disconnect-cycles 1..50]\n\
@@ -52,6 +64,12 @@ struct Dependencies {
     imports: Vec<Dependency>,
 }
 #[derive(Deserialize)]
+struct NativeArchive {
+    name: String,
+    sha256: String,
+    size_bytes: u64,
+}
+#[derive(Deserialize)]
 struct Manifest {
     schema_version: u32,
     product: String,
@@ -68,6 +86,8 @@ struct Manifest {
     configuration: String,
     files: Vec<FileEntry>,
     dependencies: BTreeMap<String, Dependencies>,
+    native_archives: Vec<NativeArchive>,
+    native_build: BTreeMap<String, String>,
 }
 struct Package {
     root: PathBuf,
@@ -662,13 +682,28 @@ fn verify_package(root: &Path) -> Result<Package> {
         || manifest.backend != "cpu"
         || manifest.configuration != "Release"
         || manifest.protocol_version != 1
-        || manifest.worker_protocol_version != 2
-        || manifest.shim_version != 3
+        || manifest.worker_protocol_version != 3
+        || manifest.shim_version != 4
         || manifest.llama_commit != LLAMA_COMMIT
         || !valid_hex(&manifest.project_commit, 40)
         || manifest.package_version != env!("CARGO_PKG_VERSION")
     {
         return Err("unsupported release identity or protocol".into());
+    }
+    let archive_names: BTreeSet<_> = manifest
+        .native_archives
+        .iter()
+        .map(|archive| archive.name.as_str())
+        .collect();
+    if manifest.native_build.get("MTMD_VIDEO").map(String::as_str) != Some("OFF")
+        || manifest.native_archives.len() != NATIVE_ARCHIVES.len()
+        || archive_names != NATIVE_ARCHIVES.into_iter().collect()
+        || manifest
+            .native_archives
+            .iter()
+            .any(|archive| archive.size_bytes == 0 || !valid_hex(&archive.sha256, 64))
+    {
+        return Err("native static archive closure mismatch".into());
     }
     let mut listed = BTreeSet::new();
     let mut casefold = BTreeSet::new();
@@ -1510,7 +1545,7 @@ mod tests {
         let mut files = BTreeSet::new();
         inventory(temp.path(), "", &mut files).unwrap();
         let entries: Vec<_> = files.iter().map(|p|json!({"path":p,"size_bytes":fs::metadata(temp.path().join(p)).unwrap().len(),"sha256":file_hash(&temp.path().join(p)).unwrap()})).collect();
-        let manifest = json!({"schema_version":1,"product":"nexa-runtime","package_version":env!("CARGO_PKG_VERSION"),"project_commit":"a".repeat(40),"llama_commit":LLAMA_COMMIT,"protocol_version":1,"worker_protocol_version":2,"shim_version":3,"platform":"windows-x64","target":"x86_64-pc-windows-msvc","architecture":"x86_64","backend":"cpu","configuration":"Release","files":entries,"dependencies":{"ai-runtime.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]},"ai-runtime-worker.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]}}});
+        let manifest = json!({"schema_version":1,"product":"nexa-runtime","package_version":env!("CARGO_PKG_VERSION"),"project_commit":"a".repeat(40),"llama_commit":LLAMA_COMMIT,"protocol_version":1,"worker_protocol_version":3,"shim_version":4,"platform":"windows-x64","target":"x86_64-pc-windows-msvc","architecture":"x86_64","backend":"cpu","configuration":"Release","native_build":{"MTMD_VIDEO":"OFF"},"native_archives":NATIVE_ARCHIVES.iter().map(|name|json!({"name":name,"sha256":"b".repeat(64),"size_bytes":128})).collect::<Vec<_>>(),"files":entries,"dependencies":{"ai-runtime.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]},"ai-runtime-worker.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]}}});
         fs::write(
             temp.path().join("manifest.json"),
             serde_json::to_vec(&manifest).unwrap(),
@@ -1971,8 +2006,12 @@ mod tests {
         for (field, value) in [
             ("configuration", json!("Debug")),
             ("worker_protocol_version", json!(1)),
+            ("worker_protocol_version", json!(2)),
             ("shim_version", json!(2)),
+            ("shim_version", json!(3)),
             ("architecture", json!("arm64")),
+            ("native_build", json!({"MTMD_VIDEO":"ON"})),
+            ("native_build", json!({})),
         ] {
             let package = fixture();
             let mut manifest: Value =
@@ -1986,6 +2025,41 @@ mod tests {
             .unwrap();
             rewrite_sums(package.path());
             assert!(verify_package(package.path()).is_err());
+        }
+    }
+    #[test]
+    fn incomplete_duplicate_or_unpinned_native_closure_is_rejected() {
+        for mutation in [
+            "missing-mtmd",
+            "missing-hash",
+            "duplicate",
+            "empty",
+            "bad-hash",
+            "extra",
+        ] {
+            let package = fixture();
+            let mut manifest: Value =
+                serde_json::from_slice(&fs::read(package.path().join("manifest.json")).unwrap())
+                    .unwrap();
+            let archives = manifest["native_archives"].as_array_mut().unwrap();
+            match mutation {
+                "missing-mtmd" => archives.retain(|record| record["name"] != "mtmd"),
+                "missing-hash" => archives.retain(|record| record["name"] != "vendor-hash"),
+                "duplicate" => archives[0] = archives[1].clone(),
+                "empty" => archives[0]["size_bytes"] = json!(0),
+                "bad-hash" => archives[0]["sha256"] = json!("not-a-sha256"),
+                "extra" => {
+                    archives.push(json!({"name":"unlisted","sha256":"a".repeat(64),"size_bytes":1}))
+                }
+                _ => unreachable!(),
+            }
+            fs::write(
+                package.path().join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            rewrite_sums(package.path());
+            assert!(verify_package(package.path()).is_err(), "{mutation}");
         }
     }
     #[cfg(unix)]

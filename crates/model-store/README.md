@@ -6,6 +6,7 @@
 
 - `ModelStore::open(data_dir)`：取得整个存储实例生命周期的进程独占锁，恢复本模块临时文件，对现有注册项执行完整 hash/结构校验
 - `import_file(source, request, cancellation)` / `import_reader(reader, size, request, cancellation)`：复制来源；`ImportRequest::new(id, name, source)` 默认 context 2048，可设置预期 SHA-256
+- `import_file_pair(source, projector_source, request, projector_request, cancellation)`：显式复制主模型与 projector，组成唯一模型 ID；`ProjectorImportRequest` 独立保存来源与可选预期 SHA-256。不按命名自动配对，不把 mmproj 注册成第二个语言模型
 - `list/get`：读取 manifest 派生索引，校验 schema、受控路径和文件大小；不在列表操作中重算所有模型 hash
 - `resolve`：已验证缓存 + 有界 manifest / 文件 fingerprint 检查；导入或重验占用写锁时立即返回 `RuntimeBusy`，不等待大文件操作，也不在调度 actor 内重新 hash
 - `verify`：显式完整 hash 与 GGUF 重验，刷新缓存；适合阻塞执行器。`open` 与导入同样是阻塞操作
@@ -19,8 +20,8 @@
 1. 检查来源可读、ID、可用空间（模型大小外保留 1 MiB）
 2. 创建独占 `imports/import-<uuid>.partial`，流式复制与 SHA-256
 3. 有界 GGUF metadata / tensor 描述符与数据范围检查；验证 manifest
-4. 在 imports 的 `.staged` 目录放入 `model.gguf` 与已 flush 的 `manifest.json`
-5. 同一文件系统目录 rename 到 `models/<id>`，两个文件一起成为注册项
+4. 在 imports 的 `.staged` 目录放入 `model.gguf`、可选 `mmproj.gguf` 与已 flush 的 `manifest.json`；配对导入对两份来源分别检查 hash、结构、身份与取消，总大小计入空间预算
+5. 同一文件系统目录 rename 到 `models/<id>`，完整目录一起成为注册项
 
 不写独立 `index.json`：受控身份从完整注册目录派生，schema3 library 仅增加登记可见性覆盖层；移除/显式恢复与 external 索引同文件原子提交，不修改受控 manifest。协作进程遵守 `runtime/model-store.lock`；同实例修改互斥，默认拒绝任何已有目标（包括空目录、符号链接和不完整目录）。`.partial/.staged` 出错或取消时清理；中断残留只按本模块 UUID 命名空间恢复，不删除未知临时名称。删除先把注册目录原子移动为 `.deleted`，再清理，重启可续清。
 
@@ -57,3 +58,11 @@ ModelStore保留现有managed布局，同时从data root的model-library.json读
 本轮[ADR0017](../../docs/decisions/0017-model-discovery-and-catalog-download.md)增加`library::download::DownloadFile`，仅显式下载可创建受保护UUID.part并在全量size/hash核验后原子hardlink no-clobber发布。模型目录与祖先身份须匹配，已有或竞争目标绝不覆盖；仅清理本任务实际持有的partial对象。生产文件保护仅Windows实现，Linux单元fixture只能验证字节事务；发布后临时项清理未确认须承认文件已保存并上报warning。普通scan/prepare仍只读，不调用该写路径。下载不登记模型、不迁移到managed，也不自动赋validated；使用者须另扫再load，详见[本轮记录](../../docs/verification/2026-10-03-model-catalog-download.md)。
 
 Windows合成共享访问与预存可写mapping测试仅证明各自观察，Linux不能冒称拥有Windows强制共享保证。未确认cleanup的prepared guard有界保留到进程退出，进程随后拒绝重新open catalog；正常调用者必须在worker确认停止后显式release_external_after_shutdown。
+
+## 显式 projector 配对
+
+首版配对只支持 managed 复制。原有 external 单文件零复制注册、目录扫描和列表合并保持；扫描遇到 clip projector 返回 `unsupported_model`，不猜测相邻文件。主模型仍要求内嵌模板/context；projector 使用同一 tensor 范围与预算检查，要求 `clip` 架构和有效 `clip.projector_type`，不要求语言模型模板。结构检查不证明语义配对兼容，最终由原生后端判定。
+
+Manifest 的可选 `projector` 保存来源、固定相对路径 `mmproj.gguf`、大小、SHA-256、架构和投影类型；缺省字段不序列化，保持旧 manifest 与取消登记指纹。配对的 `verify/resolve` 同时检查两文件身份，inventory 同时观察伙伴可用性和游标变化；`unregister` 保留两文件，受控 `remove` 只允许已声明的伙伴。Windows来源打开保持只读共享句柄至发布；应用私有 managed 副本沿用既有存储生命周期约束，不宣称抵御同账号恶意写入。
+
+既有 Qwen 文本验证矩阵只适用于没有 projector 的模型。配对模型不能生成或匹配旧文本 `local_validation::Scope`，不得因此显示文本短测 Passed。真实存储复验可显式提供 `NEXA_REAL_MODEL` / `NEXA_REAL_PROJECTOR`，运行 `cargo test -p model-store --test import real_pair_import_and_reopen_verify_both_assets -- --ignored`；此测试验证真实文件导入与重开 hash，不执行推理。

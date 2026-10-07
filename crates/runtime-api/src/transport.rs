@@ -28,7 +28,9 @@ pub const MAX_CONNECTIONS: usize = 64;
 pub const MAX_LAN_CONNECTIONS: usize = 48;
 // Separately bounded connection teardown scratch/traffic. This is not generated
 // text and must never be counted as part of the core's 256 KiB output ledger.
-const LINGER_BYTE_LIMIT: usize = 1024 * 1024 + 64 * 1024;
+// Allow a just-over-limit eager image upload to observe its complete 413.
+// This only drains traffic: scratch stays 8 KiB and the total deadline stays 1s.
+const LINGER_BYTE_LIMIT: usize = crate::config::MAX_IMAGE_BODY_BYTES + 64 * 1024;
 const LINGER_TIMEOUT: Duration = Duration::from_secs(1);
 const LINGER_SCRATCH_BYTES: usize = 8 * 1024;
 #[derive(Debug, PartialEq, Eq)]

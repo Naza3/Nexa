@@ -82,6 +82,10 @@ export const nativeApi: DesktopApi = {
   testModel: (model_id, options) =>
     call("model_test", { model_id, ...options }),
   unloadModel: () => call("model_unload"),
+  ocrStart: (request) => call("ocr_start", request),
+  saveOcrMarkdown: (text) => call("ocr_save_markdown", { text }),
+  pickModelPair: () => call("models_pair_pick"),
+  importModelPair: (selection_id, model_id) => call("models_pair_import", { selection_id, model_id }),
   chatStart: (request) => call("chat_start", request),
   chatNext: (request_id) => call("chat_next", { request_id }),
   chatCancel: (request_id) => call("chat_cancel", { request_id }),

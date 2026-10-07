@@ -36,6 +36,7 @@ fn runtime(host: ProcessHost, model_path: PathBuf) -> Runtime {
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: model_path.clone(),
+                projector_path: None,
                 context_limit: 2048,
                 default_context: 2048,
                 loadable: true,
@@ -86,6 +87,7 @@ fn main() {
                 model: ResolvedModel {
                     id: ModelId::new("fixture").unwrap(),
                     path: PathBuf::from("fixture.gguf"),
+                    projector_path: None,
                     context_limit: 2048,
                     default_context: 2048,
                     loadable: true,

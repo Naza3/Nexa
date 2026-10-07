@@ -150,8 +150,8 @@ Import {
                       "compiler_id": "Clang", "compiler_frontend": "MSVC", "compiler_simulate_id": "MSVC", "compiler_target": pack.base.TARGET,
                       "c_compiler_id": "Clang", "c_compiler_frontend": "MSVC", "c_compiler_simulate_id": "MSVC", "c_compiler_target": pack.base.TARGET,
                       "msvc_runtime_library": "MultiThreadedDLL", "cross_abi_verified": "1", "cross_cpu_baseline_verified": "1", "GGML_SSE42": "ON", "GGML_AVX": "ON", "GGML_AVX2": "ON", "GGML_FMA": "ON", "GGML_F16C": "ON", "GGML_BMI2": "ON", "GGML_AVX512": "OFF"}
-            fields.update(dict.fromkeys(("GGML_NATIVE", "GGML_BACKEND_DL", "GGML_OPENMP", "GGML_CUDA", "GGML_VULKAN", "GGML_METAL", "LLAMA_OPENSSL", "BUILD_SHARED_LIBS"), "OFF"))
-            for name in ("air_llama", "llama-common", "llama-common-base", "cpp-httplib", "llama", "ggml", "ggml-cpu", "ggml-base"):
+            fields.update(dict.fromkeys(("GGML_NATIVE", "GGML_BACKEND_DL", "GGML_OPENMP", "GGML_CUDA", "GGML_VULKAN", "GGML_METAL", "LLAMA_OPENSSL", "BUILD_SHARED_LIBS", "MTMD_VIDEO"), "OFF"))
+            for name in pack.base.NATIVE_ARCHIVES:
                 path = native / (name + ".lib")
                 path.write_bytes(b"archive path fixture")
                 fields["library." + name] = str(path)
@@ -159,7 +159,7 @@ Import {
             def write():
                 identity.write_text("\n".join(key + "=" + value for key, value in fields.items()) + "\n", encoding="utf-8")
             write()
-            self.assertEqual(len(pack.native_identity(native)[1]), 8)
+            self.assertEqual(len(pack.native_identity(native)[1]), 10)
             (outside / "air_llama.lib").write_bytes(b"outside archive path fixture")
             fields["library.air_llama"] = str(native / ".." / "outside" / "air_llama.lib")
             write()

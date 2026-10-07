@@ -21,14 +21,22 @@ pub(crate) struct Metadata {
 }
 
 pub(crate) fn read<R: Read + Seek>(reader: R) -> Result<Metadata> {
-    read_with_budget_policy(reader, false)
+    read_with_budget_policy(reader, false, false).map(|(metadata, _)| metadata)
 }
 /// Directory scans distinguish resource exhaustion from stable malformed
 /// content. Existing import/load callers keep their historical error contract.
 pub(crate) fn read_for_scan<R: Read + Seek>(reader: R) -> Result<Metadata> {
-    read_with_budget_policy(reader, true)
+    read_with_budget_policy(reader, true, false).map(|(metadata, _)| metadata)
 }
-fn read_with_budget_policy<R: Read + Seek>(reader: R, scan: bool) -> Result<Metadata> {
+pub(crate) fn read_projector<R: Read + Seek>(reader: R) -> Result<(String, String)> {
+    let (metadata, projector_type) = read_with_budget_policy(reader, false, true)?;
+    Ok((metadata.architecture, projector_type.unwrap()))
+}
+fn read_with_budget_policy<R: Read + Seek>(
+    reader: R,
+    scan: bool,
+    projector: bool,
+) -> Result<(Metadata, Option<String>)> {
     let mut input = Input::new(reader, scan)?;
     if input.bytes::<4>()? != *b"GGUF" {
         return Err(invalid_manifest("invalid GGUF magic"));
@@ -58,7 +66,7 @@ fn read_with_budget_policy<R: Read + Seek>(reader: R, scan: bool) -> Result<Meta
         }
         let kind = input.u32()?;
         match key.as_str() {
-            "general.architecture" | "tokenizer.chat_template" => {
+            "general.architecture" | "tokenizer.chat_template" | "clip.projector_type" => {
                 if kind != 8 {
                     return Err(invalid_manifest(
                         "GGUF architecture/template must be a string",
@@ -182,11 +190,43 @@ fn read_with_budget_policy<R: Read + Seek>(reader: R, scan: bool) -> Result<Meta
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         })
         .ok_or_else(|| invalid_manifest("GGUF architecture missing or invalid"))?;
+    if projector {
+        let projector_type = strings
+            .remove("clip.projector_type")
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 128
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            })
+            .ok_or_else(|| invalid_manifest("GGUF projector type missing or invalid"))?;
+        if architecture != "clip" {
+            return Err(invalid_manifest(
+                "GGUF projector must use clip architecture",
+            ));
+        }
+        return Ok((
+            Metadata {
+                architecture,
+                file_type: numbers.get("general.file_type").copied().unwrap_or(0),
+                template: String::new(),
+                context_length: 0,
+            },
+            Some(projector_type),
+        ));
+    }
+    if architecture == "clip" || strings.contains_key("clip.projector_type") {
+        return Err(runtime_types::RuntimeError::new(
+            runtime_types::ErrorCode::UnsupportedModel,
+            "a projector is a companion asset, not a language model",
+        ));
+    }
     let context_length = *numbers
         .get(&format!("{architecture}.context_length"))
         .filter(|&&value| value >= 32)
         .ok_or_else(|| invalid_manifest("GGUF context length missing or invalid"))?;
-    Ok(Metadata {
+    Ok((Metadata {
         context_length,
         architecture,
         file_type: *numbers
@@ -203,7 +243,7 @@ fn read_with_budget_policy<R: Read + Seek>(reader: R, scan: bool) -> Result<Meta
                     "GGUF requires a nonempty, NUL-free embedded chat template; no fallback is provided",
                 )
             })?,
-    })
+    }, None))
 }
 
 /// Conservative supported structural layouts from the locked ggml.h and

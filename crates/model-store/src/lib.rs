@@ -15,7 +15,8 @@ mod store;
 pub mod unregister;
 
 pub use manifest::{
-    Capabilities, ImportRequest, ModelManifest, ModelSource, ModelStorage, ValidationEvidence,
+    Capabilities, ImportRequest, ModelManifest, ModelSource, ModelStorage, ProjectorAsset,
+    ProjectorImportRequest, ValidationEvidence,
 };
 pub use store::{ImportCancellation, ModelStore};
 

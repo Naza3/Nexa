@@ -8,6 +8,8 @@ use std::fmt;
 
 mod model_compatibility;
 pub use model_compatibility::ModelCompatibility;
+mod image;
+pub use image::{ImageInput, MAX_IMAGE_BYTES, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS};
 
 mod scheduler;
 pub use scheduler::*;
@@ -46,6 +48,9 @@ impl Role {
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// A single-page OCR input. Text conversations retain their original wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageInput>,
 }
 
 impl Message {
@@ -53,6 +58,7 @@ impl Message {
         Self {
             role,
             content: content.into(),
+            image: None,
         }
     }
 }
@@ -62,6 +68,7 @@ impl fmt::Debug for Message {
         f.debug_struct("Message")
             .field("role", &self.role)
             .field("content_bytes", &self.content.len())
+            .field("has_image", &self.image.is_some())
             .finish()
     }
 }
@@ -162,6 +169,21 @@ pub fn validate_messages(messages: &[Message]) -> Result<(), RuntimeError> {
         return Err(RuntimeError::invalid(
             "messages must contain 1..=128 entries",
         ));
+    }
+    if messages.iter().any(|message| message.image.is_some()) {
+        if messages.len() != 1
+            || messages[0].role != Role::User
+            || messages[0].content.trim().is_empty()
+        {
+            return Err(RuntimeError::invalid(
+                "OCR requires one user message with an image and a nonempty prompt",
+            ));
+        }
+        messages[0]
+            .image
+            .as_ref()
+            .expect("image checked")
+            .decode()?;
     }
     let mut expected = Role::User;
     let mut total_bytes = 0usize;

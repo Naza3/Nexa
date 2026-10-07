@@ -13,6 +13,7 @@ const TEMPLATE_SHA256: &str = "57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b
 const MODEL_SIZE: u64 = 639_446_688;
 const VALIDATED_CONTEXT: u32 = 2048;
 const RESERVED: &[&str] = &[
+    "projector",
     "schema_version",
     "storage",
     "id",
@@ -121,6 +122,64 @@ impl ImportRequest {
     }
 }
 
+/// Explicit companion provenance and optional caller-provided integrity pin.
+#[derive(Clone, Debug)]
+pub struct ProjectorImportRequest {
+    pub expected_sha256: Option<String>,
+    pub source: ModelSource,
+}
+impl ProjectorImportRequest {
+    pub fn new(source: ModelSource) -> Self {
+        Self {
+            source,
+            expected_sha256: None,
+        }
+    }
+    pub(crate) fn validate(&self) -> Result<()> {
+        self.source.validate()?;
+        if self
+            .expected_sha256
+            .as_deref()
+            .is_some_and(|value| !is_hash(value))
+        {
+            return Err(invalid_manifest(
+                "expected projector SHA-256 must be 64 lowercase hexadecimal characters",
+            ));
+        }
+        Ok(())
+    }
+}
+/// A managed companion belongs to the primary model's atomic commit unit.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectorAsset {
+    pub relative_file: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub source: ModelSource,
+    pub architecture: String,
+    pub projector_type: String,
+}
+impl ProjectorAsset {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.relative_file != "mmproj.gguf"
+            || self.size_bytes == 0
+            || self.size_bytes > crate::library::MAX_MODEL_BYTES
+            || !is_hash(&self.sha256)
+            || self.architecture != "clip"
+            || self.projector_type.is_empty()
+            || self.projector_type.len() > 128
+            || !self
+                .projector_type
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(invalid_manifest("invalid managed projector asset"));
+        }
+        self.source.validate()
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Capabilities {
     pub chat: bool,
@@ -155,6 +214,8 @@ pub struct ModelManifest {
     pub id: ModelId,
     pub display_name: String,
     pub relative_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projector: Option<ProjectorAsset>,
     pub size_bytes: u64,
     pub sha256: String,
     pub source: ModelSource,
@@ -202,6 +263,7 @@ impl ModelManifest {
             id: request.id,
             display_name: request.display_name,
             relative_file: "model.gguf".into(),
+            projector: None,
             size_bytes: size,
             sha256: hash,
             source: request.source,
@@ -258,6 +320,12 @@ impl ModelManifest {
             ));
         }
         self.source.validate()?;
+        if let Some(projector) = &self.projector {
+            if self.storage != ModelStorage::Managed {
+                return Err(invalid_manifest("projector pairs require managed storage"));
+            }
+            projector.validate()?;
+        }
         validate_extra(&self.extra)?;
         let has_claim = self.validated
             || self.validated_llama_commit.is_some()
@@ -311,7 +379,8 @@ impl ModelManifest {
     }
 
     fn matches_matrix(&self) -> bool {
-        self.sha256 == MODEL_SHA256
+        self.projector.is_none()
+            && self.sha256 == MODEL_SHA256
             && self.size_bytes == MODEL_SIZE
             && self.architecture == "qwen3"
             && self.gguf_file_type == 7
@@ -394,6 +463,7 @@ mod tests {
             id: ModelId::new("renamed-known-artifact").unwrap(),
             display_name: "Known artifact".into(),
             relative_file: "model.gguf".into(),
+            projector: None,
             size_bytes: MODEL_SIZE,
             sha256: MODEL_SHA256.into(),
             source: ModelSource::local("user-selected local copy"),
@@ -447,6 +517,16 @@ mod tests {
         alternatives.push(m);
         let mut m = known();
         m.validated = false;
+        alternatives.push(m);
+        let mut m = known();
+        m.projector = Some(ProjectorAsset {
+            relative_file: "mmproj.gguf".into(),
+            size_bytes: 128,
+            sha256: "1".repeat(64),
+            source: ModelSource::local("fixture"),
+            architecture: "clip".into(),
+            projector_type: "glm4v".into(),
+        });
         alternatives.push(m);
         for mutated in alternatives {
             assert!(mutated.validate().is_err());

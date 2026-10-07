@@ -1,5 +1,9 @@
 # 开发与平台构建锁
 
+## 2026-10-07 单图 OCR 构建增量
+
+[ADR0032](decisions/0032-local-single-image-ocr.md)保持llama提交不变，追加CPU mtmd（MTMD_VIDEO=OFF）、vendor-hash，准确静态库闭包10项，私有worker3/shim4、公共HTTP1。包身份检查和stb_image/miniaudio完整内嵌许可证同步。Linux实编使用CMake4.4.4/Ninja1.13.2/GNU14.2/Rust1.98.1；本批尚无Windows原生构建结果。
+
 ## 2026-10-04 最新覆盖：公开仓库恢复Actions
 
 用户明确改为公开仓库并恢复GitHub Actions构建，已通过GitHub API确认public。此要求覆盖本文旧“以后不在Actions执行Rust”安排；本地Windows手动构建和显式Linux交叉路径仍保留。后续优先标准托管Windows/Ubuntu runner，不使用收费larger runner、不自动改预算或购买资源。官方费用边界见[GitHub托管runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
@@ -85,7 +89,7 @@ ctest --test-dir build/native-release --output-on-failure
 
 `llama-adapter` 负责单线程拥有原生对象，`runtime-types` 无原生依赖。`AIR_NATIVE_DIR` 可指向上述已经构建的目录；不设置时由 build.rs 在 Cargo OUT_DIR 单独构建，禁止在构建时下载模型或拉取上游代码。
 
-静态链接：air_llama、llama-common、llama-common-base、llama、ggml、ggml-cpu、ggml-base、cpp-httplib；平台系统库由 build.rs 选择。`cpp-httplib` 是固定上游 common 库的编译依赖；T04 HTTP使用Rust Axum/Hyper，Nexa仍不自动下载模型。
+静态链接：air_llama、llama-common、llama-common-base、llama、ggml、ggml-cpu、ggml-base、cpp-httplib、mtmd、vendor-hash；平台系统库由 build.rs 选择。`cpp-httplib` 是固定上游 common 库的编译依赖；T04 HTTP使用Rust Axum/Hyper，Nexa仍不自动下载模型。
 
 ## 所有权与目前限制
 

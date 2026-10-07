@@ -481,6 +481,22 @@ impl DesktopBridge {
         Ok(page)
     }
     pub async fn import_model(&self, path: PathBuf, model_id: String) -> Result<ModelSummary> {
+        self.import_files(path, None, model_id).await
+    }
+    pub async fn import_model_pair(
+        &self,
+        path: PathBuf,
+        projector: PathBuf,
+        model_id: String,
+    ) -> Result<ModelSummary> {
+        self.import_files(path, Some(projector), model_id).await
+    }
+    async fn import_files(
+        &self,
+        path: PathBuf,
+        projector: Option<PathBuf>,
+        model_id: String,
+    ) -> Result<ModelSummary> {
         self.open()?;
         let _work = self
             .work
@@ -497,7 +513,10 @@ impl DesktopBridge {
             size_bytes: u64,
             sha256: String,
         }
-        let body = json!({"id":id,"file":path});
+        let mut body = json!({"id":id,"file":path});
+        if let Some(projector) = projector {
+            body["projector"] = json!({"file":local_source(&projector)?});
+        }
         let response: ImportResponse = tokio::select! {
             biased;
             _=self.closing_requested()=>{

@@ -93,6 +93,29 @@ unsafe extern "C" {
         out: *mut *mut AirModel,
         error: *mut AirError,
     ) -> i32;
+    pub fn air_model_load_with_projector(
+        engine: *mut AirEngine,
+        path: AirString,
+        projector_path: AirString,
+        options: AirLoadOptions,
+        cancel: *const AirCancel,
+        out: *mut *mut AirModel,
+        error: *mut AirError,
+    ) -> i32;
+    pub fn air_prepare_image(
+        model: *mut AirModel,
+        prompt: AirString,
+        image: *const u8,
+        image_len: u64,
+        image_after_text: u32,
+        options: AirGenerateOptions,
+        stops: *const AirString,
+        stop_count: u64,
+        cancel: *const AirCancel,
+        out: *mut *mut AirPrepared,
+        prompt_tokens: *mut u32,
+        error: *mut AirError,
+    ) -> i32;
     pub fn air_model_unload(model: *mut AirModel);
     pub fn air_prepare(
         model: *mut AirModel,

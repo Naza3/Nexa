@@ -791,7 +791,7 @@ impl Actor {
             }
         };
         if self.state == ModelState::Ready
-            && self.selected.as_ref().is_some_and(|m| m.id == id)
+            && self.selected.as_ref() == Some(&model)
             && self.options == Some(options)
         {
             let _ = reply.send(Ok(()));
@@ -1628,6 +1628,7 @@ mod ledger_tests {
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: "fake.gguf".into(),
+                projector_path: None,
                 context_limit: 4096,
                 default_context: 4096,
                 loadable: true,
@@ -1667,6 +1668,7 @@ mod ledger_tests {
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: "fake.gguf".into(),
+                projector_path: None,
                 context_limit: 4096,
                 default_context: 4096,
                 loadable: true,
@@ -1736,6 +1738,7 @@ mod ledger_tests {
             Ok(ResolvedModel {
                 id: id.clone(),
                 path: "fake.gguf".into(),
+                projector_path: None,
                 context_limit: 8192,
                 default_context: 4096,
                 loadable: true,

@@ -1,6 +1,9 @@
 #include "air_llama.h"
 #include "chat.h"
 #include "llama.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
+#include "stb/stb_image.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -14,6 +17,7 @@
 
 #include "stream_buffer.h"
 #include "text_template.h"
+#include "ocr_template.h"
 #include "gguf.h"
 #include "log.h"
 struct air_cancel {
@@ -28,10 +32,15 @@ struct air_model {
   llama_model *model = nullptr;
   llama_context *context = nullptr;
   std::unique_ptr<air_text_template> templates;
+  std::unique_ptr<air_ocr_template> ocr_template;
+  mtmd_context *projector = nullptr;
+  const air_cancel *vision_cancel = nullptr;
   uint32_t batch = 0;
   uint32_t context_limit = 0;
   ~air_model() {
     templates.reset();
+    ocr_template.reset();
+    if (projector) mtmd_free(projector);
     if (context)
       llama_free(context);
     if (model)
@@ -43,6 +52,8 @@ struct air_model {
 struct air_prepared {
   air_model *model;
   std::vector<llama_token> tokens;
+  std::unique_ptr<mtmd_input_chunks, decltype(&mtmd_input_chunks_free)> chunks{nullptr, mtmd_input_chunks_free};
+  uint32_t prompt_tokens = 0;
   air_generate_options options;
   std::vector<std::string> stops;
 };
@@ -136,6 +147,7 @@ extern "C" int32_t air_engine_create(air_engine **out, air_error *error) {
     // owner and before any native/template activity. Dependency defaults or
     // earlier direct-library users must not enable prompt/template logging.
     llama_log_set(quiet_log, nullptr);
+    mtmd_helper_log_set(quiet_log, nullptr);
     common_log_set_verbosity_thold(-1);
     jinja::enable_debug(false);
     try {
@@ -154,7 +166,7 @@ extern "C" void air_engine_destroy(air_engine *e) {
   delete e;
   engine_active = false;
 }
-extern "C" int32_t air_model_load(air_engine *e, air_string path,
+static int32_t model_load(air_engine *e, air_string path, air_string projector_path,
                                   air_load_options options,
                                   const air_cancel *cancel, air_model **out,
                                   air_error *error) {
@@ -220,7 +232,9 @@ extern "C" int32_t air_model_load(air_engine *e, air_string path,
       const auto eos_id = llama_vocab_eos(vocab);
       auto bos = bos_id == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(vocab, bos_id, true);
       auto eos = eos_id == LLAMA_TOKEN_NULL ? std::string() : common_token_to_piece(vocab, eos_id, true);
-      m->templates = std::make_unique<air_text_template>(
+      if (projector_path.len) {
+        m->ocr_template = std::make_unique<air_ocr_template>(tmpl, bos, eos);
+      } else m->templates = std::make_unique<air_text_template>(
           tmpl, bos, eos, llama_vocab_get_add_bos(vocab), llama_vocab_get_add_eos(vocab),
           [vocab, eos_id](const std::string &suffix) {
             if (suffix.empty())
@@ -253,9 +267,49 @@ extern "C" int32_t air_model_load(air_engine *e, air_string path,
     m->batch = cp.n_batch;
     // Upstream rounds KV capacity to 256; preserve the caller's logical budget.
     m->context_limit = std::min(options.context_size, llama_n_ctx(m->context));
+    if (projector_path.len) {
+      auto pp = string(projector_path);
+      if (pp.empty() || pp.find('\0') != std::string::npos)
+        throw failure(1, "invalid projector path");
+      auto vp = mtmd_context_params_default();
+      vp.use_gpu = false;
+      vp.print_timings = false;
+      vp.warmup = false;
+      vp.n_threads = options.threads;
+      // mtmd may retain its parameters. Keep user_data model-owned instead of
+      // storing a borrowed load flag that can be dropped after this call.
+      m->vision_cancel = cancel;
+      vp.progress_callback = [](float, void *data) {
+        return !cancelled(static_cast<air_model *>(data)->vision_cancel);
+      };
+      vp.progress_callback_user_data = m.get();
+      vp.cb_eval = [](ggml_tensor *, bool ask, void *data) {
+        auto *model = static_cast<air_model *>(data);
+        return ask || !cancelled(model->vision_cancel);
+      };
+      vp.cb_eval_user_data = m.get();
+      m->projector = mtmd_init_from_file(pp.c_str(), m->model, vp);
+      check_cancel(cancel);
+      m->vision_cancel = nullptr;
+      if (!m->projector || !mtmd_support_vision(m->projector) || mtmd_support_audio(m->projector))
+        throw failure(3, "projector does not support the image-only execution contract");
+    }
     e->loaded = true;
     *out = m.release();
   });
+}
+extern "C" int32_t air_model_load(air_engine *e, air_string path,
+    air_load_options options, const air_cancel *cancel, air_model **out, air_error *error) {
+  return model_load(e, path, {nullptr, 0}, options, cancel, out, error);
+}
+extern "C" int32_t air_model_load_with_projector(air_engine *e, air_string path,
+    air_string projector_path, air_load_options options, const air_cancel *cancel,
+    air_model **out, air_error *error) {
+  if (!projector_path.len) {
+    if (out) *out = nullptr;
+    return guarded(error, [] { throw failure(1, "projector path is required"); });
+  }
+  return model_load(e, path, projector_path, options, cancel, out, error);
 }
 extern "C" void air_model_unload(air_model *m) {
   if (m && m->engine->owner == std::this_thread::get_id())
@@ -279,6 +333,7 @@ extern "C" int32_t air_prepare(air_model *m, const air_message *messages,
         !(options.top_p > 0 && options.top_p <= 1))
       throw failure(1, "invalid generation options");
     check_cancel(cancel);
+    if (!m->templates) throw failure(4, "this OCR model requires one image and a prompt");
     common_chat_templates_inputs input;
     input.enable_thinking = false;
     input.use_jinja = true;
@@ -338,10 +393,79 @@ extern "C" int32_t air_prepare(air_model *m, const air_message *messages,
     if (static_cast<uint64_t>(n) + options.max_tokens > m->context_limit)
       throw failure(5, "context_length_exceeded");
     check_cancel(cancel);
+    p->prompt_tokens = n;
     *prompt_tokens = n;
     *out = p.release();
   });
 }
+extern "C" int32_t air_prepare_image(air_model *m, air_string input,
+    const uint8_t *image, uint64_t image_len, uint32_t image_after_text,
+    air_generate_options options, const air_string *stops, uint64_t stop_count,
+    const air_cancel *cancel, air_prepared **out, uint32_t *prompt_tokens,
+    air_error *error) {
+  if (out) *out = nullptr;
+  if (prompt_tokens) *prompt_tokens = 0;
+  return guarded(error, [&] {
+    owner(m);
+    if (!out || !prompt_tokens || !image || image_len < 3 || image_len > 4194304 ||
+        image_after_text > 1 || stop_count > 4 || (stop_count && !stops) ||
+        options.max_tokens < 1 || options.max_tokens > 4096 ||
+        !(options.temperature >= 0 && options.temperature <= 2) ||
+        !(options.top_p > 0 && options.top_p <= 1))
+      throw failure(1, "invalid image generation arguments");
+    check_cancel(cancel);
+    if (!m->projector || !m->ocr_template)
+      throw failure(3, "image input requires a compatible loaded projector");
+    auto text = string(input);
+    const std::string marker = mtmd_get_marker(m->projector);
+    if (text.find_first_not_of(" \t\r\n") == std::string::npos ||
+        text.find(marker) != std::string::npos)
+      throw failure(1, "image prompt is empty or contains a reserved media marker");
+    const uint8_t png[] = {137, 80, 78, 71, 13, 10, 26, 10};
+    const bool is_png = image_len >= 24 && std::memcmp(image, png, sizeof(png)) == 0;
+    const bool is_jpeg = image[0] == 255 && image[1] == 216 && image[2] == 255;
+    int width = 0, height = 0, channels = 0;
+    if ((!is_png && !is_jpeg) ||
+        !stbi_info_from_memory(image, static_cast<int>(image_len), &width, &height, &channels) ||
+        width < 1 || height < 1 || width > 8192 || height > 8192 ||
+        static_cast<uint64_t>(width) * height > 16777216)
+      throw failure(1, "invalid or oversized PNG/JPEG image");
+    auto decoded = mtmd_helper_bitmap_init_from_buf(m->projector, image, image_len,
+                                                   false, mtmd_helper_init_opt_default());
+    std::unique_ptr<mtmd_bitmap, decltype(&mtmd_bitmap_free)> bitmap(decoded.bitmap, mtmd_bitmap_free);
+    std::unique_ptr<mtmd_helper_video, decltype(&mtmd_helper_video_free)> video(decoded.video_ctx, mtmd_helper_video_free);
+    check_cancel(cancel);
+    if (!bitmap || video || mtmd_bitmap_is_audio(bitmap.get()))
+      throw failure(1, "PNG/JPEG image decoding failed");
+    auto p = std::make_unique<air_prepared>();
+    p->model = m;
+    p->options = options;
+    for (uint64_t i = 0; i < stop_count; ++i) {
+      auto stop = string(stops[i]);
+      if (stop.empty() || stop.size() > 128) throw failure(1, "invalid stop");
+      p->stops.push_back(std::move(stop));
+    }
+    auto prompt = m->ocr_template->render(image_after_text ? text + marker : marker + text);
+    if (prompt.size() > 4194304) throw failure(1, "formatted prompt too large");
+    p->chunks.reset(mtmd_input_chunks_init());
+    if (!p->chunks) throw failure(6, "image chunk allocation failed");
+    mtmd_input_text formatted{prompt.data(), prompt.size(), true, true};
+    const mtmd_bitmap *bitmaps[] = {bitmap.get()};
+    int result = mtmd_tokenize(m->projector, p->chunks.get(), &formatted, bitmaps, 1);
+    check_cancel(cancel);
+    if (result) throw failure(1, "image tokenization failed");
+    const auto tokens = mtmd_helper_get_n_tokens(p->chunks.get());
+    const auto positions = mtmd_helper_get_n_pos(p->chunks.get());
+    if (!tokens || positions < 1) throw failure(6, "empty multimodal prompt");
+    if (tokens + options.max_tokens > m->context_limit ||
+        static_cast<uint64_t>(positions) + options.max_tokens > m->context_limit)
+      throw failure(5, "context_length_exceeded");
+    p->prompt_tokens = static_cast<uint32_t>(tokens);
+    *prompt_tokens = p->prompt_tokens;
+    *out = p.release();
+  });
+}
+
 extern "C" void air_prepared_free(air_prepared *p) {
   if (p && p->model->engine->owner == std::this_thread::get_id())
     delete p;
@@ -366,14 +490,17 @@ extern "C" int32_t air_generate_observed(
     owner(p->model);
     auto ctx = p->model->context;
     auto vocab = llama_model_get_vocab(p->model->model);
-    usage->prompt_tokens = static_cast<uint32_t>(p->tokens.size());
+    usage->prompt_tokens = p->prompt_tokens;
     struct cleanup {
       llama_context *ctx;
+      air_model *model;
       ~cleanup() {
+        model->vision_cancel = nullptr;
         llama_set_abort_callback(ctx, nullptr, nullptr);
         llama_memory_clear(llama_get_memory(ctx), true);
       }
-    } clean{ctx};
+    } clean{ctx, p->model};
+    p->model->vision_cancel = cancel;
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_set_abort_callback(ctx, abort_callback,
                              const_cast<air_cancel *>(cancel));
@@ -400,17 +527,85 @@ extern "C" int32_t air_generate_observed(
       check_cancel(cancel);
     };
     observe(0, 0);
-    for (size_t i = 0; i < p->tokens.size(); i += p->model->batch) {
-      check_cancel(cancel);
-      auto batch = llama_batch_get_one(
-          p->tokens.data() + i, static_cast<int32_t>(std::min<size_t>(
-                                    p->model->batch, p->tokens.size() - i)));
-      int r = llama_decode(ctx, batch);
-      check_cancel(cancel);
-      if (r)
-        throw failure(6, "prefill failed");
-      observe(1, static_cast<uint32_t>(std::min<size_t>(
-                     i + p->model->batch, p->tokens.size())));
+    llama_pos next_position = 0;
+    std::unique_ptr<llama_batch_ext, decltype(&llama_batch_ext_free)> multimodal_batch(
+        p->chunks ? llama_batch_ext_init(ctx) : nullptr, llama_batch_ext_free);
+    if (p->chunks && !multimodal_batch) throw failure(6, "batch allocation failed");
+    uint32_t completed = 0;
+    auto decode_text = [&](const llama_token *tokens, size_t count, bool final, bool prefill) {
+      for (size_t i = 0; i < count; i += p->model->batch) {
+        check_cancel(cancel);
+        llama_batch_ext_clear(multimodal_batch.get());
+        size_t end = std::min(count, i + p->model->batch);
+        for (size_t j = i; j < end; ++j) {
+          int32_t index = llama_batch_ext_add_token(multimodal_batch.get(), 0, tokens[j]);
+          if (index < 0 || !llama_batch_ext_set_pos(multimodal_batch.get(), index, &next_position))
+            throw failure(6, "multimodal text batch failed");
+          ++next_position;
+          if (final && j + 1 == count &&
+              !llama_batch_ext_set_output_logits(multimodal_batch.get(), index, true))
+            throw failure(6, "multimodal logits batch failed");
+        }
+        int r = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, multimodal_batch.get());
+        check_cancel(cancel);
+        if (r) throw failure(6, "multimodal text prefill failed");
+        if (prefill) {
+          completed += static_cast<uint32_t>(end - i);
+          observe(1, completed);
+        }
+      }
+    };
+    if (p->chunks) {
+      const auto count = mtmd_input_chunks_size(p->chunks.get());
+      for (size_t i = 0; i < count; ++i) {
+        check_cancel(cancel);
+        auto *chunk = mtmd_input_chunks_get(p->chunks.get(), i);
+        auto type = mtmd_input_chunk_get_type(chunk);
+        if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+          size_t n = 0;
+          auto *tokens = mtmd_input_chunk_get_tokens_text(chunk, &n);
+          decode_text(tokens, n, i + 1 == count, true);
+        } else if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+          int r = mtmd_encode_chunk(p->model->projector, chunk);
+          // Upstream cb_eval stops graph work without necessarily returning an
+          // error: never consume embeddings before checking our cancellation flag.
+          check_cancel(cancel);
+          if (r) throw failure(6, "image encoding failed");
+          struct image_progress_state {
+            air_progress_callback callback;
+            void *user;
+            uint32_t *completed;
+            uint32_t total;
+            const air_cancel *cancel;
+          } state{progress, progress_user, &completed, usage->prompt_tokens, cancel};
+          auto on_batch = [](const mtmd_helper_embd_batch *batch, void *data) -> int32_t {
+            auto &state = *static_cast<image_progress_state *>(data);
+            *state.completed += static_cast<uint32_t>(batch->n_tokens);
+            if (state.callback && state.callback(state.user, 1, *state.completed, state.total))
+              return 8;
+            return cancelled(state.cancel) ? 2 : 0;
+          };
+          r = mtmd_helper_decode_image_chunk(p->model->projector, ctx, chunk,
+              mtmd_get_output_embd(p->model->projector), next_position, 0,
+              p->model->batch, &next_position, on_batch, &state);
+          check_cancel(cancel);
+          if (r == 8) throw failure(8, "progress consumer stopped");
+          if (r) throw failure(6, "image prefill failed");
+        } else throw failure(3, "unsupported multimodal chunk");
+      }
+    } else {
+      for (size_t i = 0; i < p->tokens.size(); i += p->model->batch) {
+        check_cancel(cancel);
+        auto batch = llama_batch_get_one(
+            p->tokens.data() + i, static_cast<int32_t>(std::min<size_t>(
+                                      p->model->batch, p->tokens.size() - i)));
+        int r = llama_decode(ctx, batch);
+        check_cancel(cancel);
+        if (r)
+          throw failure(6, "prefill failed");
+        observe(1, static_cast<uint32_t>(std::min<size_t>(
+                       i + p->model->batch, p->tokens.size())));
+      }
     }
     observe(2, usage->prompt_tokens);
     air_stream_buffer stream(p->stops);
@@ -454,7 +649,9 @@ extern "C" int32_t air_generate_observed(
         break;
       }
       if (i + 1 < p->options.max_tokens) {
-        int r = llama_decode(ctx, llama_batch_get_one(&token, 1));
+        int r = 0;
+        if (p->chunks) decode_text(&token, 1, true, false);
+        else r = llama_decode(ctx, llama_batch_get_one(&token, 1));
         check_cancel(cancel);
         if (r)
           throw failure(6, "decode failed");
@@ -488,7 +685,7 @@ extern "C" int32_t air_get_build_info(air_buffer *out, air_error *error) {
   return guarded(error, [&] {
     if (!out)
       throw failure(1, "null output");
-    *out = buffer("{\"shim_version\":3,\"backend\":\"cpu\",\"llama_commit\":"
+    *out = buffer("{\"shim_version\":4,\"backend\":\"cpu\",\"llama_commit\":"
                   "\"" AIR_LLAMA_COMMIT "\"}");
   });
 }

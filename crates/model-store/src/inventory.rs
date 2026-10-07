@@ -26,6 +26,7 @@ pub fn validate_data_directory(root: &Path) -> Result<()> {
 }
 pub fn read(root: &Path) -> Result<Inventory> {
     let mut entries = Vec::new();
+    let mut projector_stamps = Vec::new();
     let mut registered_ids = BTreeSet::new();
     let mut metadata_bytes = 0u64;
     let _root = root
@@ -80,11 +81,23 @@ pub fn read(root: &Path) -> Result<Inventory> {
             }
             let stamp = library::open_read_file(&directory.join("model.gguf"), false)
                 .and_then(|f| library::identity(&f));
-            let availability_error = match &stamp {
+            let mut availability_error = match &stamp {
                 Ok(stamp) if stamp.size == manifest.size_bytes => None,
                 Ok(_) => Some(ErrorCode::ModelFileChanged),
                 Err(e) => Some(e.code),
             };
+            if let Some(asset) = &manifest.projector {
+                let companion =
+                    library::open_read_file(&directory.join(&asset.relative_file), false)
+                        .and_then(|f| library::identity(&f));
+                let error = match &companion {
+                    Ok(stamp) if stamp.size == asset.size_bytes => None,
+                    Ok(_) => Some(ErrorCode::ModelFileChanged),
+                    Err(error) => Some(error.code),
+                };
+                availability_error = availability_error.or(error);
+                projector_stamps.push((manifest.id.clone(), companion.ok()));
+            }
             entries.push(InventoryEntry {
                 manifest,
                 availability_error,
@@ -132,6 +145,13 @@ pub fn read(root: &Path) -> Result<Inventory> {
                 .map_err(|_| invalid_manifest("invalid identity"))?,
         );
         digest.update(entry.availability_error.map_or("", |e| e.as_str()));
+    }
+    projector_stamps.sort_by(|a, b| a.0.cmp(&b.0));
+    for stamp in projector_stamps {
+        digest.update(
+            serde_json::to_vec(&stamp)
+                .map_err(|_| invalid_manifest("invalid projector identity"))?,
+        );
     }
     let bytes: [u8; 16] = digest.finalize()[..16].try_into().unwrap();
     Ok(Inventory {

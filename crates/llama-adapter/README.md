@@ -8,7 +8,7 @@ T01/T02 的 Rust 安全包装，原生实现固定为 `native/llama-shim/include
 - `Prepared::generate_observed` 额外回调 prefill 开始、成功批次及 decode 开始；只报告数值进度，不能用耗时猜阶段，进度回调必须立即返回
 - engine/model/prepared 不能跨线程；`CancelHandle` 是单次、可克隆、可跨线程的独立原子取消标志
 - 回调借用完整 UTF-8，最多 4096 字节。调用方快速复制/有界入队；允许在 decode 步骤之间等待同一有界输出预算，但必须可由取消唤醒、设有限时且不持额外原生锁，禁止无限阻塞。回调 panic 在 C ABI 内被捕获，原生清理后在 Rust 栈恢复（`panic=unwind`）
-- 原生错误仅供受信任宿主诊断，不能未经清洗通过 HTTP 暴露。示例只记录数值、hash 和错误类别，不记录消息内容
+- 原生错误仅供受信任宿主诊断，不能未经清洗通过 HTTP 暴露。普通文本诊断示例只记录数值、hash 和错误类别；显式 `ocr-smoke` 会将识别正文输出到stdout用于人工对照，仅应对受控测试图片运行
 - seed `u32::MAX` 是上游随机哨兵，其他 seed 只在同模型/后端/硬件/工具链内尽力复现
 
 ## 构建
@@ -37,3 +37,7 @@ NEXA_TEST_MODEL=/path/to/locked.gguf NEXA_TEST_THREADS=2 cargo test --locked -p 
 `native-smoke --help` 列出取消、背压和预算模式；`xtask native-smoke` 驱动多场景并校验锁定元数据。默认单测不加载模型，显式忽略的真实模型测试覆盖 stop 命中、上下文超限、丢弃 prepared、取消/消费者停止/panic 后同一模型恢复及重复加载释放。仅测试通过不代表推理质量或目标设备性能验收。
 
 A08 的 `real_model_observed_prefill_and_decode_cancellation` 先校验固定官方 GGUF SHA-256，再由独立控制线程在成功完成且未完成全部 prompt 的 prefill 批次观测后取消。必须没有进入 decode、completion_tokens=0，单独记录取消到安全返回延迟；decode 取消另测。它还验证新 progress 回调 panic 的隔离及同模型恢复。该测试通过的设备/线程配置见验证记录，不扩大原支持矩阵。
+
+## 单图 OCR（ADR0032）
+
+`Engine::load_with_projector`加载托管模型与配套视觉GGUF；`Model::prepare`将带ImageInput的单user请求交给追加`air_prepare_image`入口，CPU mtmd负责真实图像token/位置预算。GLM单轮模板oracle与普通文本模板校验分开，ABI v2布局保持、shim行为身份为4。所有视觉对象与取消回调上下文保持同线程所有权，生成结束清空取消指针；坏图、预算不足和纯文本请求不会伪装成功。见[决策](../../docs/decisions/0032-local-single-image-ocr.md)及[真实测试fixture](../../tests/fixtures/ocr/README.md)。

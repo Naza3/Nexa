@@ -103,6 +103,29 @@ impl ApiState {
         if let Some(cancel) = &cancel {
             crate::load_operations::check_cancelled(cancel)?;
         }
+        // A projector-backed OCR model has a single-image template, so a text
+        // probe is not an inference validation. Report only the successful load.
+        let store = self.store.clone();
+        let requested = model.clone();
+        let paired = tokio::task::spawn_blocking(move || {
+            // Unavailable metadata follows the existing probe/scope-error path;
+            // it cannot yield a persisted successful validation receipt.
+            store.get(&requested).is_ok_and(|m| m.projector.is_some())
+        })
+        .await
+        .map_err(|_| ApiError::internal())?;
+        if paired {
+            if let Some(cancel) = &cancel {
+                crate::load_operations::check_cancelled(cancel)?;
+            }
+            return Ok(LocalValidation {
+                state: ValidationState::Loaded,
+                checked_at_unix_ms: Some(local_validation::now_ms()),
+                error_code: None,
+                load_success: true,
+                generation_pass: false,
+            });
+        }
         let state = self.clone();
         let requested = model.clone();
         let loaded_scope = tokio::task::spawn_blocking(move || {
@@ -469,6 +492,7 @@ mod tests {
                 Ok(ResolvedModel {
                     id: id.clone(),
                     path: "fixture.gguf".into(),
+                    projector_path: None,
                     context_limit: 4096,
                     default_context: 4096,
                     loadable: true,
@@ -619,6 +643,7 @@ mod tests {
                 Ok(ResolvedModel {
                     id: id.clone(),
                     path: "fixture.gguf".into(),
+                    projector_path: None,
                     context_limit: 4096,
                     default_context: 4096,
                     loadable: true,

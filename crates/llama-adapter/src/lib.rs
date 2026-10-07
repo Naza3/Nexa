@@ -92,9 +92,48 @@ impl Engine {
         options: LoadOptions,
         cancel: &CancelHandle,
     ) -> Result<Model<'engine>, RuntimeError> {
+        self.load_inner(path.as_ref(), None, options, cancel)
+    }
+
+    /// Loads a text model and its verified image projector on this same thread.
+    pub fn load_with_projector<'engine>(
+        &'engine mut self,
+        path: impl AsRef<Path>,
+        projector_path: impl AsRef<Path>,
+        options: LoadOptions,
+        cancel: &CancelHandle,
+    ) -> Result<Model<'engine>, RuntimeError> {
+        self.load_inner(
+            path.as_ref(),
+            Some(projector_path.as_ref()),
+            options,
+            cancel,
+        )
+    }
+
+    fn load_inner<'engine>(
+        &'engine mut self,
+        path: &Path,
+        projector_path: Option<&Path>,
+        options: LoadOptions,
+        cancel: &CancelHandle,
+    ) -> Result<Model<'engine>, RuntimeError> {
         options.validate()?;
+        let projector_path = projector_path
+            .map(|path| {
+                let value = path
+                    .to_str()
+                    .ok_or_else(|| RuntimeError::invalid("projector path must be valid UTF-8"))?;
+                if value.is_empty()
+                    || value.contains('\0')
+                    || value.len() > runtime_types::MAX_MESSAGE_BYTES
+                {
+                    return Err(RuntimeError::invalid("invalid projector path"));
+                }
+                Ok(value)
+            })
+            .transpose()?;
         let path = path
-            .as_ref()
             .to_str()
             .ok_or_else(|| RuntimeError::invalid("model path must be valid UTF-8"))?;
         if path.is_empty() || path.contains('\0') || path.len() > runtime_types::MAX_MESSAGE_BYTES {
@@ -112,14 +151,26 @@ impl Engine {
         // SAFETY: Self is exclusively borrowed on its creating thread; path and
         // cancellation storage outlive the synchronous native call.
         let status = unsafe {
-            ffi::air_model_load(
-                self.raw.as_ptr(),
-                ffi::AirString::borrowed(path),
-                options,
-                cancel.raw(),
-                &mut raw,
-                &mut error,
-            )
+            if let Some(projector_path) = projector_path {
+                ffi::air_model_load_with_projector(
+                    self.raw.as_ptr(),
+                    ffi::AirString::borrowed(path),
+                    ffi::AirString::borrowed(projector_path),
+                    options,
+                    cancel.raw(),
+                    &mut raw,
+                    &mut error,
+                )
+            } else {
+                ffi::air_model_load(
+                    self.raw.as_ptr(),
+                    ffi::AirString::borrowed(path),
+                    options,
+                    cancel.raw(),
+                    &mut raw,
+                    &mut error,
+                )
+            }
         };
         check_status(status, error)?;
         Ok(Model {
@@ -164,6 +215,9 @@ impl Model<'_> {
     ) -> Result<Prepared<'model>, RuntimeError> {
         validate_messages(messages)?;
         options.validate()?;
+        let image = messages.iter().find_map(|message| message.image.as_ref());
+        let image_bytes = image.map(runtime_types::ImageInput::decode).transpose()?;
+        let image_after_text = image.is_some_and(|image| image.after_text);
         let messages: Vec<_> = messages
             .iter()
             .map(|message| ffi::AirMessage {
@@ -188,18 +242,35 @@ impl Model<'_> {
         // SAFETY: The model is exclusively borrowed; all borrowed input arrays
         // remain live for the call. The shim copies everything into Prepared.
         let status = unsafe {
-            ffi::air_prepare(
-                self.raw.as_ptr(),
-                messages.as_ptr(),
-                messages.len() as u64,
-                options,
-                stops.as_ptr(),
-                stops.len() as u64,
-                cancel.raw(),
-                &mut raw,
-                &mut prompt_tokens,
-                &mut error,
-            )
+            if let Some(image) = &image_bytes {
+                ffi::air_prepare_image(
+                    self.raw.as_ptr(),
+                    messages[0].content,
+                    image.as_ptr(),
+                    image.len() as u64,
+                    u32::from(image_after_text),
+                    options,
+                    stops.as_ptr(),
+                    stops.len() as u64,
+                    cancel.raw(),
+                    &mut raw,
+                    &mut prompt_tokens,
+                    &mut error,
+                )
+            } else {
+                ffi::air_prepare(
+                    self.raw.as_ptr(),
+                    messages.as_ptr(),
+                    messages.len() as u64,
+                    options,
+                    stops.as_ptr(),
+                    stops.len() as u64,
+                    cancel.raw(),
+                    &mut raw,
+                    &mut prompt_tokens,
+                    &mut error,
+                )
+            }
         };
         check_status(status, error)?;
         Ok(Prepared {
@@ -437,7 +508,7 @@ pub fn build_info() -> Result<String, RuntimeError> {
 }
 
 const EXPECTED_BUILD_INFO: &str = concat!(
-    "{\"shim_version\":3,\"backend\":\"cpu\",\"llama_commit\":\"",
+    "{\"shim_version\":4,\"backend\":\"cpu\",\"llama_commit\":\"",
     "2149c00f4442dc59302e134a02e4c99d5f7ed9fc\"}"
 );
 fn verify_build_identity(info: &str) -> Result<(), RuntimeError> {
@@ -746,7 +817,7 @@ mod tests {
     #[test]
     fn native_build_reports_pinned_abi() {
         let info = build_info().unwrap();
-        assert!(info.contains("\"shim_version\":3"));
+        assert!(info.contains("\"shim_version\":4"));
         assert!(info.contains("\"backend\":\"cpu\""));
         assert!(info.contains("2149c00f4442dc59302e134a02e4c99d5f7ed9fc"));
     }
@@ -778,10 +849,10 @@ mod behavior_identity_tests {
     fn product_entry_identity_rejects_previous_and_forged_shims() {
         assert!(verify_build_identity(EXPECTED_BUILD_INFO).is_ok());
         for invalid in [
-            EXPECTED_BUILD_INFO.replace("\"shim_version\":3", "\"shim_version\":2"),
+            EXPECTED_BUILD_INFO.replace("\"shim_version\":4", "\"shim_version\":3"),
             EXPECTED_BUILD_INFO.replace(
-                "\"shim_version\":3",
-                "\"shim_version\":2,\"shim_version\":3",
+                "\"shim_version\":4",
+                "\"shim_version\":3,\"shim_version\":4",
             ),
             EXPECTED_BUILD_INFO.replace("cpu", "gpu"),
             EXPECTED_BUILD_INFO.replace("2149c00", "0000000"),

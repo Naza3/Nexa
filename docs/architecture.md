@@ -8,6 +8,8 @@
 
 > 2026-10-04 运行策略增量按 [ADR0023](decisions/0023-model-verification-and-idle-policy.md)：文件校验整操作超时与空闲自动卸载分别配置；关闭自动卸载只禁止TTL释放，显式卸载/切换/停服仍有效。设置由本机管理、停服持锁保存，不扩大LAN管理权限。
 
+> 2026-10-07：按 [ADR0032](decisions/0032-local-single-image-ocr.md) 增加本机单图 OCR，托管双 GGUF、CPU mtmd、现有 worker/SSE 和桌面 OCR 页；LAN 仍为文本接口。模型质量、Windows 与目标机验证见本轮记录。
+
 ## 1. 产品目标与边界
 
 Nexa 是面向 Windows 桌面 CPU 的本地 LLM runtime。其他应用通过本机 API 调用；桌面 UI 管理模型与服务，聊天辅助验证。首要目标 Windows10 x64 / i5-8400 / 16GB内存，后续按实测覆盖更多 Intel/AMD 桌面 CPU 与 Windows11。
@@ -68,7 +70,7 @@ Executor、ModelResolver、DTO/IPC边界已有Windows进程隔离、测试和解
 
 ## 5. API 与 harness 接入
 
-现有接口：`/v1/models`、`/v1/chat/completions`文本子集与`/runtime/*`管理。SSE在Started后开始；Accepted/Queued/Loading不是现有HTTP完整任务流。当前status仅给聚合状态/活动ID。
+现有接口：`/v1/models`、`/v1/chat/completions`文本及本机单图 OCR 子集与`/runtime/*`管理。SSE在Started后开始；Accepted/Queued/Loading不是现有HTTP完整任务流。当前status仅给聚合状态/活动ID。
 
 dsh接入复用既有HTTP路径，先准确配置pi-ai provider，再增加真正需要的工具消息/工具输出流能力；不先增加另一套 `/v1/messages` 网关。协议兼容与模型具备可靠工具能力是两种验收，0.6B链路成功不能证明真实harness可用。
 

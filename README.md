@@ -12,6 +12,10 @@ Nexa 是面向 Windows 桌面处理器的本地大模型运行时。以固定版
 - 合规单文件 GGUF 可尝试加载，不设特定型号/hash 许可名单；结构、完整性、原始模板、执行方式与资源检查仍必需，精确[模型矩阵](docs/model-matrix.md)只记录实测证据
 - 关闭窗口与停止服务分别处理；托盘、开机自启动、生产工具调用、完整 Harness 工具闭环、GPU/NPU 及其他系统仍不属于已实现承诺
 
+## 当前开发分支：单图 OCR
+
+新增 GLM-OCR 双 GGUF 配对导入、CPU 图片识别和桌面 Markdown 原文/预览/保存。Linux真实PNG/JPEG、HTTP取消恢复及原有文本回归通过；本批Windows包与用户目标机仍待验，旧v0.1.0包不含此能力。见[使用说明](docs/ocr-windows-cpu.md)、[实现边界](docs/decisions/0032-local-single-image-ocr.md)和[验证记录](docs/verification/2026-10-07-local-ocr.md)。
+
 ## 最新已交付版本
 
 2026-10-05 已交付版本 0.1.0 的便携 ZIP、MSI 与 Setup EXE，精确来源为 `de7732f031c11e44a27f86b33a341c48131a3906`。[Windows Actions37306309927](https://github.com/Naza3/Nexa/actions/runs/37306309927)通过真实模型/桌面 bridge 与全部 13 项安装生命周期门槛，随后独立产物审计通过。三格式来自同一 28 文件 payload，完整 10 份许可及 aria2 对应源码保留。

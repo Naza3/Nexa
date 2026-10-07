@@ -77,11 +77,14 @@ impl FromStr for RequestId {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolvedModel {
     pub id: ModelId,
     pub path: PathBuf,
+    /// Integrity-checked companion asset belonging to this logical model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projector_path: Option<PathBuf>,
     pub context_limit: u32,
     pub default_context: u32,
     /// Store-authorized controlled attempt after integrity checks. This does

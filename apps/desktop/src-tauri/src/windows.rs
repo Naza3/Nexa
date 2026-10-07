@@ -27,6 +27,7 @@ struct Shell {
     data_dir: PathBuf,
     package_root: PathBuf,
     selection: Mutex<Option<Selection>>,
+    pair_selection: Mutex<Option<FileSelection<(PathBuf, desktop_bridge::SelectedFile)>>>,
     file_selection: Mutex<Option<FileSelection<desktop_bridge::SelectedFile>>>,
     directory_selection: Mutex<Option<DirectorySelection>>,
     picking: AtomicBool,
@@ -398,6 +399,88 @@ async fn models_selection_discard(
     })
 }
 #[tauri::command]
+async fn models_pair_pick(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<Option<PickedFiles>> {
+    guard(&window, &state)?;
+    if state.picking.swap(true, Ordering::AcqRel) {
+        return Err(error("desktop_busy"));
+    }
+    struct Picking<'a>(&'a AtomicBool);
+    impl Drop for Picking<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let _picking = Picking(&state.picking);
+    *state
+        .pair_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))? = None;
+    let mut files = Vec::new();
+    let mut summaries = Vec::new();
+    for title in [
+        "选择 OCR 主模型 GGUF（将复制两个文件）",
+        "选择配套视觉投影 GGUF（mmproj）",
+    ] {
+        let picked = rfd::AsyncFileDialog::new()
+            .set_parent(&window)
+            .set_title(title)
+            .add_filter("GGUF", &["gguf"])
+            .pick_file()
+            .await;
+        guard(&window, &state)?;
+        let Some(picked) = picked else {
+            return Ok(None);
+        };
+        let path = crate::selection::regular_file(picked.path()).map_err(error)?;
+        if !path
+            .extension()
+            .is_some_and(|s| s.eq_ignore_ascii_case("gguf"))
+            || files.iter().any(|(p, _)| p == &path)
+        {
+            return Err(error("invalid_request"));
+        }
+        let lease =
+            desktop_bridge::SelectedFile::open(&path).map_err(|e| error(e.code.as_str()))?;
+        summaries.push(PickedFile {
+            selection_index: files.len(),
+            file_name: lease.file_name().to_owned(),
+            size_bytes: lease.size_bytes(),
+        });
+        files.push((path, lease));
+    }
+    let (selection, dto) = FileSelection::new(files, summaries);
+    *state
+        .pair_selection
+        .lock()
+        .map_err(|_| error("desktop_busy"))? = Some(selection);
+    Ok(Some(dto))
+}
+#[tauri::command]
+async fn models_pair_import(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: ImportRequest,
+) -> Result<ModelSummary> {
+    guard(&window, &state)?;
+    let files = {
+        let mut slot = state
+            .pair_selection
+            .lock()
+            .map_err(|_| error("desktop_busy"))?;
+        FileSelection::consume_pair(&mut slot, request.selection_id).map_err(error)?
+    };
+    // Keep both native read/directory leases alive until publication or failure.
+    let result = state
+        .bridge
+        .import_model_pair(files[0].0.clone(), files[1].0.clone(), request.model_id)
+        .await;
+    drop(files);
+    result
+}
+#[tauri::command]
 async fn models_add(
     window: WebviewWindow,
     state: State<'_, Arc<Shell>>,
@@ -655,6 +738,51 @@ async fn chat_start(
     state.bridge.chat_start(request)
 }
 #[tauri::command]
+async fn ocr_start(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: OcrStartRequest,
+) -> Result<RequestHandle> {
+    guard(&window, &state)?;
+    state.bridge.ocr_start(request)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarkdownRequest {
+    text: String,
+}
+#[derive(Serialize)]
+struct SavedMarkdown {
+    saved: bool,
+}
+#[tauri::command]
+async fn ocr_save_markdown(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: MarkdownRequest,
+) -> Result<SavedMarkdown> {
+    guard(&window, &state)?;
+    if request.text.len() > 256 * 1024 {
+        return Err(error("invalid_request"));
+    }
+    let file = rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .set_title("保存 OCR 原文")
+        .set_file_name("ocr.md")
+        .add_filter("Markdown", &["md"])
+        .save_file()
+        .await;
+    guard(&window, &state)?;
+    if let Some(file) = file {
+        file.write(request.text.as_bytes())
+            .await
+            .map_err(|_| error("file_save_failed"))?;
+        Ok(SavedMarkdown { saved: true })
+    } else {
+        Ok(SavedMarkdown { saved: false })
+    }
+}
+#[tauri::command]
 async fn chat_next(
     window: WebviewWindow,
     state: State<'_, Arc<Shell>>,
@@ -777,6 +905,9 @@ async fn close(app: tauri::AppHandle, state: Arc<Shell>) {
     if let Ok(mut slot) = state.file_selection.lock() {
         *slot = None;
     }
+    if let Ok(mut slot) = state.pair_selection.lock() {
+        *slot = None;
+    }
     loop {
         match state.bridge.close().await {
             Ok(()) => break,
@@ -886,6 +1017,7 @@ pub fn run() {
         data_dir,
         package_root: layout.package_root,
         selection: Mutex::new(None),
+        pair_selection: Mutex::new(None),
         file_selection: Mutex::new(None),
         directory_selection: Mutex::new(None),
         picking: AtomicBool::new(false),
@@ -902,6 +1034,13 @@ pub fn run() {
                 break;
             };
             if let Ok(mut slot) = state.file_selection.lock() {
+                if state.closing.load(Ordering::Acquire) {
+                    *slot = None;
+                } else {
+                    FileSelection::expire(&mut slot);
+                }
+            }
+            if let Ok(mut slot) = state.pair_selection.lock() {
                 if state.closing.load(Ordering::Acquire) {
                     *slot = None;
                 } else {
@@ -952,6 +1091,10 @@ pub fn run() {
             model_load,
             model_unload,
             model_unregister,
+            models_pair_pick,
+            models_pair_import,
+            ocr_start,
+            ocr_save_markdown,
             chat_start,
             chat_next,
             chat_cancel,

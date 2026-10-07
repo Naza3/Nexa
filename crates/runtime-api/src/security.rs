@@ -14,6 +14,13 @@ use axum::{
 use std::{net::SocketAddr, sync::Arc};
 #[derive(Clone, Copy, Debug)]
 pub struct BodyLimit(pub usize);
+fn local_read_limit(request: &Request, text_limit: usize) -> usize {
+    if request.method() == Method::POST && request.uri().path() == "/v1/chat/completions" {
+        crate::config::MAX_IMAGE_BODY_BYTES
+    } else {
+        text_limit
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct PeerEndpoints {
     pub client: SocketAddr,
@@ -185,7 +192,7 @@ fn validate(
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .ok_or_else(|| ApiError::invalid("body", "Invalid Content-Length."))?;
-        if length > crate::config::MAX_BODY_BYTES as u64 {
+        if length > local_read_limit(request, crate::config::MAX_BODY_BYTES) as u64 {
             return Err(ApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "request_too_large",
@@ -236,6 +243,7 @@ pub async fn enforce(
     if limit == 0 || limit > crate::config::MAX_BODY_BYTES {
         return early_rejection(reject());
     }
+    let limit = local_read_limit(&request, limit);
     let too_large = || {
         early_rejection(ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -293,6 +301,32 @@ pub async fn enforce(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_local_post_chat_receives_the_image_envelope_budget() {
+        let c = context();
+        let mut r = request(&c);
+        r.headers_mut()
+            .insert("content-length", HeaderValue::from_static("1048577"));
+        assert_eq!(
+            validate(&c, &r).unwrap_err().status,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        *r.uri_mut() = "/v1/chat/completions".parse().unwrap();
+        assert!(validate(&c, &r).is_err());
+        *r.method_mut() = axum::http::Method::POST;
+        assert!(validate(&c, &r).is_ok());
+        r.headers_mut()
+            .insert("content-length", HeaderValue::from_static("8388609"));
+        assert_eq!(
+            validate(&c, &r).unwrap_err().status,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        r.headers_mut().remove("authorization");
+        assert_eq!(
+            validate(&c, &r).unwrap_err().status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
     fn context() -> SecurityContext {
         SecurityContext::new(
             SecretToken::generate().unwrap(),

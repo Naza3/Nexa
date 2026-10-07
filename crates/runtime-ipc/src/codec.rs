@@ -63,6 +63,12 @@ fn check_size(frame: &Frame, size: usize, limit: usize) -> Result<(), RuntimeErr
     if size > limit {
         return Err(protocol_error("encoded frame exceeds byte limit"));
     }
+    if matches!(&frame.message, Message::Generate { request }
+        if request.messages.iter().all(|message| message.image.is_none()))
+        && size > 2 * 1024 * 1024
+    {
+        return Err(protocol_error("encoded text request exceeds byte limit"));
+    }
     if matches!(
         frame.message,
         Message::Event {

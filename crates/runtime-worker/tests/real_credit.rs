@@ -116,6 +116,7 @@ fn model() -> ResolvedModel {
     ResolvedModel {
         id: ModelId::new("qwen3-fixed").unwrap(),
         path,
+        projector_path: None,
         context_limit: 2048,
         default_context: 2048,
         loadable: true,

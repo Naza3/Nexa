@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 pub const MAX_BODY_BYTES: usize = 1_048_576;
+/// Fixed local single-image envelope. Text and management limits remain unchanged.
+pub const MAX_IMAGE_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_NONSTREAM_RESPONSE_BYTES: usize = 96 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
