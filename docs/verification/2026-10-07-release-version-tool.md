@@ -67,3 +67,18 @@
 实际执行 `gh run rerun 37605103921 --repo Naza3/Nexa --failed`，仅对同提交失败 Windows job 重跑一次，复用已成功的来源构建。`gh api .../actions/runs/37605103921` 确认 `run_attempt=2`、源码 SHA 不变。第二次尝试中，组件门禁与 `Install locked Rust and compatible CMake tools` 步骤均已成功；后者包含完整严格 Python suite，并在非零退出时明确抛错，故此次 Windows 版本测试失败已恢复。独立审查确认 aria2 来源、补丁、探针及构建脚本与旧成功提交 `09b9e049` 相同，本轮未修改它们或放宽分类器。
 
 记录时完整 CI 仍处于后续安装器/应用构建阶段，不宣称整体或新安装包成功。随后仅补记本段的文档提交与本次精确代码验证分开；无需为记录更新重复启动完整构建。
+
+## 产品版本更新至0.2.2
+
+任务 W05-VERSION-3。用户明确要求更新版本至 `0.2.2`。在含 OCR 配对与 UI 修复的 `e5741ac42cc12039e23004307c24c765e116e9fb` 上使用既有工具同步七文件；最新 main `02c90da` 已包含在开发分支中。本批没有新增工具逻辑或依赖变更。
+
+以下命令退出码均为 0：
+
+- `python3 scripts/set_version.py 0.2.2`：同步七文件；根 Cargo 锁13个本地包、桌面锁10个本地包随产品版本更新。
+- `python3 scripts/set_version.py --check`：确认所有产品版本为 `0.2.2`。
+- `python3 scripts/set_version.py 0.2.2 --dry-run`：0 文件需变化。
+- `python3 -B -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_release*.py'`：39项，38通过/1个既有Windows专属跳过。
+- 根工程执行 `cargo metadata --locked --offline --no-deps --format-version 1`，以及同命令添加 `--manifest-path apps/desktop/src-tauri/Cargo.toml`：13个根 workspace 包与1个桌面壳包均为 `0.2.2`，锁定解析通过。
+- `git diff --check` 通过。独立结构化审查确认 Cargo 第三方包、依赖边和 checksum 不变；npm 锁仅顶层及根 package 版本变化。
+
+本批证据限于版本同步和发行校验，不转授前一提交的完整构建结果。按既有授权推送 `codex/dev`，新版本 Windows 构建由现有分支 CI 验证；未创建或移动 tag、未发布 Release。

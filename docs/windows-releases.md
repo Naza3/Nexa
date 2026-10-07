@@ -68,6 +68,8 @@ MSI 和 Setup 使用同一个 MSI payload；安装、修复、升级、失败回
 
 ## 失败、重跑与防覆盖
 
+早期 Windows 下载组件检查依赖 `example.com` 和三个 badssl 公网样例。仅明确的零字节网络超时/连接中断会自动重试，最多三次，等待2秒、5秒；每次使用新目录，证书与策略通过条件保持。Actions日志显示样例名、原因与次数，`windows-aria2-policy.json` 保留每次尝试；未知错误、真实证书错误、策略失败不重试，公网持续不可用仍阻止构建。具体规则见[组件检查说明](../third_party/aria2/README.md#构建和检查)。
+
 安装生命周期在执行过程中写入独立的脱敏诊断 sidecar。工作流在成功或失败后都尝试通过封闭 schema 校验，再上传固定的 `nexa-windows-installer-evidence-<commit>` artifact；只含预先审核的阶段、动作/窗口类别、退出码和计数。报告缺失也明确标记缺失，不伪造完成。未知字段、任意文字、用户路径或不一致 commit 被拒绝，校验失败不上传；原始 msiexec 日志和构建输出目录不进入该 artifact。runner 整体退出或任务超时导致后续步骤不能执行时，不能保证保留诊断。
 
 若正式 MSI/Setup 构建已经成功而生命周期未成功，另保留 `nexa-windows-installers-UNVERIFIED-<commit>` 开发诊断 artifact，仅含当次正式 MSI、Setup EXE 和不含用户路径的 build report。它不是通过验收的发行包，不能作为验收通过或正式交付的依据；不含测试 fixture、原始日志、用户数据或整个 dist 目录。Release job 永不消费该 artifact，仍只接收完整验证后的 release 资产。

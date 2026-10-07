@@ -17,6 +17,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 
 CERT_ERRORS = {"80090325", "80090322", "80090328", "800b0109", "800b010f", "800b0101"}
 PRIVATE_URLS = {
@@ -39,6 +40,8 @@ CERTIFICATE_CASES = {
     "untrusted_certificate": ("https://self-signed.badssl.com/", {"80090325", "800b0109"}),
     "expired_certificate": ("https://expired.badssl.com/", {"80090328", "800b0101"}),
 }
+PUBLIC_HTTPS_URL = "https://example.com/"
+RETRY_DELAYS = (2, 5)
 
 
 def sha(path: Path) -> str:
@@ -143,6 +146,106 @@ def classify_download(name: str, url: str, expectation: str, code: int, text: st
     return result
 
 
+def transient_transport_failure(name: str, url: str, expectation: str,
+                                code: int, text: str, size: int) -> str | None:
+    """Recognize only bounded, observed transport failures of fixed public fixtures.
+
+    This authorizes another attempt, never a passing certificate result. An
+    unexpected certificate error, ambiguous error chain or received payload
+    must remain a hard failure even if a later request might succeed.
+    """
+    fixed_public = name == "public_https" and url == PUBLIC_HTTPS_URL and expectation == "public_https"
+    fixed_certificate = (expectation == "certificate" and name in CERTIFICATE_CASES
+                         and url == CERTIFICATE_CASES[name][0])
+    if not (fixed_public or fixed_certificate) or code not in (1, 2) or size != 0:
+        return None
+    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    # A Schannel/HRESULT diagnostic takes precedence, including unexpected
+    # certificate/revocation errors outside this fixture's accepted codes.
+    if certificate_rejected(code, text) or re.search(
+            r"\([0-9a-f]{8}\)|Nexa policy:|certificate|revocation", text, re.I):
+        return None
+    aborted = re.findall(r"\[ERROR\] CUID#\d+ - Download aborted\. URI=([^\r\n]+)", text)
+    if aborted != [url] or text.count("[ERROR]") != 1:
+        return None
+    if any(found != url for found in re.findall(r"\bURI=([^\r\n]+)", text)):
+        return None
+    errors = re.findall(r"^.*errorCode=.*$", text, re.M)
+    abort_line = r"\[ERROR\] CUID#\d+ - Download aborted\. URI=" + re.escape(url) + r"\r?\n"
+    if code == 2 and len(errors) == 1 and re.fullmatch(
+            r"Exception: \[[^\r\n\]]*[/\\]AbstractCommand\.cc:\d+\] errorCode=2 Timeout\.\r?", errors[0]):
+        if re.search(abort_line + re.escape(errors[0].rstrip("\r")) + r"\r?$", text, re.M):
+            return "network_timeout"
+        return None
+    if code != 1 or len(errors) != 2 or not re.fullmatch(
+            r"Exception: \[[^\r\n\]]*[/\\]AbstractCommand\.cc:\d+\] errorCode=1 URI="
+            + re.escape(url) + r"\r?", errors[0]):
+        return None
+    socket_error = r"  -> \[[^\r\n\]]*[/\\]SocketCore\.cc:\d+\] errorCode=1 SSL/TLS handshake failure:[^\r\n]*"
+    if not re.fullmatch(socket_error + r"\r?", errors[1]):
+        return None
+    numeric_errors = re.findall(r"(?mi)^\(([0-9a-f]+)\)\r?$", text)
+    if len(numeric_errors) != 1 or not re.search(
+            abort_line + re.escape(errors[0].rstrip("\r")) + r"\r?\n"
+            + socket_error + r"\r?\n\(" + re.escape(numeric_errors[0]) + r"\)\r?$", text, re.M):
+        return None
+    return {"2746": "connection_reset", "2745": "connection_aborted",
+            "274c": "network_timeout"}.get(numeric_errors[0].lower())
+
+
+def run_download_case(binary: Path, root: Path, name: str, url: str, expectation: str,
+                      extra: tuple = (), payload_limit: str | None = "1048576") -> dict:
+    attempts = []
+    failure_kind = None
+    for number in range(1, len(RETRY_DELAYS) + 2):
+        directory = root / f"attempt-{number}" / name
+        directory.mkdir(parents=True)
+        argv = download_command(binary, directory, url, expectation, extra)
+        process_timeout = False
+        try:
+            completed = subprocess.run(argv, capture_output=True, timeout=60, env=clean_env(payload_limit))
+            code = completed.returncode
+            raw = completed.stdout + completed.stderr
+        except subprocess.TimeoutExpired as error:
+            # subprocess.run has killed and reaped the timed-out child. Preserve
+            # this attempt and previous evidence, but do not retry a hung child.
+            process_timeout = True
+            code = None
+            raw = (error.output or b"") + (error.stderr or b"")
+        text = raw.decode("utf-8", "replace")
+        payload = directory / "payload"
+        size = payload.stat().st_size if payload.exists() else 0
+        result = (classify_download(name, url, expectation, code, text, size) if not process_timeout else
+                  {"passed": False, "evidence_class": "unexpected_result",
+                   "socket_gate_rejection_observed": False, "matched_evidence": []})
+        reason = None if result["passed"] or process_timeout else transient_transport_failure(
+            name, url, expectation, code, text, size)
+        attempt = {"attempt": number, **result, "exit": code, "bytes": size,
+                   "diagnostic": text[-8192:], "transport_failure": reason}
+        attempts.append(attempt)
+        if result["passed"]:
+            break
+        failure_kind = "process_timeout" if process_timeout else "unexpected_result"
+        if reason is None:
+            break
+        failure_kind = "network_retries_exhausted"
+        if number > len(RETRY_DELAYS):
+            break
+        delay = RETRY_DELAYS[number - 1]
+        print(f"Policy fixture {name}: attempt {number}/3 failed ({reason}); retrying in {delay}s", flush=True)
+        time.sleep(delay)
+    last = attempts[-1]
+    report = {"name": name, **{key: value for key, value in last.items() if key != "attempt"},
+              "url": url, "expectation": expectation, "attempt_count": len(attempts),
+              "recovered_after_retry": last["passed"] and len(attempts) > 1, "attempts": attempts}
+    if not last["passed"]:
+        report["failure_kind"] = failure_kind
+        print(f"Policy fixture {name}: FAILED ({failure_kind}; attempts={len(attempts)})", flush=True)
+    elif len(attempts) > 1:
+        print(f"Policy fixture {name}: passed on attempt {len(attempts)}; earlier failures retained", flush=True)
+    return report
+
+
 def probe(artifacts: Path, output: Path) -> bool:
     report = {"schema_version": 1, "platform": platform.platform(), "windows_runtime_tested": False,
               "target_win10_device_tested": False, "cases": [], "passed": False,
@@ -205,16 +308,7 @@ def probe(artifacts: Path, output: Path) -> bool:
             if not good:
                 raise RuntimeError("Native payload/IOFile test failed")
             def run(name: str, url: str, expectation: str, extra: tuple = (), payload_limit: str | None = "1048576") -> None:
-                directory = tmp / name
-                directory.mkdir()
-                argv = download_command(binary, directory, url, expectation, extra)
-                r = subprocess.run(argv, capture_output=True, timeout=60, env=clean_env(payload_limit))
-                text = (r.stdout + r.stderr).decode("utf-8", "replace")
-                payload = directory / "payload"
-                size = payload.stat().st_size if payload.exists() else 0
-                result = classify_download(name, url, expectation, r.returncode, text, size)
-                cases.append({"name": name, **result, "exit": r.returncode, "bytes": size, "url": url,
-                              "expectation": expectation, "diagnostic": text[-8192:]})
+                cases.append(run_download_case(binary, tmp, name, url, expectation, extra, payload_limit))
             # A real loopback listener detects regressions that actually connect.
             # No firewall rule, privileged port reservation or trusted CA changes.
             accepted = []
@@ -260,6 +354,8 @@ def probe(artifacts: Path, output: Path) -> bool:
     finally:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        print(f"Windows component policy: {sum(case['passed'] for case in cases)}/{len(cases)} cases passed; "
+              f"overall={'pass' if report['passed'] else 'FAIL'}", flush=True)
     return report["passed"]
 
 

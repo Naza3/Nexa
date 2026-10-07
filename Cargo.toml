@@ -4,7 +4,7 @@ exclude = ["apps/desktop/src-tauri"]
 members = ["crates/download-engine", "crates/desktop-bridge", "crates/runtime-types", "crates/runtime-api", "crates/runtime-cli", "crates/runtime-ipc", "crates/process-host", "crates/runtime-worker", "crates/runtime-core", "crates/model-store", "crates/engine-host", "crates/llama-adapter", "xtask"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.98"
 

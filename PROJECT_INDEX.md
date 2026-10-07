@@ -47,12 +47,15 @@
 | `native/llama-shim/tests/tool_parser_test.cpp` | T0合成上游模板/parser诊断，13case/无权重，不是生产工具接受算法 |
 | `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
+- [Actions Node24 升级验证](docs/verification/2026-10-07-actions-node24.md)：四个自有工作流的官方固定版本、归档/缓存兼容性与验证边界
+
 根 workspace、桌面壳 workspace 与相关 Windows/Linux 开发验证是当前工程入口。`.codex/agents/`是开发代理配置，不是产品运行依赖；上游 llama.cpp 的跨平台源码保持完整。
 
 ## Windows 接口、发行与原生窗口
 
 - [Tag 自动发行](docs/windows-releases.md)：同一精确源码/payload 的便携 ZIP、MSI、Setup EXE、版本与对应源码闭包；分支构建不发布，平台/目标机验收分层
 - [一键版本更新](update-version.cmd) / [跨平台工具](scripts/set_version.py)：离线同步七个版本文件，支持预览与一致性检查；[本轮验证](docs/verification/2026-10-07-release-version-tool.md)
+- [公网 TLS 检查有限重试](docs/verification/2026-10-07-public-tls-retries.md)：只重试已识别网络故障，保留全部尝试证据与原通过门槛
 - [Windows 安装器](docs/windows-installers.md) / [ADR0028](docs/decisions/0028-tagged-windows-installers.md)：当前用户 MSI 与同载荷 Setup、数据保留、生命周期与目标机验收边界
 
 - [HTTP/管理 ADR0005](docs/decisions/0005-t04-loopback-http-and-management.md)：鉴权、同连接proof、原子导入/输出预算与关停
@@ -127,3 +130,4 @@
 - [本机单图OCR ADR0032](docs/decisions/0032-local-single-image-ocr.md)：配对GGUF、CPU mtmd、图片HTTP/IPC预算与桌面流程
 - [Windows CPU OCR使用说明](docs/ocr-windows-cpu.md)：双文件下载、显式加载、图片/Markdown及i5-8400参数建议
 - [单图OCR开发验证](docs/verification/2026-10-07-local-ocr.md)：Linux真实模型/HTTP及文本回归，Windows与目标机另验
+- [OCR 配对与布局修复](docs/verification/2026-10-07-ocr-pair-and-layout.md)：Windows 选择路径、导入反馈/列表刷新及沿用全局风格的页面布局

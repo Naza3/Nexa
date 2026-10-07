@@ -88,8 +88,20 @@ Linux job 额外执行 `tests/run_linux_payload.sh`：12 个实际 HTTPS 本地 
 
 证书负例必须出现明确的 Schannel 证书错误码，网络超时、吊销服务不可达、
 通用握手失败均**不能充当通过**。不关闭证书或吊销检查、不导入测试 CA、
-不改防火墙/hosts，不创建 RPC，不发放新权限。公共 fixture 不可用时 CI 应
-失败并保留结果，不能改弱测试标准。
+不改防火墙/hosts，不创建 RPC，不发放新权限。
+
+为减少公网波动导致的误中断，仅 `example.com` 正例和三个固定 badssl 证书
+负例允许有限重试：最多三次，第二、三次前分别等待2秒、5秒，每次使用新的
+空目录。只识别绑定当前URL、唯一且连续原生错误链的零字节超时或明确
+Winsock连接中断（2745/2746/274c）；DNS、HTTP、证书/吊销错误、混合日志、
+未知失败、已有响应字节、进程级超时及本机策略测试均不重试。原单次
+`--max-tries=1`、15/20秒网络超时、60秒进程上限及证书通过判定不变。
+
+每个下载case的 `attempts` 保存各次退出码、字节数、失败类型、诊断与判定，
+`attempt_count` 和 `recovered_after_retry` 明确区分首次通过和重试恢复。
+外层兼容原最终结果；Actions日志直接显示固定样例名、重试原因及次数。
+三次仍失败时报告 `network_retries_exhausted` 并阻止后续发布；网络失败本身
+不会成为证书拒绝证据。公共 fixture 持续不可用时 CI 仍失败并保留结果。
 
 Windows 不使用 Linux LD_PRELOAD 网络重映射；因此本片没有 Windows
 public-to-private redirect 完整 socket trace、DNS rebind/缓存失效证据、

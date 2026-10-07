@@ -158,7 +158,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
                                      (root / name).read_text(encoding="utf-8")))
             emitted = {code for pair in emitted for code in pair if code}
             # Selection-only UI codes cannot reach layout validation.
-            emitted -= {"selected_file_not_gguf", "selected_file_name_invalid", "selection_expired"}
+            emitted -= {"selected_file_not_gguf", "selected_file_name_invalid", "selected_pair_same_file", "selection_expired"}
             self.assertTrue(emitted <= smoke.PACKAGE_ERROR_CODES, emitted - smoke.PACKAGE_ERROR_CODES)
 
     def test_valid_nonzero_diagnostic_saved_without_overwriting_bridge_failure(self):

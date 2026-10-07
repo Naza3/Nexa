@@ -1,5 +1,7 @@
 """Offline classifier/orchestration regressions, not Windows/Winsock evidence."""
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -184,6 +186,169 @@ class ClassificationTests(unittest.TestCase):
         self.assertFalse(self.check("wrong_hostname", "https://wrong.host.badssl.com/", "typo", certificate_log("https://wrong.host.badssl.com/", "80090322"))["passed"])
 
 
+def timeout_log(url):
+    return (f"[ERROR] CUID#7 - Download aborted. URI={url}\n"
+            "Exception: [/build/src/AbstractCommand.cc:340] errorCode=2 Timeout.\n")
+
+
+class RetryTests(unittest.TestCase):
+    def run_case(self, outcomes, name="public_https", url="https://example.com/", expectation="public_https"):
+        directories = []
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+
+            def execute(argv, **kwargs):
+                index = len(directories)
+                directory = Path(next(x[6:] for x in argv if x.startswith("--dir=")))
+                self.assertEqual(directory, root / f"attempt-{index + 1}" / name)
+                self.assertTrue(directory.is_dir())
+                self.assertEqual(list(directory.iterdir()), [])
+                directories.append(directory)
+                self.assertEqual(kwargs["timeout"], 60)
+                for flag in ("--no-conf", "--no-netrc=true", "--check-certificate=true",
+                             "--enable-rpc=false", "--max-tries=1", "--allow-overwrite=false"):
+                    self.assertIn(flag, argv)
+                outcome = outcomes[index]
+                if isinstance(outcome, Exception):
+                    raise outcome
+                code, text, payload = outcome
+                (directory / "payload.aria2").write_bytes(b"stale control file")
+                if payload:
+                    (directory / "payload").write_bytes(payload)
+                return subprocess.CompletedProcess(argv, code, text.encode(), b"")
+
+            with mock.patch.object(probe.subprocess, "run", side_effect=execute) as process, \
+                    mock.patch.object(probe.time, "sleep") as sleep, redirect_stdout(io.StringIO()) as output:
+                result = probe.run_download_case(Path("aria2.exe"), root, name, url, expectation)
+            self.assertEqual(result["attempt_count"], process.call_count)
+            self.assertEqual(len(result["attempts"]), process.call_count)
+            self.assertEqual([a["attempt"] for a in result["attempts"]], list(range(1, process.call_count + 1)))
+            self.assertTrue(all("attempts" not in a for a in result["attempts"]))
+            self.assertEqual(sleep.call_args_list, [mock.call(n) for n in (2, 5)[:process.call_count - 1]])
+            lines = output.getvalue().splitlines()
+            expected_lines = [
+                f"Policy fixture {name}: attempt {a['attempt']}/3 failed ({a['transport_failure']}); retrying in {delay}s"
+                for a, delay in zip(result["attempts"][:-1], (2, 5))
+            ]
+            if result["passed"] and process.call_count > 1:
+                expected_lines.append(f"Policy fixture {name}: passed on attempt {process.call_count}; earlier failures retained")
+            elif not result["passed"]:
+                expected_lines.append(f"Policy fixture {name}: FAILED ({result['failure_kind']}; attempts={process.call_count})")
+            self.assertEqual(lines, expected_lines)
+            return result
+
+    def test_public_recovers_and_stops_with_failed_history_and_clean_directories(self):
+        url = "https://example.com/"
+        result = self.run_case([(2, timeout_log(url), b""), (0, "", b"public payload")])
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["recovered_after_retry"])
+        self.assertEqual([a["passed"] for a in result["attempts"]], [False, True])
+        self.assertEqual(result["attempts"][0]["transport_failure"], "network_timeout")
+        self.assertIn("Timeout.", result["attempts"][0]["diagnostic"])
+        self.assertIsNone(result["attempts"][1]["transport_failure"])
+
+    def test_each_certificate_recovers_only_on_its_original_certificate_evidence(self):
+        for name, (url, errors) in probe.CERTIFICATE_CASES.items():
+            with self.subTest(name=name):
+                result = self.run_case([(1, exception_log(url, "SSL/TLS handshake failure: Error: connection reset.\n(2746)"), b""),
+                                        (1, certificate_log(url, sorted(errors)[0]), b"")], name, url, "certificate")
+                self.assertTrue(result["passed"])
+                self.assertTrue(result["recovered_after_retry"])
+                self.assertEqual(result["attempts"][0]["transport_failure"], "connection_reset")
+
+    def test_three_network_failures_exhaust_budget_without_passing(self):
+        url = "https://example.com/"
+        result = self.run_case([(2, timeout_log(url), b"")] * 3)
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["recovered_after_retry"])
+        self.assertEqual(result["failure_kind"], "network_retries_exhausted")
+        self.assertEqual(result["attempt_count"], 3)
+        self.assertTrue(all(not a["passed"] for a in result["attempts"]))
+
+    def test_no_retry_for_certificate_errors_payload_policy_or_unknown_failures(self):
+        url = "https://example.com/"
+        outcomes = [(1, certificate_log(url, e), b"") for e in probe.CERT_ERRORS]
+        outcomes += [(2, timeout_log(url), b"partial"), (1, "timeout", b""),
+                     (1, resolver_log(url), b""), (22, "HTTP 503", b""),
+                     (1, exception_log(url, "Nexa policy: destination rejected"), b"")]
+        for outcome in outcomes:
+            with self.subTest(outcome=outcome):
+                result = self.run_case([outcome])
+                self.assertFalse(result["passed"])
+                self.assertEqual(result["attempt_count"], 1)
+                self.assertFalse(result["recovered_after_retry"])
+
+    def test_real_wrong_certificate_after_network_failure_stops_immediately(self):
+        name, (url, errors) = next(iter(probe.CERTIFICATE_CASES.items()))
+        wrong_error = sorted(probe.CERT_ERRORS - errors)[0]
+        result = self.run_case([(2, timeout_log(url), b""), (1, certificate_log(url, wrong_error), b"")], name, url, "certificate")
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["recovered_after_retry"])
+        self.assertEqual(result["attempt_count"], 2)
+        self.assertIsNone(result["attempts"][-1]["transport_failure"])
+
+    def test_process_timeout_is_not_retried_and_preserves_prior_attempts(self):
+        url = "https://example.com/"
+        for prefix in ([], [(2, timeout_log(url), b"")]):
+            with self.subTest(prior_attempts=len(prefix)):
+                result = self.run_case(prefix + [subprocess.TimeoutExpired("aria2.exe", 60, output=b"partial diagnostic")])
+                self.assertFalse(result["passed"])
+                self.assertEqual(result["failure_kind"], "process_timeout")
+                self.assertIsNone(result["exit"])
+                self.assertEqual(result["attempt_count"], len(prefix) + 1)
+                self.assertIn("partial diagnostic", result["attempts"][-1]["diagnostic"])
+
+    def test_ambiguous_error_logs_fail_without_retry(self):
+        url = "https://example.com/"
+        fixtures = [(2, timeout_log(url)),
+                    (1, exception_log(url, "SSL/TLS handshake failure: Error: reset.\n(2746)"))]
+        for code, original in fixtures:
+            lines = original.splitlines()
+            variants = []
+            # Competing failures without errorCode must still prevent a retry.
+            for detail in ("DNS lookup failed", "HTTP 403 Forbidden", "unknown failure"):
+                extra = "[ERROR] " + detail + "\n"
+                variants.extend((extra + original, original + extra))
+            # Every edge of the native chain must remain adjacent and ordered.
+            for position in range(1, len(lines)):
+                split = lines[:position] + ["[INFO] unrelated operation"] + lines[position:]
+                variants.append("\n".join(split) + "\n")
+                swapped = lines.copy()
+                swapped[position - 1], swapped[position] = swapped[position], swapped[position - 1]
+                variants.append("\n".join(swapped) + "\n")
+            for text in variants:
+                with self.subTest(code=code, text=text):
+                    self.assertIsNone(probe.transient_transport_failure("public_https", url, "public_https", code, text, 0))
+                    result = self.run_case([(code, text, b"")])
+                    self.assertFalse(result["passed"])
+                    self.assertEqual(result["attempt_count"], 1)
+                    self.assertIsNone(result["attempts"][0]["transport_failure"])
+
+    def test_transport_classifier_is_bound_to_fixed_case_and_precise_native_evidence(self):
+        url = "https://example.com/"
+        for native_code, failure in (("2746", "connection_reset"), ("2745", "connection_aborted"), ("274c", "network_timeout")):
+            text = exception_log(url, f"SSL/TLS handshake failure: Error: transport failure.\n({native_code})")
+            self.assertEqual(probe.transient_transport_failure("public_https", url, "public_https", 1, text, 0), failure)
+        good = timeout_log(url)
+        native_colored = good.replace("[ERROR]", "[\x1b[1;31mERROR\x1b[0m]").replace("\n", "\r\n")
+        self.assertEqual(probe.transient_transport_failure("public_https", url, "public_https", 2, native_colored, 0), "network_timeout")
+        variants = [good.replace(url, url + "suffix"), good.replace("AbstractCommand.cc", "Other.cc"),
+                    good.replace("errorCode=2", "errorCode=1"), good.replace("Timeout.", "generic timeout"),
+                    good.replace("Download aborted.", "Other failure."), good + "Nexa policy: destination rejected\n"]
+        variants += [good + certificate_log(url, error) for error in probe.CERT_ERRORS]
+        variants += [good + error + "\n" for error in probe.CERT_ERRORS]
+        for text in variants:
+            with self.subTest(text=text):
+                self.assertIsNone(probe.transient_transport_failure("public_https", url, "public_https", 2, text, 0))
+        for name, bad_url, expectation in (("unlisted", url, "public_https"), ("public_https", url + "path", "public_https"),
+                                           ("public_https", url, "certificate"), ("private_integer", probe.NUMERIC_ALIAS_URLS["private_integer"], "numeric_alias")):
+            self.assertIsNone(probe.transient_transport_failure(name, bad_url, expectation, 2, timeout_log(bad_url), 0))
+        reset = exception_log(url, "SSL/TLS handshake failure: Error: reset.\n(2746)")
+        for text in (reset.replace("SocketCore.cc", "Other.cc"), reset.replace("SSL/TLS handshake failure", "HTTP failure"),
+                     reset.replace("URI=" + url, "URI=https://wrong.example/"), reset.replace("(2746)", "(2740)")):
+            self.assertIsNone(probe.transient_transport_failure("public_https", url, "public_https", 1, text, 0))
+
+
 class OrchestrationTests(unittest.TestCase):
     """Mock all native execution/listening; check gates, not OS behavior."""
 
@@ -249,7 +414,8 @@ class OrchestrationTests(unittest.TestCase):
                     mock.patch.object(probe.subprocess, "run", side_effect=execute), \
                     mock.patch.object(probe.socket, "socket", return_value=listener), \
                     mock.patch.object(probe.threading, "Event", return_value=event), \
-                    mock.patch.object(probe.threading, "Thread", side_effect=thread_factory):
+                    mock.patch.object(probe.threading, "Thread", side_effect=thread_factory), \
+                    redirect_stdout(io.StringIO()):
                 passed = probe.probe(root, root / "report.json")
             report = json.loads((root / "report.json").read_text(encoding="utf-8"))
             self.assertEqual(passed, report["passed"])

@@ -49,6 +49,11 @@ fn error(code: &str) -> BridgeError {
             "clipboard_unavailable" => "无法写入系统剪贴板，请稍后重试。",
             "token_unavailable" => "令牌文件未初始化或安全校验失败。",
             "selection_expired" => "所选项目已过期，请重新选择。",
+            "selected_file_not_gguf" => "请选择扩展名为 .gguf 的模型文件。",
+            "selected_file_name_invalid" => "所选文件名无法识别，请重新选择有效的 GGUF 文件。",
+            "selected_pair_same_file" => {
+                "主模型与视觉投影不能是同一个文件，请选择配套的 mmproj 文件。"
+            }
             "model_library_limit" => {
                 "所选文件超出数量或大小限制：最多64个、单个16 GiB、每批32 GiB。"
             }
@@ -66,6 +71,23 @@ fn error(code: &str) -> BridgeError {
             _ => "操作无法安全完成，请刷新状态后重试。",
         }
         .into(),
+    }
+}
+fn pair_selection_error(code: &str) -> BridgeError {
+    // These codes also occur during package validation. Describe the selected
+    // OCR input here without changing the separate package diagnostic messages.
+    let message = match code {
+        "selected_path_invalid" => "请选择本机磁盘中的 GGUF 文件，不使用网络盘、设备或特殊路径。",
+        "selected_path_indirect" => "所选文件或目录是链接或重解析路径，请从本机普通目录重新选择。",
+        "selected_file_unavailable" => {
+            "所选文件无法读取，请确认下载已完成且文件仍在原位置，然后重新选择。"
+        }
+        "selected_file_invalid" => "请选择文件，不能选择目录。",
+        _ => return error(code),
+    };
+    BridgeError {
+        code: code.into(),
+        message: message.into(),
     }
 }
 fn local_url(url: &tauri::Url) -> bool {
@@ -420,6 +442,7 @@ async fn models_pair_pick(
         .map_err(|_| error("desktop_busy"))? = None;
     let mut files = Vec::new();
     let mut summaries = Vec::new();
+    let mut previous_canonical = None;
     for title in [
         "选择 OCR 主模型 GGUF（将复制两个文件）",
         "选择配套视觉投影 GGUF（mmproj）",
@@ -434,22 +457,17 @@ async fn models_pair_pick(
         let Some(picked) = picked else {
             return Ok(None);
         };
-        let path = crate::selection::regular_file(picked.path()).map_err(error)?;
-        if !path
-            .extension()
-            .is_some_and(|s| s.eq_ignore_ascii_case("gguf"))
-            || files.iter().any(|(p, _)| p == &path)
-        {
-            return Err(error("invalid_request"));
-        }
+        let file = crate::selection::pair_file(picked.path(), previous_canonical.as_deref())
+            .map_err(pair_selection_error)?;
         let lease =
-            desktop_bridge::SelectedFile::open(&path).map_err(|e| error(e.code.as_str()))?;
+            desktop_bridge::SelectedFile::open(&file.source).map_err(|e| error(e.code.as_str()))?;
         summaries.push(PickedFile {
             selection_index: files.len(),
             file_name: lease.file_name().to_owned(),
             size_bytes: lease.size_bytes(),
         });
-        files.push((path, lease));
+        previous_canonical = Some(file.canonical);
+        files.push((file.source, lease));
     }
     let (selection, dto) = FileSelection::new(files, summaries);
     *state
