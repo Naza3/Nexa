@@ -82,3 +82,11 @@
 - `git diff --check` 通过。独立结构化审查确认 Cargo 第三方包、依赖边和 checksum 不变；npm 锁仅顶层及根 package 版本变化。
 
 本批证据限于版本同步和发行校验，不转授前一提交的完整构建结果。按既有授权推送 `codex/dev`，新版本 Windows 构建由现有分支 CI 验证；未创建或移动 tag、未发布 Release。
+
+## 产品版本更新至0.2.3并创建tag
+
+任务 W05-VERSION-4。用户追加明确授权“升级版本0.2.3，创建tag”。基线为已推送`2770b09`，包含OCR选图预览、状态反馈与tag只读缓存；构建优化前置提交843已通过完整Windows流水线。main仍为`1c3650c`且是当前祖先，本批不自行合并main；新tag绑定包含全部修复的开发分支提交。
+
+实际本地检查：`python3 scripts/set_version.py 0.2.3`同步七文件、`python3 scripts/set_version.py --check`确认0.2.3、同版本`--dry-run`为0文件，退出码均0。严格编码的`python3 -B -X warn_default_encoding -W error::EncodingWarning -m unittest discover -s scripts -p 'test_release*.py'`39项（38通过/1个Windows专属skip），退出0。远端`git ls-remote --tags origin refs/tags/v0.2.3`为空，本地无同名tag，GitHub Release查询返回not found；不移动旧tag，也不预建空Release。独立结构化审查通过：根Cargo锁13个本地包、壳锁10个本地包升为0.2.3；142/447个第三方包的结构、checksum与依赖边保持。固定环境下两次`cargo metadata --offline --locked --no-deps --format-version 1`（第二次加`--manifest-path apps/desktop/src-tauri/Cargo.toml`）退出0，13+1个workspace成员全部0.2.3。生产版本解析与MSI ProductVersion均为0.2.3，`git diff --check`退出0。
+
+发布流程使用既有自动化：提交全部版本文件，按精确新提交验证`refs/tags/v0.2.3`与package版本，再创建附注tag并与开发分支推送。同一提交以tag流水线执行完整验证/发布，不并行保留冗余分支构建；正在运行的0.2.2中间构建由新版本取代，不据此宣称其完整成功。当前main未包含缓存工作流，因此新tag可能冷构建；不为缓存擅自合并main或读取兄弟分支缓存。

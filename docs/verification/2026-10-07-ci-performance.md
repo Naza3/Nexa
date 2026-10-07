@@ -1,6 +1,6 @@
 # Windows CI 构建优化验证
 
-任务：W05-CI-PERF-1。状态：首轮构建/测试及交接通过，最终打包失败已修复，原生复验中。用户授权按分析方案依次优化；开发分支已快进同步 main `1c3650c352e56472f6ec7a5880b519f905ea6f8a`，产品版本保持 0.2.2。
+任务：W05-CI-PERF-1。状态：构建修复精确提交原生验证成功；tag只读收尾随OCR最终提交复验中。用户授权按分析方案依次优化；开发分支已快进同步 main `1c3650c352e56472f6ec7a5880b519f905ea6f8a`，产品版本保持 0.2.2。
 
 ## 基线
 
@@ -45,3 +45,13 @@ Release harness实际仅有47条`Compiling`，旧独立目录为122条，确实�
 按用户补充要求，tag不保存独立缓存。五处Cargo缓存拆分官方同SHA的restore/save，所有save都要求success、非tag、主键非空且没有精确命中；两处setup-node仅非tag传入npm缓存，tag使用npm实际缓存路径与官方同一key恢复，不注册自动保存。现有main/dev缓存键、前缀、路径和其余构建门禁经结构化逐项比较保持。GitHub优先当前ref再main的服务规则及历史同tag缓存边界见ADR0033，不声称restore具有不存在的ref输入。
 
 实际检查：`/tmp/nexa-actionlint/actionlint .github/workflows/native-windows.yml`退出0；`python3 -m unittest discover -s scripts -p 'test_windows_ci.py'`14/14通过、退出0；`git diff --check`退出0。固定官方cache/restore、cache/save的action.yml与setup-node源码已核对；静态遍历确认没有cache主动作、所有显式save对tag不可达、tag setup-node未启用任何缓存保存路径。此检查不等同已执行新的tag发布，本次不创建tag或Release。
+
+## 构建修复精确提交原生成功
+
+`843251b0768d35a82f44547b2366f3aa2a3087c3`的[Actions37632857580](https://github.com/Naza3/Nexa/actions/runs/37632857580)于2026-10-07 14:27:46 UTC成功，创建于13:58:44 UTC，总等待时间**29分02秒**；桌面548秒、同源下载组件259秒、Runtime1244秒、最终native组装220秒、版本身份7秒。分支Release job正确跳过。相比旧成功基线36分56秒，这次缩短7分54秒（约21.4%）；这是一次实际运行对比，不是所有后续构建的固定承诺。并行job时长不能相加当成用户等待时间；上述job累计2278秒（37分58秒），总runner工作量没有等比例减少。
+
+桌面命中Cargo输入85MB和Rust编译缓存约1.036GB，恢复分别约19/20秒，保存编译缓存29秒；Tauri检查/Release步骤298秒，旧基线525秒，本次最终Release仍248秒。Runtime镜像对应key从旧`eeaf1f…`换为`50559f…`，两层均未命中，因此本轮为桌面命中、Runtime冷构建，不能写成全链热缓存。Runtime原生C++276秒、Rust检查194秒、Release包138秒、harness76秒；执行完已成功保存新分区。
+
+此前失败的桌面包8秒、真实桌面bridge24秒均成功；两份handoff身份/字节验证、固定模型校验、真实模型/HTTP/CLI、独立解压、MSI/Setup以及13项安装生命周期全部通过，完整源码/许可闭包保持。最终组装还包括Cargo输入恢复15秒、Node含npm缓存10秒、npm许可原文安装19秒，不能忽略并行引入的准备开销。证据：`/tmp/nexa-ci-perf-37632857580.json`与该run的完整Actions日志。
+
+后续`9baff4f`只读缓存规则与OCR`2770b0937262b903cd4d7391dc6a04e1d6a1d44a`已推送；[联合Actions37636935709](https://github.com/Naza3/Nexa/actions/runs/37636935709)已开始独立验收；用户随后要求0.2.3与tag，最终验收转到该发行提交，不把843结果追溯覆盖新提交。
