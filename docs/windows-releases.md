@@ -12,21 +12,37 @@
 
 首版仅接受规范稳定版本 `vMAJOR.MINOR.PATCH`，例如 `v0.1.0`。前导零、第四段、预发布后缀（如 `-rc.1`）和构建后缀（如 `+build.1`）均拒绝，不会默默转换为相同 MSI 版本。三个数值上限分别为 `255`、`255`、`65535`；`0.0.0` 保留，不用作发行版本。
 
-提交前统一这些文件，并更新两个 Cargo 锁文件中所有本地包版本：
+提交前使用仓库根目录的 `update-version.cmd` 一次同步版本。Windows 安装 Python 3.11 或更新版本后，双击该文件，输入 `0.2.1`（也接受 `v0.2.1`），按回车即可；输入为空则取消。PowerShell 中也可以运行：
+
+```powershell
+.\update-version.cmd 0.2.1
+.\update-version.cmd 0.2.1 --dry-run  # 只预览将修改的文件
+.\update-version.cmd --check         # 检查当前版本是否一致
+```
+
+跨平台直接运行同一个 Python 工具（Linux 使用 `python3`，Windows 也可使用 `py -3`）：
+
+```sh
+python3 scripts/set_version.py 0.2.1
+```
+
+工具离线运行，不需要安装 Cargo、npm 或第三方 Python 包；只同步以下七个文件中的产品版本：
 
 - 根 `Cargo.toml` 的 `workspace.package.version` 与 `Cargo.lock`
 - `apps/desktop/src-tauri/Cargo.toml`、`Cargo.lock`、`tauri.conf.json`
 - `apps/desktop/package.json`、`package-lock.json` 顶层及根 package 版本
 
-本地 workspace crate 继承版本，不允许静默覆盖成其他版本。CI 的 `release_version.py` 校验所有上述来源；它不会临时改版本、锁文件或污染源码身份。tag 版本必须等于已提交版本。版本升级后，应重新运行正常锁文件和应用回归，不手工将旧二进制标为新版本。
+`Cargo.lock` 仍由 Cargo 管理依赖解析，工具只更新无 `source` 的本地包版本及其版本限定引用；npm 锁文件只更新顶层及根 package 的版本。第三方依赖、校验和与下载地址不变。工具可修复之前手工修改造成的版本不一致；写入前在临时目录调用同一发布校验器，检查失败不写入，普通写入异常会尝试恢复原文件。它保留每个文件的 LF/CRLF，重复同步同一版本不会产生额外修改；没有跨七文件的断电事务保证。
+
+本地 workspace crate 继承版本，不允许静默覆盖成其他版本。CI 的 `release_version.py` 校验所有上述来源；它不会临时改版本、锁文件或污染源码身份。工具不会提交、推送或创建 tag；查看 `git diff`、提交全部版本变更、完成应用回归后，再在包含该修改的提交上创建同版本 tag。仅重跑旧 tag 的 Actions 不会包含新修复。
 
 示例流程（仅说明，不表示这些命令已经执行）：
 
 ```sh
-# 在包含新工作流、各版本一致、完整验证通过的精确提交上操作
-# 确认当前 HEAD 是准备发行的提交，再由维护者创建并推送 tag
-git tag -a v0.1.0 -m "Nexa 0.1.0"
-git push origin v0.1.0
+# 先用上面的工具同步版本，审查、提交并推送修改，完成构建验证
+# 确认当前 HEAD 包含这些修改，并且该版本尚无正式发行，再创建 tag
+git tag -a v0.2.1 -m "Nexa 0.2.1"
+git push origin v0.2.1
 ```
 
 ## 同源三格式与发布资产

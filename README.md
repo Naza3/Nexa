@@ -35,6 +35,8 @@ Nexa 是面向 Windows 桌面处理器的本地大模型运行时。以固定版
 
 ## 当前方向与阅读入口
 
+更新版本号：Windows 双击仓库根目录的 `update-version.cmd`，输入一次版本即可同步 Cargo、Tauri、npm 与锁文件（需要 Python 3.11+）。命令行、预览和发布步骤见[版本更新说明](docs/windows-releases.md#版本规则)。
+
 后续桌面性能、目标机和发行验证按[Windows 路线](docs/roadmap.md)推进。官方 DeepSeek Harness（dsh）的 pi-ai provider 是 API 兼容目标，当前严格文本子集不等于完整工具协议；具体差异见[Harness 契约](docs/windows-harness-contract.md)。Telegram 摘要只是可选参考调用端，不构成 runtime 发布前置。
 
 1. [开发规则](AGENTS.md)、[当前状态](PROJECT_STATE.md)、[项目索引](PROJECT_INDEX.md)

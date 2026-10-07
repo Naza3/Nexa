@@ -3,3 +3,5 @@
 packaging/desktop-windows/third-party/** -text -whitespace
 # The aria2 source lock hashes these exact patch bytes on Linux and Windows.
 third_party/aria2/patches/*.patch -text
+# Keep the Windows double-click version helper compatible with cmd.exe.
+update-version.cmd text eol=crlf

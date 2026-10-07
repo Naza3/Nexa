@@ -25,7 +25,7 @@ BUILD_ENVIRONMENT = (
     "VSCMD_ARG_HOST_ARCH", "VSCMD_ARG_TGT_ARCH", "NEXA_CMAKE_BIN",
 )
 NATIVE_TARGETS = ("air_llama", "air-stream-test", "air-template-test",
-                  "air-tool-parser-test", "llama-completion", "llama-bench")
+                  "air-tool-parser-test", "air-ocr-template-test", "llama-completion", "llama-bench")
 
 
 def checked_rust(env):

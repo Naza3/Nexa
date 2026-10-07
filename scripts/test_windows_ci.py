@@ -3,6 +3,7 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -88,6 +89,21 @@ class WindowsCiTests(unittest.TestCase):
             self.assertEqual(logged.call_args_list[0].args[0], configure)
             self.assertEqual(logged.call_args_list[1].args[0], ["cmake", "--build", native, "--config", "Release", "--target", *ci.NATIVE_TARGETS, "--parallel", "4"])
             self.assertEqual(logged.call_args_list[2].args[0], ["ctest", "--test-dir", native, "-C", "Release", "--output-on-failure"])
+
+    def test_build_includes_every_registered_ctest_executable(self):
+        cmake = (ci.base.ROOT / "native/llama-shim/CMakeLists.txt").read_text(encoding="utf-8")
+        registered_tests = re.findall(r"add_test\(\s*NAME\s+(\S+)\s+COMMAND\s+([^\s)]+)", cmake)
+        self.assertTrue(registered_tests, "expected native CTest registrations")
+        self.assertEqual(len(registered_tests), len(re.findall(r"\badd_test\s*\(", cmake)),
+                         "update this check for the new CMake test registration syntax")
+        with tempfile.TemporaryDirectory() as folder:
+            logged, _, _, _ = self.invoke("build", folder)
+            build = logged.call_args_list[1].args[0]
+            targets = build[build.index("--target") + 1:build.index("--parallel")]
+            for name, executable in registered_tests:
+                with self.subTest(test=name, executable=executable):
+                    self.assertIn(executable, targets,
+                                  "CTest executable must be built before running the suite")
 
     def test_build_rejects_toolchain_selection_drift(self):
         with tempfile.TemporaryDirectory() as folder, self.assertRaisesRegex(ValueError, "selection changed"):
