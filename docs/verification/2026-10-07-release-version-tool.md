@@ -59,3 +59,11 @@
 - `python3 -B scripts/set_version.py --check`：0.2.1 一致，退出 0
 
 下一步推送修复并检查原生 Windows 原失败步骤。版本升级来自用户，修复不改版本、tag、发布权限或测试准入规则。
+
+### 精确修复提交的 Windows 步骤结果
+
+修复提交 `cdbc12a98dfe7b4f596d77f22f25ef8a06ae86dd` 已推送，对应 [Actions37605103921](https://github.com/Naza3/Nexa/actions/runs/37605103921)。第一次尝试在更早的 aria2 策略门禁失败，诊断报告32项中31项通过，唯一失败为 `untrusted_certificate`：`self-signed.badssl.com` 返回 `exit=2`、`bytes=0`、`AbstractCommand.cc errorCode=2 Timeout`，没有取得预期 Schannel 证书拒绝证据。报告保存在本机 `/tmp/nexa-37605103921-evidence/windows-aria2-policy.json`，远端为该 run 的 `windows-cpu-native-cdbc12a98dfe7b4f596d77f22f25ef8a06ae86dd` artifact；未据此推断具体 TCP/TLS 故障阶段。
+
+实际执行 `gh run rerun 37605103921 --repo Naza3/Nexa --failed`，仅对同提交失败 Windows job 重跑一次，复用已成功的来源构建。`gh api .../actions/runs/37605103921` 确认 `run_attempt=2`、源码 SHA 不变。第二次尝试中，组件门禁与 `Install locked Rust and compatible CMake tools` 步骤均已成功；后者包含完整严格 Python suite，并在非零退出时明确抛错，故此次 Windows 版本测试失败已恢复。独立审查确认 aria2 来源、补丁、探针及构建脚本与旧成功提交 `09b9e049` 相同，本轮未修改它们或放宽分类器。
+
+记录时完整 CI 仍处于后续安装器/应用构建阶段，不宣称整体或新安装包成功。随后仅补记本段的文档提交与本次精确代码验证分开；无需为记录更新重复启动完整构建。
