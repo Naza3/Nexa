@@ -127,8 +127,9 @@ jobs:
           cargo --version
           cmake --version
           New-Item -ItemType Directory -Force artifacts/verification | Out-Null
-      - name: Cache locked Cargo download inputs
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+      - name: Restore locked Cargo download inputs
+        id: cargo_inputs_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
         with:
           path: |
             ~/.cargo/registry/index/
@@ -138,8 +139,9 @@ jobs:
           key: windows-cargo-inputs-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
             windows-cargo-inputs-v1-runtime-${{ env.NEXA_WINDOWS_CACHE_KEY }}-
-      - name: Cache runtime Rust compilation
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+      - name: Restore runtime Rust compilation
+        id: rust_build_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
         with:
           path: |
             target/debug/
@@ -487,6 +489,24 @@ jobs:
           path: artifacts/upload-evidence/
           if-no-files-found: warn
           retention-days: 7
+      - name: Save Cargo download inputs for successful branch builds
+        if: ${{ success() && github.ref_type != 'tag' && steps.cargo_inputs_cache.outputs.cache-primary-key != '' && steps.cargo_inputs_cache.outputs.cache-primary-key != steps.cargo_inputs_cache.outputs.cache-matched-key }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/src/
+            ~/.cargo/git/db/
+          key: ${{ steps.cargo_inputs_cache.outputs.cache-primary-key }}
+      - name: Save Rust compilation for successful branch builds
+        if: ${{ success() && github.ref_type != 'tag' && steps.rust_build_cache.outputs.cache-primary-key != '' && steps.rust_build_cache.outputs.cache-primary-key != steps.rust_build_cache.outputs.cache-matched-key }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            target/debug/
+            build/windows-x64-cpu/cargo-*/
+          key: ${{ steps.rust_build_cache.outputs.cache-primary-key }}
   desktop-build:
     if: ${{ !github.event.repository.private }}
     needs: release-identity
@@ -536,8 +556,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python scripts/package_windows_msi.py --check-toolchain --report artifacts/verification/windows-installer-compile.json
           if ($LASTEXITCODE -ne 0) { throw 'Installer helper compilation failed before the full product build' }
-      - name: Cache locked Cargo download inputs
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+      - name: Restore locked Cargo download inputs
+        id: cargo_inputs_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
         with:
           path: |
             ~/.cargo/registry/index/
@@ -547,8 +568,9 @@ jobs:
           key: windows-cargo-inputs-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
             windows-cargo-inputs-v1-desktop-${{ env.NEXA_WINDOWS_CACHE_KEY }}-
-      - name: Cache desktop Rust compilation
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+      - name: Restore desktop Rust compilation
+        id: rust_build_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
         with:
           path: |
             build/desktop/cargo/
@@ -562,9 +584,28 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           package-manager-cache: false
-          cache: npm
+          # Tag runs may restore main's cache, but never save a tag-scoped cache.
+          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
           cache-dependency-path: apps/desktop/package-lock.json
           node-version: '24.19.0'
+      - name: Locate npm cache for read-only tag restoration
+        if: ${{ github.ref_type == 'tag' }}
+        id: npm_tag_cache
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cachePath = (npm config get cache).Trim()
+          if ($LASTEXITCODE -ne 0 -or !$cachePath -or ![IO.Path]::IsPathRooted($cachePath) -or $cachePath -match '[\r\n\0]') { throw 'Invalid npm cache directory' }
+          $nodeArch = (node -p process.arch).Trim()
+          if ($LASTEXITCODE -ne 0 -or $nodeArch -ne 'x64') { throw 'Unexpected Windows Node architecture' }
+          "path=$cachePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "arch=$nodeArch" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Restore npm download cache without saving for tags
+        if: ${{ github.ref_type == 'tag' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: ${{ steps.npm_tag_cache.outputs.path }}
+          # Match the exact key and directory used by the pinned setup-node.
+          key: node-cache-${{ runner.os }}-${{ steps.npm_tag_cache.outputs.arch }}-npm-${{ hashFiles('apps/desktop/package-lock.json') }}
       - name: Check locked desktop frontend
         id: desktop_frontend
         working-directory: apps/desktop
@@ -640,6 +681,23 @@ jobs:
           path: artifacts/upload-evidence/
           if-no-files-found: warn
           retention-days: 7
+      - name: Save Cargo download inputs for successful branch builds
+        if: ${{ success() && github.ref_type != 'tag' && steps.cargo_inputs_cache.outputs.cache-primary-key != '' && steps.cargo_inputs_cache.outputs.cache-primary-key != steps.cargo_inputs_cache.outputs.cache-matched-key }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/src/
+            ~/.cargo/git/db/
+          key: ${{ steps.cargo_inputs_cache.outputs.cache-primary-key }}
+      - name: Save Rust compilation for successful branch builds
+        if: ${{ success() && github.ref_type != 'tag' && steps.rust_build_cache.outputs.cache-primary-key != '' && steps.rust_build_cache.outputs.cache-primary-key != steps.rust_build_cache.outputs.cache-matched-key }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            build/desktop/cargo/
+          key: ${{ steps.rust_build_cache.outputs.cache-primary-key }}
   native:
     if: ${{ !github.event.repository.private }}
     needs: [release-identity, download-component, runtime-build, desktop-build]
@@ -682,8 +740,9 @@ jobs:
           cargo --version
           cmake --version
           New-Item -ItemType Directory -Force artifacts/verification | Out-Null
-      - name: Cache locked Cargo download inputs
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+      - name: Restore locked Cargo download inputs
+        id: cargo_inputs_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
         with:
           path: |
             ~/.cargo/registry/index/
@@ -697,9 +756,28 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           package-manager-cache: false
-          cache: npm
+          # Tag runs may restore main's cache, but never save a tag-scoped cache.
+          cache: ${{ github.ref_type != 'tag' && 'npm' || '' }}
           cache-dependency-path: apps/desktop/package-lock.json
           node-version: '24.19.0'
+      - name: Locate npm cache for read-only tag restoration
+        if: ${{ github.ref_type == 'tag' }}
+        id: npm_tag_cache
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cachePath = (npm config get cache).Trim()
+          if ($LASTEXITCODE -ne 0 -or !$cachePath -or ![IO.Path]::IsPathRooted($cachePath) -or $cachePath -match '[\r\n\0]') { throw 'Invalid npm cache directory' }
+          $nodeArch = (node -p process.arch).Trim()
+          if ($LASTEXITCODE -ne 0 -or $nodeArch -ne 'x64') { throw 'Unexpected Windows Node architecture' }
+          "path=$cachePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "arch=$nodeArch" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - name: Restore npm download cache without saving for tags
+        if: ${{ github.ref_type == 'tag' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: ${{ steps.npm_tag_cache.outputs.path }}
+          # Match the exact key and directory used by the pinned setup-node.
+          key: node-cache-${{ runner.os }}-${{ steps.npm_tag_cache.outputs.arch }}-npm-${{ hashFiles('apps/desktop/package-lock.json') }}
       - name: Install locked frontend license originals
         working-directory: apps/desktop
         run: |
@@ -857,6 +935,16 @@ jobs:
           path: dist/release/
           if-no-files-found: error
           retention-days: 7
+      - name: Save Cargo download inputs for successful branch builds
+        if: ${{ success() && github.ref_type != 'tag' && steps.cargo_inputs_cache.outputs.cache-primary-key != '' && steps.cargo_inputs_cache.outputs.cache-primary-key != steps.cargo_inputs_cache.outputs.cache-matched-key }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; node24
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/src/
+            ~/.cargo/git/db/
+          key: ${{ steps.cargo_inputs_cache.outputs.cache-primary-key }}
   release:
     # Branch/dispatch runs exercise packaging but can never publish a release.
     if: ${{ github.event_name == 'push' && github.ref_type == 'tag' && !github.event.repository.private }}

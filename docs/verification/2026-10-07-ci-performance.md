@@ -39,3 +39,9 @@
 缓存未命中原因已核实：桌面 runner image为`20260927.320.1`，Runtime和assembly为`20261004.326.1`。两个不同的新image VM得到相同缓存键；三者兼容工具链键相同，故交接正常通过。分区没有因每台VM随机失效，也不以放宽镜像分区掩盖冷依赖问题。
 
 Release harness实际仅有47条`Compiling`，旧独立目录为122条，确实减少75条编译记录。但本轮较慢runner使总步耗时101秒，旧基线92秒，不能宣称单凭这次观测已节省秒数；剩余新增依赖及feature变体编译保留。
+
+## Tag 缓存只读收尾
+
+按用户补充要求，tag不保存独立缓存。五处Cargo缓存拆分官方同SHA的restore/save，所有save都要求success、非tag、主键非空且没有精确命中；两处setup-node仅非tag传入npm缓存，tag使用npm实际缓存路径与官方同一key恢复，不注册自动保存。现有main/dev缓存键、前缀、路径和其余构建门禁经结构化逐项比较保持。GitHub优先当前ref再main的服务规则及历史同tag缓存边界见ADR0033，不声称restore具有不存在的ref输入。
+
+实际检查：`/tmp/nexa-actionlint/actionlint .github/workflows/native-windows.yml`退出0；`python3 -m unittest discover -s scripts -p 'test_windows_ci.py'`14/14通过、退出0；`git diff --check`退出0。固定官方cache/restore、cache/save的action.yml与setup-node源码已核对；静态遍历确认没有cache主动作、所有显式save对tag不可达、tag setup-node未启用任何缓存保存路径。此检查不等同已执行新的tag发布，本次不创建tag或Release。

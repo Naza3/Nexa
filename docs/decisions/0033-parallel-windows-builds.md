@@ -16,6 +16,10 @@
 
 Rust 编译缓存主键追加提交 SHA，让新的 main 构建保存本次更新的编译结果；恢复时优先相同锁文件，再回退同角色/同工具链。锁文件或版本变化时，由 Cargo 按新锁文件和指纹决定哪些依赖重编。`main` push 也运行完整检查并预热默认分支缓存：GitHub 允许 tag 读取默认分支缓存，但不允许新 tag 读取 `codex/dev` 或另一个 tag 的缓存。首次 main 构建仍可能是冷缓存；待 main 对应构建成功保存缓存后再打 tag，发布构建才能复用它。新增 main 触发不授予分支发布权限。规则依据见 [GitHub 缓存访问范围](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#restrictions-for-accessing-a-cache)。
 
+按用户要求，tag 运行只恢复已有缓存，不保存自身 tag 缓存。五处 Cargo 缓存使用官方固定版本的独立 `restore` / `save`：所有运行可恢复，仅成功的非 tag 运行在主键没有精确命中时保存。main/dev 沿用原有缓存键与恢复前缀。npm 在分支构建保留 `setup-node` 自动保存；tag 关闭其缓存保存路径，按同版官方算法的 `node-cache-<系统>-<Node架构>-npm-<锁文件hash>` 与 `npm config get cache` 目录执行 restore-only。缓存缺失仍按锁文件正常安装和构建，不跳过任何验证。
+
+GitHub 恢复服务本身先查当前 ref，再查默认分支，官方 restore action 不提供指定 main ref 的输入。因此此规则实施后的新 tag 不再建立自己的缓存，可复用的缓存来自 main；若历史同名 tag 已有旧缓存，服务仍可能读取它，本次不删除历史缓存。实现参数依据：[cache/restore](https://github.com/actions/cache/blob/55cc8345863c7cc4c66a329aec7e433d2d1c52a9/restore/action.yml)、[cache/save](https://github.com/actions/cache/blob/55cc8345863c7cc4c66a329aec7e433d2d1c52a9/save/action.yml)、[setup-node 缓存键](https://github.com/actions/setup-node/blob/820762786026740c76f36085b0efc47a31fe5020/src/cache-restore.ts)。
+
 跨 job 的临时 handoff 只包含桌面 EXE 或两个完整 Runtime ZIP/校验文件及桌面验证器。固定库存记录每个文件的 SHA256/长度，并绑定干净源码提交、工作树字节摘要、同一 Actions run 与实际兼容工具链身份。不同 run、源码、工具链或文件内容拒绝；同 run 的失败 job 重跑可以消费早先成功 job 的产物。ZIP 在临时目录按封闭路径规则展开并重新验证包清单、许可和来源后才落地。
 
 工具链兼容身份与缓存分区分开：前者比较实际 Rust/CMake、MSVC、SDK/UCRT 和 CRT 文件身份；后者额外区分 runner image、VS 安装实例和路径。runner 镜像标签相同不能替代工具链校验。
