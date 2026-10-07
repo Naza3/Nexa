@@ -1,4 +1,6 @@
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -62,6 +64,36 @@ class EvidenceStagingTests(unittest.TestCase):
         self.assertEqual(result["rejected_reports"][0]["path"], "windows-baseline.json")
         self.assertIn("FAILED", (self.out / "windows-rust-tests.log").read_text(encoding="utf-8"))
         self.assertNotIn("sensitive", (self.out / "staging-failure.json").read_text(encoding="utf-8"))
+
+    def test_aria2_retry_history_survives_staging_and_path_redaction(self):
+        # Use the real probe/report classifier; only native execution and delay
+        # are replaced. Staging must retain the failed observation after recovery.
+        from test_aria2_build_policy_windows import probe, certificate_log, timeout_log
+        import subprocess
+
+        name, (url, errors) = next(iter(probe.CERTIFICATE_CASES.items()))
+        diagnostic = timeout_log(url) + r"C:\Users\Private Name\work\native.log" + "\n"
+        outcomes = [subprocess.CompletedProcess([], 2, diagnostic.encode(), b""),
+                    subprocess.CompletedProcess([], 1, certificate_log(url, sorted(errors)[0]).encode(), b"")]
+        with patch.object(probe.subprocess, "run", side_effect=outcomes), patch.object(probe.time, "sleep"), \
+                redirect_stdout(io.StringIO()) as summary:
+            case = probe.run_download_case(Path("aria2.exe"), self.root / "probe", name, url, "certificate")
+        self.assertTrue(case["passed"])
+        self.assertNotIn("Private Name", summary.getvalue())
+        self.assertIn("earlier failures retained", summary.getvalue())
+        self.put("windows-aria2-policy.json", json.dumps({"passed": True, "cases": [case]}))
+        self.assertEqual(self.run_stage()["result"], "pass")
+        staged_text = (self.out / "windows-aria2-policy.json").read_text(encoding="utf-8")
+        self.assertNotIn("Private Name", staged_text)
+        output = json.loads(staged_text)["cases"][0]
+        self.assertTrue(output["passed"])
+        self.assertTrue(output["recovered_after_retry"])
+        self.assertEqual(output["attempt_count"], 2)
+        self.assertEqual([item["passed"] for item in output["attempts"]], [False, True])
+        self.assertEqual(output["attempts"][0]["transport_failure"], "network_timeout")
+        self.assertEqual(output["attempts"][0]["exit"], 2)
+        self.assertIn("Timeout.", output["attempts"][0]["diagnostic"])
+        self.assertIn(sorted(errors)[0], output["attempts"][1]["diagnostic"])
 
     def test_explicit_credential_text_is_not_blindly_scrubbed(self):
         self.put("windows-rust-tests.log", "Authorization: Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ")
