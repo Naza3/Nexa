@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, matches main CI
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Offline build-contract tests
@@ -29,8 +29,9 @@ jobs:
         run: bash third_party/aria2/tests/run_linux_payload.sh "$RUNNER_TEMP/aria2-build"
       - name: Retain build materials and diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, matches main CI
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: aria2-pinned-build-${{ github.sha }}
           path: ${{ runner.temp }}/aria2-build/artifacts/
           if-no-files-found: error
@@ -40,19 +41,21 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0, official release verified
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          digest-mismatch: error
           name: aria2-pinned-build-${{ github.sha }}
           path: artifacts/aria2-build
       - name: Real Windows native policy, private socket and Schannel tests
         run: python third_party/aria2/tests/windows_probe.py --artifacts artifacts/aria2-build --output artifacts/aria2-windows-policy.json
       - name: Retain Windows observations separately from untested build artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: aria2-pinned-windows-policy-${{ github.sha }}
           path: artifacts/aria2-windows-policy.json
           if-no-files-found: error

@@ -47,6 +47,8 @@
 | `native/llama-shim/tests/tool_parser_test.cpp` | T0合成上游模板/parser诊断，13case/无权重，不是生产工具接受算法 |
 | `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
+- [Actions Node24 升级验证](docs/verification/2026-10-07-actions-node24.md)：四个自有工作流的官方固定版本、归档/缓存兼容性与验证边界
+
 根 workspace、桌面壳 workspace 与相关 Windows/Linux 开发验证是当前工程入口。`.codex/agents/`是开发代理配置，不是产品运行依赖；上游 llama.cpp 的跨平台源码保持完整。
 
 ## Windows 接口、发行与原生窗口

@@ -36,7 +36,7 @@ jobs:
       version: ${{ steps.identity.outputs.version }}
       project_commit: ${{ steps.identity.outputs.project_commit }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -63,8 +63,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=all)"
           bash scripts/build_aria2_windows.sh "$RUNNER_TEMP/aria2-build"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-download-source-build-${{ github.sha }}
           path: ${{ runner.temp }}/aria2-build/artifacts/
           if-no-files-found: error
@@ -84,13 +85,14 @@ jobs:
       # Pin the effective toolchain too; a runner's stable alias is not evidence.
       RUSTUP_TOOLCHAIN: '1.98.1'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          digest-mismatch: error
           name: nexa-download-source-build-${{ github.sha }}
           path: artifacts/aria2-build
       - name: Verify Windows component policy and prepare product closure
@@ -161,8 +163,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Inherited-Job launch observation did not produce a valid bounded report' }
       - name: Preserve early desktop launch observation
         if: ${{ !cancelled() && steps.desktop_launch_probe.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-desktop-launch-probe-${{ github.sha }}
           path: |
             artifacts/verification/windows-desktop/launch-probe-breakaway.json
@@ -170,8 +173,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Install fixed desktop Node toolchain
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          package-manager-cache: false
           node-version: '24.19.0'
       - name: Check locked desktop frontend
         id: desktop_frontend
@@ -468,16 +472,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installer diagnostic schema validation failed; raw evidence will not be uploaded' }
       - name: Preserve sanitized installer diagnostics on success or failure
         if: ${{ always() && steps.installer_evidence.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-windows-installer-evidence-${{ github.sha }}
           path: artifacts/upload-installer-evidence/
           if-no-files-found: error
           retention-days: 7
       - name: Preserve unverified installer binaries only for failed lifecycle diagnosis
         if: ${{ always() && steps.windows_installers.outcome == 'success' && steps.installer_acceptance.outcome != 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           # Diagnostic-only: the release job never downloads this artifact.
           name: nexa-windows-installers-UNVERIFIED-${{ github.sha }}
           path: |
@@ -488,8 +494,9 @@ jobs:
           retention-days: 7
       - name: Preserve desktop package
         if: ${{ success() && steps.desktop_acceptance.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-desktop-windows-${{ github.sha }}
           path: |
             dist/desktop-windows.zip
@@ -498,8 +505,9 @@ jobs:
           retention-days: 7
       - name: Preserve Windows CPU product package
         if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-windows-x64-cpu-${{ github.sha }}
           path: |
             dist/windows-x64-cpu.zip
@@ -508,8 +516,9 @@ jobs:
           retention-days: 7
       - name: Preserve separate acceptance tool package
         if: ${{ success() && steps.package_acceptance.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-acceptance-tools-${{ github.sha }}
           path: |
             dist/acceptance-tools.zip
@@ -518,8 +527,9 @@ jobs:
           retention-days: 7
       - name: Preserve Release symbols when produced
         if: ${{ !cancelled() && steps.portable_package.outcome == 'success' && hashFiles('build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb') != '' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-windows-symbols-${{ github.sha }}
           path: build/windows-x64-cpu/cargo-*/x86_64-pc-windows-msvc/release/*.pdb
           if-no-files-found: error
@@ -536,8 +546,9 @@ jobs:
           @{ schema_version = 1; project_commit = $env:GITHUB_SHA; files = @($entries) } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifacts/verification/native-build-manifest.json
       - name: Preserve compiled diagnostic tools
         if: ${{ failure() && !cancelled() && steps.native_manifest.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: windows-native-tools-${{ github.sha }}
           path: |
             artifacts/verification/native-build-manifest.json
@@ -562,8 +573,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Evidence review/staging failed; no raw directory will be uploaded' }
       - name: Preserve verification evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: windows-cpu-native-${{ github.sha }}
           path: artifacts/upload-evidence/
           if-no-files-found: warn
@@ -577,8 +589,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release identity/checksum/source closure failed' }
       - name: Preserve validated portable MSI Setup and release inventory
         if: ${{ success() && steps.installer_acceptance.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          archive: true
           name: nexa-windows-release-${{ github.sha }}
           path: dist/release/
           if-no-files-found: error
@@ -592,12 +605,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          digest-mismatch: error
           name: nexa-windows-release-${{ github.sha }}
           path: dist/release
       - name: Recheck complete asset inventory before enabling publication
