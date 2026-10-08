@@ -161,7 +161,8 @@ class TauriPublicationTests(unittest.TestCase):
     def test_failed_publish_cleans_partial_outputs_and_never_overwrites_racing_file(self):
         for failure in ("copy", "race"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
-                root = Path(temp)
+                # create() supplies canonical paths; Windows TEMP may use an 8.3 alias.
+                root = Path(temp).resolve()
                 first, second = root / "first.source", root / "second.source"
                 first.write_bytes(b"first"); second.write_bytes(b"second")
                 targets = [root / "out/first", root / "out/second"]

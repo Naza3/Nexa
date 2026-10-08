@@ -15,7 +15,8 @@ class TauriWixTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="nexa-wix-xml-")
         self.addCleanup(self.temporary.cleanup)
-        self.work = Path(self.temporary.name)
+        # Match generated source paths even when Windows TEMP uses an 8.3 alias.
+        self.work = Path(self.temporary.name).resolve()
         self.payload = self.work / "payload with spaces & marks"
         self.payload.mkdir()
         self.names = ["nexa-desktop.exe", "README.md", "runtime/ai-runtime.exe",
