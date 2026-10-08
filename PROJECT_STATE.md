@@ -1,10 +1,12 @@
 # Nexa 当前状态
 
-## 2026-10-08 版本0.3.0、推送与tag（进行中）
+## 2026-10-08 版本0.3.0、推送与tag（已完成；标签发行构建进行中）
 
 用户明确授权统一版本至0.3.0、推送GitHub并创建v0.3.0。已fetch确认main 1c3650c为当前开发分支祖先；远端codex/dev a18e9a1为本地祖先，v0.3.0尚不存在。一键工具同步七版本文件，重复执行零修改；两Cargo锁及npm锁第三方依赖不变，锁定离线metadata和严格Python检查通过。
 
-本轮包含前轮Tauri MSI/NSIS、托盘和开机启动。按用户指定顺序，在精确提交完成完整本地Windows交叉门槛，再推送codex/dev；先验证新安装器原生流水线，通过后创建并推送附注tag，避免移动失败标签。实际构建、tag和发行结果见[0.3.0验证记录](docs/verification/2026-10-08-release-0.3.0.md)，未完成项不记为成功。
+本轮包含前轮Tauri MSI/NSIS、托盘和开机启动。修复Windows测试短路径比较和Tauri私有安装夹具跨盘资源读取后，干净a7db515先通过完整本地Windows交叉门槛，再推送codex/dev。[Actions37758119918](https://github.com/Naza3/Nexa/actions/runs/37758119918)五个构建/验证job全部成功，17项实际安装生命周期门槛全部通过；下载六个发行文件并复验清单、哈希与来源一致。
+
+附注v0.3.0已创建并推送，远端确认指向a7db515f649f8ba05f3837c050b6ed56b920968c；main未自动合并。[标签发行Actions37762270527](https://github.com/Naza3/Nexa/actions/runs/37762270527)已启动，正式Release公开和附件上传仍以该流水线最终结果为准。源码/版本/tag交付完成，用户Windows10/i5的原生窗口与登录启动实际体验仍独立待验。命令、结果及限制见[0.3.0验证记录](docs/verification/2026-10-08-release-0.3.0.md)。
 
 ## 2026-10-08 Tauri 安装器、托盘与开机启动（本地检查与Windows交叉构建完成）
 
