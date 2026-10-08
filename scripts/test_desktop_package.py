@@ -380,6 +380,8 @@ class DesktopPackageTests(unittest.TestCase):
         commands.update({"runtime_initialize", "configuration_get", "configuration_model_get", "configuration_save", "configuration_migrate", "model_load_profile", "model_load_start", "model_load_profile_start", "model_load_next", "model_load_cancel", "model_unregister", "ui_preferences_get", "ui_preferences_save"})
         commands.update({"ocr_start", "ocr_save_markdown", "models_pair_pick", "models_pair_import"})
         commands.add("performance_get")
+        commands.add("desktop_close_ack")
+        commands.update({"ocr_history_list", "ocr_history_get", "ocr_history_save", "ocr_history_delete", "workbench_get", "workbench_save"})
         self.assertEqual(set(capability["permissions"]), {"allow-" + name.replace("_", "-") for name in commands})
         native = (pack.SHELL / "src/windows.rs").read_text(encoding="utf-8")
         import re

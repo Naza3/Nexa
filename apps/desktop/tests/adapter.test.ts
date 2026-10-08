@@ -15,6 +15,19 @@ describe("native-only adapter", () => {
   it("uses frozen snake_case requests and fixed commands only", async () => {
     await nativeApi.performanceGet?.();
     expect(invoke).toHaveBeenLastCalledWith("performance_get", undefined);
+    await nativeApi.closeAcknowledge?.("close-id");
+    expect(invoke).toHaveBeenLastCalledWith("desktop_close_ack", { request: { id: "close-id" } });
+    await nativeApi.workbenchGet?.();
+    expect(invoke).toHaveBeenLastCalledWith("workbench_get", undefined);
+    await nativeApi.ocrHistoryList?.();
+    expect(invoke).toHaveBeenLastCalledWith("ocr_history_list", undefined);
+    await nativeApi.ocrHistoryGet?.("record-id");
+    expect(invoke).toHaveBeenLastCalledWith("ocr_history_get", { request: { id: "record-id" } });
+    await nativeApi.ocrHistoryDelete?.("record-id");
+    expect(invoke).toHaveBeenLastCalledWith("ocr_history_delete", { request: { id: "record-id" } });
+    const historyRequest = { mode: "create" as const, id: "record-id", image_name: "image.png", model_id: "model", status: "completed" as const, finish_reason: "stop" as const, error_code: null, incomplete: false, markdown: "# output", performance: null };
+    await nativeApi.ocrHistorySave?.(historyRequest);
+    expect(invoke).toHaveBeenLastCalledWith("ocr_history_save", { request: historyRequest });
     await nativeApi.catalog();
     expect(invoke).toHaveBeenLastCalledWith("model_catalog", undefined);
     await nativeApi.discoverDirectory();

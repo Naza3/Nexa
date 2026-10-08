@@ -48,7 +48,7 @@
 - `runtime_idle_save({ idle_unload_seconds })` → snapshot。前端单独提供“应用空闲卸载设置”动作；仅服务已停止且持实例锁时校验并原子更新runtime config，下次启动生效。运行中返回 `runtime_running`，不自动关停其他客户端、不伪称热更新。snapshot.settings中的idle值来自runtime config，其他UI偏好来自独立文件；两次显式动作各自只写一个文件，不承诺跨文件事务。
 - `token_copy()` → `{ copied:true }`，只由用户按钮触发。原生壳通过现有私有文件校验读取，直接写原生剪贴板；前端不收到 token，也没有剪贴板读取能力。按钮提示令牌会进入系统剪贴板。
 - `runtime_stop()` → `{ stopped:true }`，仅在真实 HTTP shutdown 成功且 `wait_stopped` 确认原实例锁/记录释放后返回。该操作会停止全部客户端任务，UI 在入口明确告知。
-- `desktop_close()` → void。与原生窗口关闭事件调用同一关闭状态机，不绕过本 UI 请求清理及关闭设置。
+- `desktop_close()` → void。前端先完成参数/结果保存再调用原生关闭状态机。原生窗口关闭先发送固定 `nexa-close-requested` CustomEvent（仅native UUID）；`desktop_close_ack({id})` 返回是否为当前有效请求，确认后前端走相同草稿确认及保存流程。5秒未确认则nonce过期，提供原生重试/保留/明确丢弃未保存内容后关闭，不默默跳过保存。
 
 状态刷新最多 1Hz且不重叠；动作后可刷新一次，不周期读取日志。前端界面重绘/文本批处理最多约30Hz。UI 工位定义上述 TS DTO，bridge 工位对应 Rust serde DTO；共同使用本文字段，不因 camelCase 自动转换假设造成偏差。
 
@@ -103,3 +103,13 @@
 ## 统一性能页（ADR0035）
 
 新增本机受ACL约束的只读 `performance_get`，经同一已证明连接请求 `/runtime/performance` 并校验instance UUID、200条上限及数字/状态边界；旧服务404映射performance_unsupported。独立性能页涵盖各推理入口的终态记录，可见时每3秒刷新，按模型/状态/文本图片筛选，详情显示实际参数与阶段耗时，复制CSV保留原始单位。查询错误不改变聊天/OCR结果；防止重叠查询和旧连接结果覆盖，服务退出清空。无正文/图片持久化，现有ChatEvent及SSE不变。详细口径见 [ADR0035](decisions/0035-unified-inference-performance.md) 和 [使用说明](inference-performance.md)。
+
+## 输出摘要、OCR归档与TOML工作区（ADR0036）
+
+桌面ChatBatch新增可缺省 `runtime_instance_id`，来自生成请求同一已验证连接；ChatEvent与公共SSE不变。终态后查询一次性能，只附加唯一且实例/请求/模型/类型/状态/输出上限匹配的记录，成功还核对usage与finish_reason。摘要位于原文下方，复制与另存不含指标；缺测、查询失败、过期结果不使推理失败。
+
+新增精确ACL命令 `ocr_history_list()`、`ocr_history_get({id})`、`ocr_history_save({mode,...})`、`ocr_history_delete({id})`。保存非空终态原文及元数据，最多100条、单条256KiB、编码文件32MiB；独立私有JSON归档不是性能日志。create与update_performance严格分开：补指标不能改正文或重建删除的条目。重启可浏览、复制/另存和删除，原图不保存。
+
+`workbench_get()` 返回 `{revision,preferences}`，`workbench_save({expected_revision,preferences})` 按原文件revision执行CAS，保存到 `%LOCALAPPDATA%/Nexa/workbench-preferences.toml`。OCR模型选择、加载参数/每模型base与draft、提示词、输出上限、缩放/视图及聊天未发送草稿自动记忆；正式模型档案仍归config.toml。先读取后保存，损坏/冲突保留现有文件及输入，禁止静默默认值回写。格式、限额、恢复优先级与关闭顺序见[ADR0036](decisions/0036-desktop-results-and-preferences.md)。
+
+关闭准备期间阻止新工作区编辑/新推理，先取消并消费当前OCR终态、登记已有正文，再等待工作区及结果写入后调用desktop_close。原生桥的独立持久化许可覆盖实际后台磁盘写入；读写采用同一文件锁及私有原子替换。保存失败或任务终态未确认保留窗口，不将未保存显示为已保存。

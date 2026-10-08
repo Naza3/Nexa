@@ -43,6 +43,13 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
   }
 }
 export const nativeApi: DesktopApi = {
+  closeAcknowledge: (id) => call("desktop_close_ack", { id }),
+  workbenchGet: () => call("workbench_get"),
+  workbenchSave: (request) => call("workbench_save", request),
+  ocrHistoryList: () => call("ocr_history_list"),
+  ocrHistoryGet: (id) => call("ocr_history_get", { id }),
+  ocrHistorySave: (request) => call("ocr_history_save", request),
+  ocrHistoryDelete: (id) => call("ocr_history_delete", { id }),
   performanceGet: () => call("performance_get"),
   initialize: () => call("runtime_initialize"),
   configurationGet: () => call("configuration_get"),

@@ -8,15 +8,21 @@ mod error;
 mod lan_addresses;
 mod library;
 mod loading;
+mod ocr_history;
 mod onboarding;
 mod performance;
 mod settings;
 mod sse;
 mod unregister;
+mod workbench;
 pub use dto::*;
 pub use error::{BridgeError, Result};
 use hyper::Method;
 pub use model_store::library::selected::{SelectedFile, validate_selection};
+pub use ocr_history::{
+    OcrHistoryEntry, OcrHistoryList, OcrHistoryPerformance, OcrHistorySaveMode,
+    OcrHistorySaveRequest, OcrHistorySummary,
+};
 use runtime_api::Config;
 pub use runtime_api::configuration::{
     ConfigurationMigrateRequest, ConfigurationSaveRequest, ConfigurationSnapshot,
@@ -40,6 +46,10 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Mutex as AsyncMutex;
+pub use workbench::{
+    ChatWorkbenchPreferences, OcrLoadDraft, OcrWorkbenchPreferences, WorkbenchPreferences,
+    WorkbenchPreferencesSaveRequest, WorkbenchPreferencesSnapshot,
+};
 
 /// Native-only numeric observations for the last accepted start attempt.
 /// These are not part of any invoke command or frontend DTO.
@@ -54,6 +64,8 @@ pub struct DesktopBridge {
     root: PathBuf,
     executable: PathBuf,
     work: std::sync::Arc<AsyncMutex<()>>,
+    // Independent from inference/model operations; close waits for accepted writes.
+    persistence: std::sync::Arc<AsyncMutex<()>>,
     snapshot_gate: AsyncMutex<()>,
     close_gate: AsyncMutex<()>,
     closing: AtomicBool,
@@ -90,6 +102,7 @@ impl DesktopBridge {
             root: data_dir,
             executable: runtime_executable,
             work: std::sync::Arc::new(AsyncMutex::new(())),
+            persistence: std::sync::Arc::new(AsyncMutex::new(())),
             snapshot_gate: AsyncMutex::new(()),
             close_gate: AsyncMutex::new(()),
             closing: AtomicBool::new(false),
@@ -753,6 +766,11 @@ impl DesktopBridge {
         self.closing.store(true, Ordering::Release);
         self.close_signal.notify_waiters();
         let result = async {
+            drop(
+                tokio::time::timeout(Duration::from_secs(10), self.persistence.lock())
+                    .await
+                    .map_err(|_| BridgeError::new("persistence_busy"))?,
+            );
             self.close_download().await?;
             self.close_chat().await?;
             self.close_library().await?;

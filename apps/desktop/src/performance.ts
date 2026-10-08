@@ -1,4 +1,29 @@
-import type { PerformanceRecord, PerformanceSnapshot } from "./types";
+import type { DesktopApi, PerformanceRecord, PerformanceSnapshot } from "./types";
+
+export type RequestPerformance = { state: "pending" | "unavailable" } | { state: "ready"; record: PerformanceRecord };
+export interface PerformanceIdentity {
+  instance_id: string | null | undefined;
+  request_id: string;
+  model_id: string;
+  modality: PerformanceRecord["modality"];
+  status: PerformanceRecord["status"];
+  max_output_tokens: number;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  finish_reason?: "stop" | "length";
+}
+/** One isolated read after a confirmed terminal. Never guess from the latest row. */
+export async function readRequestPerformance(api: DesktopApi, identity: PerformanceIdentity): Promise<RequestPerformance> {
+  if (!identity.instance_id || !api.performanceGet) return { state: "unavailable" };
+  try {
+    const snapshot = validatePerformance(await api.performanceGet());
+    if (snapshot.instance_id !== identity.instance_id) return { state: "unavailable" };
+    const candidates = snapshot.records.filter((row) => row.request_id === identity.request_id);
+    const row = candidates[0];
+    if (candidates.length !== 1 || row.model_id !== identity.model_id || row.modality !== identity.modality || row.status !== identity.status || row.max_output_tokens !== identity.max_output_tokens) return { state: "unavailable" };
+    if (identity.status === "completed" && (!identity.usage || row.finish_reason !== identity.finish_reason || row.usage.prompt_tokens !== identity.usage.prompt_tokens || row.usage.completion_tokens !== identity.usage.completion_tokens || row.usage.prompt_tokens + row.usage.completion_tokens !== identity.usage.total_tokens)) return { state: "unavailable" };
+    return { state: "ready", record: row };
+  } catch { return { state: "unavailable" }; }
+}
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

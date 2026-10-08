@@ -1,3 +1,7 @@
+import { readRequestPerformance } from "./performance";
+import type { RequestPerformance } from "./performance";
+import { WorkbenchStore, initialWorkbench } from "./workbench";
+import type { WorkbenchState } from "./workbench";
 import { projectActivities, recordActivity, readActivityHistory, createActivitySessionId, persistActivitySummaries } from "./activity";
 import { validModelLoadOperation, validOptionalLoadPhase } from "./modelLoad";
 import { modelRemovalBlocker } from "./modelRemoval";
@@ -10,7 +14,7 @@ import { validAddOperation, validModelSelection } from "./modelSelection";
 import { lanBaseUrl, validateLanSettings, validLanAddresses } from "./lanApi";
 import { preferencesOnly, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 import type {
-  ConfigurationSnapshot, ConfigurationSaveRequest, ConfigurationMigrateRequest, ModelConfiguration, UiPreferences,
+  ConfigurationSnapshot, ConfigurationSaveRequest, ConfigurationMigrateRequest, ModelConfiguration, UiPreferences, WorkbenchPreferences, OcrHistorySaveRequest, OcrHistoryList,
   CatalogEntry,
   DownloadOperation,
   ChatBatch,
@@ -115,6 +119,7 @@ export interface SessionMessage extends WireMessage {
   id: number;
   state: MessageState;
   usage?: Usage;
+  performance?: RequestPerformance;
   finish_reason?: string;
   notice?: string;
 }
@@ -175,6 +180,9 @@ interface ModelLoadTask {
   resume: (() => void) | null;
 }
 export interface ViewState {
+  closing: boolean;
+  workbench: WorkbenchState;
+  persistence_error: string | null;
   model_removal: { model_id: string; id: number } | null;
   model_load: ModelLoadTaskView | null;
   activities: Activity[];
@@ -283,6 +291,9 @@ export function checkSubmission(
 export class DesktopController {
   private activityHistory = readActivityHistory();
   private state: ViewState = {
+    closing: false,
+    workbench: initialWorkbench(),
+    persistence_error: null,
     model_removal: null,
     model_load: null,
     activities: this.activityHistory.records,
@@ -322,6 +333,9 @@ export class DesktopController {
   private snapshotEpoch = 0;
   private configurationReadEpoch = 0;
   private stream: {
+    model_id: string;
+    max_output_tokens: number;
+    performanceEpoch: number;
     id: string | null;
     cancel: boolean;
     cancelSent: boolean;
@@ -343,6 +357,7 @@ export class DesktopController {
   private modelsEpoch = 0;
   private modelRemovalPending = false;
   private nextMessage = 0;
+  private performanceEpoch = 0;
   private nextOperation = 0;
   private nextTask = 0;
   private modelConfigurationReads = new Map<string, number>();
@@ -355,7 +370,62 @@ export class DesktopController {
   private modelLoadTask: ModelLoadTask | null = null;
   private snapshotReadError: SafeError | null = null;
   private modelsReadError: SafeError | null = null;
-  constructor(readonly api: DesktopApi) {}
+  private workbenchStore: WorkbenchStore;
+  private historyWrites = new Map<string, { request: OcrHistorySaveRequest; pending: Promise<boolean> | null }>();
+  private historyDeletes = new Map<string, Promise<OcrHistoryList>>();
+  private preClose = new Set<() => Promise<boolean>>();
+  registerPreClose = (callback: () => Promise<boolean>) => { this.preClose.add(callback); return () => { this.preClose.delete(callback); }; };
+  constructor(readonly api: DesktopApi) {
+    this.workbenchStore = new WorkbenchStore(api, (workbench) => this.update({ workbench }, false));
+    this.state.workbench = this.workbenchStore.state;
+  }
+  setChatDraft = (draft: string) => { if (!this.closing) this.workbenchStore.edit({ ...this.state.workbench.preferences, chat: { draft } }); };
+  setOcrPreferences = (patch: Partial<WorkbenchPreferences["ocr"]>) => { if (!this.closing) this.workbenchStore.edit({ ...this.state.workbench.preferences, ocr: { ...this.state.workbench.preferences.ocr, ...patch } }); };
+  saveWorkbench = () => this.workbenchStore.flush();
+  reloadWorkbench = () => this.closing ? Promise.resolve() : this.workbenchStore.load(true);
+  overwriteWorkbench = () => this.closing ? Promise.resolve() : this.workbenchStore.overwrite();
+  persistOcrHistory = (request: OcrHistorySaveRequest): Promise<boolean> => {
+    const deleting = this.historyDeletes.get(request.id);
+    if (deleting) return deleting.then(() => true, () => this.persistOcrHistory(request));
+    const key = `${request.id}:${request.mode}`;
+    const existing = this.historyWrites.get(key);
+    if (existing?.pending) return existing.pending;
+    const task = existing ?? { request, pending: null };
+    this.historyWrites.set(key, task);
+    task.pending = Promise.resolve().then(() => this.api.ocrHistorySave!(task.request)).then(() => {
+      this.historyWrites.delete(key);
+      if (!this.historyWrites.size) this.update({ persistence_error: null });
+      return true;
+    }).catch((error) => {
+      if (request.mode === "update_performance" && error && typeof error === "object" && "code" in error && error.code === "ocr_history_not_found") { this.historyWrites.delete(key); return true; }
+      this.update({ persistence_error: "识别历史尚未保存到本机。正文仍在窗口内，请重试保存，保存成功前不会关闭窗口。" });
+      return false;
+    }).finally(() => { task.pending = null; });
+    return task.pending;
+  };
+  flushOcrHistory = async (): Promise<boolean> => {
+    await Promise.all([...this.historyDeletes.values()].map((operation) => operation.catch(() => null)));
+    while (this.historyWrites.size) {
+      const results = await Promise.all([...this.historyWrites.values()].map((task) => this.persistOcrHistory(task.request)));
+      if (results.some((saved) => !saved)) return false;
+    }
+    this.update({ persistence_error: null });
+    return true;
+  };
+  deleteOcrHistory = (id: string): Promise<OcrHistoryList> => {
+    const existing = this.historyDeletes.get(id);
+    if (existing) return existing;
+    if (this.closing || !this.api.ocrHistoryDelete) return Promise.reject(new Error("history_delete_unavailable"));
+    const operation = (async () => {
+      await Promise.all([...this.historyWrites.values()].filter((task) => task.request.id === id).map((task) => task.pending));
+      const result = await this.api.ocrHistoryDelete!(id);
+      for (const [key, task] of this.historyWrites) if (task.request.id === id) this.historyWrites.delete(key);
+      if (!this.historyWrites.size) this.update({ persistence_error: null });
+      return result;
+    })().finally(() => { this.historyDeletes.delete(id); });
+    this.historyDeletes.set(id, operation);
+    return operation;
+  };
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -386,6 +456,7 @@ export class DesktopController {
     this.update({ error: { ...safe, message: messages[safe.code] ?? safe.message } });
   }
   mount = () => {
+    void this.workbenchStore.load();
     ++this.settingsEpoch;
     this.mounted = true;
     const epoch = ++this.pollEpoch;
@@ -399,6 +470,8 @@ export class DesktopController {
     return () => {
       if (epoch !== this.pollEpoch) return;
       this.mounted = false;
+      void this.workbenchStore.flush();
+      ++this.performanceEpoch;
       ++this.settingsEpoch;
       ++this.modelFeedbackEpoch;
       this.update({ model_tests: {} });
@@ -1689,9 +1762,14 @@ export class DesktopController {
   close = async () => {
     if (this.closing || (this.state.operation && !this.state.testing_model && this.state.operation.kind !== "pick_models")) return;
     this.closing = true;
+    this.update({ closing: true });
     let finishDecision!: () => void;
     this.closeDecision = new Promise<void>((resolve) => { finishDecision = resolve; });
     try {
+      for (const prepare of this.preClose) {
+        if (!await prepare()) { this.update({ notice: "识别终态尚未确认，窗口已保留。请在图片 OCR 页重新确认任务后再关闭。" }); return; }
+      }
+      if (!await this.workbenchStore.flush() || !await this.flushOcrHistory()) return;
       const selected = !!this.state.model_selection;
       const discarded = this.discardModelSelection();
       if (selected) await discarded;
@@ -1701,10 +1779,10 @@ export class DesktopController {
       this.update({ model_tests: {}, activities: this.state.activities.map((item) => item.kind === "model" && ["running", "stopping"].includes(item.status) ? { ...item, status: "recovery" as const, detail: "窗口关闭已确认，本次模型结果未在窗口内完成核对。重开后检查状态，不自动重放。" } : item) });
     }
     catch (error) { this.report(error); }
-    finally { this.closing = false; this.closeDecision = null; finishDecision(); }
+    finally { this.closing = false; this.update({ closing: false }); this.closeDecision = null; finishDecision(); }
   };
   send = async (text: string): Promise<boolean> => {
-    if (this.stream || this.libraryTask || this.downloadTask || this.state.operation || !text.trim())
+    if (this.closing || this.stream || this.libraryTask || this.downloadTask || this.state.operation || !text.trim())
       return false;
     const snapshot = this.state.snapshot;
     if (
@@ -1736,6 +1814,9 @@ export class DesktopController {
       return false;
     }
     const stream = {
+      model_id: request.model_id,
+      max_output_tokens: request.max_output_tokens,
+      performanceEpoch: this.performanceEpoch,
       id: null as string | null,
       cancel: false,
       cancelSent: false,
@@ -1933,7 +2014,16 @@ export class DesktopController {
         };
       if (terminal.type === "failed") { stream.error = safeError(terminal); this.report(terminal); }
     }
+    if (terminal) next.performance = { state: "pending" };
     this.update({ messages: [...this.state.messages.slice(0, -1), next] });
+    if (terminal && stream.id && stream.performanceEpoch === this.performanceEpoch) {
+      const messageId = next.id;
+      const epoch = stream.performanceEpoch;
+      void readRequestPerformance(this.api, { instance_id: batch.runtime_instance_id, request_id: stream.id, model_id: stream.model_id, max_output_tokens: stream.max_output_tokens, modality: "text", status: terminal.type, ...(terminal.type === "completed" ? { usage: terminal.usage, finish_reason: terminal.finish_reason } : {}) }).then((performance) => {
+        if (epoch !== this.performanceEpoch || !this.state.messages.some((message) => message.id === messageId)) return;
+        this.update({ messages: this.state.messages.map((message) => message.id === messageId ? { ...message, performance } : message) });
+      });
+    }
     return Boolean(terminal);
   }
   private async consume() {

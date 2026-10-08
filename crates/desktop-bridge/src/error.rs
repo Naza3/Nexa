@@ -7,6 +7,28 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "persistence_busy" => "正在保存识别历史或窗口设置，请稍后重试关闭。",
+            "ocr_history_io" => "识别历史无法读写。当前识别正文仍保留在窗口中。",
+            "ocr_history_busy" => "识别历史正被另一个窗口修改，请稍后重试。",
+            "ocr_history_corrupt" => "识别历史文件损坏或版本不受支持，已保留原文件。",
+            "ocr_history_invalid" => "识别记录格式不正确，未保存。",
+            "ocr_history_limit" => "识别历史超过存储大小限制，未改动已有记录。",
+            "ocr_history_durability_unconfirmed" => {
+                "识别记录可能已保存，但磁盘写入未确认，请刷新历史后核对。"
+            }
+            "ocr_history_not_found" => "这条识别记录已删除或被最近100条限制淘汰。",
+            "ocr_history_conflict" => "同一识别记录的内容不一致，未覆盖已有记录。",
+            "ocr_history_closing" => "窗口正在关闭，识别记录未保存。",
+            "workbench_io" => "窗口偏好无法读写，请检查本机数据目录。",
+            "workbench_busy" => "另一个窗口正在保存偏好，请稍后重试。",
+            "workbench_corrupt" => "窗口偏好文件损坏或版本不受支持，已保留原文件。",
+            "workbench_invalid" => "参数或提示词超出允许范围，窗口偏好未保存。",
+            "workbench_limit" => "窗口偏好超过存储大小限制，未改动已有设置。",
+            "workbench_conflict" => "窗口偏好已被其他窗口修改，请重新读取后比较。",
+            "workbench_durability_unconfirmed" => {
+                "窗口偏好可能已保存，但磁盘写入未确认，请重新读取核对。"
+            }
+            "workbench_closing" => "窗口正在关闭，偏好未保存。",
             "performance_unsupported" => "当前运行服务不支持性能记录，请使用新版运行时并重启服务。",
             "model_unregister_loaded" => "请先卸载此模型，再从模型库移除。",
             "model_unregister_durability_unconfirmed" => {

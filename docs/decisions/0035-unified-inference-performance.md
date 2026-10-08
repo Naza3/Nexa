@@ -32,4 +32,6 @@ prefill token/s = `usage.prompt_tokens * 1e6 / prefill_us`；decode token/s = `u
 
 ## 限制与验证
 
+后续桌面增量按[ADR0036](0036-desktop-results-and-preferences.md)：每条聊天输出与OCR结果下方显示实例/请求严格匹配的性能摘要；用户授权的桌面OCR结果归档可保存该次指标。runtime本身仍只存最近200条内存元数据，不持久化正文。
+
 内存历史在服务退出时清空，仅保留终态、无实时逐 token 仪表和断线重放。模型 ID 不是文件 hash，记录不宣称精确复现实验；比较需保持设备、文件、上下文、线程、批次和输入一致，并区分模型冷加载及输出达上限。实际验证见[验证记录](../verification/2026-10-08-inference-performance.md)，不继承旧版本 Windows 验收。

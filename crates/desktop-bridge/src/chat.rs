@@ -24,9 +24,10 @@ const STALL: Duration = Duration::from_secs(10);
 #[derive(Default)]
 pub(crate) struct ChatSlot {
     current: Option<Arc<Session>>,
-    previous: Option<(Uuid, ChatEvent)>,
+    previous: Option<ChatBatch>,
 }
 struct Queue {
+    runtime_instance_id: Option<Uuid>,
     events: VecDeque<ChatEvent>,
     bytes: usize,
     terminal: Option<ChatEvent>,
@@ -47,6 +48,7 @@ impl Session {
         Self {
             id,
             queue: Mutex::new(Queue {
+                runtime_instance_id: None,
                 events: VecDeque::new(),
                 bytes: 0,
                 terminal: None,
@@ -179,6 +181,7 @@ impl Session {
         }
         ChatBatch {
             request_id: self.id,
+            runtime_instance_id: q.runtime_instance_id,
             events,
             terminal,
         }
@@ -245,7 +248,12 @@ impl DesktopBridge {
             {
                 return Err(BridgeError::new("desktop_busy"));
             }
-            let previous = (current.id, q.terminal.clone().unwrap());
+            let previous = ChatBatch {
+                request_id: current.id,
+                runtime_instance_id: q.runtime_instance_id,
+                events: vec![q.terminal.clone().unwrap()],
+                terminal: true,
+            };
             drop(q);
             slot.previous = Some(previous);
         }
@@ -264,14 +272,12 @@ impl DesktopBridge {
             let slot = self.chat.lock().unwrap();
             if let Some(s) = slot.current.as_ref().filter(|s| s.id == request_id) {
                 s.clone()
-            } else if let Some((id, event)) =
-                slot.previous.as_ref().filter(|(id, _)| *id == request_id)
+            } else if let Some(batch) = slot
+                .previous
+                .as_ref()
+                .filter(|batch| batch.request_id == request_id)
             {
-                return Ok(ChatBatch {
-                    request_id: *id,
-                    events: vec![event.clone()],
-                    terminal: true,
-                });
+                return Ok(batch.clone());
             } else {
                 return Err(BridgeError::new("request_not_owned"));
             }
@@ -305,7 +311,7 @@ impl DesktopBridge {
         } else if !slot
             .previous
             .as_ref()
-            .is_some_and(|(id, _)| *id == request_id)
+            .is_some_and(|batch| batch.request_id == request_id)
         {
             return Err(BridgeError::new("request_not_owned"));
         }
@@ -374,6 +380,9 @@ impl DesktopBridge {
         remaining: usize,
     ) -> Result<ChatEvent> {
         let mut connection = tokio::select! {biased;_=session.cancelled()=>return Ok(ChatEvent::Cancelled),result=self.connect()=>result?};
+        // Capture provenance once, from the same proved connection used below.
+        // A later service restart must never relabel this request's terminal.
+        session.queue.lock().unwrap().runtime_instance_id = Some(connection.instance_id());
         if session.cancelled.load(Ordering::Acquire) {
             return Ok(ChatEvent::Cancelled);
         }

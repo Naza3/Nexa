@@ -31,6 +31,8 @@
 
 - [统一性能 ADR0035](docs/decisions/0035-unified-inference-performance.md) / [使用说明](docs/inference-performance.md)：全推理阶段计时、本机性能接口、内存历史与桌面比较页
 
+- [桌面持久化 ADR0036](docs/decisions/0036-desktop-results-and-preferences.md) / [验证记录](docs/verification/2026-10-08-output-history-and-preferences.md)：输出性能摘要、最近100条OCR结果、TOML参数/提示词恢复与关闭保存
+
 ## 实际 Windows 工程
 
 | 路径 | 作用 / 说明 |

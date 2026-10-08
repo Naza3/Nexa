@@ -172,6 +172,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "toml",
  "uuid",
  "windows-sys 0.61.2",
 ]

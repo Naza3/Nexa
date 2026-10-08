@@ -7,6 +7,8 @@
   "webviews": ["main"],
   "permissions": [
     "allow-performance-get",
+    "allow-ocr-history-list", "allow-ocr-history-get", "allow-ocr-history-save", "allow-ocr-history-delete",
+    "allow-workbench-get", "allow-workbench-save",
     "allow-runtime-initialize", "allow-configuration-get", "allow-configuration-model-get", "allow-configuration-save", "allow-configuration-migrate", "allow-model-load-profile", "allow-model-load-start", "allow-model-load-profile-start", "allow-model-load-next", "allow-model-load-cancel", "allow-ui-preferences-get", "allow-ui-preferences-save",
     "allow-desktop-snapshot", "allow-runtime-start", "allow-model-pick",
     "allow-models-pick",
@@ -20,6 +22,6 @@
     "allow-models-page", "allow-model-load", "allow-model-unload", "allow-model-unregister", "allow-chat-start",
     "allow-models-pair-pick", "allow-models-pair-import", "allow-ocr-start", "allow-ocr-save-markdown", "allow-chat-next", "allow-chat-cancel", "allow-settings-save", "allow-runtime-idle-save", "allow-runtime-verification-save", "allow-token-copy",
     "allow-runtime-lan-save", "allow-runtime-lan-addresses", "allow-lan-token-copy",
-    "allow-runtime-stop", "allow-desktop-close"
+    "allow-runtime-stop", "allow-desktop-close-ack", "allow-desktop-close"
   ]
 }

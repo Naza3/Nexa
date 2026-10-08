@@ -282,6 +282,9 @@ pub struct RequestHandle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatBatch {
     pub request_id: Uuid,
+    /// Identity proved on the connection that submitted this request, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_instance_id: Option<Uuid>,
     pub events: Vec<ChatEvent>,
     pub terminal: bool,
 }

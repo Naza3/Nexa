@@ -223,6 +223,8 @@ export type ChatEvent =
   | ({ type: "failed" } & SafeError);
 export interface ChatBatch {
   request_id: string;
+  /** Identity of the service that owned this request; absent on older bridges. */
+  runtime_instance_id?: string | null;
   events: ChatEvent[];
   terminal: boolean;
 }
@@ -298,7 +300,29 @@ export interface PerformanceRecord {
   finish_reason: "stop" | "length" | null;
 }
 export interface PerformanceSnapshot { instance_id: string; capacity: number; records: PerformanceRecord[] }
+export interface OcrHistorySaveRequest {
+  mode: "create" | "update_performance";
+  id: string;
+  image_name: string;
+  model_id: string;
+  status: PerformanceRecord["status"];
+  finish_reason: "stop" | "length" | null;
+  error_code: string | null;
+  markdown: string;
+  incomplete: boolean;
+  performance: { instance_id: string; record: PerformanceRecord } | null;
+}
+export type OcrHistoryEntry = Omit<OcrHistorySaveRequest, "mode"> & { first_saved_at_unix_ms: number };
+export type OcrHistorySummary = Omit<OcrHistoryEntry, "markdown" | "performance"> & { markdown_bytes: number };
+export interface OcrHistoryList { capacity: 100; entries: OcrHistorySummary[] }
 export interface DesktopApi {
+  closeAcknowledge?(id: string): Promise<boolean>;
+  workbenchGet?(): Promise<WorkbenchPreferencesSnapshot>;
+  workbenchSave?(request: { expected_revision: string; preferences: WorkbenchPreferences }): Promise<WorkbenchPreferencesSnapshot>;
+  ocrHistoryList?(): Promise<OcrHistoryList>;
+  ocrHistoryGet?(id: string): Promise<OcrHistoryEntry>;
+  ocrHistorySave?(request: OcrHistorySaveRequest): Promise<OcrHistoryList>;
+  ocrHistoryDelete?(id: string): Promise<OcrHistoryList>;
   performanceGet?(): Promise<PerformanceSnapshot>;
   ocrStart?(request: OcrRequest): Promise<{ request_id: string }>;
   saveOcrMarkdown?(text: string): Promise<{ saved: boolean }>;
@@ -407,3 +431,8 @@ export interface ConfigurationSaveRequest { expected_revision: string; update: C
 export interface ConfigurationMigrateRequest { expected_revision: string; expected_preferences_revision: string | null; choice: "api" | "desktop" | "custom"; custom: { global_defaults: LoadDefaults; request_defaults: RequestDefaults } | null }
 export interface UiPreferences { close_runtime_on_exit: boolean; download_source: DownloadSource }
 export interface UiPreferencesSnapshot { revision: string; preferences: UiPreferences }
+export interface WorkbenchPreferences {
+  ocr: { model_id: string | null; context_size: number; threads: number; batch_size: number; max_output_tokens: number; prompt: string; image_edge: 0 | 1600 | 2048; markdown: boolean; model_drafts: Record<string, { base: LoadOptions; draft: LoadOptions }> };
+  chat: { draft: string };
+}
+export interface WorkbenchPreferencesSnapshot { revision: string; preferences: WorkbenchPreferences }

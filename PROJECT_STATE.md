@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-08 输出摘要、OCR历史与TOML设置（源码与Linux验证完成，Windows待验证）
+
+任务W02-PERF-2 / W02-OCR-5 / W02-PREF-1。性能摘要放在聊天和OCR正文下方，严格匹配生成连接的真实实例与终态；最近100条非空OCR结果单独持久化，含不完整标记与可用指标，支持查看、复制、另存、删除，不保存原图。运行配置仍为config.toml，新增workbench-preferences.toml记忆OCR参数/提示词/缩放/视图及未发送聊天草稿；模型档案与本窗口草稿做基线冲突检查，不静默恢复初始默认值。
+
+正常关闭先停止并消费OCR终态、保存已有正文与设置；标题栏通过固定事件/nonce ACK进入同一流程，未响应不默默丢弃。独立文件锁、CAS、原子替换及关闭写入门槛已验证。bridge155项、最后参数范围子集9项、Linux壳38项、包装ACL17项、fmt/clippy通过；前端全量936项、typecheck/lint/生产构建及三种宽度浏览器模拟API检查通过；最后定向检查与证据见[本轮验证](docs/verification/2026-10-08-output-history-and-preferences.md)。Windows原生构建/WebView2与用户i5目标机待验，版本仍0.2.3。见[ADR0036](docs/decisions/0036-desktop-results-and-preferences.md)及[OCR说明](docs/ocr-windows-cpu.md)。
+
 ## 2026-10-08 统一推理性能系统（源码与Linux验证完成，Windows待验证）
 
 任务W02-PERF-1。用户要求从OCR扩展至所有推理。原生prepare/prefill/decode/同步输出回调计时随可靠终态传递，单actor保留最近200条内存历史，覆盖聊天、OCR、本机/LAN流式及非流式、实际生成短测。新增本机鉴权 `/runtime/performance` 与受ACL约束的 `performance_get`，实例绑定与有界校验；独立性能页按模型/状态/类型筛选，显示真实token速度、耗时与实际加载参数，支持复制CSV。失败/取消/超时不冒充成功测速；记录不含正文/图片/路径，服务退出清空。

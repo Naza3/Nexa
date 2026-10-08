@@ -1915,3 +1915,26 @@ h3 {
 .performance-detail dl { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 3fr); gap: 12px 20px; }
 .performance-detail dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .performance-detail dl { grid-template-columns: 1fr; gap: 8px; } .performance-detail dd { margin-bottom: 12px; } }
+.performance-summary { margin-top: 14px; padding: 12px 0 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.performance-summary-title { margin: 0 0 6px; font-weight: 600; }
+.performance-summary-metrics { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.performance-summary-metrics strong { color: #42495a; font-weight: 500; font-variant-numeric: tabular-nums; }
+.performance-summary-note { margin: 6px 0 0; font-size: 11px; }
+.ocr-output-card > .performance-summary { margin: 0 22px 20px; }
+@media (max-width: 600px) { .performance-summary-metrics { display: grid; gap: 6px; } .ocr-output-card > .performance-summary { margin-inline: 14px; } }
+.ocr-history { margin-top: 22px; }
+.ocr-history > summary { display: flex; flex-wrap: wrap; gap: 8px 16px; cursor: pointer; padding: 20px 22px; }
+.ocr-history > summary span { color: var(--muted); font-size: 12px; }
+.ocr-history-content { padding: 0 22px 22px; min-width: 0; }
+.ocr-history-list { max-height: 360px; overflow: auto; margin-top: 14px; }
+.ocr-history-list table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ocr-history-list th, .ocr-history-list td { padding: 10px; text-align: left; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; min-width: 100px; }
+.ocr-history-list small { display: block; color: var(--muted); }
+.ocr-history-list td:last-child { min-width: 140px; }
+.ocr-history-list button { padding: 6px 10px; margin: 2px; }
+.ocr-history-detail { margin-top: 20px; min-width: 0; }
+.ocr-history-detail h3 { overflow-wrap: anywhere; }
+.ocr-history-result { max-height: 540px; overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
+.ocr-history-result pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.ocr-history-save-status { margin: 0 22px 20px; font-size: 12px; color: var(--muted); }
+@media (max-width: 600px) { .ocr-history-content { padding: 0 14px 14px; } .ocr-history > summary { padding: 14px; } }

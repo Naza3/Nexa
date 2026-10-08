@@ -1,4 +1,5 @@
 use crate::{
+    close_request::CloseRequestGate,
     diagnostics,
     directory_selection::{AdmissionError, DirectorySelection, PickedDirectory},
     file_selection::{FileSelection, PickedFile, PickedFiles},
@@ -7,8 +8,9 @@ use crate::{
 };
 use desktop_bridge::{
     BridgeError, ConfigurationMigrateRequest, ConfigurationSaveRequest, ConfigurationSnapshot,
-    DesktopBridge, ModelConfiguration, PerformanceSnapshot, UiPreferencesSaveRequest,
-    UiPreferencesSnapshot, dto::*,
+    DesktopBridge, ModelConfiguration, OcrHistoryEntry, OcrHistoryList, OcrHistorySaveRequest,
+    PerformanceSnapshot, UiPreferencesSaveRequest, UiPreferencesSnapshot,
+    WorkbenchPreferencesSaveRequest, WorkbenchPreferencesSnapshot, dto::*,
 };
 use rfd::{MessageButtons, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
@@ -34,6 +36,7 @@ struct Shell {
     picking: AtomicBool,
     closing: AtomicBool,
     closed: AtomicBool,
+    close_request: CloseRequestGate,
 }
 fn error(code: &str) -> BridgeError {
     if diagnostics::PACKAGE_ERROR_CODES.contains(&code) {
@@ -206,6 +209,63 @@ async fn performance_get(
 ) -> Result<PerformanceSnapshot> {
     guard(&window, &state)?;
     state.bridge.performance_get().await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryIdRequest {
+    id: Uuid,
+}
+#[tauri::command]
+async fn ocr_history_list(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<OcrHistoryList> {
+    guard(&window, &state)?;
+    state.bridge.ocr_history_list().await
+}
+#[tauri::command]
+async fn ocr_history_get(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: HistoryIdRequest,
+) -> Result<OcrHistoryEntry> {
+    guard(&window, &state)?;
+    state.bridge.ocr_history_get(request.id).await
+}
+#[tauri::command]
+async fn ocr_history_save(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: OcrHistorySaveRequest,
+) -> Result<OcrHistoryList> {
+    guard(&window, &state)?;
+    state.bridge.ocr_history_save(request).await
+}
+#[tauri::command]
+async fn ocr_history_delete(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: HistoryIdRequest,
+) -> Result<OcrHistoryList> {
+    guard(&window, &state)?;
+    state.bridge.ocr_history_delete(request.id).await
+}
+#[tauri::command]
+async fn workbench_get(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<WorkbenchPreferencesSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.workbench_get().await
+}
+#[tauri::command]
+async fn workbench_save(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: WorkbenchPreferencesSaveRequest,
+) -> Result<WorkbenchPreferencesSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.workbench_save(request).await
 }
 #[tauri::command]
 async fn configuration_get(
@@ -912,23 +972,89 @@ async fn runtime_stop(window: WebviewWindow, state: State<'_, Arc<Shell>>) -> Re
     state.bridge.stop().await
 }
 #[tauri::command]
+async fn desktop_close_ack(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+    request: HistoryIdRequest,
+) -> Result<bool> {
+    guard(&window, &state)?;
+    Ok(state.close_request.acknowledge(request.id))
+}
+#[tauri::command]
 async fn desktop_close(
     window: WebviewWindow,
     state: State<'_, Arc<Shell>>,
     app: tauri::AppHandle,
 ) -> Result<()> {
-    // Repeated closes merge; the native close button and this command share this
-    // exact state machine. No shell-side Child handle or kill-on-drop is used.
+    // The UI flushes pending preferences/history before this command. Repeated
+    // closes merge; no shell-side Child handle or kill-on-drop is used.
     if window.label() != "main" || !window.url().is_ok_and(|url| local_url(&url)) {
         return Err(error("unauthorized_window"));
     }
     close(app, Arc::clone(&state)).await;
     Ok(())
 }
+async fn request_close(app: tauri::AppHandle, state: Arc<Shell>) {
+    if state.closing.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(mut id) = state.close_request.begin() else {
+        return;
+    };
+    loop {
+        // Only dispatch a fixed lifecycle event to our bundled main UI. UUID
+        // formatting contains no script text supplied by the webview or files.
+        let dispatched = app.get_webview_window("main").is_some_and(|window| {
+            window.url().is_ok_and(|url| local_url(&url))
+                && window.eval(&format!(
+                    "window.dispatchEvent(new CustomEvent('nexa-close-requested', {{detail: {{id: '{id}'}}}}));"
+                )).is_ok()
+        });
+        if dispatched {
+            let _ = tauri::async_runtime::spawn_blocking(|| {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            })
+            .await;
+        }
+        if state.closing.load(Ordering::Acquire) || !state.close_request.expire(id) {
+            return;
+        }
+        // A successful eval only queues JavaScript. Never silently discard
+        // pending edits if the UI was not ready or has stopped responding.
+        let choice = rfd::AsyncMessageDialog::new()
+            .set_title("Nexa：界面尚未确认保存")
+            .set_description("界面没有响应关闭请求，无法确认刚修改的设置和识别结果是否已保存。\n重试会再次请求保存；仍要关闭可能丢失尚未保存的内容。")
+            .set_level(MessageLevel::Warning)
+            .set_buttons(MessageButtons::YesNoCancelCustom("重试".into(), "仍要关闭".into(), "保留窗口".into()))
+            .show().await;
+        if !state.close_request.is_pending(id) || state.closing.load(Ordering::Acquire) {
+            return;
+        }
+        match choice {
+            MessageDialogResult::Custom(label) if label == "重试" => {
+                state.close_request.clear();
+                let Some(next) = state.close_request.begin() else {
+                    return;
+                };
+                id = next;
+                continue;
+            }
+            MessageDialogResult::Custom(label) if label == "仍要关闭" => {
+                state.close_request.clear();
+                close(app, state).await;
+            }
+            _ => {
+                state.close_request.clear();
+            }
+        }
+        return;
+    }
+}
 async fn close(app: tauri::AppHandle, state: Arc<Shell>) {
     if state.closing.swap(true, Ordering::AcqRel) {
         return;
     }
+    state.close_request.clear();
     if let Ok(mut slot) = state.file_selection.lock() {
         *slot = None;
     }
@@ -1050,6 +1176,7 @@ pub fn run() {
         picking: AtomicBool::new(false),
         closing: AtomicBool::new(false),
         closed: AtomicBool::new(false),
+        close_request: CloseRequestGate::default(),
     });
     // One shell-owned reaper, rather than one sleeping task per pick. It never
     // holds the Shell alive or delays runtime shutdown for the lease lifetime.
@@ -1086,6 +1213,12 @@ pub fn run() {
             runtime_initialize,
             configuration_get,
             performance_get,
+            ocr_history_list,
+            ocr_history_get,
+            ocr_history_save,
+            ocr_history_delete,
+            workbench_get,
+            workbench_save,
             configuration_model_get,
             configuration_save,
             configuration_migrate,
@@ -1134,6 +1267,7 @@ pub fn run() {
             lan_token_copy,
             token_copy,
             runtime_stop,
+            desktop_close_ack,
             desktop_close
         ])
         .setup(|app| {
@@ -1148,7 +1282,7 @@ pub fn run() {
                 api.prevent_close();
                 let app = window.app_handle().clone();
                 let state = Arc::clone(&app.state::<Arc<Shell>>());
-                tauri::async_runtime::spawn(close(app, state));
+                tauri::async_runtime::spawn(request_close(app, state));
             }
         })
         .build(tauri::generate_context!());
@@ -1158,7 +1292,7 @@ pub fn run() {
                 let state = Arc::clone(&app.state::<Arc<Shell>>());
                 if !state.closed.load(Ordering::Acquire) {
                     api.prevent_exit();
-                    tauri::async_runtime::spawn(close(app.clone(), state));
+                    tauri::async_runtime::spawn(request_close(app.clone(), state));
                 }
             }
         }),

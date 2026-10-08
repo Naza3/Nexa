@@ -48,6 +48,7 @@ enum Mode {
     PendingConfiguration,
 }
 struct Fixture {
+    instance_id: Uuid,
     _temp: tempfile::TempDir,
     _lock: Option<InstanceLock>,
     bridge: Arc<DesktopBridge>,
@@ -456,6 +457,7 @@ impl Fixture {
             }
         });
         Self {
+            instance_id: instance,
             _temp: temp,
             _lock: Some(lock),
             bridge,
@@ -506,7 +508,15 @@ async fn valid_same_connection_unicode_usage_and_repeat_terminal() {
     assert!(matches!(events.last(),Some(ChatEvent::Completed{usage,..}) if usage.total_tokens==5));
     let again = f.bridge.chat_next(id).await.unwrap();
     assert_eq!(again.events, vec![events.last().unwrap().clone()]);
+    assert_eq!(again.runtime_instance_id, Some(f.instance_id));
     assert_eq!(f.auth.load(Ordering::SeqCst), 2);
+    let next = f.start();
+    f.terminal(next).await;
+    // Re-reading the prior terminal retains the original request provenance.
+    let previous = f.bridge.chat_next(id).await.unwrap();
+    assert_eq!(previous.runtime_instance_id, again.runtime_instance_id);
+    assert_eq!(previous.events, again.events);
+    assert_eq!(previous.request_id, id);
 }
 #[tokio::test]
 async fn proof_failure_never_releases_bearer() {
@@ -516,6 +526,14 @@ async fn proof_failure_never_releases_bearer() {
     assert!(matches!(events.last(),Some(ChatEvent::Failed{code,..}) if code=="connection_failed"));
     assert_eq!(f.auth.load(Ordering::SeqCst), 0);
     assert_eq!(f.chats.load(Ordering::SeqCst), 0);
+    assert!(
+        f.bridge
+            .chat_next(id)
+            .await
+            .unwrap()
+            .runtime_instance_id
+            .is_none()
+    );
 }
 #[tokio::test]
 async fn redirect_eof_huge_frame_wrong_identity_and_missing_usage_never_succeed() {

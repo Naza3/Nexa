@@ -1,3 +1,5 @@
+import { PerformanceSummary } from "./PerformanceSummary";
+import { WorkbenchNotice } from "./WorkbenchNotice";
 import { PerformancePage } from "./PerformancePage";
 import { OcrPage } from "./OcrPage";
 import { followOnLoadAction } from "./modelLoad";
@@ -5,7 +7,7 @@ import { ModelLoadControl } from "./ModelLoadControl";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ModelRemoveAction } from "./ModelRemoveAction";
 import { modelRemovalBlocker } from "./modelRemoval";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   byteLength,
@@ -628,6 +630,7 @@ function ChatPage({
   );
   const canSend =
     ready &&
+    !state.closing &&
     !active &&
     !state.operation &&
     state.library_phase === "idle" &&
@@ -746,7 +749,8 @@ function ChatPage({
                       {message.notice}
                     </p>
                   )}
-                  {message.usage && (
+                  {message.performance && <PerformanceSummary value={message.performance} usage={message.usage} />}
+                  {message.usage && !message.performance && (
                     <p className="message-note">
                       输入 {message.usage.prompt_tokens} · 输出{" "}
                       {message.usage.completion_tokens} tokens
@@ -792,7 +796,7 @@ function ChatPage({
             ready ? "输入消息，开始本地对话…" : "加载模型后即可发送消息…"
           }
           rows={3}
-          disabled={active || !!state.operation}
+          disabled={active || !!state.operation || !state.workbench.hydrated || state.closing}
           onCompositionStart={() => {
             composing.current = true;
           }}
@@ -1086,9 +1090,20 @@ export default function App({
   }, [page]);
   const [configDrafts] = useState(createDraftStore);
   const [confirmClose, setConfirmClose] = useState(false);
+  const requestClose = useCallback(() => { if (hasDirtyDrafts(configDrafts)) setConfirmClose(true); else void controller.close(); }, [configDrafts, controller]);
+  useEffect(() => {
+    let alive = true;
+    const nativeClose = (event: Event) => {
+      if (!(event instanceof CustomEvent) || typeof event.detail?.id !== "string" || !controller.api.closeAcknowledge) return;
+      void controller.api.closeAcknowledge(event.detail.id).then((accepted) => { if (alive && accepted) requestClose(); }).catch(() => {});
+    };
+    window.addEventListener("nexa-close-requested", nativeClose);
+    return () => { alive = false; window.removeEventListener("nexa-close-requested", nativeClose); };
+  }, [controller, requestClose]);
   const [draftEpoch, setDraftEpoch] = useState(0);
   useSyncExternalStore(configDrafts.subscribe, configDrafts.getSnapshot);
-  const [draft, setDraft] = useState("");
+  const draft = state.workbench.preferences.chat.draft;
+  const setDraft = controller.setChatDraft;
   const [confirmAddStop, setConfirmAddStop] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmRecoveryStop, setConfirmRecoveryStop] = useState(false);
@@ -1169,7 +1184,7 @@ export default function App({
               aria-label={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : "关闭窗口并保留服务"}
               className="icon-button"
               disabled={!!state.operation && !state.testing_model && state.operation.kind !== "pick_models"}
-              onClick={() => { if (hasDirtyDrafts(configDrafts)) setConfirmClose(true); else void controller.close(); }}
+              onClick={requestClose}
             >
               <Icon name="power" size={16} />
             </button>
@@ -1194,6 +1209,8 @@ export default function App({
           }
         >
           <RuntimeBanner state={state} />
+          <WorkbenchNotice state={state} controller={controller} />
+          {state.persistence_error && <div className="notice-band warning" role="status"><div><p>{state.persistence_error}</p><button onClick={() => void controller.flushOcrHistory()}>重试保存识别历史</button></div></div>}
           {state.activity_storage_warning && <div className="notice-band warning" role="alert"><p>{state.activity_storage_warning}</p></div>}
           {state.configuration_recovery_error && <section className="notice-band warning" role="alert"><div><strong>配置无法读取，服务状态尚未确认</strong><p>不会用默认值代替配置或启动新实例。可检查并停止当前本机实例；原生端仍会验证身份并确认清理，其他客户端可能受影响。</p><p>配置诊断码：{state.configuration_recovery_error.code}</p><button disabled={!!state.operation || state.chat_phase !== "idle" || state.library_phase !== "idle" || state.download_phase !== "idle"} onClick={() => setConfirmRecoveryStop(true)}>检查并停止本机服务</button></div></section>}
           {configDrafts.pending.size > 0 && <section className="notice-band warning" role="status"><div><strong>发现上次未保存草稿</strong><p>可恢复 {configDrafts.pending.size} 组非秘密配置草稿。请先选择恢复或丢弃，再编辑配置。它们不是已保存配置；恢复后会核对原版本，不会自动提交、加载或启动服务。</p><div className="workspace-actions"><button onClick={() => { configDrafts.restorePending(); setDraftEpoch((value) => value + 1); }}>恢复未保存草稿</button><button onClick={() => configDrafts.discardPending()}>丢弃上次草稿</button></div></div></section>}
@@ -1265,7 +1282,7 @@ export default function App({
               <button className="text-button" aria-label="收起操作结果" onClick={() => controller.dismissNotice(state.notice!)}>收起</button>
             </div>
           )}
-          <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0}>
+          <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0 || state.closing}>
           {ocrVisited && <div hidden={page !== "ocr"}><OcrPage state={state} controller={controller} /></div>}
           {page === "performance" && <PerformancePage api={controller.api} connection={state.snapshot?.connection} />}
           {page === "overview" && <OverviewPage state={state} controller={controller} goModels={() => setPage("models")} goApi={() => setPage("api")} goActivity={() => setPage("activity")} goChat={enterChat} />}
