@@ -1,10 +1,14 @@
 # Nexa 当前状态
 
-## 2026-10-08 Windows 桌面 Clippy 修复（交叉编译已完成，原生构建待验证）
+## 2026-10-08 Windows 桌面 Clippy 修复与交叉便携包（交叉编译及原生CI已完成）
 
 任务W05-CI-FIX-3 / W05-CROSS-2。[Actions37716280319](https://github.com/Naza3/Nexa/actions/runs/37716280319/job/113113404013)在Windows桌面Clippy失败：`windows.rs:1009`的`window.eval(&format!(...))`触发`needless_borrows_for_generic_args`，既有`-D warnings`将其提升为错误。该轮前端960项和Windows壳37项已通过；Runtime、下载组件与版本job成功，后续native打包跳过。按锁定Tauri接口改为直接传入`String`，关闭保存流程保持，未关闭lint。
 
-本地主机fmt/Clippy退出0，独立审查核对锁定Tauri接口与关闭流程通过。用户明确要求先完成本地Windows交叉编译，检查通过才推送；已写入AGENTS。工具链已准备并复验，正式门槛脚本退出0：前端、189项原生编译、两workspace的Windows Release strict Clippy、四EXE实际链接和源码/原生库/PE身份核对全部通过。保留已有clang-cl工具探测warning；未运行Windows EXE，不能替代原生CI。证据`/workspace/onboarding/windows-cross/runs/20261008T024028Z`；SDK冷准备17分49秒，缓存复验约0.5秒。已包含最新main，版本仍0.2.3；下一步按授权推送并重新运行原生工作流。详见[本轮验证记录](docs/verification/2026-10-08-windows-cross-gate.md)。
+本地主机fmt/Clippy退出0，独立审查核对锁定Tauri接口与关闭流程通过。用户明确要求先完成本地Windows交叉编译，检查通过才推送；已写入AGENTS。工具链已准备并复验，正式门槛脚本退出0：前端、189项原生编译、两workspace的Windows Release strict Clippy、四EXE实际链接和源码/原生库/PE身份核对全部通过。保留已有clang-cl工具探测warning。证据`/workspace/onboarding/windows-cross/runs/20261008T024028Z`；SDK冷准备17分49秒，缓存复验约0.5秒。
+
+完成本地门槛后提交并推送`0ecddad0b837a9ea5571b01bc28eea73461357d1`。[原生Actions37719780731](https://github.com/Naza3/Nexa/actions/runs/37719780731)于03:15:07 UTC整轮成功：五个构建/验证job成功，分支Release正确跳过。Windows根Rust625通过/10既有忽略、桌面壳37、前端960、Python319项（317通过/2skip）、CTest5/5；真实模型、HTTP/CLI、桌面整包及安装器生命周期步骤通过。没有创建tag、发布Release或合并main，版本仍0.2.3。上述为原生CI构建的验证，不转授本地交叉包Windows运行结论。
+
+用户要求下载本机产物后，在干净0ecddad上复跑交叉门槛退出0，结合本次同提交aria2与验证过的官方CRT生成`dist/Nexa-0.2.3-windows-x64-cross-0ecddad.zip`，18,721,201字节，生产打包校验及独立交付复核通过。启动路径`Nexa-Windows-cross-test/desktop-windows/nexa-desktop.exe`，需已有WebView2、自备模型；本地交叉EXE未在Windows执行，用户Win10/i5实际GUI、批量OCR与性能仍待实机验证。环境复用配置已保存草稿，需在环境设置中保存并发布后供后续环境使用。下一步为用户下载试用；详情、SHA与证据见[本轮验证记录](docs/verification/2026-10-08-windows-cross-gate.md)。
 
 ## 2026-10-08 按导入顺序批量OCR（源码与Linux验证完成，Windows待验证）
 

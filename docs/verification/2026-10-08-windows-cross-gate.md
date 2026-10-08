@@ -50,4 +50,35 @@ SDK首次准备成功，17分49秒，慢在实际CAB解压；完成后缓存保�
 | nexa-acceptance.exe | 2651648 | `72486d6bbedfe443d296ef1d3e6116c37c4d8f780f4507d5147ccd138b49acd7` |
 | nexa-desktop.exe | 15249408 | `ced926f0bf04a19b6d26ff19a0563c50a44b224429c9fc01d576e0757c1111a8` |
 
-源码、主机检查与本地Windows交叉门槛已完成；推送后新的原生CI结果待单独记录。
+源码、主机检查与本地Windows交叉门槛已完成；推送后的原生CI结果见下方独立记录。
+
+## 用户下载的交叉便携测试包
+
+用户随后要求下载本机构建结果。为绑定可审查的干净源码，在已推送的`0ecddad0b837a9ea5571b01bc28eea73461357d1`上重新捕获收据并执行完整门槛，退出0；证据`/workspace/onboarding/windows-cross/runs/20261008T025622Z`。此轮在首次推送前检查已通过之后，属于新增下载任务的干净提交打包验证，不替代先验后推送顺序。
+
+使用生产`package_windows_cross_test.py`生成完整便携测试ZIP，退出0。Runtime/worker/桌面/验收器为本地交叉编译；aria2取自[本次同提交CI](https://github.com/Naza3/Nexa/actions/runs/37719780731)的`nexa-download-source-build-0ecddad0b837a9ea5571b01bc28eea73461357d1` artifact，重新核对完整原始清单并按生产准备入口生成组件。没有改旧manifest冒充同源，也没有加入模型、测试EXE或原始构建日志。
+
+官方CRT原VSIX及原许可DOCX保留来源、SHA和实际字节。Debian签名索引校验的osslsigncode2.9原在线CRL请求因微软Content-Type与OpenSSL不兼容失败；随后经官方HTTPS取得原始CRL，使用工具支持的`-CRLfile`及`-TSA-CRLfile`参数验证。wrapper仅追加这两个参数、不过滤输出、不禁用签名/时间戳/吊销检查。生产验证函数对11个Release DLL各两份签名及其时间戳/CRL通过；包中按实际导入闭包仅复制3种DLL、4个文件。未宣称Windows `Get-AuthenticodeSignature`通过。工具、证书、CRL及失败/成功日志见`/workspace/tooling/windows/packaging/`。
+
+最终ZIP39文件，App含runtime/download在内的许可文件恰为10份；文件清单、大小/SHA、普通与delay PE导入、ZIP逐字节、源码收据复核通过，真实Rust layout和download identity消费者在Linux上读取最终包通过。独立验收器只随包提供，没有执行Windows程序。
+
+- 路径：`dist/Nexa-0.2.3-windows-x64-cross-0ecddad.zip`
+- 大小：18,721,201字节
+- SHA256：`b62590ffb0c33887619d08cdaecadce6d0664c44c6d9ad65fb518dd6918f31aa`
+- 对应`.zip.sha256`一同生成；完整记录在`dist/Nexa-0.2.3-cross-0ecddad/build-result.json`与`/workspace/onboarding/windows-cross/package.log`
+- 启动：退出旧Nexa，解压后运行`Nexa-Windows-cross-test/desktop-windows/nexa-desktop.exe`；需已有WebView2，不包含模型权重
+
+此ZIP明确为Linux交叉编译的便携测试包，不是GitHub原生构建包，也不是正式Release。独立只读交付复核确认ZIP与sidecar SHA相等、启动EXE存在、AVX2基线适配i5-8400；用户Windows10/i5目标机实测仍独立待验。
+
+## 同源码原生Windows CI
+
+本地完整门槛通过后，提交并推送`0ecddad0b837a9ea5571b01bc28eea73461357d1`，tree为`4daa3be028675c2b2dd38f38622d8b3de08b2ce4`。[Actions37719780731](https://github.com/Naza3/Nexa/actions/runs/37719780731)于2026-10-08 03:15:07 UTC完成，整轮`success`；`gh run watch --exit-status`退出0。release-identity、desktop-build、download-component、runtime-build与native五项成功，非tag分支的release按条件跳过。
+
+- 前端45文件960项与独立Windows桌面壳37项通过，原失败的Windows strict Clippy通过，桌面Release实际链接成功。
+- Windows根workspace Rust55组625通过、0失败、10既有忽略；随后显式运行真实模型/Runtime/worker信用测试，另记其独立验证，不混入普通用例总数。
+- Python319项（317通过、2平台skip），原生CTest5/5；真实模型、HTTP/CLI生命周期、下载组件、独立解压桌面包与安装器生命周期步骤均成功。
+- 原生MSI构建报告确认payload与MSI表校验、Setup内嵌精确MSI通过；产物保持未签名。[三格式CI产物](https://github.com/Naza3/Nexa/actions/runs/37719780731/artifacts/11526615269)已由工作流保存，未发布为公开Release。
+
+原始job日志保留在`/tmp/nexa-37719780731-desktop.log`、`/tmp/nexa-37719780731-runtime.log`、`/tmp/nexa-37719780731-native.log`；安装诊断在`/tmp/nexa-37719780731-installer/`。这些原生运行结果只对应CI生成的二进制；本地交叉ZIP只完成交叉构建与打包/静态校验，不能声称它在Windows运行通过。Windows10/i5实际GUI、真实长图质量和长期使用仍待用户设备验证。
+
+交付前再次fetch main并确认已包含，纯文档记录不改变产物源身份、不重复全量构建。云环境install_script/start_skill已保存为配置草稿，内容指向实际测试过的工具准备与门槛脚本；尚未发布环境快照，不宣称后续新环境恢复已验证。用户可在环境设置中审阅、保存并发布以复用。
