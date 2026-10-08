@@ -1,5 +1,9 @@
 # 开发与平台构建锁
 
+## 2026-10-08 推送前 Windows 交叉构建
+
+用户要求先在本地完成Windows目标严格Clippy和实际Release交叉编译，通过后才推送，再运行GitHub原生Windows构建/测试。具体入口见[交叉构建说明](windows-cross-test-build.md#推送前检查顺序2026-10-08)。Linux目标检查不覆盖`cfg(windows)`，交叉`check`也不证明EXE已链接；检查、编译与原生运行分别记录。继续复用锁定Rust/llama和有效增量缓存，保持原生CI门槛。
+
 ## 2026-10-07 单图 OCR 构建增量
 
 [ADR0032](decisions/0032-local-single-image-ocr.md)保持llama提交不变，追加CPU mtmd（MTMD_VIDEO=OFF）、vendor-hash，准确静态库闭包10项，私有worker4/shim4、公共HTTP1（worker4性能载荷按ADR0035；原OCR增量使用worker3）。包身份检查和stb_image/miniaudio完整内嵌许可证同步。Linux实编使用CMake4.4.4/Ninja1.13.2/GNU14.2/Rust1.98.1；本批尚无Windows原生构建结果。

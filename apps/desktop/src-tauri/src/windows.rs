@@ -1006,7 +1006,7 @@ async fn request_close(app: tauri::AppHandle, state: Arc<Shell>) {
         // formatting contains no script text supplied by the webview or files.
         let dispatched = app.get_webview_window("main").is_some_and(|window| {
             window.url().is_ok_and(|url| local_url(&url))
-                && window.eval(&format!(
+                && window.eval(format!(
                     "window.dispatchEvent(new CustomEvent('nexa-close-requested', {{detail: {{id: '{id}'}}}}));"
                 )).is_ok()
         });

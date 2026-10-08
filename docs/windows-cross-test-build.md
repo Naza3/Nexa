@@ -2,6 +2,25 @@
 
 这是独立的交叉构建与测试打包入口。`package_windows.py` 和 `package_desktop_windows.py` 的原生 Windows / Visual Studio 路径不变。此路径不使用 GitHub Actions、不下载或安装工具、不运行 Windows EXE、不替代目标机验收，也不修改推理/API/桌面运行时行为。
 
+## 推送前检查顺序（2026-10-08）
+
+用户明确要求先在本地交叉编译Windows版本，通过后再推送；随后GitHub Actions执行原生Windows构建与运行验收。此顺序覆盖此前“先推送、并行补做交叉编译”的安排。保持相同的待推送代码，先准备下述工具与SDK，再构建前端、原生推理静态库，执行两个Rust workspace的Windows目标严格Clippy，最后实际链接Runtime、worker、独立验收器和桌面Release EXE。`cargo check`与Linux主机Clippy不能替代这一步；本次Windows专属`window.eval`警告正是主机检查不会覆盖的代码。
+
+两workspace的检查命令为：
+
+```sh
+cargo xwin clippy --locked --release --target x86_64-pc-windows-msvc \
+  --workspace --all-targets -- -D warnings
+cargo xwin clippy --locked --release --target x86_64-pc-windows-msvc \
+  --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo xwin build --locked --release --target x86_64-pc-windows-msvc \
+  -p runtime-cli -p runtime-worker -p xtask
+cargo xwin build --locked --release --target x86_64-pc-windows-msvc \
+  --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+必须先按下文设置正确的`AIR_NATIVE_PROFILE`、`AIR_NATIVE_DIR`和隔离的输出缓存；桌面workspace使用自己的输出目录。核验实际EXE的AMD64 PE头并记录日志、源码身份及SHA256，通过后才提交推送。失败先修复并重跑相关检查，不以关闭lint或跳过Windows模块放行。纯文档更新不用重新构建。此门槛不要求每次都生成下文完整私有测试ZIP；完整打包、同源aria2、CRT签名/许可闭包、原生运行和用户目标机仍有各自的验收要求。
+
 ## 范围与前置条件
 
 - 仅供本次已授权用户的私有开发测试，不是公开 Release；不自动推断用户的许可资格或额外分发权限
