@@ -8,6 +8,7 @@ from unittest import mock
 
 import package_windows as base
 import test_tauri_windows_lifecycle as lifecycle
+import windows_installer_diagnostics as diagnostics
 
 
 class FakeMsi:
@@ -85,6 +86,24 @@ class TauriLifecycleContractTests(unittest.TestCase):
         self.assertEqual(version, "0.2.3")
         self.assertEqual(package, api.package)
         self.assertNotEqual(product, lifecycle.legacy.product_code(version))
+
+    def test_released_legacy_fixture_keeps_023_identity_with_private_inventory(self):
+        files = [{"path": "private-inventory.txt"}]
+        cabinet, guard = self.work / "private.cab", self.work / "private-guard.dll"
+        with mock.patch.object(lifecycle.legacy, "write_msi") as author:
+            destination = lifecycle.build_released_legacy_fixture(files, "0.3.0", cabinet, guard, self.work)
+        author.assert_called_once_with(files, "0.2.3", cabinet, guard, destination)
+        self.assertEqual(destination, self.work / "legacy-release-0.2.3.msi")
+
+    def test_released_legacy_fixture_does_not_attempt_equal_version_or_downgrade(self):
+        with mock.patch.object(lifecycle.legacy, "write_msi") as author:
+            for version in ("0.1.9", "0.2.2", "0.2.3"):
+                with self.subTest(version=version):
+                    self.assertIsNone(lifecycle.build_released_legacy_fixture([], version, None, None, self.work))
+        author.assert_not_called()
+
+    def test_native_lifecycle_stages_are_accepted_by_sanitized_diagnostics(self):
+        self.assertLessEqual(lifecycle.STAGES, diagnostics.STAGES)
 
     def test_product_identity_rejects_malformed_package_identity(self):
         api = FakeMsi()

@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-bridge"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "download-engine",
  "http-body-util",
@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "download-engine"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2008,7 +2008,7 @@ dependencies = [
 
 [[package]]
 name = "model-store"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "cap-std",
  "fs2",
@@ -2080,7 +2080,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nexa-desktop"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "clipboard-win",
  "desktop-bridge",
@@ -2600,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "process-host"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "libc",
  "runtime-core",
@@ -2774,7 +2774,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-api"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "axum",
  "bytes",
@@ -2802,7 +2802,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-cli"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "fs2",
@@ -2824,7 +2824,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-core"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "runtime-types",
  "serde",
@@ -2832,7 +2832,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-ipc"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "runtime-core",
  "runtime-types",
@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "runtime-types"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "serde",

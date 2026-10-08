@@ -41,7 +41,9 @@ STAGES = frozenset("""
     msi_upgrade msi_downgrade msi_uninstall msi_install nsis_install
     nsis_repeat_install nsis_same_upgrade nsis_busy_install nsis_busy_uninstall
     nsis_uninstall nsis_upgrade nsis_downgrade complete
+    msi_legacy_release_install msi_legacy_release_migrate msi_legacy_release_uninstall
 """.split())
+RELEASED_LEGACY_VERSION = "0.2.3"
 NSIS_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Nexa"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 require = common.require
@@ -167,6 +169,20 @@ def build_tauri_fixture(payload, files, version, work, *, kinds=("msi", "nsis"))
     helpers = pack.compile_helpers(work / "helpers", files)
     project = pack.prepare_project(payload, files, version, work, helpers)
     return {kind: pack.bundle(project, kind, work, version) for kind in kinds}
+
+
+def build_released_legacy_fixture(files, version, cabinet, guard, work):
+    """Exercise the released legacy identity, not historical release binaries.
+
+    The inventory and helpers remain our private, locally authored fixture.
+    Equal/older targets keep the existing same-version migration test only.
+    """
+    current = tuple(map(int, legacy.validate_version(version).split(".")))
+    if current <= tuple(map(int, RELEASED_LEGACY_VERSION.split("."))):
+        return None
+    destination = work / "legacy-release-0.2.3.msi"
+    legacy.write_msi(files, RELEASED_LEGACY_VERSION, cabinet, guard, destination)
+    return destination
 
 
 def add_rollback_fixture(source, destination, api=None):
@@ -300,6 +316,8 @@ def lifecycle(msi, setup, payload, report):
         old_product, _, _ = msi_identity(api, old_msi)
         require(old_product == legacy.product_code(version) and old_product != product,
                 "legacy fixture does not have the original version-only product identity")
+        released_legacy = build_released_legacy_fixture(
+            legacy_files, version, cabinet, helpers["guard"], legacy_work)
         changed_payload = work / "changed-payload"
         changed_files = variant_payload(payload, changed_payload)
         changed = build_tauri_fixture(changed_payload, changed_files, version, work / "changed")
@@ -314,6 +332,23 @@ def lifecycle(msi, setup, payload, report):
         require(future_product not in (old_product, product, changed_product)
                 and built_future_version == future_version, "future MSI fixture identity is invalid")
         common.trace("fixture_build", "complete")
+
+        if released_legacy is not None:
+            released_product, released_version, _ = msi_identity(api, released_legacy)
+            require(released_version == RELEASED_LEGACY_VERSION
+                    and released_product == legacy.product_code(RELEASED_LEGACY_VERSION),
+                    "released legacy fixture does not have the original 0.2.3 product identity")
+            common.msi_command(released_legacy, "/i", logs / "legacy-release-install.log")
+            assert_msi(api, released_product, root, legacy_files, {}, machine_targets)
+            common.msi_command(msi, "/i", logs / "legacy-release-migrate.log")
+            assert_msi(api, product, root, files, {}, machine_targets)
+            require(api.MsiQueryProductStateW(released_product) == -1
+                    and not (root / "nexa-private-obsolete.txt").exists(),
+                    "0.2.3 legacy migration left the old product or obsolete owned file")
+            common.msi_command(msi, "/x", logs / "legacy-release-uninstall.log")
+            assert_removed(root, files, {})
+            require(not related_products(api), "0.2.3 migration cleanup retained an MSI registration")
+            require(autostart_value() is None, "0.2.3 migration enabled autostart")
 
         common.msi_command(old_msi, "/i", logs / "legacy-install.log")
         common.installed_payload(root, legacy_files)

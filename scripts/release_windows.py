@@ -339,9 +339,10 @@ def publish(directory, environment=None, client=None):
     if release is None:
         release = api.request("POST", "/releases", {"tag_name": tag, "target_commitish": commit, "name": "Nexa " + tag,
             "draft": True, "prerelease": False, "make_latest": "false",
-            "body": f"{marker}\n\nWindows x64 CPU：便携 ZIP、MSI 和 Setup EXE，来自同一已验证 payload。\n\n"
+            "body": f"{marker}\n\nWindows x64 CPU：便携 ZIP、Tauri WiX MSI 和 NSIS EXE，来自同一已验证 payload。\n\n"
                     f"源码提交：{commit}。SHA256SUMS 与 release-manifest.json 记录完整身份；对应 aria2 源码随包并单独提供。\n\n"
-                    "MSI/Setup 为当前用户安装，升级和卸载保留模型与用户配置。需要系统已有 Evergreen WebView2。\n\n"
+                    "两种安装器均为当前用户安装，支持同格式同版本覆盖，升级和卸载保留模型与用户配置。旧 Setup EXE 实际安装的是 MSI，请使用新版 MSI 原位更新；切换 MSI/NSIS 格式需先卸载程序。需要系统已有 Evergreen WebView2。\n\n"
+                    "设置中可分别启用关闭到托盘和开机启动，默认均关闭。\n\n"
                     "安装程序尚未代码签名，Windows 可能提示未知发布者。标准 Windows Server 2022 CI 已完成原生和安装生命周期验证；"
                     "Windows 10 目标机原生窗口、无开发工具/离线及长期稳定性验收仍独立待验。"})
     if release.get("tag_name") != tag or marker not in release.get("body", "") or release.get("prerelease") is not False:
