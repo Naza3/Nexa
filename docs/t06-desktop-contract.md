@@ -113,3 +113,11 @@
 `workbench_get()` 返回 `{revision,preferences}`，`workbench_save({expected_revision,preferences})` 按原文件revision执行CAS，保存到 `%LOCALAPPDATA%/Nexa/workbench-preferences.toml`。OCR模型选择、加载参数/每模型base与draft、提示词、输出上限、缩放/视图及聊天未发送草稿自动记忆；正式模型档案仍归config.toml。先读取后保存，损坏/冲突保留现有文件及输入，禁止静默默认值回写。格式、限额、恢复优先级与关闭顺序见[ADR0036](decisions/0036-desktop-results-and-preferences.md)。
 
 关闭准备期间阻止新工作区编辑/新推理，先取消并消费当前OCR终态、登记已有正文，再等待工作区及结果写入后调用desktop_close。原生桥的独立持久化许可覆盖实际后台磁盘写入；读写采用同一文件锁及私有原子替换。保存失败或任务终态未确认保留窗口，不将未保存显示为已保存。
+
+## 顺序图片队列（ADR0037）
+
+桌面文件输入支持多选，最多20张、每张4MiB、合计80MiB，按FileList导入顺序而非文件名排序；独立条目ID支持重名，开始前可上下移动和移除。单图原有操作保持。开始后冻结顺序及模型/提示词/token/缩放参数，每次只准备并发送一张，成功终态正文保存后推进；性能补存仍旁路关联各自请求。没有新增原生命令或公共多图API。
+
+controller以唯一token持有本窗口的批量占位，覆盖图片准备、图间和保存空隙，阻止冲突操作；只读状态与关闭清理保持。提交前先等待先前poll结束，再读取新快照，不能拿终态前的generating缓存误判下一张。外部并发仍由原actor治理，前端检查不构成跨客户端锁。
+
+失败/停止/断流暂停，未知终态保留原任务和占位；恢复沿用原ID，显式继续只处理待开始项。单图重新识别使用新条目ID隔离旧指标回包。跨页继续，关窗先停止后续调度再保存部分正文；File/待运行队列不持久化，完成结果按ADR0036独立归档。边界及验证见[ADR0037](decisions/0037-sequential-image-ocr-queue.md)。

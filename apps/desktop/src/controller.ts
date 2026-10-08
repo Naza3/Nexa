@@ -181,6 +181,7 @@ interface ModelLoadTask {
 }
 export interface ViewState {
   closing: boolean;
+  ocr_batch_active: boolean;
   workbench: WorkbenchState;
   persistence_error: string | null;
   model_removal: { model_id: string; id: number } | null;
@@ -292,6 +293,7 @@ export class DesktopController {
   private activityHistory = readActivityHistory();
   private state: ViewState = {
     closing: false,
+    ocr_batch_active: false,
     workbench: initialWorkbench(),
     persistence_error: null,
     model_removal: null,
@@ -363,6 +365,34 @@ export class DesktopController {
   private modelConfigurationReads = new Map<string, number>();
   private modelsLoaded = false;
   private closing = false;
+  private ocrBatchToken: symbol | null = null;
+  /** Reserve this window's inference slot across image preparation and result writes. */
+  acquireOcrBatch = (): symbol | null => {
+    const snapshot = this.state.snapshot;
+    const runtime = snapshot?.runtime;
+    if (this.closing || this.ocrBatchToken || this.stream || this.modelLoadTask ||
+        this.libraryTask || this.downloadTask || this.state.operation ||
+        snapshot?.connection !== "connected" || runtime?.state !== "ready" ||
+        !runtime.selected_model || runtime.stopping || runtime.registry_busy ||
+        runtime.active_request || runtime.queued_jobs > 0) return null;
+    const token = Symbol("ocr-batch");
+    this.ocrBatchToken = token;
+    this.update({ ocr_batch_active: true });
+    return token;
+  };
+  ownsOcrBatch = (token: symbol): boolean => this.ocrBatchToken === token;
+  /** A poll captured before the previous terminal cannot certify the next image. */
+  refreshOcrBatch = async (token: symbol): Promise<void> => {
+    if (!this.ownsOcrBatch(token) || this.closing) return;
+    const pending = this.snapshotPromise;
+    if (pending) await pending;
+    if (this.ownsOcrBatch(token) && !this.closing) await this.refresh();
+  };
+  releaseOcrBatch = (token: symbol): void => {
+    if (!this.ownsOcrBatch(token)) return;
+    this.ocrBatchToken = null;
+    this.update({ ocr_batch_active: false });
+  };
   private closeDecision: Promise<void> | null = null;
   private modelFeedbackEpoch = 0;
   private settingsEpoch = 0;
@@ -551,7 +581,7 @@ export class DesktopController {
     kind: CommandOperation["kind"] = "management",
   ) {
     if (
-      this.closing || this.state.operation ||
+      this.closing || this.state.operation || (this.ocrBatchToken && kind !== "check") ||
       (!allowChat && this.stream) ||
       (!allowLibrary && (this.libraryTask || this.downloadTask))
     )
@@ -663,7 +693,7 @@ export class DesktopController {
       this.update({ directory_selection: null });
   };
   pickModels = async () => {
-    if (this.closing || this.state.operation || this.libraryTask || this.downloadTask || this.stream) return;
+    if (this.closing || this.ocrBatchToken || this.state.operation || this.libraryTask || this.downloadTask || this.stream) return;
     const epoch = ++this.selectionEpoch;
     this.update({ operation: { id: ++this.nextOperation, kind: "pick_models", label: "正在选择 GGUF 文件" }, model_selection: null, add_auto_test: false, error: null, notice: null });
     try {
@@ -736,7 +766,7 @@ export class DesktopController {
     await this.loadPage(null);
   };
   unregisterModel = async (modelId: string, generation: string): Promise<boolean> => {
-    if (this.closing || this.state.operation) return false;
+    if (this.closing || this.ocrBatchToken || this.state.operation) return false;
     const blocker = modelRemovalBlocker(this.state, modelId);
     if (blocker) { this.report(blocker); return false; }
     if (generation !== this.state.models.generation) {
@@ -793,7 +823,7 @@ export class DesktopController {
     return removed;
   };
   private async beginLibrary(kind: "apply" | "scan" | "discover" | "reconcile" | "add" | "configure") {
-    if (this.closing || this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
+    if (this.closing || this.ocrBatchToken || this.libraryTask || this.downloadTask || this.state.operation || this.stream) return;
     if (kind !== "reconcile" && this.state.snapshot?.connection !== "stopped") {
       this.report(
         new DesktopError(
@@ -1031,7 +1061,7 @@ export class DesktopController {
     finally { this.update({ catalog_loading: false }); }
   };
   startDownload = async (catalog_id: string, auto_test?: boolean) => {
-    if (this.downloadTask || this.libraryTask || this.stream || this.state.operation) return;
+    if (this.closing || this.ocrBatchToken || this.downloadTask || this.libraryTask || this.stream || this.state.operation) return;
     const snapshot = this.state.snapshot;
     const entry = this.state.catalog.find((entry) => entry.catalog_id === catalog_id);
     if (!snapshot || snapshot.connection !== "stopped" || !snapshot.model_directory.configured) {
@@ -1281,7 +1311,7 @@ export class DesktopController {
     }
   }
   private runModelTest = async (modelId: string, mode: "load" | "test", temporary?: Partial<LoadOptions>) => {
-    if (this.closing) return;
+    if (this.closing || this.ocrBatchToken) return;
     if (!this.state.models.generation) {
       this.report(new DesktopError("model_list_changed", "模型列表待确认，请刷新后再操作。")); return;
     }
@@ -1466,7 +1496,7 @@ export class DesktopController {
     );
   private saveRuntimeSettings(label: string, save: () => Promise<Snapshot>, notice: string) {
     if (this.closing) return Promise.resolve();
-    if (this.state.operation || this.stream || this.libraryTask || this.downloadTask) {
+    if (this.ocrBatchToken || this.state.operation || this.stream || this.libraryTask || this.downloadTask) {
       this.update({ notice: null });
       this.report(new DesktopError("operation_in_progress", "有其他操作正在进行，请等待完成或取消后再保存设置。"));
       return Promise.resolve();
@@ -1782,7 +1812,7 @@ export class DesktopController {
     finally { this.closing = false; this.update({ closing: false }); this.closeDecision = null; finishDecision(); }
   };
   send = async (text: string): Promise<boolean> => {
-    if (this.closing || this.stream || this.libraryTask || this.downloadTask || this.state.operation || !text.trim())
+    if (this.closing || this.ocrBatchToken || this.stream || this.libraryTask || this.downloadTask || this.state.operation || !text.trim())
       return false;
     const snapshot = this.state.snapshot;
     if (

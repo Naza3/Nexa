@@ -33,6 +33,8 @@
 
 - [桌面持久化 ADR0036](docs/decisions/0036-desktop-results-and-preferences.md) / [验证记录](docs/verification/2026-10-08-output-history-and-preferences.md)：输出性能摘要、最近100条OCR结果、TOML参数/提示词恢复与关闭保存
 
+- [顺序OCR队列 ADR0037](docs/decisions/0037-sequential-image-ocr-queue.md) / [验证记录](docs/verification/2026-10-08-sequential-ocr.md)：按导入顺序、逐图准备与串行生成、停止/恢复及每图历史
+
 ## 实际 Windows 工程
 
 | 路径 | 作用 / 说明 |

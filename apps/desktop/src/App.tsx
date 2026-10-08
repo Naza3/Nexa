@@ -1282,6 +1282,7 @@ export default function App({
               <button className="text-button" aria-label="收起操作结果" onClick={() => controller.dismissNotice(state.notice!)}>收起</button>
             </div>
           )}
+          {state.ocr_batch_active && page !== "ocr" && <div className="notice-band" role="status"><div><strong>OCR 图片队列正在处理</strong><p>本窗口的模型和生成操作暂时保留给图片队列。</p><button onClick={() => setPage("ocr")}>查看 OCR 队列</button></div></div>}
           <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0 || state.closing}>
           {ocrVisited && <div hidden={page !== "ocr"}><OcrPage state={state} controller={controller} /></div>}
           {page === "performance" && <PerformancePage api={controller.api} connection={state.snapshot?.connection} />}

@@ -103,7 +103,7 @@ it("waits for the current resize operation and never sends an older preparation"
   expect(ocrImage.prepareOcrImage).toHaveBeenNthCalledWith(2, file, 1600);
   expect(screen.getByRole("status", { name: "OCR 图片准备状态" })).toHaveTextContent("预览为本次将发送的图片");
   fireEvent.click(screen.getByRole("button", { name: "识别图片" }));
-  expect(api.ocrStart).toHaveBeenCalledWith(expect.objectContaining({ image_data_url: "data:image/png;base64,TkVX" }));
+  await waitFor(() => expect(api.ocrStart).toHaveBeenCalledWith(expect.objectContaining({ image_data_url: "data:image/png;base64,TkVX" })));
 });
 it("previews an empty-MIME PNG through the real preparation helper and sends normalized bytes", async () => {
   vi.mocked(ocrImage.prepareOcrImage).mockRestore();
@@ -152,6 +152,7 @@ it("retains early cancellation until the request id arrives", async () => {
   const api = await mount({ ocrStart: vi.fn(() => start.promise), chatNext: vi.fn(() => finish.promise) });
   await upload();
   fireEvent.click(screen.getByRole("button", { name: "识别图片" }));
+  await waitFor(() => expect(api.ocrStart).toHaveBeenCalledTimes(1));
   fireEvent.click(screen.getByRole("button", { name: "停止识别" }));
   await act(async () => start.resolve({ request_id: "ocr-1" }));
   expect(api.chatCancel).toHaveBeenCalledWith("ocr-1");

@@ -38,6 +38,7 @@ async function mountOcr(api: DesktopApi) {
   api.ocrStart = vi.fn(async () => ({ request_id: "request-1" }));
   api.chatNext = vi.fn(async () => batch());
   const controller = new DesktopController(api); const value = snapshot(); value.runtime!.load_options!.context_size = 8192;
+  api.snapshot = vi.fn(async () => value); await controller.refresh();
   const state = { ...controller.getSnapshot(), booting: false, snapshot: value, models: { generation: "g", data: [{ ...model, has_projector: true }], next_after: null } };
   const view = render(<OcrPage controller={controller} state={state} />);
   fireEvent.change(screen.getByLabelText("OCR 模型"), { target: { value: model.id } });
@@ -150,7 +151,8 @@ describe("OCR terminal autosave", () => {
     await waitFor(() => expect(api.ocrHistorySave).toHaveBeenCalledTimes(1));
     const first = vi.mocked(api.ocrHistorySave!).mock.calls[0][0];
     expect(first).toMatchObject({ mode: "create", id: "request-1", image_name: "original.png", model_id: model.id, markdown: "# 识别原文", incomplete: false, performance: null });
-    expect(screen.getByRole("button", { name: "识别图片" })).toBeEnabled();
+    // The OCR reservation now remains held until this image's text is durable.
+    expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
     metric.resolve(metrics()); await act(async () => {});
     expect(api.ocrHistorySave).toHaveBeenCalledTimes(1);
     create.resolve({ capacity: 100, entries: [] });

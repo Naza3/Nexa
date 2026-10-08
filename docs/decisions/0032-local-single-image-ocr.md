@@ -4,6 +4,8 @@
 
 ## 决策与范围
 
+后续用户授权的桌面多图队列见[ADR0037](0037-sequential-image-ocr-queue.md)：按导入顺序逐张调用本ADR的单图接口，不改变下面的单请求图片数量与CPU资源边界。
+
 复用现有 API → 单 actor → 独立 worker → 专用原生线程。锁定 llama.cpp `2149c00f4442dc59302e134a02e4c99d5f7ed9fc` 已包含 GLM-OCR/mtmd 支持，不升级引擎、不另起 Python/Ollama 服务。首阶段为一张 PNG/JPEG 与一个非空提示词，模型直接生成 Markdown 原文。默认提示词 `Text Recognition:`。不包含 PDF 分页、版面检测、多区域排序、批量任务、OCR 多轮历史或官方网站完整流水线的质量保证。
 
 GLM-OCR 使用语言 GGUF 与视觉 projector GGUF。显式配对导入将两个文件复制到同一 staging 目录，分别校验 hash、GGUF 结构、文件身份与总空间预算，取消/失败不发布半个模型。完成后同目录原子发布，manifest 的可选 `projector` 记录第二个文件的相对路径、大小、hash、来源与结构信息。旧文本 manifest 不序列化空字段；单文件 external 零复制登记保持。projector 不单独成为语言模型。受管理配对记录必须在已配置 external 库时仍可见；加载前的缓存/身份检查包含两项资产。

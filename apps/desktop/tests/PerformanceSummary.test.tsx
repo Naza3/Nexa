@@ -135,6 +135,7 @@ async function mountOcr(performanceGet = vi.fn(async () => history([record({ mod
   const api = makeApi({ performanceGet, ocrStart: vi.fn(async () => ({ request_id: "request-1" })), chatNext: vi.fn(async () => terminal()), saveOcrMarkdown: vi.fn(async () => ({ saved: true })) });
   const controller = new DesktopController(api);
   const value = snapshot(); value.runtime!.load_options!.context_size = 8192;
+  api.snapshot = vi.fn(async () => value); await controller.refresh();
   const state = { ...controller.getSnapshot(), booting: false, snapshot: value, models: { generation: "g", data: [{ ...model, has_projector: true }], next_after: null } };
   const view = render(<OcrPage controller={controller} state={state} />);
   fireEvent.change(screen.getByLabelText("OCR 模型"), { target: { value: model.id } });

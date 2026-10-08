@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-08 按导入顺序批量OCR（源码与Linux验证完成，Windows待验证）
+
+任务W02-OCR-6。一次最多20张PNG/JPEG、每张4MiB，默认保留导入列表顺序（不按文件名排序），开始前可上移/下移/移除。逐图准备和串行请求，复用已加载模型；正文保存成功后推进，每图独立结果/性能/100条历史。失败或停止暂停，恢复原请求不重放，明确继续仅处理未开始项。controller整批占位防图间被本窗口其他操作抢占；跨页继续，关窗停止调度并保存当前部分结果。原图/待运行队列不落盘，TOML偏好保持。
+
+前端全量45文件958项通过，最后批量19项、互斥4项及旧OCR74项定向通过（子集不加总）；typecheck/lint/build与真实Chromium三尺寸模拟API检查通过。单图重跑迟到指标、外部模型变化、旧poll和正文超限边界已验证。没有Rust/协议/ACL/依赖变化，版本仍0.2.3；main已同步包含，本地提交不自动推送/tag。Windows原生文件窗口、WebView2及用户i5目标机仍待验证。见[ADR0037](docs/decisions/0037-sequential-image-ocr-queue.md)、[验证记录](docs/verification/2026-10-08-sequential-ocr.md)和[使用说明](docs/ocr-windows-cpu.md)。
+
 ## 2026-10-08 输出摘要、OCR历史与TOML设置（源码与Linux验证完成，Windows待验证）
 
 任务W02-PERF-2 / W02-OCR-5 / W02-PREF-1。性能摘要放在聊天和OCR正文下方，严格匹配生成连接的真实实例与终态；最近100条非空OCR结果单独持久化，含不完整标记与可用指标，支持查看、复制、另存、删除，不保存原图。运行配置仍为config.toml，新增workbench-preferences.toml记忆OCR参数/提示词/缩放/视图及未发送聊天草稿；模型档案与本窗口草稿做基线冲突检查，不静默恢复初始默认值。
