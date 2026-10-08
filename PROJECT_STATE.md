@@ -1,12 +1,12 @@
 # Nexa 当前状态
 
-## 2026-10-08 Tauri 安装器、托盘与开机启动（本地检查完成，Windows交叉构建中）
+## 2026-10-08 Tauri 安装器、托盘与开机启动（本地检查与Windows交叉构建完成）
 
 按用户选择，将自研 Setup/WiX 打包迁移为锁定 Tauri CLI 2.12.1 的 WiX MSI + NSIS EXE，保持每用户固定目录和完整数据保留，支持同格式同版本替换。旧 Setup 内含 MSI，应使用新 MSI 原位更新；跨格式直接覆盖拒绝，切换需先卸载程序。NSIS 替换不承诺事务回滚。生产 CI 接入新的17项原生生命周期门槛；本轮未推送、未创建tag，版本仍0.2.3。
 
 新增独立、默认关闭的“关闭到托盘”和“开机启动”。关闭到托盘保存在既有 TOML，仅隐藏并保留任务/服务/模型；托盘显示/退出复用安全保存与关停。开机启动以当前用户 Windows Run 登记为真实持久化来源，带引号无参数、260字符限制、写后回读；正常卸载只清理属于本安装目录的项，升级保留选择。
 
-前端970项、Linux壳42项、workbench11项、严格Python359项（354通过/5跳过）、fmt/typecheck/lint/build/actionlint通过。最新原生安装helper实际交叉链接和导入检查通过；完整Tauri→NSIS探测使用旧0ecddad载荷，解包28文件逐一一致，未冒充新功能发行包。正在冻结源码执行完整Windows Release交叉门槛；真实Windows安装/托盘/登录启动仍待验。见[ADR0039](docs/decisions/0039-tauri-windows-installers.md)、[ADR0040](docs/decisions/0040-desktop-tray-and-autostart.md)、[操作说明](docs/desktop-startup.md)和[本轮验证](docs/verification/2026-10-08-tauri-installers-and-startup.md)。
+前端970项、Linux壳42项、workbench11项、严格Python359项（354通过/5跳过）、fmt/typecheck/lint/build/actionlint通过。最新原生安装helper实际交叉链接和导入检查通过；完整Tauri→NSIS探测使用旧0ecddad载荷，解包28文件逐一一致，未冒充新功能发行包。干净源码f0a7183通过完整Windows Release交叉门槛，两workspace strict Clippy、四EXE实际链接和源码/PE核对全通过，证据20261008T081623Z。20份原始许可模拟Windows换行转换后字节一致；真实Windows安装/托盘/登录启动仍待验。见[ADR0039](docs/decisions/0039-tauri-windows-installers.md)、[ADR0040](docs/decisions/0040-desktop-tray-and-autostart.md)、[操作说明](docs/desktop-startup.md)和[本轮验证](docs/verification/2026-10-08-tauri-installers-and-startup.md)。
 
 ## 2026-10-08 PI Desktop OCR 插件下载发布（已完成）
 

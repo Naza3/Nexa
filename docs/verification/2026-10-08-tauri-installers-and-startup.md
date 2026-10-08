@@ -8,6 +8,7 @@
 - Linux 桌面壳：42 项通过；desktop-bridge workbench：11 项通过。两 workspace fmt 检查通过。
 - Python 严格编码模式完整 suite：359 项，354 通过、5 项既有平台跳过。包括新路径隔离、失败发布清理、模板、许可原件完整性和生命周期夹具测试。
 - `.github/workflows/native-windows.yml` actionlint 通过。
+- 新许可目录使用 `.gitattributes -text -whitespace` 保留上游原始 CRLF/空白；模拟 `core.autocrlf=true` 的 Git checkout 后20份原件SHA全部一致。实现差异检查通过，没有为消除空白提示改写上游原件。
 - 最新三个原生安装 helper 使用 clang-cl/LLD 与 Windows MSVC SDK 实际编译、链接及 PE 导入白名单检查通过，没有执行 Windows 代码。
 - Tauri CLI 2.12.1 + NSIS 3.11 完整生产打包入口在 Linux 实际运行成功。使用此前验证的 `0ecddad` 桌面载荷，解包后 28 个文件大小/hash 与输入相符，输入未改。探测 EXE SHA-256：`f62b7a27525d78cd5d7c2eafe68143ed53107b07d9f22d324e381580608e24ef`。这是新模板/打包流程检查，不是含新托盘功能的发行包。
 - 最终 WiX 片段通过 WiX 3.14.1 官方 XSD 检查；未据此声称 candle/light 或 Windows 安装成功。
@@ -18,7 +19,7 @@
 
 ## Windows 完整交叉构建
 
-源码冻结后执行既有 `/workspace/onboarding/windows-cross/build.sh`，要求前端、原生库、桌面及 runtime 两 workspace 的 Windows Release 全目标 strict Clippy、四个 EXE 实际链接与源码/PE 身份检查全通过。执行结果在提交后补记；未完成前不以单独 Clippy 通过代替整个门槛。
+源码冻结后执行既有 `/workspace/onboarding/windows-cross/build.sh`，要求前端、原生库、桌面及 runtime 两 workspace 的 Windows Release 全目标 strict Clippy、四个 EXE 实际链接与源码/PE 身份检查全通过。本次在干净提交 `f0a7183207d0d662e1e89dc78ff463845c33867a` 完成，整脚本退出0，所有阶段退出0，四个 EXE 均为 AMD64 PE32+，源码保持不变。证据目录 `/workspace/onboarding/windows-cross/runs/20261008T081623Z`。桌面 EXE 为15,609,344字节，SHA-256 `b0b7e2ea8a3457ef5b93e2c2d5af0cd2c996ec6a8b1ce495d5c487f9d6b54f2a`；它尚未在 Windows 执行，单个 EXE 也不等于完整分发包。后续仅更新本记录/状态的文档提交不改变已验实现。
 
 ## 尚待原生 Windows 验证
 
