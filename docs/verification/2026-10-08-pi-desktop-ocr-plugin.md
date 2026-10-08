@@ -54,3 +54,18 @@ Chromium宽度1100/700/390/300及深色外观通过早期布局检查；后续�
 Windows原生PI Desktop安装/iframe桥/目录选择和用户i5设备长图待验；未以Linux宿主fixture声明这些通过。没有本轮Nexa二进制改动或远端构建，因此未重做Windows交叉编译；后续任何触发CI的推送仍先遵守AGENTS的Windows交叉门槛。
 
 云环境已实际刷新并验证插件开发依赖，保留官方devkit、宿主与真实模型fixture；已追加保存install_script/start_skill草稿，保留现有Windows交叉规则及工作区。保存草稿不是发布新快照，也不假定服务跨任务存活。下一步是用户在Windows PI Desktop安装此包，连接已登记GLM-OCR的Nexa，验证实际图片；失败依据具体界面错误继续修复。
+
+## GitHub公开下载交付
+
+同日用户指出云端路径无法下载，并明确同意公开发布。本轮任务W04-PI-OCR-RELEASE-1完成独立插件预发布；不把本节发布事实追溯为上一节未执行的Windows宿主验证。
+
+- 标签 `pi-ocr-v0.1.0` 固定至插件已验源码 `93cdf6d4493570714f744cd7c246ccc908a4a8d3`。此标签不匹配既有Windows `v*` 触发器，初次推送未启动主程序CI。
+- 普通上传HTTP400；确认已有GH_TOKEN绑定后正常使用官方 `gh release upload`，uploads.github.com 返回401 Bad credentials。Release API仍可正常创建/修改草稿。未读取或输出凭据，没有反复盲试或要求用户再发密钥。
+- 新增固定用途 `.github/workflows/pi-ocr-release.yml`，提交 `0f0e0fb67d1542d6ab3fcb8ab5b3196270e52852`。仅专用发布分支运行：只读job固定源码/PI devkit、执行52项测试/官方打包并核对完整包SHA；写job用Actions自身令牌向固定草稿406423946补齐附件，不覆盖、不自行公开。
+- 按用户既有要求，在推送此工作流之前，`bash /workspace/onboarding/windows-cross/build.sh` 退出0；证据 `/workspace/onboarding/windows-cross/runs/20261008T045644Z`。该干净源码的前端、原生库、两workspace Windows strict Clippy、四EXE链接/AMD64身份及源码收据检查全部通过。未在Windows运行EXE。
+- 仅把该提交推送到 `codex/pi-ocr-publish` 以隔离主程序CI，不创建worktree、不改main、不移动旧tag；远端codex/dev保持原状。本轮隔离为附件发布故障恢复，不取代长期开发分支安排。
+- [Actions37729949673](https://github.com/Naza3/Nexa/actions/runs/37729949673)的build/upload-draft两job成功。云端重打包334150字节与本地已验包SHA完全一致；官方devkit的ZIP日期固定且文件排序稳定。固定草稿查询用release ID；按tag查草稿实际404已在推送前修正。
+- 核对已上传的包和sha256文件后，API公开为pre-release且 `make_latest=false`。发布页 [pi-ocr-v0.1.0](https://github.com/Naza3/Nexa/releases/tag/pi-ocr-v0.1.0)，附件仅插件及校验文件；旧Nexa发行保持。
+- 实际读取两个公开 `browser_download_url` 均HTTP200，逐字节等于本地文件，SHA与GitHub asset digest一致。包SHA仍为本文的 `12f170a...3f0f8b`。完整本机证据 `github-plugin-release.json`、`github-plugin-download-verification.json`、`github-release-action.log` 位于 `/workspace/onboarding/pi-ocr`。
+
+最终[安装包直链](https://github.com/Naza3/Nexa/releases/download/pi-ocr-v0.1.0/io.github.naza3.nexa-ocr-0.1.0.piplug)可从用户本机浏览器下载，替代此前只能打开云端文件的workspace链接。插件安装位置和Nexa令牌导入步骤仍按README；Windows Electron与用户CPU实际效果待验。

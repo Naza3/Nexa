@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-08 PI Desktop OCR 插件下载发布（已完成）
+
+用户明确同意公开发布后，插件 `pi-ocr-v0.1.0` 已发布为独立预发布，标签固定源码 `93cdf6d`，Nexa主程序仍0.2.3。[直接下载](https://github.com/Naza3/Nexa/releases/download/pi-ocr-v0.1.0/io.github.naza3.nexa-ocr-0.1.0.piplug) / [发布页](https://github.com/Naza3/Nexa/releases/tag/pi-ocr-v0.1.0)。安装包334150字节，实际HTTP下载200、SHA及每字节与已验本地产物一致；Windows宿主实机条件不因发布而改变。
+
+云端可写Release API但uploads域官方CLI返回401，改为独立上传工作流。先在干净 `0f0e0fb` 通过本地Windows全交叉门槛，再仅推送专用 `codex/pi-ocr-publish`；[Actions37729949673](https://github.com/Naza3/Nexa/actions/runs/37729949673)两job成功，重现完全相同包并使用GitHub自身令牌上传，随后公开发布。未更新main/codex/dev远端、未触发主程序Windows发行，未覆盖旧Release。详见[发布验证](docs/verification/2026-10-08-pi-desktop-ocr-plugin.md#github公开下载交付)。
+
 ## 2026-10-08 PI Desktop 的 Nexa OCR 插件（安装包与Linux验证完成，Windows待验）
 
 任务W04-PI-OCR-1。按用户“先完成插件”新增独立0.1.0 `.piplug`，位于 `integrations/pi-desktop-ocr`：本机服务身份验证、显式令牌导入、空闲自动加载所选已登记视觉模型、顺序20图队列、Markdown/原文、正文下真实性能、最近100条非空结果和TOML参数保存。面板关闭继续后台，禁用/退出尽力取消保存；Nexa核心与公共协议、版本0.2.3保持。
