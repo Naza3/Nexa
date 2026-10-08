@@ -2,7 +2,7 @@
 
 ## 2026-10-07 单图 OCR 构建增量
 
-[ADR0032](decisions/0032-local-single-image-ocr.md)保持llama提交不变，追加CPU mtmd（MTMD_VIDEO=OFF）、vendor-hash，准确静态库闭包10项，私有worker3/shim4、公共HTTP1。包身份检查和stb_image/miniaudio完整内嵌许可证同步。Linux实编使用CMake4.4.4/Ninja1.13.2/GNU14.2/Rust1.98.1；本批尚无Windows原生构建结果。
+[ADR0032](decisions/0032-local-single-image-ocr.md)保持llama提交不变，追加CPU mtmd（MTMD_VIDEO=OFF）、vendor-hash，准确静态库闭包10项，私有worker4/shim4、公共HTTP1（worker4性能载荷按ADR0035；原OCR增量使用worker3）。包身份检查和stb_image/miniaudio完整内嵌许可证同步。Linux实编使用CMake4.4.4/Ninja1.13.2/GNU14.2/Rust1.98.1；本批尚无Windows原生构建结果。
 
 ## 2026-10-04 最新覆盖：公开仓库恢复Actions
 

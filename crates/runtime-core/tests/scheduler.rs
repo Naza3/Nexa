@@ -30,7 +30,8 @@ impl Pending {
                 prompt_tokens: 8,
                 completion_tokens: 1
             },
-            finish_reason: FinishReason::Stop
+            finish_reason: FinishReason::Stop,
+            timings: None,
         }));
     }
     fn fail(&self, code: ErrorCode) {
@@ -1211,6 +1212,16 @@ fn unconfirmed_cleanup_overrides_cancellation_and_permanently_disables_recovery(
             .message
             .contains("request_cancelled")
     );
+    let history = h.handle.performance().unwrap();
+    assert_eq!(history.records.len(), 2);
+    assert!(
+        history
+            .records
+            .iter()
+            .all(|record| record.status == PerformanceStatus::Failed
+                && record.error_code == Some(ErrorCode::ExecutorCleanupUnconfirmed)
+                && record.performance.is_none())
+    );
     // A late normal terminal/fault must neither recover nor hide the stronger error.
     pending.complete();
     pending
@@ -2364,5 +2375,134 @@ fn unregister_cannot_cancel_or_cut_across_active_and_queued_work() {
     ));
     drop(first);
     drop(second);
+    h.finish();
+}
+
+#[test]
+fn measured_completion_uses_loaded_options_and_cancellation_discards_performance() {
+    let h = Harness::new(config(), true);
+    let loaded = LoadOptions {
+        context_size: 2048,
+        threads: 2,
+        batch_size: 32,
+    };
+    h.handle.load(request().model, loaded).unwrap();
+    let timings = InferenceTimings {
+        prepare_us: 10,
+        prefill_us: 20,
+        decode_us: 30,
+        output_callback_us: 40,
+    };
+    for cancel in [false, true] {
+        let req = request();
+        let id = req.request_id;
+        let receiver = h.handle.submit(req).unwrap();
+        let pending = h.pending();
+        pending.prepared();
+        if cancel {
+            h.handle.cancel(id).unwrap();
+        }
+        pending.events.emit(ExecutorEvent::Completed {
+            usage: Usage {
+                prompt_tokens: 8,
+                completion_tokens: 1,
+            },
+            finish_reason: FinishReason::Stop,
+            timings: Some(timings),
+        });
+        let terminal = terminal(&receiver);
+        if cancel {
+            assert!(matches!(terminal, RequestEventKind::Cancelled { .. }));
+        } else {
+            assert!(
+                matches!(terminal, RequestEventKind::Completed { performance: Some(performance), .. } if *performance == RequestPerformance { timings, load_options: loaded })
+            );
+        }
+    }
+    let history = h.handle.performance().unwrap();
+    assert_eq!(history.records.len(), 2);
+    assert_eq!(history.records[0].status, PerformanceStatus::Cancelled);
+    assert!(history.records[0].performance.is_none());
+    assert_eq!(
+        history.records[1].performance,
+        Some(RequestPerformance {
+            timings,
+            load_options: loaded
+        })
+    );
+    h.finish();
+}
+
+#[test]
+fn performance_history_is_bounded_newest_first_and_accepts_reused_request_ids() {
+    let h = Harness::new(config(), true);
+    assert!(h.handle.performance().unwrap().records.is_empty());
+    let req = request();
+    for _ in 0..203 {
+        let receiver = h.handle.submit(req.clone()).unwrap();
+        let pending = h.pending();
+        pending.prepared();
+        pending.complete();
+        terminal(&receiver);
+    }
+    let history = h.handle.performance().unwrap();
+    assert_eq!(history.capacity, 200);
+    assert_eq!(history.records.len(), 200);
+    assert_eq!(history.records.first().unwrap().sequence, 203);
+    assert_eq!(history.records.last().unwrap().sequence, 4);
+    assert!(
+        history
+            .records
+            .windows(2)
+            .all(|pair| pair[0].sequence == pair[1].sequence + 1)
+    );
+    for record in history.records {
+        assert_eq!(record.request_id, req.request_id);
+        assert_eq!(record.model_id, req.model);
+        assert_eq!(record.modality, PerformanceModality::Text);
+        assert_eq!(record.status, PerformanceStatus::Completed);
+        assert!(record.accepted_at_unix_ms > 0);
+        assert_eq!(record.max_output_tokens, req.options.max_tokens);
+        assert!(record.performance.is_none());
+        assert!(record.error_code.is_none());
+        assert_eq!(record.finish_reason, Some(FinishReason::Stop));
+    }
+    h.finish();
+}
+
+#[test]
+fn performance_history_tracks_image_failure_queued_cancel_and_omits_rejections() {
+    let h = Harness::new(config(), true);
+    let mut req = request();
+    req.messages[0].content = "private prompt never retained in history".into();
+    req.messages[0].image = Some(ImageInput::from_data_url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX8AAAAASUVORK5CYII=").unwrap());
+    let active = h.handle.submit(req.clone()).unwrap();
+    let pending = h.pending();
+    assert!(h.handle.submit(req.clone()).is_err());
+    let queued_req = request();
+    let queued = h.handle.submit(queued_req.clone()).unwrap();
+    h.handle.cancel(queued_req.request_id).unwrap();
+    terminal(&queued);
+    pending.prepared();
+    pending.fail(ErrorCode::NativeFailure);
+    terminal(&active);
+    let records = h.handle.performance().unwrap().records;
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].modality, PerformanceModality::Image);
+    assert_eq!(records[0].status, PerformanceStatus::Failed);
+    assert_eq!(records[0].error_code, Some(ErrorCode::NativeFailure));
+    assert_eq!(records[0].usage.prompt_tokens, 8);
+    assert_eq!(records[1].status, PerformanceStatus::Cancelled);
+    assert_eq!(records[1].error_code, Some(ErrorCode::RequestCancelled));
+    assert_eq!(records[1].usage, Usage::default());
+    assert!(
+        records
+            .iter()
+            .all(|record| record.performance.is_none() && record.finish_reason.is_none())
+    );
+    let json = serde_json::to_string(&records).unwrap();
+    assert!(!json.contains("private prompt"));
+    assert!(!json.contains("controlled failure"));
+    assert!(!json.contains("base64"));
     h.finish();
 }

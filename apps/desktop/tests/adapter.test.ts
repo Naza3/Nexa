@@ -13,6 +13,8 @@ beforeEach(() => {
 });
 describe("native-only adapter", () => {
   it("uses frozen snake_case requests and fixed commands only", async () => {
+    await nativeApi.performanceGet?.();
+    expect(invoke).toHaveBeenLastCalledWith("performance_get", undefined);
     await nativeApi.catalog();
     expect(invoke).toHaveBeenLastCalledWith("model_catalog", undefined);
     await nativeApi.discoverDirectory();

@@ -332,7 +332,7 @@ shutdown始终等待安全边界并调用close。关闭进行中新发生且未�
 
 - 每帧带 protocol_version、session_id（每次spawn的新UUID）、operation_id、request_id、kind、payload及seq。Hello和命令的seq为null；worker事件seq从1开始，在同session内严格递增，不重置为公共seq
 - 图片请求帧上限8 MiB，纯文本Generate仍上限2 MiB，事件帧上限64 KiB，均包含最后LF。完整编码必须在首次写出前检查；读取在累积前检查上限，拒绝残缺EOF、非法UTF-8、未知字段/kind、重复字段、版本或身份不符
-- 父端先发送Hello并指定session；worker读取实际build_info，当前双方严格核对私有protocol=3、shim=4（公共HTTP/proof仍1）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
+- 父端先发送Hello并指定session；worker读取实际build_info，当前双方严格核对私有protocol=4、shim=4（公共HTTP/proof仍1）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
 - 命令为Load、Generate、Unload、Cancel、Credit、Shutdown。普通操作operation_id非零递增，Generate的request_id须与payload相同；Cancel/Credit只作用于绑定的session/operation/request。Shutdown为session控制帧，operation_id=0、request_id=null
 - 事件为原始ExecutorEvent，包括Prepared、TextDelta和清理后的终态；Loaded/Unloaded对应各自操作。Prepared只能一次，TextDelta/Completed不能抢在它前面，usage须匹配Prepared及请求max_tokens；每操作仅一次终态
 - 父端是唯一输出预算账本。每Generate预留16 KiB暂存和最多两个120 KiB信用，合计≤256 KiB。信用ID在session内非零严格递增，每个信用只准一次≤4 KiB UTF-8 delta，其完整编码≤25 KiB（最坏24 KiB转义正文+1 KiB封套）
@@ -360,6 +360,7 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 | `GET /runtime/models` | 鉴权安全管理摘要，包含未验证模型；有界 limit/after 分页 |
 | `POST /v1/chat/completions` | 文本 messages 或本机单 user 的一个内联 PNG/JPEG image_url 与 text，流式或非流式；LAN仅文本 |
 | `GET /runtime/status` | 模型状态、队列数、活动 ID、后端、错误与内存指标 |
+| `GET /runtime/performance` | 仅本机鉴权：真实instance UUID、capacity和最近200条推理终态，最新优先；字段与计时口径见ADR0035 |
 | `GET /runtime/devices` | 本构建后端与设备探测结果 |
 | `POST /runtime/models/import` | 当前用户本地文件导入；只供受信任本机管理客户端 |
 | `POST /runtime/load` | 显式加载/切换，完成后返回 200；受 load_timeout 约束 |
@@ -786,3 +787,7 @@ llama基线核对日期：2026-09-29；当前Windows范围收敛：2026-10-03。
 - [S10 — llama-bench](https://github.com/ggml-org/llama.cpp/blob/master/tools/llama-bench/README.md)：输入处理与生成基准；参数在 T00 对照锁定版本验证。
 
 实施时发现上游行为与本规格冲突，应以可复现结果记录问题，修改适配层或显式更新本规格。不要仅为保留设计描述而掩盖失败、伪造支持或跳过验收。
+
+## 统一推理性能（ADR0035）
+
+按 [ADR0035](docs/decisions/0035-unified-inference-performance.md)，engine阶段计时由可靠Completed载荷经IPC4传递，actor保留最多200条内存终态。涵盖已接收的文本/OCR/本机API/LAN及私有生成短测；准入前拒绝不计入。成功完整测量带实际load_options和prepare/prefill/decode/output_callback微秒；失败、取消、超时不带成功指标。prefill包含视觉编码，decode扣同步回调仍含采样与清理。速度使用原生usage，零分母不可用。历史不存正文、图片、路径或错误全文，服务退出清空。record key为instance UUID加sequence，不能只用可重用的request_id。公共HTTP/proof仍1，shim4/ABI布局v2保持，SSE/非流式响应形状保持。

@@ -1,5 +1,7 @@
 # Nexa Windows 总体方案与架构
 
+> 2026-10-08 性能增量按 [ADR0035](decisions/0035-unified-inference-performance.md)：原生阶段计时随可靠终态经 IPC 到 actor，actor 独占最近 200 条推理历史，本机鉴权查询、桌面统一性能页；覆盖文本/OCR/各调用端，不持久化正文或图片，不改变 SSE 响应。
+
 日期：2026-10-03。当前范围见 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，具体协议见 [执行规格](../ai-runtime-v0.1-execution-spec.md)，完成事实见 [当前状态](../PROJECT_STATE.md)。源码与文档清理边界见 [ADR0029](decisions/0029-desktop-only-source-tree.md)，旧版由 Git 追溯。
 
 > 2026-10-04 增量：[ADR0020](decisions/0020-opt-in-lan-inference-api.md)定义用户显式启用的独立局域网推理监听，仅对已加载模型开放 models/chat；原回环管理与服务端证明不变。实施/目标机验证状态见 PROJECT_STATE。本文早期“本机API”不禁止该受限显式增量，公网服务仍非目标。

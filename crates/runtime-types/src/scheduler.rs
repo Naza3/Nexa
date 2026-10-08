@@ -176,11 +176,43 @@ pub struct RuntimeStatus {
     pub registry_busy: bool,
     pub last_error: Option<RuntimeError>,
 }
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequestTimings {
     pub queue_ms: u64,
     pub load_ms: u64,
     pub execution_ms: u64,
+}
+/// Engine phase measurements, in microseconds. Decode excludes synchronous output
+/// delivery; output_callback_us records that delivery separately. Token counts retain
+/// native Usage semantics (including the first sampled token and EOG).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InferenceTimings {
+    pub prepare_us: u64,
+    pub prefill_us: u64,
+    pub decode_us: u64,
+    pub output_callback_us: u64,
+}
+impl InferenceTimings {
+    /// Bound both fields and their sum for exact transport through JavaScript.
+    pub fn is_valid(self) -> bool {
+        [
+            self.prepare_us,
+            self.prefill_us,
+            self.decode_us,
+            self.output_callback_us,
+        ]
+        .into_iter()
+        .try_fold(0_u64, u64::checked_add)
+        .is_some_and(|sum| sum <= 9_007_199_254_740_991)
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestPerformance {
+    pub timings: InferenceTimings,
+    pub load_options: LoadOptions,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct RequestEvent {
@@ -201,6 +233,7 @@ pub enum RequestEventKind {
         usage: Usage,
         finish_reason: FinishReason,
         timings: RequestTimings,
+        performance: Option<Box<RequestPerformance>>,
     },
     Cancelled {
         reason: ErrorCode,
@@ -264,4 +297,40 @@ mod tests {
         disabled.idle_unload = Duration::ZERO;
         assert!(disabled.validate().is_err());
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum PerformanceStatus {
+    Completed,
+    Cancelled,
+    Failed,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum PerformanceModality {
+    Text,
+    Image,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceRecord {
+    pub sequence: u64,
+    pub request_id: RequestId,
+    pub model_id: ModelId,
+    pub modality: PerformanceModality,
+    pub status: PerformanceStatus,
+    pub accepted_at_unix_ms: u64,
+    pub max_output_tokens: u32,
+    pub usage: Usage,
+    pub timings: RequestTimings,
+    pub performance: Option<RequestPerformance>,
+    pub error_code: Option<ErrorCode>,
+    pub finish_reason: Option<FinishReason>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceHistory {
+    pub capacity: usize,
+    pub records: Vec<PerformanceRecord>,
 }

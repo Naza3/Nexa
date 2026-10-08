@@ -5,6 +5,7 @@ pub mod configuration;
 pub mod dto;
 pub mod errors;
 pub(crate) mod load_operations;
+pub mod performance;
 pub mod probe;
 pub mod service;
 pub mod state;

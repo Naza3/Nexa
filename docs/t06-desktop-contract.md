@@ -99,3 +99,7 @@
 ## 单图 OCR 增量（ADR0032）
 
 见 [单图决策](decisions/0032-local-single-image-ocr.md)和[使用说明](ocr-windows-cpu.md)。新增四个精确ACL命令 `ocr_start`、`ocr_save_markdown`、`models_pair_pick`、`models_pair_import`。本地选择双文件发放一次性token，受管理复制导入，原单文件零复制保持。OCR显式加载本次参数，单图预览/可选缩放、流式原文/安全Markdown、复制与原生保存；与聊天共用一个ChatSlot、chat_next/chat_cancel及关窗清理。不把加载成功、旧文本凭据或上限截断输出显示为OCR质量验证。
+
+## 统一性能页（ADR0035）
+
+新增本机受ACL约束的只读 `performance_get`，经同一已证明连接请求 `/runtime/performance` 并校验instance UUID、200条上限及数字/状态边界；旧服务404映射performance_unsupported。独立性能页涵盖各推理入口的终态记录，可见时每3秒刷新，按模型/状态/文本图片筛选，详情显示实际参数与阶段耗时，复制CSV保留原始单位。查询错误不改变聊天/OCR结果；防止重叠查询和旧连接结果覆盖，服务退出清空。无正文/图片持久化，现有ChatEvent及SSE不变。详细口径见 [ADR0035](decisions/0035-unified-inference-performance.md) 和 [使用说明](inference-performance.md)。

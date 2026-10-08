@@ -468,6 +468,7 @@ mod tests {
                         }
                         _ => {
                             events.emit(ExecutorEvent::Completed {
+                                timings: None,
                                 usage: Usage {
                                     prompt_tokens: 8,
                                     completion_tokens: if matches!(self.0, Mode::BadUsage) {

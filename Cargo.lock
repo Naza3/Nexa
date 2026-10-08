@@ -789,6 +789,7 @@ version = "0.2.3"
 dependencies = [
  "runtime-types",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

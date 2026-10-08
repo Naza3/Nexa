@@ -43,6 +43,7 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
   }
 }
 export const nativeApi: DesktopApi = {
+  performanceGet: () => call("performance_get"),
   initialize: () => call("runtime_initialize"),
   configurationGet: () => call("configuration_get"),
   configurationModelGet: (model_id) => call("configuration_model_get", { model_id }),

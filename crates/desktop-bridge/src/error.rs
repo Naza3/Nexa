@@ -7,6 +7,7 @@ pub struct BridgeError {
 impl BridgeError {
     pub(crate) fn new(code: &str) -> Self {
         let message = match code {
+            "performance_unsupported" => "当前运行服务不支持性能记录，请使用新版运行时并重启服务。",
             "model_unregister_loaded" => "请先卸载此模型，再从模型库移除。",
             "model_unregister_durability_unconfirmed" => {
                 "移除登记可能已完成，但磁盘持久化未确认。请刷新模型库后再操作。"

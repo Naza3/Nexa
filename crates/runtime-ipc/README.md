@@ -3,7 +3,7 @@
 T03双方共用的纯Rust私有协议。依赖core/types/serde，不依赖engine-host或原生库。
 
 - `Frame`同时固定版本、session UUID、operation_id、request_id、worker seq和kind/payload
-- 父Hello指定session，双方核对实际私有protocol3/shim行为identity4/锁定llama commit；公共protocol仍1，C ABI布局v2不变；旧父worker组合拒绝；无argv生产worker只接受stdin协议
+- 父Hello指定session，双方核对实际私有protocol4/shim行为identity4/锁定llama commit；公共protocol仍1，C ABI布局v2不变；旧父worker组合拒绝；无argv生产worker只接受stdin协议
 - `encode_frame`在任何pipe写入前验证完整编码；`read_frame`读取前执行上限检查，残缺EOF、未知字段、重复key、非法UTF8都拒绝
 - 图片请求8MiB、纯文本Generate仍2MiB、事件64KiB均含LF；TextDelta≤4KiB，编码≤25KiB
 - `EventValidator`校验握手、操作、Prepared/usage/终态顺序与一次性信用。应在reader侧验证后才能进入队列；begin/grant与accept共用锁

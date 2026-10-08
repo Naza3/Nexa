@@ -29,6 +29,8 @@
 - [聊天 Markdown ADR0031](docs/decisions/0031-safe-chat-markdown.md)：安全GFM显示、原文保持与离线链接/图片边界
 - [统一推理超时 ADR0034](docs/decisions/0034-configurable-execution-timeout.md)：单项执行超时、桌面有效配置预算、停服保存与重启生效
 
+- [统一性能 ADR0035](docs/decisions/0035-unified-inference-performance.md) / [使用说明](docs/inference-performance.md)：全推理阶段计时、本机性能接口、内存历史与桌面比较页
+
 ## 实际 Windows 工程
 
 | 路径 | 作用 / 说明 |

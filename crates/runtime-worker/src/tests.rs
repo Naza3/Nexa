@@ -62,6 +62,7 @@ fn complete() -> ExecutorEvent {
             completion_tokens: 1,
         },
         finish_reason: FinishReason::Length,
+        timings: None,
     }
 }
 #[test]

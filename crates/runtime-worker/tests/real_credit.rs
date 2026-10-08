@@ -205,8 +205,11 @@ fn real_credit_wait_cancel_and_single_use_streaming() {
                 credit += 1;
                 worker.send(3, Some(request_id), Message::Credit { credit_id: credit });
             }
-            (ExecutorEvent::Completed { usage, .. }, None) => {
+            (ExecutorEvent::Completed { usage, timings, .. }, None) => {
                 assert!(usage.completion_tokens > 0);
+                let timings = timings.expect("real worker phase measurements");
+                assert!(timings.is_valid());
+                assert!(timings.prefill_us > 0 && timings.decode_us > 0);
                 break;
             }
             _ => panic!("unexpected generation event"),

@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-08 统一推理性能系统（源码与Linux验证完成，Windows待验证）
+
+任务W02-PERF-1。用户要求从OCR扩展至所有推理。原生prepare/prefill/decode/同步输出回调计时随可靠终态传递，单actor保留最近200条内存历史，覆盖聊天、OCR、本机/LAN流式及非流式、实际生成短测。新增本机鉴权 `/runtime/performance` 与受ACL约束的 `performance_get`，实例绑定与有界校验；独立性能页按模型/状态/类型筛选，显示真实token速度、耗时与实际加载参数，支持复制CSV。失败/取消/超时不冒充成功测速；记录不含正文/图片/路径，服务退出清空。
+
+完整Rust596通过/10既有忽略，Python314通过/5平台跳过，Linux壳34通过，前端全量879及随后定向19项、fmt/clippy/typecheck/lint/生产构建通过。真实Qwen文本、IPC4 worker信用取消、GLM-OCR真实HTTP计时/取消/恢复均通过；浏览器1440/1024/390布局、筛选、剪贴板及停服隔离通过（模拟后端）。私有worker协议升4，shim4与公共HTTP1保持；版本仍0.2.3。本地交付不自动推送或创建tag，Windows新包与用户i5目标机为下一步。见[ADR0035](docs/decisions/0035-unified-inference-performance.md)、[验证记录](docs/verification/2026-10-08-inference-performance.md)和[使用说明](docs/inference-performance.md)。
+
 ## 2026-10-08 可配置推理执行超时（源码与Linux检查完成，Windows待验证）
 
 任务W02-OCR-4。新增“设置 → 资源与校验 → 推理执行超时”，复用既有执行秒数，默认300、停服可保存1–86400，重启服务生效。桌面聊天/OCR通过同一认证连接读取运行有效配置，响应头等待与流式等待同时跟随配置，移除这两处固定750秒限制；旧TOML兼容、CAS、取消、不重放和部分输出保留保持。浏览器发现并修复新设置草稿恢复白名单遗漏，补中文超时指引。

@@ -624,6 +624,7 @@ fn finish_probe(events: &ExecutionEvents) {
     let permit = events.try_reserve_text(120 * 1024).unwrap();
     assert!(events.emit_reserved_text("ok".into(), permit));
     events.emit(ExecutorEvent::Completed {
+        timings: None,
         usage: runtime_types::Usage {
             prompt_tokens: 8,
             completion_tokens: 1,

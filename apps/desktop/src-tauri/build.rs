@@ -5,6 +5,7 @@ fn main() {
                 "desktop_snapshot",
                 "runtime_initialize",
                 "configuration_get",
+                "performance_get",
                 "configuration_model_get",
                 "configuration_save",
                 "configuration_migrate",

@@ -107,7 +107,7 @@ fn malformed_frames_fail_without_unbounded_reads_or_partial_writes() {
     let raw = String::from_utf8(encode_frame(&frame, 4096).unwrap()).unwrap();
     for invalid in [
         raw.replace("\"hello\"", "\"unknown\""),
-        raw.replacen("\"protocol_version\":3", "\"protocol_version\":1", 1),
+        raw.replacen("\"protocol_version\":4", "\"protocol_version\":1", 1),
         raw.replace(LLAMA_COMMIT, "wrong"),
         raw.replace("\"shim_version\":4", "\"shim_version\":1"),
     ] {
@@ -269,6 +269,7 @@ fn credits_once_only_max_two_and_terminal_once() {
                 completion_tokens: 0,
             },
             finish_reason: FinishReason::Stop,
+            timings: None,
         },
         None,
     );
@@ -353,8 +354,8 @@ fn unknown_fields_and_duplicate_json_keys_are_rejected_at_each_layer() {
         hello.replacen('{', "{\"unknown\":true,", 1),
         hello.replacen("\"payload\":{", "\"payload\":{\"unknown\":true,", 1),
         hello.replacen(
-            "\"protocol_version\":3",
-            "\"protocol_version\":3,\"protocol_version\":3",
+            "\"protocol_version\":4",
+            "\"protocol_version\":4,\"protocol_version\":4",
             1,
         ),
         hello.replacen(
@@ -498,4 +499,133 @@ fn load_eligibility_is_required_and_old_validation_claim_is_rejected() {
     ] {
         assert!(read_frame(&mut Cursor::new(old), 4096).is_err());
     }
+}
+
+#[test]
+fn completion_timings_are_bounded_and_only_accepted_after_prepared_once() {
+    use runtime_types::InferenceTimings;
+    let good = InferenceTimings {
+        prepare_us: 1,
+        prefill_us: 2,
+        decode_us: 3,
+        output_callback_us: 4,
+    };
+    for timings in [
+        good,
+        InferenceTimings {
+            prepare_us: u64::MAX,
+            ..good
+        },
+        InferenceTimings {
+            prepare_us: 9_007_199_254_740_991,
+            ..good
+        },
+    ] {
+        let (session, id, mut validator) = ready();
+        let completion = |seq| {
+            Frame::event(
+                session,
+                1,
+                Some(id),
+                seq,
+                ExecutorEvent::Completed {
+                    usage: Usage {
+                        prompt_tokens: 8,
+                        completion_tokens: 1,
+                    },
+                    finish_reason: FinishReason::Stop,
+                    timings: Some(timings),
+                },
+                None,
+            )
+        };
+        assert!(validator.accept(&completion(1)).is_err());
+        validator
+            .accept(&Frame::event(
+                session,
+                1,
+                Some(id),
+                1,
+                ExecutorEvent::Prepared { prompt_tokens: 8 },
+                None,
+            ))
+            .unwrap();
+        assert_eq!(validator.accept(&completion(2)).is_ok(), timings == good);
+        if timings == good {
+            assert!(validator.accept(&completion(3)).is_err());
+        }
+    }
+}
+
+#[test]
+fn timing_nested_schema_and_old_private_version_are_rejected() {
+    let (session, id, _) = ready();
+    let frame = Frame::event(
+        session,
+        1,
+        Some(id),
+        2,
+        ExecutorEvent::Completed {
+            usage: Usage {
+                prompt_tokens: 8,
+                completion_tokens: 1,
+            },
+            finish_reason: FinishReason::Stop,
+            timings: Some(runtime_types::InferenceTimings {
+                prepare_us: 1,
+                prefill_us: 2,
+                decode_us: 3,
+                output_callback_us: 4,
+            }),
+        },
+        None,
+    );
+    let value = serde_json::to_value(&frame).unwrap();
+    for bad in [
+        serde_json::json!({"prepare_us":1,"prefill_us":2,"decode_us":3,"output_callback_us":4,"unknown":1}),
+        serde_json::json!({"prepare_us":-1,"prefill_us":2,"decode_us":3,"output_callback_us":4}),
+        serde_json::json!({"prepare_us":1,"prefill_us":2,"decode_us":3}),
+    ] {
+        let mut malformed = value.clone();
+        malformed["payload"]["event"]["data"]["timings"] = bad;
+        assert!(serde_json::from_value::<Frame>(malformed).is_err());
+    }
+    let mut old = Frame::hello(session, Hello::expected());
+    old.protocol_version = 3;
+    assert!(EventValidator::new(session).accept_hello(&old).is_err());
+    let mut old_hello = Hello::expected();
+    old_hello.protocol_version = 3;
+    assert!(old_hello.validate().is_err());
+}
+
+#[test]
+fn duplicate_timing_fields_are_rejected_and_absent_measurement_is_not_zero() {
+    let event = ExecutorEvent::Completed {
+        usage: Usage {
+            prompt_tokens: 8,
+            completion_tokens: 1,
+        },
+        finish_reason: FinishReason::Stop,
+        timings: Some(runtime_types::InferenceTimings {
+            prepare_us: 1,
+            prefill_us: 2,
+            decode_us: 3,
+            output_callback_us: 4,
+        }),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let duplicate = json.replace("\"decode_us\":3", "\"decode_us\":3,\"decode_us\":4");
+    assert_ne!(duplicate, json);
+    assert!(serde_json::from_str::<ExecutorEvent>(&duplicate).is_err());
+    let absent = ExecutorEvent::Completed {
+        usage: Usage::default(),
+        finish_reason: FinishReason::Stop,
+        timings: None,
+    };
+    let json = serde_json::to_string(&absent).unwrap();
+    assert!(!json.contains("timings"));
+    assert!(matches!(
+        serde_json::from_str::<ExecutorEvent>(&json).unwrap(),
+        ExecutorEvent::Completed { timings: None, .. }
+    ));
 }

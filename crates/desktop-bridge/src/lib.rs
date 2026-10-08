@@ -9,6 +9,7 @@ mod lan_addresses;
 mod library;
 mod loading;
 mod onboarding;
+mod performance;
 mod settings;
 mod sse;
 mod unregister;
@@ -21,6 +22,7 @@ pub use runtime_api::configuration::{
     ConfigurationMigrateRequest, ConfigurationSaveRequest, ConfigurationSnapshot,
     ModelConfiguration, UiPreferencesSaveRequest, UiPreferencesSnapshot,
 };
+pub use runtime_api::performance::PerformanceSnapshot;
 use runtime_cli::{
     client::VerifiedConnection,
     instance::{Discovery, InstanceLock, wait_stopped},

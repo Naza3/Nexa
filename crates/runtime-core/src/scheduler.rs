@@ -78,6 +78,7 @@ enum Command {
     Unload(Reply<()>),
     Cancel(RequestId, Reply<()>),
     Status(Reply<RuntimeStatus>),
+    Performance(Reply<PerformanceHistory>),
     ReserveRegistry(Reply<RegistryLease>),
     ReserveUnregister(ModelId, Reply<RegistryLease>),
     ForgetUnregistered(ModelId, Reply<()>),
@@ -223,6 +224,9 @@ impl RuntimeHandle {
     pub fn status(&self) -> Result<RuntimeStatus, RuntimeError> {
         self.ask(Command::Status)
     }
+    pub fn performance(&self) -> Result<PerformanceHistory, RuntimeError> {
+        self.ask(Command::Performance)
+    }
     /// Reserve an idle registry transaction without running I/O in the actor.
     pub fn reserve_registry(&self) -> Result<RegistryLease, RuntimeError> {
         self.ask(Command::ReserveRegistry)
@@ -270,6 +274,8 @@ struct Job {
     output: Arc<Output>,
     seq: u64,
     enqueued: Instant,
+    accepted_at_unix_ms: u64,
+    modality: PerformanceModality,
     load_started: Option<Instant>,
     execution_started: Option<Instant>,
     timings: RequestTimings,
@@ -302,8 +308,11 @@ impl Job {
         }
         t
     }
-    fn terminate(mut self, result: Result<(Usage, FinishReason), RuntimeError>) {
-        if let Ok((usage, _)) = result {
+    fn terminate(
+        &mut self,
+        result: Result<(Usage, FinishReason, Option<RequestPerformance>), RuntimeError>,
+    ) -> RequestEventKind {
+        if let Ok((usage, _, _)) = result {
             self.usage = usage;
         }
         let timings = self.timings();
@@ -317,7 +326,7 @@ impl Job {
             .output
             .reason()
             .filter(|reason| !is_cancellation(*reason) || !failed);
-        let kind = if let Some(reason) = reason {
+        if let Some(reason) = reason {
             if !is_cancellation(reason) {
                 RequestEventKind::Failed {
                     error: error(reason),
@@ -333,10 +342,11 @@ impl Job {
             }
         } else {
             match result {
-                Ok((usage, finish_reason)) => RequestEventKind::Completed {
+                Ok((usage, finish_reason, performance)) => RequestEventKind::Completed {
                     usage,
                     finish_reason,
                     timings,
+                    performance: performance.map(Box::new),
                 },
                 Err(error) => RequestEventKind::Failed {
                     error,
@@ -344,8 +354,7 @@ impl Job {
                     timings,
                 },
             }
-        };
-        self.event(kind, None);
+        }
     }
 }
 fn millis(d: Duration) -> u64 {
@@ -381,6 +390,8 @@ struct Actor {
     options: Option<LoadOptions>,
     active: Option<Job>,
     queue: VecDeque<Job>,
+    history: VecDeque<PerformanceRecord>,
+    performance_sequence: u64,
     operation: Option<Operation>,
     operation_id: u64,
     owned_load: Option<LoadControl>,
@@ -415,6 +426,8 @@ impl Actor {
             options: None,
             active: None,
             queue: VecDeque::new(),
+            history: VecDeque::new(),
+            performance_sequence: 0,
             operation: None,
             operation_id: 0,
             owned_load: None,
@@ -547,6 +560,12 @@ impl Actor {
                     Ok(RegistryLease { state })
                 };
                 let _ = reply.send(result);
+            }
+            Command::Performance(reply) => {
+                let _ = reply.send(Ok(PerformanceHistory {
+                    capacity: 200,
+                    records: self.history.iter().rev().cloned().collect(),
+                }));
             }
             Command::Status(reply) => {
                 let _ = reply.send(Ok(self.status()));
@@ -738,6 +757,20 @@ impl Actor {
         }
         let output = Output::new(self.config.slow_consumer_timeout);
         let mut job = Job {
+            accepted_at_unix_ms: millis(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default(),
+            ),
+            modality: if request
+                .messages
+                .iter()
+                .any(|message| message.image.is_some())
+            {
+                PerformanceModality::Image
+            } else {
+                PerformanceModality::Text
+            },
             request,
             output: output.clone(),
             seq: 0,
@@ -913,7 +946,7 @@ impl Actor {
         if let Some(index) = self.queue.iter().position(|j| j.request.request_id == id) {
             let job = self.queue.remove(index).unwrap();
             job.output.cancel(reason);
-            job.terminate(Err(error(reason)));
+            self.finish_job(job, Err(error(reason)));
             return Ok(());
         }
         if self
@@ -934,7 +967,7 @@ impl Actor {
         }
         if matches!(self.operation, Some(Operation::Load { .. })) {
             if let Some(job) = self.active.take() {
-                job.terminate(Err(error(ErrorCode::RequestCancelled)));
+                self.finish_job(job, Err(error(ErrorCode::RequestCancelled)));
             }
             self.promote_during_load();
             if self.active.is_none()
@@ -952,16 +985,16 @@ impl Actor {
             return;
         }
         if let Some(job) = self.active.take() {
-            job.terminate(Err(error(ErrorCode::RequestCancelled)));
+            self.finish_job(job, Err(error(ErrorCode::RequestCancelled)));
         }
         self.next_job();
     }
     fn pop_eligible(&mut self) -> Option<Job> {
         while let Some(job) = self.queue.pop_front() {
             if let Some(reason) = job.output.reason() {
-                job.terminate(Err(error(reason)));
+                self.finish_job(job, Err(error(reason)));
             } else if job.enqueued.elapsed() >= self.config.queue_timeout {
-                job.terminate(Err(error(ErrorCode::QueueTimeout)));
+                self.finish_job(job, Err(error(ErrorCode::QueueTimeout)));
             } else {
                 return Some(job);
             }
@@ -1127,16 +1160,28 @@ impl Actor {
             ExecutorEvent::Completed {
                 usage,
                 finish_reason,
+                timings,
             } => {
                 if !matches!(self.operation, Some(Operation::Generate { .. }))
-                    || self.active.as_ref().is_none_or(|j| !j.started)
+                    || self.active.as_ref().is_none_or(|j| {
+                        !j.started
+                            || usage.prompt_tokens != j.usage.prompt_tokens
+                            || usage.completion_tokens > j.request.options.max_tokens
+                    })
+                    || timings.is_some_and(|timings| !timings.is_valid())
                 {
                     self.fault(error(ErrorCode::NativeProtocol));
                     return;
                 }
                 self.operation = None;
                 if let Some(job) = self.active.take() {
-                    job.terminate(Ok((usage, finish_reason)));
+                    let performance = timings.zip(self.options).map(|(timings, load_options)| {
+                        RequestPerformance {
+                            timings,
+                            load_options,
+                        }
+                    });
+                    self.finish_job(job, Ok((usage, finish_reason, performance)));
                 }
                 self.state = ModelState::Ready;
                 self.next_job();
@@ -1270,18 +1315,91 @@ impl Actor {
         self.last_error = Some(error.clone());
         // Unconfirmed cleanup outranks all cancellation/deadline causes and
         // earlier failures, independently of the ordinary termination policy.
-        for mut job in self.active.take().into_iter().chain(self.queue.drain(..)) {
-            let timings = job.timings();
-            let usage = job.usage;
-            job.event(
-                RequestEventKind::Failed {
-                    error: error.clone(),
-                    usage,
-                    timings,
-                },
-                None,
-            );
+        let mut jobs = std::mem::take(&mut self.queue);
+        if let Some(job) = self.active.take() {
+            jobs.push_front(job);
         }
+        for job in jobs {
+            let kind = RequestEventKind::Failed {
+                error: error.clone(),
+                usage: job.usage,
+                timings: job.timings(),
+            };
+            self.publish_terminal(job, kind);
+        }
+    }
+
+    fn finish_job(
+        &mut self,
+        mut job: Job,
+        result: Result<(Usage, FinishReason, Option<RequestPerformance>), RuntimeError>,
+    ) {
+        let kind = job.terminate(result);
+        self.publish_terminal(job, kind);
+    }
+    fn publish_terminal(&mut self, mut job: Job, kind: RequestEventKind) {
+        let (status, usage, timings, performance, error_code, finish_reason) = match &kind {
+            RequestEventKind::Completed {
+                usage,
+                timings,
+                performance,
+                finish_reason,
+            } => (
+                PerformanceStatus::Completed,
+                *usage,
+                *timings,
+                performance.as_deref().copied(),
+                None,
+                Some(*finish_reason),
+            ),
+            RequestEventKind::Cancelled {
+                reason,
+                usage,
+                timings,
+            } => (
+                PerformanceStatus::Cancelled,
+                *usage,
+                *timings,
+                None,
+                Some(*reason),
+                None,
+            ),
+            RequestEventKind::Failed {
+                error,
+                usage,
+                timings,
+            } => (
+                PerformanceStatus::Failed,
+                *usage,
+                *timings,
+                None,
+                Some(error.code),
+                None,
+            ),
+            _ => unreachable!("terminal publisher requires a terminal event"),
+        };
+        // At exhaustion keep publishing terminals but never reuse a history key.
+        if let Some(sequence) = self.performance_sequence.checked_add(1) {
+            self.performance_sequence = sequence;
+            if self.history.len() == 200 {
+                self.history.pop_front();
+            }
+            self.history.push_back(PerformanceRecord {
+                sequence,
+                request_id: job.request.request_id,
+                model_id: job.request.model.clone(),
+                modality: job.modality,
+                status,
+                accepted_at_unix_ms: job.accepted_at_unix_ms,
+                max_output_tokens: job.request.options.max_tokens,
+                usage,
+                timings,
+                performance,
+                error_code,
+                finish_reason,
+            });
+        }
+        job.event(kind, None);
     }
     fn operation_failed(&mut self, err: RuntimeError) {
         match self.operation.take() {
@@ -1329,7 +1447,7 @@ impl Actor {
             Some(Operation::Generate { .. }) => {
                 self.remember_shutdown_error(&err);
                 if let Some(job) = self.active.take() {
-                    job.terminate(Err(err));
+                    self.finish_job(job, Err(err));
                 }
                 self.state = ModelState::Ready;
                 self.next_job();
@@ -1358,8 +1476,8 @@ impl Actor {
         if let Some(job) = &self.active {
             job.output.cancel(ErrorCode::NativeProtocol);
         }
-        for job in self.queue.drain(..) {
-            job.terminate(Err(err.clone()));
+        while let Some(job) = self.queue.pop_front() {
+            self.finish_job(job, Err(err.clone()));
         }
         if let Some(Operation::Load { cancel, .. } | Operation::Generate { cancel, .. }) =
             &self.operation
@@ -1409,10 +1527,10 @@ impl Actor {
         self.state = ModelState::Faulted;
         self.last_error = Some(err.clone());
         if let Some(job) = self.active.take() {
-            job.terminate(Err(err.clone()));
+            self.finish_job(job, Err(err.clone()));
         }
-        for job in self.queue.drain(..) {
-            job.terminate(Err(err.clone()));
+        while let Some(job) = self.queue.pop_front() {
+            self.finish_job(job, Err(err.clone()));
         }
     }
     fn begin_shutdown(&mut self, reply: Option<Reply<()>>) {
@@ -1426,9 +1544,9 @@ impl Actor {
         if let Some(lease) = &self.registry {
             lease.cancelled.store(true, Ordering::Release);
         }
-        for job in self.queue.drain(..) {
+        while let Some(job) = self.queue.pop_front() {
             job.output.cancel(ErrorCode::RuntimeShutdown);
-            job.terminate(Err(stopped()));
+            self.finish_job(job, Err(stopped()));
         }
         if let Some(job) = &self.active {
             job.output.cancel(ErrorCode::RuntimeShutdown);
@@ -1453,9 +1571,9 @@ impl Actor {
         let mut retained = VecDeque::new();
         while let Some(job) = self.queue.pop_front() {
             if let Some(reason) = job.output.reason() {
-                job.terminate(Err(error(reason)));
+                self.finish_job(job, Err(error(reason)));
             } else if job.enqueued.elapsed() >= self.config.queue_timeout {
-                job.terminate(Err(error(ErrorCode::QueueTimeout)));
+                self.finish_job(job, Err(error(ErrorCode::QueueTimeout)));
             } else {
                 retained.push_back(job);
             }
@@ -1556,7 +1674,9 @@ mod ledger_tests {
                 let receiver = EventReceiver {
                     output: output.clone(),
                 };
-                let job = Job {
+                let mut job = Job {
+                    accepted_at_unix_ms: 0,
+                    modality: PerformanceModality::Text,
                     request: GenerationRequest {
                         request_id: RequestId::new(),
                         model: ModelId::new("qa-small").unwrap(),
@@ -1573,11 +1693,12 @@ mod ledger_tests {
                     started: false,
                     waiting: false,
                 };
-                job.terminate(
-                    failure.map_or(Ok((Usage::default(), FinishReason::Stop)), |code| {
+                let kind = job.terminate(
+                    failure.map_or(Ok((Usage::default(), FinishReason::Stop, None)), |code| {
                         Err(error(code))
                     }),
                 );
+                job.event(kind, None);
                 let terminal = receiver.recv().unwrap();
                 let real_failure = failure.filter(|code| real_errors.contains(code));
                 if cancellations.contains(&reason) && real_failure.is_some() {
@@ -1706,8 +1827,12 @@ mod ledger_tests {
         feed(
             &mut actor,
             ExecutorEvent::Completed {
-                usage: Usage::default(),
+                usage: Usage {
+                    prompt_tokens: 8,
+                    completion_tokens: 0,
+                },
                 finish_reason: FinishReason::Stop,
+                timings: None,
             },
         );
         actor.idle_since = Instant::now() - Duration::from_millis(2);
@@ -1724,8 +1849,12 @@ mod ledger_tests {
         feed(
             &mut actor,
             ExecutorEvent::Completed {
-                usage: Usage::default(),
+                usage: Usage {
+                    prompt_tokens: 8,
+                    completion_tokens: 0,
+                },
                 finish_reason: FinishReason::Stop,
+                timings: None,
             },
         );
         assert_eq!(actor.state, ModelState::Ready);

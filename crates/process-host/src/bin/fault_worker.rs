@@ -328,6 +328,7 @@ fn main() {
                                     completion_tokens: emitted,
                                 },
                                 finish_reason: FinishReason::Stop,
+                                timings: None,
                             },
                             None,
                         );
@@ -339,6 +340,7 @@ fn main() {
                                 ExecutorEvent::Completed {
                                     usage: Usage::default(),
                                     finish_reason: FinishReason::Stop,
+                                    timings: None,
                                 },
                                 None,
                             );

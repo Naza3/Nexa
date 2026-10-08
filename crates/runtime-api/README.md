@@ -8,6 +8,7 @@ T04 纯 Rust 本机管理、文本与单图 OCR HTTP API；不链接 engine-host
 - 96KiB完整非流式上限；SSE与非流式共享core/IPC输出信用，不截断/落盘/重放
 - HTTP/Ctrl+C/启动失败统一ServiceShutdown，清理未确认保持错误
 - status/devices未知native指标为null/unavailable，不能将配置伪报实测
+- 本机 `GET /runtime/performance` 返回真实服务 instance_id 和 actor 最近 200 条推理终态；聊天/OCR/LAN 共用记录，LAN 不开放管理查询。详见 [ADR0035](../../docs/decisions/0035-unified-inference-performance.md)
 
 Config保留默认context4096；当前矩阵使用显式2048、threads2、batch128、cpu。此crate中的NoInference/fake仅用于契约测试。实际模型链路与Windows结果另行记录，不从单测推导模型可用性。
 

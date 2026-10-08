@@ -13,6 +13,7 @@ import type {
   Snapshot,
   DirectoryIdentity,
   LibraryOperation,
+  PerformanceSnapshot,
 } from "./types";
 export function createPreviewApi(): DesktopApi {
   const scenario = new URLSearchParams(window.location.search).get("scenario");
@@ -131,6 +132,7 @@ export function createPreviewApi(): DesktopApi {
   }
   let loadTask: { progress: ModelLoadOperation; options: LoadOptions; step: number; cancel: boolean } | null = null;
   return {
+    performanceGet: async () => scenario === "performance" ? structuredClone(PREVIEW_PERFORMANCE) : { instance_id: "preview-empty", capacity: 200, records: [] },
     loadModelStart: async (operation_id, model_id, options) => {
       if (loadTask && !loadTask.progress.terminal) throw new DesktopError("runtime_busy", "预览加载仍在进行。");
       loadTask = { progress: { operation_id, model_id, phase: "preparing", status: "running", terminal: false,
@@ -455,3 +457,16 @@ export function createPreviewApi(): DesktopApi {
     },
   };
 }
+
+/** Synthetic layout fixtures, never measurements or normal preview inference history. */
+export const PREVIEW_PERFORMANCE: PerformanceSnapshot = {
+  instance_id: "模拟数据-preview-performance", capacity: 200,
+  records: Array.from({ length: 6 }, (_, index) => ({
+    sequence: 6 - index, request_id: `模拟请求-${6 - index}`, model_id: index % 2 ? "模拟-Qwen3-0.6B" : "模拟-GLM-OCR",
+    modality: index % 2 ? "text" : "image", status: index === 4 ? "failed" : index === 5 ? "cancelled" : "completed",
+    accepted_at_unix_ms: 1791446400000 - index * 60000, max_output_tokens: 256,
+    usage: { prompt_tokens: 1200, completion_tokens: 256 }, timings: { queue_ms: 15, load_ms: 0, execution_ms: 5200 },
+    performance: index >= 4 ? null : { timings: { prepare_us: 10000, prefill_us: 2000000, decode_us: 3000000, output_callback_us: 20000 }, load_options: { context_size: 8192, threads: 4, batch_size: 256 } },
+    error_code: index === 4 ? "inference_failed" : index === 5 ? "cancelled" : null, finish_reason: index >= 4 ? null : index === 0 ? "length" : "stop",
+  })),
+};

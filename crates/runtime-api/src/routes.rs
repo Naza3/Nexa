@@ -23,11 +23,23 @@ use std::sync::Arc;
 
 pub fn router(state: ApiState, security: Arc<SecurityContext>) -> Router {
     let body_limit = crate::security::BodyLimit(state.config.api.max_body_bytes);
+    let instance_id = security.instance_id();
     Router::new()
         .route("/healthz", get(health))
         .route("/v1/models", get(available_models))
         .route("/v1/chat/completions", post(crate::chat::chat))
         .route("/runtime/status", get(status))
+        .route(
+            "/runtime/performance",
+            get(move |State(state): State<ApiState>| async move {
+                let history = state.control(|runtime| runtime.performance()).await?;
+                Ok::<_, ApiError>(Json(crate::performance::PerformanceSnapshot {
+                    instance_id,
+                    capacity: history.capacity,
+                    records: history.records,
+                }))
+            }),
+        )
         .route(
             "/runtime/configuration",
             get(configuration_get).put(configuration_save),

@@ -1,3 +1,4 @@
+import { PerformancePage } from "./PerformancePage";
 import { OcrPage } from "./OcrPage";
 import { followOnLoadAction } from "./modelLoad";
 import { ModelLoadControl } from "./ModelLoadControl";
@@ -1058,7 +1059,7 @@ export default function App({
 }: {
   controller: DesktopController;
   preview?: boolean;
-  initialPage?: "ocr" | "overview" | "models" | "api" | "activity" | "chat" | "settings";
+  initialPage?: "performance" | "ocr" | "overview" | "models" | "api" | "activity" | "chat" | "settings";
 }) {
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -1096,7 +1097,7 @@ export default function App({
     const handler = (event: KeyboardEvent) => {
       const target = event.target;
       if (event.isComposing || target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable)) return;
-      if (event.altKey && ["1", "2", "3", "4", "5", "6"].includes(event.key)) {
+      if (event.altKey && ["1", "2", "3", "4", "5", "6", "7"].includes(event.key)) {
         event.preventDefault();
         setConfirmStop(false);
         setConfirmClose(false);
@@ -1105,7 +1106,7 @@ export default function App({
         setSettingsFromDownloads(false);
         if (event.key === "6") setOcrVisited(true);
         setPage(
-          (["overview", "models", "api", "activity", "settings", "ocr"] as const)[Number(event.key) - 1],
+          (["overview", "models", "api", "activity", "settings", "ocr", "performance"] as const)[Number(event.key) - 1],
         );
       }
     };
@@ -1117,6 +1118,7 @@ export default function App({
     { id: "models", title: "模型库", detail: "文件与运行档案", icon: "models" },
     { id: "api", title: "API 接入", detail: "连接你的应用", icon: "copy" },
     { id: "activity", title: "活动", detail: "任务与结果", icon: "refresh" },
+    { id: "performance", title: "性能", detail: "推理速度与耗时", icon: "refresh" },
     { id: "ocr", title: "图片 OCR", detail: "单页图片识别", icon: "models" },
   ] as const;
   const latestModelAttempt = Object.values(state.model_tests).sort((a, b) => b.id - a.id)[0];
@@ -1141,7 +1143,7 @@ export default function App({
               key={item.id}
               aria-current={page === item.id ? "page" : undefined}
               aria-label={item.title}
-              title={`${item.title}（Alt + ${item.id === "ocr" ? 6 : index + 1}）`}
+              title={`${item.title}（Alt + ${item.id === "ocr" ? 6 : item.id === "performance" ? 7 : index + 1}）`}
               className={`nav-item ${page === item.id ? "active" : ""}`}
               onClick={() => { setConfirmStop(false); setSettingsFromDownloads(false); setPage(item.id); if (item.id === "ocr") setOcrVisited(true); }}
             >
@@ -1265,6 +1267,7 @@ export default function App({
           )}
           <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0}>
           {ocrVisited && <div hidden={page !== "ocr"}><OcrPage state={state} controller={controller} /></div>}
+          {page === "performance" && <PerformancePage api={controller.api} connection={state.snapshot?.connection} />}
           {page === "overview" && <OverviewPage state={state} controller={controller} goModels={() => setPage("models")} goApi={() => setPage("api")} goActivity={() => setPage("activity")} goChat={enterChat} />}
           {page === "api" && <ApiPage state={state} controller={controller} goChat={enterChat} />}
           {page === "activity" && <ActivityPage state={state} controller={controller} goChat={enterChat} />}

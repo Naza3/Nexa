@@ -280,7 +280,26 @@ export interface ModelLoadOperation {
   error: SafeError | null;
 }
 export interface OcrRequest { model_id: string; image_data_url: string; prompt: string; max_output_tokens: number }
+export interface PerformanceRecord {
+  sequence: number;
+  request_id: string;
+  model_id: string;
+  modality: "text" | "image";
+  status: "completed" | "cancelled" | "failed";
+  accepted_at_unix_ms: number;
+  max_output_tokens: number;
+  usage: { prompt_tokens: number; completion_tokens: number };
+  timings: { queue_ms: number; load_ms: number; execution_ms: number };
+  performance: null | {
+    timings: { prepare_us: number; prefill_us: number; decode_us: number; output_callback_us: number };
+    load_options: LoadOptions;
+  };
+  error_code: string | null;
+  finish_reason: "stop" | "length" | null;
+}
+export interface PerformanceSnapshot { instance_id: string; capacity: number; records: PerformanceRecord[] }
 export interface DesktopApi {
+  performanceGet?(): Promise<PerformanceSnapshot>;
   ocrStart?(request: OcrRequest): Promise<{ request_id: string }>;
   saveOcrMarkdown?(text: string): Promise<{ saved: boolean }>;
   pickModelPair?(): Promise<ModelFileSelection | null>;

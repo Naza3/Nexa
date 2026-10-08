@@ -51,7 +51,7 @@ class PackageTests(unittest.TestCase):
         names = re.search(r"pub const LIBRARIES: \[&str; 10\] = \[(.*?)\];", consumer, re.S)
         self.assertIsNotNone(names)
         self.assertEqual(tuple(re.findall(r'"([^"\n]+)"', names[1])), pack.NATIVE_ARCHIVES)
-        self.assertEqual((pack.WORKER_PROTOCOL_VERSION, pack.SHIM_VERSION), (3, 4))
+        self.assertEqual((pack.WORKER_PROTOCOL_VERSION, pack.SHIM_VERSION), (4, 4))
 
     def test_native_archive_closure_rejects_missing_extra_empty_and_video(self):
         with tempfile.TemporaryDirectory() as temporary:

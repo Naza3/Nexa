@@ -59,6 +59,8 @@ pub enum ExecutorEvent {
     Completed {
         usage: Usage,
         finish_reason: FinishReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timings: Option<runtime_types::InferenceTimings>,
     },
     Failed(RuntimeError),
     GenerationFailed {

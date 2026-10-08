@@ -132,6 +132,14 @@ impl EventValidator {
         let Message::Event { event, credit_id } = &frame.message else {
             return Err(protocol_error("expected worker event"));
         };
+        if let ExecutorEvent::Completed {
+            timings: Some(timings),
+            ..
+        } = event
+            && !timings.is_valid()
+        {
+            return Err(protocol_error("invalid inference timings"));
+        }
         if let ExecutorEvent::Completed { usage, .. }
         | ExecutorEvent::GenerationFailed { usage, .. } = event
             && (usage.completion_tokens > active.max_tokens

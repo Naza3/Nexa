@@ -199,6 +199,12 @@ impl Executor for ProtocolExecutor {
                         });
                     } else {
                         events.emit(ExecutorEvent::Completed {
+                            timings: Some(runtime_types::InferenceTimings {
+                                prepare_us: 100,
+                                prefill_us: 3000,
+                                decode_us: 2000,
+                                output_callback_us: 400,
+                            }),
                             usage,
                             finish_reason: if matches!(mode, Mode::Length) {
                                 FinishReason::Length
@@ -222,6 +228,7 @@ struct Harness {
     address: SocketAddr,
     authority: SocketAddr,
     bearer: HeaderValue,
+    instance_id: uuid::Uuid,
     observed: Arc<Observed>,
     server: tokio::task::JoinHandle<std::io::Result<()>>,
 }
@@ -269,8 +276,8 @@ impl Harness {
         let state = ApiState::new(runtime, store, config, None);
         let token = SecretToken::generate().unwrap();
         let bearer = token.bearer_header_value();
-        let security =
-            Arc::new(SecurityContext::new(token, uuid::Uuid::new_v4(), address, vec![]).unwrap());
+        let instance_id = uuid::Uuid::new_v4();
+        let security = Arc::new(SecurityContext::new(token, instance_id, address, vec![]).unwrap());
         let (app, authority) = if lan {
             // Test-only transport adapter: the real TCP connection stays on
             // loopback, while the independent LAN middleware sees private socket
@@ -304,6 +311,7 @@ impl Harness {
             address,
             authority,
             bearer,
+            instance_id,
             observed,
             server,
         }
@@ -531,6 +539,32 @@ async fn actual_http_stream_order_and_nonstream_json_are_exact() {
     assert_eq!(status, 200);
     let value: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(value["choices"][0]["message"]["content"], "你好🙂\n\"\\");
+    let (status, _, body) = lan_raw(
+        &h,
+        "GET",
+        "/runtime/performance",
+        Some(h.bearer.to_str().unwrap()),
+        "",
+    )
+    .await;
+    assert_eq!(status, 200);
+    let history: runtime_api::performance::PerformanceSnapshot =
+        serde_json::from_str(&body).unwrap();
+    assert!(history.is_valid());
+    assert_eq!(history.instance_id, h.instance_id);
+    assert_eq!(history.records.len(), 2);
+    assert!(history.records.iter().all(|record| {
+        record.status == runtime_types::PerformanceStatus::Completed
+            && record.modality == runtime_types::PerformanceModality::Text
+            && record.performance.unwrap().timings.prefill_us == 3000
+            && record.performance.unwrap().load_options.context_size == 2048
+    }));
+    assert!(!body.contains("protocol test"));
+    assert!(!body.contains("你好"));
+    assert_eq!(
+        lan_raw(&h, "GET", "/runtime/performance", None, "").await.0,
+        401
+    );
     h.clean().await;
     h.close().await;
 }
@@ -568,6 +602,26 @@ async fn local_image_reaches_actor_unchanged_with_existing_json_and_sse_contract
         assert!(!request.messages[0].image.as_ref().unwrap().after_text);
         h.clean().await;
     }
+    let (_, _, body) = lan_raw(
+        &h,
+        "GET",
+        "/runtime/performance",
+        Some(h.bearer.to_str().unwrap()),
+        "",
+    )
+    .await;
+    let history: runtime_api::performance::PerformanceSnapshot =
+        serde_json::from_str(&body).unwrap();
+    assert!(history.is_valid());
+    assert_eq!(history.records.len(), 2);
+    assert!(
+        history
+            .records
+            .iter()
+            .all(|record| record.modality == runtime_types::PerformanceModality::Image)
+    );
+    assert!(!body.contains("data:image"));
+    assert!(!body.contains("Text Recognition"));
     h.close().await;
 }
 
@@ -1396,6 +1450,19 @@ async fn lan_inference_requires_local_load_and_preserves_sse_and_nonstream_contr
     let (code, _, body) = h.reply(false).await;
     assert_eq!(code, 409);
     assert!(body.contains("model_not_loaded"));
+    let history = h
+        .state
+        .control(|runtime| runtime.performance())
+        .await
+        .unwrap();
+    // Both LAN response modes share history; rejected requests do not.
+    assert_eq!(history.records.len(), 2);
+    assert!(
+        history
+            .records
+            .iter()
+            .all(|record| record.performance.is_some())
+    );
     h.close().await;
 }
 #[tokio::test]
@@ -1405,6 +1472,7 @@ async fn lan_router_has_no_management_proof_or_ambient_authentication() {
     for path in [
         "/healthz",
         "/runtime/status",
+        "/runtime/performance",
         "/runtime/configuration",
         "/runtime/configuration/models/fixture",
         "/runtime/models",

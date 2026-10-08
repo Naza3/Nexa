@@ -7,7 +7,8 @@ use crate::{
 };
 use desktop_bridge::{
     BridgeError, ConfigurationMigrateRequest, ConfigurationSaveRequest, ConfigurationSnapshot,
-    DesktopBridge, ModelConfiguration, UiPreferencesSaveRequest, UiPreferencesSnapshot, dto::*,
+    DesktopBridge, ModelConfiguration, PerformanceSnapshot, UiPreferencesSaveRequest,
+    UiPreferencesSnapshot, dto::*,
 };
 use rfd::{MessageButtons, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
@@ -197,6 +198,14 @@ async fn runtime_initialize(
 ) -> Result<DesktopSnapshot> {
     guard(&window, &state)?;
     state.bridge.initialize().await
+}
+#[tauri::command]
+async fn performance_get(
+    window: WebviewWindow,
+    state: State<'_, Arc<Shell>>,
+) -> Result<PerformanceSnapshot> {
+    guard(&window, &state)?;
+    state.bridge.performance_get().await
 }
 #[tauri::command]
 async fn configuration_get(
@@ -1076,6 +1085,7 @@ pub fn run() {
             desktop_snapshot,
             runtime_initialize,
             configuration_get,
+            performance_get,
             configuration_model_get,
             configuration_save,
             configuration_migrate,

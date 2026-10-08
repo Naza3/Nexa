@@ -5,9 +5,11 @@
 //! Only the isolated one-shot native cancellation flag crosses that boundary.
 //! The scheduler's shared byte budget is the sole pending-text buffer.
 
-use llama_adapter::{CancelHandle, Engine, GenerationPhase, Model, StreamControl};
+use llama_adapter::{
+    CancelHandle, Engine, GenerationPhase, GenerationProgress, Model, StreamControl,
+};
 use runtime_core::{CancellationHandle, ExecutionEvents, Executor, ExecutorCommand, ExecutorEvent};
-use runtime_types::{ErrorCode, GenerationRequest, RuntimeError, Usage};
+use runtime_types::{ErrorCode, GenerationRequest, InferenceTimings, RuntimeError, Usage};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::mpsc::{self, Receiver, SyncSender, TrySendError},
@@ -302,34 +304,45 @@ fn generate(
         });
         return;
     }
-    let mut prefill_started = None;
-    let mut decode_started = None;
+    let mut phases = PhaseTimer::new(prompt_tokens);
+    let mut output_callback = Duration::ZERO;
     let result = prepared.generate_observed(
         cancel,
         |text| {
-            if events.text_delta(text) {
+            let started = Instant::now();
+            let delivered = events.text_delta(text);
+            output_callback = output_callback.saturating_add(started.elapsed());
+            if delivered {
                 StreamControl::Continue
             } else {
                 StreamControl::Stop
             }
         },
         |progress| {
-            match progress.phase {
-                GenerationPhase::PrefillStarted => prefill_started = Some(Instant::now()),
-                GenerationPhase::DecodeStarted => decode_started = Some(Instant::now()),
-                GenerationPhase::PrefillBatchCompleted => {}
-            }
+            phases.observe(progress, Instant::now());
             StreamControl::Continue
         },
     );
     let returned = Instant::now();
     // On cancellation the current phase includes native cleanup until return.
-    let prefill = prefill_started
-        .map(|start| decode_started.unwrap_or(returned).duration_since(start))
+    let prefill = phases
+        .prefill_started
+        .map(|start| {
+            phases
+                .decode_started
+                .unwrap_or(returned)
+                .saturating_duration_since(start)
+        })
         .unwrap_or_default();
-    let decode = decode_started
-        .map(|start| returned.duration_since(start))
+    let decode = phases
+        .decode_started
+        .map(|start| {
+            returned
+                .saturating_duration_since(start)
+                .saturating_sub(output_callback)
+        })
         .unwrap_or_default();
+    let timings = phases.finish(prepare, output_callback, returned);
     match result {
         Ok(result) => {
             send_report(
@@ -345,6 +358,7 @@ fn generate(
             events.emit(ExecutorEvent::Completed {
                 usage: result.usage,
                 finish_reason: result.finish_reason,
+                timings,
             });
         }
         Err(failure) => {
@@ -386,4 +400,187 @@ fn send_report(
         usage,
         error,
     });
+}
+
+/// Observes native boundaries without inventing lifecycle events or zero samples.
+struct PhaseTimer {
+    prompt_tokens: u32,
+    completed: u32,
+    prefill_started: Option<Instant>,
+    decode_started: Option<Instant>,
+    invalid: bool,
+}
+impl PhaseTimer {
+    fn new(prompt_tokens: u32) -> Self {
+        Self {
+            prompt_tokens,
+            completed: 0,
+            prefill_started: None,
+            decode_started: None,
+            invalid: false,
+        }
+    }
+    fn observe(&mut self, progress: GenerationProgress, now: Instant) {
+        if progress.total_prompt_tokens != self.prompt_tokens
+            || progress.completed_prompt_tokens > self.prompt_tokens
+        {
+            self.invalid = true;
+            return;
+        }
+        let valid = match progress.phase {
+            GenerationPhase::PrefillStarted => {
+                let valid = self.prefill_started.is_none()
+                    && self.decode_started.is_none()
+                    && progress.completed_prompt_tokens == 0;
+                if valid {
+                    self.prefill_started = Some(now);
+                }
+                valid
+            }
+            GenerationPhase::PrefillBatchCompleted => {
+                let valid = self.prefill_started.is_some()
+                    && self.decode_started.is_none()
+                    && progress.completed_prompt_tokens > self.completed;
+                if valid {
+                    self.completed = progress.completed_prompt_tokens;
+                }
+                valid
+            }
+            GenerationPhase::DecodeStarted => {
+                let valid = self.prefill_started.is_some()
+                    && self.decode_started.is_none()
+                    && progress.completed_prompt_tokens == self.prompt_tokens
+                    && self.completed == self.prompt_tokens;
+                if valid {
+                    self.decode_started = Some(now);
+                }
+                valid
+            }
+        };
+        self.invalid |= !valid;
+    }
+    fn finish(
+        &self,
+        prepare: Duration,
+        output_callback: Duration,
+        returned: Instant,
+    ) -> Option<InferenceTimings> {
+        if self.invalid {
+            return None;
+        }
+        let prefill = self
+            .decode_started?
+            .checked_duration_since(self.prefill_started?)?;
+        let decode = returned
+            .checked_duration_since(self.decode_started?)?
+            .checked_sub(output_callback)?;
+        let timings = InferenceTimings {
+            prepare_us: prepare.as_micros().try_into().ok()?,
+            prefill_us: prefill.as_micros().try_into().ok()?,
+            decode_us: decode.as_micros().try_into().ok()?,
+            output_callback_us: output_callback.as_micros().try_into().ok()?,
+        };
+        timings.is_valid().then_some(timings)
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+    fn progress(phase: GenerationPhase, completed: u32) -> GenerationProgress {
+        GenerationProgress {
+            phase,
+            completed_prompt_tokens: completed,
+            total_prompt_tokens: 8,
+        }
+    }
+    #[test]
+    fn phases_include_prefill_and_exclude_callback_before_microsecond_conversion() {
+        let start = Instant::now();
+        let mut timer = PhaseTimer::new(8);
+        timer.observe(progress(GenerationPhase::PrefillStarted, 0), start);
+        timer.observe(progress(GenerationPhase::PrefillBatchCompleted, 4), start);
+        timer.observe(progress(GenerationPhase::PrefillBatchCompleted, 8), start);
+        timer.observe(
+            progress(GenerationPhase::DecodeStarted, 8),
+            start + Duration::from_micros(20),
+        );
+        let measured = timer
+            .finish(
+                Duration::from_micros(10),
+                Duration::from_nanos(1500),
+                start + Duration::from_nanos(23500),
+            )
+            .unwrap();
+        assert_eq!(
+            measured,
+            InferenceTimings {
+                prepare_us: 10,
+                prefill_us: 20,
+                decode_us: 2,
+                output_callback_us: 1
+            }
+        );
+        assert!(
+            timer
+                .finish(
+                    Duration::ZERO,
+                    Duration::from_secs(1),
+                    start + Duration::from_micros(30)
+                )
+                .is_none()
+        );
+    }
+    #[test]
+    fn absent_duplicate_reordered_and_inconsistent_phases_are_not_measurements() {
+        let start = Instant::now();
+        let sequences = [
+            vec![],
+            vec![progress(GenerationPhase::PrefillStarted, 0)],
+            vec![progress(GenerationPhase::DecodeStarted, 8)],
+            vec![
+                progress(GenerationPhase::PrefillStarted, 0),
+                progress(GenerationPhase::DecodeStarted, 8),
+            ],
+            vec![
+                progress(GenerationPhase::PrefillStarted, 0),
+                progress(GenerationPhase::PrefillBatchCompleted, 4),
+                progress(GenerationPhase::DecodeStarted, 8),
+            ],
+            vec![
+                progress(GenerationPhase::PrefillStarted, 0),
+                progress(GenerationPhase::PrefillStarted, 0),
+                progress(GenerationPhase::DecodeStarted, 8),
+            ],
+            vec![
+                progress(GenerationPhase::PrefillStarted, 0),
+                progress(GenerationPhase::DecodeStarted, 8),
+                progress(GenerationPhase::DecodeStarted, 8),
+            ],
+            vec![
+                progress(GenerationPhase::PrefillStarted, 0),
+                progress(GenerationPhase::PrefillBatchCompleted, 4),
+                progress(GenerationPhase::PrefillBatchCompleted, 3),
+                progress(GenerationPhase::DecodeStarted, 8),
+            ],
+            vec![
+                GenerationProgress {
+                    total_prompt_tokens: 9,
+                    ..progress(GenerationPhase::PrefillStarted, 0)
+                },
+                progress(GenerationPhase::DecodeStarted, 8),
+            ],
+        ];
+        for sequence in sequences {
+            let mut timer = PhaseTimer::new(8);
+            for event in sequence {
+                timer.observe(event, start);
+            }
+            assert!(
+                timer
+                    .finish(Duration::ZERO, Duration::ZERO, start)
+                    .is_none()
+            );
+        }
+    }
 }
