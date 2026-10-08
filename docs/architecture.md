@@ -1,5 +1,7 @@
 # Nexa Windows 总体方案与架构
 
+> 2026-10-08 PI Desktop 调用插件按 [ADR0038](decisions/0038-pi-desktop-ocr-plugin.md)：独立 `.piplug` 提供图片队列、Markdown、性能和 TOML 历史；通过带本机身份验证的既有接口加载与识别，Nexa 公共协议和模型/服务归属不变。
+
 > 2026-10-08 桌面持久化按 [ADR0036](decisions/0036-desktop-results-and-preferences.md)：输出下方的性能摘要、桌面最近100条OCR结果归档、TOML工作区设置与关闭前保存。OCR归档由调用层持有，不改变runtime数据归属。
 
 > 2026-10-08 顺序OCR按 [ADR0037](decisions/0037-sequential-image-ocr-queue.md)：桌面按导入顺序逐张调用既有单图接口，最多20张，逐图准备/保存，整批保留本窗口互斥；公共API不接收多图请求。

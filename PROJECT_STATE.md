@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-08 PI Desktop 的 Nexa OCR 插件（安装包与Linux验证完成，Windows待验）
+
+任务W04-PI-OCR-1。按用户“先完成插件”新增独立0.1.0 `.piplug`，位于 `integrations/pi-desktop-ocr`：本机服务身份验证、显式令牌导入、空闲自动加载所选已登记视觉模型、顺序20图队列、Markdown/原文、正文下真实性能、最近100条非空结果和TOML参数保存。面板关闭继续后台，禁用/退出尽力取消保存；Nexa核心与公共协议、版本0.2.3保持。
+
+52项单测、官方devkit打包/检查、11项官方child契约、真实Controller/Store的Chromium联调均通过。生产main通过两图真实Nexa/GLM-OCR，顺序/各3锚点/性能/历史/重载保持，自有服务正常退出。最终包只因纠正README菜单名重打，执行文件与已验main保持一致。插件包在 `integrations/pi-desktop-ocr/dist/io.github.naza3.nexa-ocr-0.1.0.piplug`；此任务本地提交，不自动推送/tag，未修改Nexa二进制。用户Windows Electron完整安装、i5长图效果仍待验；准确步骤、产物摘要及分层证据见[插件说明](integrations/pi-desktop-ocr/README.md)、[ADR0038](docs/decisions/0038-pi-desktop-ocr-plugin.md)、[验证记录](docs/verification/2026-10-08-pi-desktop-ocr-plugin.md)。环境依赖刷新与保存草稿完成，未代用户发布环境快照。
+
 ## 2026-10-08 Windows 桌面 Clippy 修复与交叉便携包（交叉编译及原生CI已完成）
 
 任务W05-CI-FIX-3 / W05-CROSS-2。[Actions37716280319](https://github.com/Naza3/Nexa/actions/runs/37716280319/job/113113404013)在Windows桌面Clippy失败：`windows.rs:1009`的`window.eval(&format!(...))`触发`needless_borrows_for_generic_args`，既有`-D warnings`将其提升为错误。该轮前端960项和Windows壳37项已通过；Runtime、下载组件与版本job成功，后续native打包跳过。按锁定Tauri接口改为直接传入`String`，关闭保存流程保持，未关闭lint。

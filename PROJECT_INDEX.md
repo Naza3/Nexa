@@ -101,6 +101,8 @@
 
 ## 可选调用层与后续验证
 
+- [PI Desktop OCR 插件](integrations/pi-desktop-ocr/README.md) / [ADR0038](docs/decisions/0038-pi-desktop-ocr-plugin.md) / [验证记录](docs/verification/2026-10-08-pi-desktop-ocr-plugin.md)：独立安装包、Nexa 本机认证、自动加载、顺序 OCR、性能摘要和 TOML 历史；Windows 宿主完整安装待验。
+
 [Telegram摘要方案](docs/telegram-summary.md)是可选参考，不是runtime发布前置；源码规划路径未创建，不自动导入Telegram SDK、账号、数据库或定时任务。
 
 当前源码树不保留项目自有移动工程、专用设计和研究报告。删除范围与开发验证见[桌面清理记录](docs/verification/2026-10-05-desktop-only-cleanup.md)，历史内容可由 Git 追溯。
