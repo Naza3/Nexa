@@ -381,6 +381,7 @@ class DesktopPackageTests(unittest.TestCase):
         commands.update({"ocr_start", "ocr_save_markdown", "models_pair_pick", "models_pair_import"})
         commands.add("performance_get")
         commands.add("desktop_close_ack")
+        commands.update({"autostart_get", "autostart_set"})
         commands.update({"ocr_history_list", "ocr_history_get", "ocr_history_save", "ocr_history_delete", "workbench_get", "workbench_save"})
         self.assertEqual(set(capability["permissions"]), {"allow-" + name.replace("_", "-") for name in commands})
         native = (pack.SHELL / "src/windows.rs").read_text(encoding="utf-8")
@@ -427,5 +428,5 @@ class DesktopPackageTests(unittest.TestCase):
         build = manifest["build-dependencies"]["tauri-build"]
         self.assertEqual(tauri["version"], "=2.12.1")
         self.assertEqual(build["version"], "=2.7.1")
-        self.assertEqual(tauri["features"], [])
+        self.assertEqual(tauri["features"], ["tray-icon"])
         self.assertEqual(build["features"], [])

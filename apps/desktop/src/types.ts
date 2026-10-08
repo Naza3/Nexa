@@ -316,6 +316,8 @@ export type OcrHistoryEntry = Omit<OcrHistorySaveRequest, "mode"> & { first_save
 export type OcrHistorySummary = Omit<OcrHistoryEntry, "markdown" | "performance"> & { markdown_bytes: number };
 export interface OcrHistoryList { capacity: 100; entries: OcrHistorySummary[] }
 export interface DesktopApi {
+  autostartGet?(): Promise<AutostartSnapshot>;
+  autostartSet?(enabled: boolean): Promise<AutostartSnapshot>;
   closeAcknowledge?(id: string): Promise<boolean>;
   workbenchGet?(): Promise<WorkbenchPreferencesSnapshot>;
   workbenchSave?(request: { expected_revision: string; preferences: WorkbenchPreferences }): Promise<WorkbenchPreferencesSnapshot>;
@@ -432,7 +434,9 @@ export interface ConfigurationMigrateRequest { expected_revision: string; expect
 export interface UiPreferences { close_runtime_on_exit: boolean; download_source: DownloadSource }
 export interface UiPreferencesSnapshot { revision: string; preferences: UiPreferences }
 export interface WorkbenchPreferences {
+  close_to_tray: boolean;
   ocr: { model_id: string | null; context_size: number; threads: number; batch_size: number; max_output_tokens: number; prompt: string; image_edge: 0 | 1600 | 2048; markdown: boolean; model_drafts: Record<string, { base: LoadOptions; draft: LoadOptions }> };
   chat: { draft: string };
 }
 export interface WorkbenchPreferencesSnapshot { revision: string; preferences: WorkbenchPreferences }
+export interface AutostartSnapshot { registered: boolean; current_executable: boolean }

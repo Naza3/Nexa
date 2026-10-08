@@ -26,10 +26,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"[0-9a-f]{40}", re.ASCII)
 HASH = re.compile(r"[0-9a-f]{64}", re.ASCII)
 SOURCE = "aria2-1.37.0-nexa-corresponding-source.tar.gz"
-BUILD_CHECKS = {"payload_verified", "msi_tables_verified", "setup_embeds_exact_msi"}
-LIFECYCLE_CHECKS = {"install", "repair", "upgrade", "rollback", "downgrade_rejected", "uninstall",
-                    "user_data_preserved", "running_process_blocked", "setup_install", "setup_repair",
-                    "setup_uninstall", "setup_exit_codes", "setup_wizard"}
+BUILD_CHECKS = {"payload_verified", "tauri_bundles_verified", "input_bytes_unchanged"}
+LIFECYCLE_CHECKS = {"msi_install", "msi_repair", "msi_same_version_upgrade", "msi_rollback", "msi_upgrade",
+                    "downgrade_rejected", "msi_uninstall", "legacy_msi_migration", "nsis_install",
+                    "nsis_repeat_install", "nsis_same_version_upgrade", "nsis_uninstall",
+                    "running_process_blocked", "cross_format_blocked", "user_data_preserved", "per_user_scope", "autostart_lifecycle"}
 
 
 def regular(path: Path) -> Path:

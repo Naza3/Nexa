@@ -157,7 +157,7 @@ jobs:
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          python scripts/package_windows_msi.py --check-toolchain --report artifacts/verification/windows-installer-compile.json
+          python scripts/package_tauri_windows.py --check-toolchain --work build/tauri-installer-preflight --report artifacts/verification/windows-installer-compile.json
           if ($LASTEXITCODE -ne 0) { throw 'Installer helper compilation failed before the full product build' }
       - name: Observe Windows detached startup context before desktop compilation
         id: desktop_launch_probe
@@ -554,7 +554,7 @@ jobs:
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
-          python scripts/package_windows_msi.py --check-toolchain --report artifacts/verification/windows-installer-compile.json
+          python scripts/package_tauri_windows.py --check-toolchain --work build/tauri-installer-preflight --report artifacts/verification/windows-installer-compile.json
           if ($LASTEXITCODE -ne 0) { throw 'Installer helper compilation failed before the full product build' }
       - name: Restore locked Cargo download inputs
         id: cargo_inputs_cache
@@ -840,23 +840,23 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -X warn_default_encoding -W error::EncodingWarning scripts/run_desktop_smoke.py --model models/qa-small.gguf --harness build/ci-tools/nexa-desktop-harness.exe
           if ($LASTEXITCODE -ne 0) { throw 'Extracted desktop/real bridge acceptance failed; native window interactions remain a separate gate' }
-      - name: Package MSI and Setup from the exact verified portable payload
+      - name: Package Tauri WiX MSI and NSIS EXE from the verified portable payload
         id: windows_installers
         if: ${{ success() && steps.desktop_acceptance.outcome == 'success' }}
         timeout-minutes: 10
         run: |
           $ErrorActionPreference = 'Stop'
           $prefix = "dist/Nexa-${env:NEXA_RELEASE_VERSION}-windows-x64-setup"
-          python -X warn_default_encoding -W error::EncodingWarning scripts/package_windows_msi.py --payload dist/desktop-windows --version $env:NEXA_RELEASE_VERSION --output "$prefix.msi" --setup-output "$prefix.exe" --report dist/windows-msi-build-report.json
+          python -X warn_default_encoding -W error::EncodingWarning scripts/package_tauri_windows.py --payload dist/desktop-windows --version $env:NEXA_RELEASE_VERSION --output "$prefix.msi" --setup-output "$prefix.exe" --report dist/windows-msi-build-report.json
           if ($LASTEXITCODE -ne 0) { throw 'MSI/Setup package closure failed' }
-      - name: Verify disposable MSI and Setup install repair upgrade rollback and uninstall
+      - name: Verify Tauri installers, same-version updates, legacy migration and data preservation
         id: installer_acceptance
         if: ${{ success() && steps.windows_installers.outcome == 'success' }}
         timeout-minutes: 25
         run: |
           $ErrorActionPreference = 'Stop'
           $prefix = "dist/Nexa-${env:NEXA_RELEASE_VERSION}-windows-x64-setup"
-          python -X warn_default_encoding -W error::EncodingWarning scripts/test_windows_msi_lifecycle.py --msi "$prefix.msi" --setup "$prefix.exe" --payload dist/desktop-windows --report dist/windows-msi-lifecycle-report.json
+          python -X warn_default_encoding -W error::EncodingWarning scripts/test_tauri_windows_lifecycle.py --msi "$prefix.msi" --setup "$prefix.exe" --payload dist/desktop-windows --report dist/windows-msi-lifecycle-report.json
           if ($LASTEXITCODE -ne 0) { throw 'MSI/Setup lifecycle or user-data preservation failed' }
       - name: Stage only validated sanitized installer diagnostics
         id: installer_evidence

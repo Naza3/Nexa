@@ -1,105 +1,105 @@
-# Windows MSI 与 Setup 安装契约
+# Windows Tauri MSI 与 NSIS 安装契约
 
-## 用户选择
+2026-10-08 用户确认改用 Tauri 官方 Windows 打包路线。本文件描述本次源码中的新安装器；本轮原生 Windows 安装、迁移和 GUI 验收尚未执行，不表示新安装包已经发布或通过实机验证。决定及与旧方案的关系见 [ADR0039](decisions/0039-tauri-windows-installers.md)。
 
-同一个 `vMAJOR.MINOR.PATCH` Release 提供三种格式：
+## 用户选择与旧版迁移
 
-- `Nexa-<版本>-windows-x64-portable.zip`：完整解压后直接运行
-- `Nexa-<版本>-windows-x64-setup.msi`：原生 Windows Installer 包，默认使用系统自带 Basic UI，支持安装、修复和卸载
-- `Nexa-<版本>-windows-x64-setup.exe`：带“安装/升级、修复此版本、移除此版本”选择、确认页、进度和结果页的离线向导，内部携带上面同一份 MSI
+同一个 `vMAJOR.MINOR.PATCH` Release 继续提供三种格式：
 
-EXE 不是另一套安装器。用任一安装格式安装，另一格式操作的是同一 MSI 产品；同一版本的文件、组件、注册表登记和卸载身份一致。不同版本的“修复/卸载”请使用与已安装版本相同的安装包；旧版安装包不能降级新版。便携版不登记 MSI 产品，也不会被安装器移动、迁移或删除。
+| 文件 | 行为 |
+| --- | --- |
+| `Nexa-<版本>-windows-x64-portable.zip` | 完整解压后直接运行，不登记安装产品 |
+| `Nexa-<版本>-windows-x64-setup.msi` | Tauri 调用 WiX 生成，使用标准 WiX 安装/维护界面；支持安装、修复、事务升级和卸载 |
+| `Nexa-<版本>-windows-x64-setup.exe` | Tauri 调用 NSIS 生成，使用标准 NSIS 向导；支持安装、同版本重装、升级和独立卸载器 |
 
-所有格式目前都没有 Nexa 代码签名。SHA-256 用于验证字节一致性，不证明发布者身份；仅从可信的仓库 Release/对应 Actions 获取并核对摘要。Windows/SmartScreen 可能显示未知发布者提示；不要把绕过安全警告当成安装步骤。
+**旧版 `Setup.exe` 内嵌 MSI；新版 `setup.exe` 是独立 NSIS 安装器。** 用旧 Setup 或旧 MSI 安装过 Nexa，应下载本次实现之后构建的新 **MSI** 原位更新。新 MSI 沿用旧产品族，支持从旧 `0.2.3` 安装替换至同为 `0.2.3` 的新构建，不要求先手工卸载。
+
+已有新 MSI 的安装继续使用 MSI；已有 NSIS 的安装继续使用 EXE。两种新安装器会拒绝直接跨 MSI/NSIS 覆盖，避免同一目录出现两套卸载登记。确需换格式时，先通过 Windows 应用设置卸载 Nexa 程序，再安装另一格式；模型和用户数据保留。
+
+新旧安装器可能使用相同版本号及文件名，应按来源提交、Release manifest 和 SHA-256 区分。既有 tag 附件不会因源码更新而改变，也不会被悄悄替换。便携版不登记 MSI/NSIS 产品，安装器不会自动迁移或删除便携目录。
+
+所有格式目前都没有 Nexa 代码签名。SHA-256 验证字节一致性，不证明发布者身份；仅从可信的仓库 Release/对应 Actions 获取并核对摘要。Windows/SmartScreen 可能显示未知发布者提示；不要把绕过安全警告当成安装步骤。
 
 ## 安装位置、权限与数据
 
-固定每用户安装到 `%LOCALAPPDATA%\Programs\Nexa`，不请求管理员权限、不提供机器级安装、不修改 PATH/防火墙/系统服务，不建立自启动任务。开始菜单只为当前用户创建 Nexa 快捷方式。
+两种安装格式均固定安装到当前用户的 `%LOCALAPPDATA%\Programs\Nexa`，不请求管理员权限，不提供机器级安装，不修改 PATH、防火墙或系统服务。开始菜单只创建当前用户的 `Nexa\Nexa.lnk`，不提供自选安装位置，不创建桌面快捷方式。
 
-- 配置、密钥、登记元数据等仍由应用放在 `%LOCALAPPDATA%\Nexa`
-- 应用已有默认模型位置是 EXE 邻近的 `models`；这个目录在每用户安装位置可写
-- 升级、修复、卸载只管理清单列出的程序文件与安装器自身的 HKCU 登记/快捷方式
-- 安装目录内用户添加的 `models`、`model`、其他非安装器文件，以及数据目录和外部模型全部保留
-- 不做递归目录删除；仅删除已经变空的安装器目录。因此卸载后仍有模型的 Nexa 目录会保留
-- 不自动迁移便携版模型或数据。已有数据结构的兼容边界仍以应用版本为准，升级前备份重要配置与登记记录
+- 配置、密钥、登记元数据等仍由应用放在 `%LOCALAPPDATA%\Nexa`。
+- 默认模型位置是桌面 EXE 邻近的 `models`，在当前用户安装位置可写。
+- 更新、修复和卸载只管理清单内程序文件、安装器登记与快捷方式；NSIS 另管理自己的 `uninstall.exe`。
+- 安装目录内用户添加的 `models`、`model` 和其他非清单文件、应用数据目录及外部模型全部保留。
+- 不做递归目录删除，只移除已空的安装器目录；卸载后含模型的 Nexa 目录会保留。
+- 不自动迁移便携版模型或数据。历史数据格式的兼容范围仍由应用版本决定。
 
-不要把安装器自带 EXE、DLL、manifest 或许可文件当作可修改的用户数据：显式修复会从相同安装源恢复这些安装器拥有的文件。
+安装器自带的 EXE、DLL、manifest、许可证等属于受管程序文件。MSI 修复或 NSIS 重装会恢复这些文件；不要把它们用作用户数据。
 
-安装/升级/修复/卸载前，在 Nexa 中停止服务并关闭窗口。原生只读检查会识别安装目录内的桌面、runtime、worker 和下载进程，包括可解析的短路径别名；发现运行中或无法确认其状态时拒绝继续。安装器不发送强杀、不静默停止服务，也关闭 Windows Installer 自动重启应用的行为。检查安装目标、受管文件及开始菜单路径中的重解析点，拒绝跨目录重定向。范围比较只展开已经存在祖先的 Windows 长名，允许同一目标的 8.3 路径别名；缺失尾部原样保留，拒绝 `.`、`..` 等改写。检查与后续 Windows Installer 写入仍不是针对同一用户恶意并发改目录的安全隔离边界。
+安装、覆盖、修复或卸载前，先在 Nexa 中停止服务，再完全退出桌面程序。启用“关闭到托盘”后，仅关闭窗口不会退出；应使用托盘菜单的“退出 Nexa”。只读检查识别桌面、runtime、worker 和下载进程，包括可解析的短路径别名；发现运行中或无法确认状态时拒绝继续。安装器不强杀进程、不静默停止服务；MSI 关闭 Restart Manager 自动重启应用的行为。
 
-## 前置组件与系统边界
+目录检查拒绝安装根、受管文件和开始菜单路径中的重解析点或越界目标。MSI 路径比较可接受同一目标的 8.3 别名，拒绝 `.`、`..` 等改写；NSIS 还独立核对实际 `$INSTDIR`，`/D` 和卸载 `_?=` 不能扩大安装范围。检查与后续写入不是针对同一用户恶意并发改目录的安全隔离边界。
 
-目标仍是 Windows 10 x64 / i5-8400 / 16GB，Windows 11 后续按真实结果验证。Windows Server 2022 runner 上通过不能代替该目标设备、干净机器、离线和长期运行验收。
+## 开机启动与卸载
 
-Microsoft Edge WebView2 Evergreen Runtime 必须已经安装。安装器不捆绑、不下载、不安装 WebView2，不接受其新的许可条款；向导显示说明，应用沿用原有缺失诊断。缺失时由用户通过 [Microsoft 官方 WebView2 页面](https://developer.microsoft.com/microsoft-edge/webview2/) 获取并自行安装。CLI runtime 不依赖 WebView2。应用本身的 CPU 指令集、内存和模型许可要求保持不变。
+安装器不会自动启用开机启动，也不会在安装完成后自动打开 Nexa。应用设置中的“开机启动”默认关闭；用户启用后，在登录 Windows 时打开当前 Nexa 主窗口。此选项与关闭到托盘独立。
 
-Setup、独立 OS 检查 EXE 与 MSI 目录/进程 guard 由同一既有 MSVC/Windows SDK 构建，使用 Windows inbox API，没有动态或静态 CRT 依赖；构建通过 `dumpbin /dependents` 的受限白名单检查。MSI 保留完整便携版许可闭包和 aria2 对应源码，不添加另一组重复许可文件。没有引入新 WiX/NSIS 运行依赖、EULA 自动接受、付费工具或签名证书。
+启动设置直接读写当前用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `Nexa` 字符串值，内容为带双引号的当前桌面 EXE 路径，不带参数，不维护另一份 TOML 副本。Windows 的“启动应用”设置仍可单独禁用该项。
+
+同版本覆盖和高版本更新保留现有启动选择。真正卸载时，仅删除匹配本固定安装目录 `nexa-desktop.exe`、带双引号且无参数的 `Nexa` Run 值；若指向其他便携副本或无法确认归属，则不删除。不会删除整个 Run 注册表项。MSI 在成功卸载的 commit 阶段清理，并排除 `UPGRADINGPRODUCTCODE`；升级失败回滚不会提前删启动项。NSIS 替换使用 `/UPDATE` 保留启动项，普通卸载才执行归属检查。
+
+## 前置组件与打包工具
+
+目标仍是 Windows 10 x64 / i5-8400 / 16GB。Windows Server 2022 runner 的结果不能替代该设备、干净机器、离线和长期使用验收；Windows 11 仍按实际结果扩展。
+
+Microsoft Edge WebView2 Evergreen Runtime 必须已安装。安装器不捆绑、下载或安装 WebView2；缺失时应用继续提供诊断，用户可从 [Microsoft 官方页面](https://developer.microsoft.com/microsoft-edge/webview2/) 获取。CLI runtime 不依赖 WebView2。
+
+正式安装器使用锁定的 Tauri CLI `2.12.1`：MSI 路线调用 WiX `3.14.1`，EXE 路线调用 NSIS `3.11`。这是官方打包器及标准界面，配合保留 Nexa 固定目录、数据和进程边界的模板适配，不是原来的自研 Setup 向导，也不是完全不加配置的 Tauri 默认安装行为。
+
+WiX 3.14.1 使用 MS-RL，不是 WiX 7 的工具/EULA 路线。Tauri、WiX、NSIS 及插件许可证原件和来源证据随既有桌面许可库存整合；详细工具版本、来源与上游插件构建身份限制见[模板说明](../packaging/tauri/windows/README.md)及[依赖证据](../packaging/tauri/windows/licenses/DEPENDENCY_EVIDENCE.md)。构建工具不随 Nexa 安装到用户机器。
+
+应用载荷复用已验收的便携目录。打包使用隔离的元数据工程与输出目录，执行 `tauri bundle --no-binary-patching --no-sign`；不重编应用，不为区分安装格式修改主 EXE。runtime/worker 等按原相对路径装入，MSI 的资源片段使用 HKCU keypath 和空目录移除以满足每用户组件规则。安装器自身的界面、卸载器、元数据不属于便携应用字节；应用文件仍须逐字节一致。
+
+## 同版本覆盖与失败恢复
+
+MSI 固定 UpgradeCode 为 `{85615F8B-FD70-53D9-86ED-4164379CBC40}`。每次构建由 WiX 生成新的 ProductCode 和 PackageCode，沿用官方 `MajorUpgrade` 的同版本升级能力，并关闭降级。旧产品移除在 `InstallInitialize` 后进行，旧卸载与新安装处于同一 Windows Installer 事务；失败由 Windows Installer 回滚。重复运行同一原始 MSI 可进入标准维护界面，或使用 `/fa` 修复；修复应保留该次安装的 MSI 源文件。
+
+NSIS 同版本重装或升级先检查现有登记与固定目录中的卸载器，执行其同格式卸载清理旧清单文件，再安装新文件，因此新清单删掉或改名的旧程序文件不会因简单覆盖而遗留。无法确定旧版本、缺少卸载器、登记与路径不符或请求降级时停止。
+
+**NSIS 替换不提供 MSI 式事务回滚。** 旧程序卸载后若新安装失败，不能自动恢复旧程序；用户数据仍保留，修复失败原因后可重新运行安装包。这一限制也适用于同版本重装，不能用 MSI 回滚通过来代表 NSIS 可回滚。
+
+同版本构建之间没有时间先后排序，新安装器允许用选定构建替换已有同版本；更低的三段版本仍被拒绝。旧安装器代码不会被追溯修改，后续同版本重装应使用本次修复后的安装器。允许本机覆盖不等于允许覆盖同名 tag/Release 附件。
 
 ## 命令行
 
-普通用户双击 Setup 可使用向导。自动化使用：
+普通用户双击新 MSI 或 EXE 使用相应标准向导，卸载可从 Windows 应用设置进入。以下 `0.2.3` 仅示例命令格式，须使用本次实现之后构建的实际新包，不表示已发布新附件：
 
 ```powershell
-.\Nexa-0.1.0-windows-x64-setup.exe /S
-.\Nexa-0.1.0-windows-x64-setup.exe /S /repair
-.\Nexa-0.1.0-windows-x64-setup.exe /S /uninstall
-msiexec.exe /i Nexa-0.1.0-windows-x64-setup.msi /qn /norestart
-msiexec.exe /fa Nexa-0.1.0-windows-x64-setup.msi /qn /norestart
-msiexec.exe /x Nexa-0.1.0-windows-x64-setup.msi /qn /norestart
+msiexec.exe /i Nexa-0.2.3-windows-x64-setup.msi /qn /norestart
+msiexec.exe /fa Nexa-0.2.3-windows-x64-setup.msi /qn /norestart
+msiexec.exe /x Nexa-0.2.3-windows-x64-setup.msi /qn /norestart
+.\Nexa-0.2.3-windows-x64-setup.exe /S
+Start-Process -FilePath "$env:LOCALAPPDATA\Programs\Nexa\uninstall.exe" -ArgumentList "/S" -Wait
 ```
 
-示例版本只是命令格式，不表示已创建这个 tag 或 Release。Setup 只接受 `/S` 及至多一个 `/install`、`/repair`、`/uninstall`，不把任意参数转交 msiexec。始终调用 Windows 系统目录中的 msiexec，禁止自动重启，返回其原始退出码：`0` 成功、`1602` 用户取消、`3010` 成功但 Windows 请求稍后重启，其他非零值为失败；非法参数返回 `87`。
+新 EXE 的 `/S` 安装或重装均进入 NSIS 流程，不再使用旧自研 Setup 的 `/repair`、`/uninstall` 接口。MSI 使用 Windows Installer 的退出码；`0` 为成功、`1602` 为取消、`3010` 为成功但请求稍后重启。NSIS 的跨格式/降级拒绝返回 `1638`，路径或进程保护拒绝返回 `1603`；不要把旧 Setup 的全部参数和退出码约定套用到新 EXE。
 
-向导执行过程中不能直接关掉向导丢弃结果。若需要取消，使用 Windows Installer 进度窗口的“取消”，等待其回滚及向导结果；静默执行没有交互式取消按钮。完成后临时 MSI 删除。Windows Installer 缓存不承诺保留修复所需 CAB，控制面板修复可能询问安装源；保留相同版本的 MSI 或重新运行该版本 Setup 并选择修复。不会从网络补取未知安装源。
-
-## 身份、事务与构建
-
-- 固定 UpgradeCode：`{85615F8B-FD70-53D9-86ED-4164379CBC40}`，只用于 Nexa 的 x64 每用户产品族
-- ProductCode 由该产品族、范围和严格三段版本派生；组件 GUID 按该产品族、范围、架构、规范化相对路径派生
-- PackageCode 每次创建随机生成。即使提交和载荷相同，重建也可能产生不同 MSI 字节；不可覆盖已发布 tag 资产
-- 只接受项目所有版本源一致的稳定版本，不归一化预发布/build 后缀；MSI 三段字段范围为 255/255/65535。`255.255.65535` 虽是 MSI 字段极限，但当前升级回归需要一个更高的私有测试版本，因此该终端版本会被 CI 阻断，须先明确新的测试策略
-- 新版本先通过只读检查，再在 `InstallInitialize` 后、生成文件操作前执行 `RemoveExistingProducts`；旧卸载和新安装在同一 Windows Installer 事务内。失败回滚由 Windows Installer 负责
-- 不允许降级，不把同一语义版本重新构建当成新的正式版本。发布流程见 [tag 发布流程](windows-releases.md)
+## 构建与验收
 
 生产命令：
 
 ```powershell
-python scripts/package_windows_msi.py --payload dist/desktop-windows --version <版本> --output dist/Nexa-<版本>-windows-x64-setup.msi --setup-output dist/Nexa-<版本>-windows-x64-setup.exe --report dist/windows-msi-build-report.json
-python scripts/test_windows_msi_lifecycle.py --payload dist/desktop-windows --msi dist/Nexa-<版本>-windows-x64-setup.msi --setup dist/Nexa-<版本>-windows-x64-setup.exe --report dist/windows-msi-lifecycle-report.json
+python scripts/package_tauri_windows.py --payload dist/desktop-windows --version <版本> --output dist/Nexa-<版本>-windows-x64-setup.msi --setup-output dist/Nexa-<版本>-windows-x64-setup.exe --report dist/windows-msi-build-report.json
+python scripts/test_tauri_windows_lifecycle.py --payload dist/desktop-windows --msi dist/Nexa-<版本>-windows-x64-setup.msi --setup dist/Nexa-<版本>-windows-x64-setup.exe --report dist/windows-msi-lifecycle-report.json
 ```
 
-第一步复用已经验收的便携目录，不重新构建应用；检查完整清单/依赖/许可/同源源码，逐文件生成标准 MSI 表及 CAB，再读取表和嵌入 CAB 校验。Setup 的资源必须与最终 MSI 完全相同，执行前在内存及提取后核对同一 SHA-256。提取使用不可预测且仅所有者/SYSTEM 可访问的临时目录，保持只读锁直到 msiexec 结束。
+保留旧报告文件名以接入既有发行流程，其内容已改为 Tauri 两种格式的来源与验收结果。旧 `package_windows_msi.py` 的自建 MSI 能力只用于私有旧身份迁移 fixture，不再生成正式发布安装器。
 
-第二步只允许一次性 GitHub Windows runner，且拒绝已有 Nexa 安装或数据目录。真实运行不带 `/q` 的默认 MSI 入口（`LIMITUI=1` 明确使用系统 Basic UI）、逐字节安装校验、MSI/EXE 修复、运行中拒绝、首次安装 scope/path 拒绝、维护阶段实际范围/位置保留、junction 拒绝、失败升级回滚、升级、降级拒绝、卸载、模型/配置/密钥/外部文件保留、Setup 三动作向导的前进/后退/取消、真实 GUI 安装的 Apply→受保护进度→Finish，以及实际 MSI `3010` 的 EXE 返回传播。私有升级/故障/请求重启测试 MSI 不进入 Release。
+生命周期入口只允许一次性 GitHub Windows runner，拒绝已有 Nexa 程序/数据目录、开始菜单、安装登记或自启动项。检查包括旧 MSI 身份迁移、新 MSI 同版本变更载荷覆盖及写入后故障回滚、修复、高版本升级和卸载；NSIS 全新安装、原包重复安装、同版本增删文件替换、高版本升级和卸载；两格式降级拒绝、运行中拒绝、双向跨格式拒绝、用户数据/外部模型哨兵保留，以及开机启动的默认关闭、更新保留、卸载按归属清理。私有变更、未来版本和故障 fixture 不进入 Release。
 
-`--check-toolchain --report <路径>` 提前编译原生辅助程序并检查 inbox DLL 依赖；还通过真正的 `System32\msiexec.exe` 执行私有 MSI 的只读 OS/目录/进程门禁，60 秒内未完成即失败。私有 MSI 使用随机产品身份，没有 InstallInitialize、InstallFiles、WriteRegistryValues、RegisterProduct、PublishProduct 等动作，前后检查产品未登记、Nexa 程序与用户数据目录未创建。Installer 自身的临时提取/日志允许；这不是应用安装、载荷或完整生命周期通过证据。表结构/外键/读回校验也不冒称 Windows SDK ICE 验证；当前报告明确记录 ICE 未运行。尚未执行的 Windows 测试不得因为测试脚本存在而写成通过。
+`--check-toolchain --report <路径>` 只编译辅助程序并产生 `compile-pass`、`installation_tested=false`，不是安装测试；Linux 的 `--nsis-only` 仅检查交叉打包，不生成正式双格式发行结论。单元测试、WiX XSD 校验、Tauri 渲染/编译、原生生命周期和用户目标机 GUI 必须分别报告。本轮原生 Windows 尚未运行；旧自研 Setup 的历史成功不能转授给新 MSI/NSIS。
 
+## 失败诊断与 MSI 宿主边界
 
-## 失败诊断
+生命周期为每个外部动作写入固定阶段、预期/实际数值退出码和 `windows-msi-diagnostics.json`。单次安装期限 240 秒；超时不强杀安装器，也不为了退出测试删除安装树。诊断只记录白名单 MSI 动作、错误码、窗口类别/控件 ID 和固定原因枚举，不包含原窗口文本、命令行、配置/令牌、用户完整路径或原始日志。工作流严格校验 schema/来源后才上传独立诊断目录；缺失报告不记通过。
 
-生命周期检查在每个外部动作前后即时输出固定阶段名、预期/实际数值退出码，写入 `windows-msi-diagnostics.json`。240 秒单次安装期限不因 UI 等待而延长，也不强杀 Windows Installer；超时时提取本次进程树窗口的固定原因枚举、控件 ID、可见/启用状态，以及 MSI 日志中白名单动作和数值错误码。原窗口文本、命令行、配置/令牌、完整路径和原始 MSI 日志不进入该报告。
+MSI 保留自带 Windows 10 supportedOS manifest 的只读 OS EXE，并在事务前同步检查其退出码；DLL 继续负责目录/进程检查。`VersionNT64` 只作架构限制，不能用 MSI 宿主的兼容版本值替代 Windows 10 门禁。旧 DLL 曾在 Windows Server MSI 宿主中观察到 `6.3.20348`，迁移本次打包器不能恢复该错误判断；历史依据见 [ADR0028](decisions/0028-tagged-windows-installers.md)。
 
-失败时工作流只上传严格 schema/来源校验后的独立诊断目录；未知字段、重复 JSON 键、非 JSON 数值、路径/自由文本、超界数据和输入/输出祖先的 reparse 均拒绝。缺失报告明确记录 missing，不标成通过；通过全量校验后才原子发布证据目录。
-
-首轮 `51d2d50` 的 Windows CI 已实际完成辅助程序编译和真实 MSI/Setup 字节绑定，在生命周期极早的一次动作等候 240 秒后失败；因当时缺少阶段诊断，不能确定具体 MSI 模态框或动作。后续 Basic UI 契约明确化、目标长短路径归一化和失败诊断属于针对源码缺口的限定修正，不宣称已证实首轮根因；完整安装、修复、升级、回滚与用户数据保留仍须新 CI 实测。
-
-
-## MSI 宿主中的 OS 识别
-
-第三轮 `2bbd72d` 的原生诊断明确定位：默认 MSI 入口停在旧 DLL 的 `NexaGuard` OS 拒绝窗口。Setup 的三种取消导航、参数拒绝和不存在产品的静默卸载已经执行通过；后续安装尚未进入。旧 `kernel32.dll` 文件版本查询究竟是 API 失败还是 MSI 兼容层返回旧版本，原报告没有数值，不能把其中一种推断当成实测结论。
-
-OS 门禁现迁至自带 Windows 10 supportedOS manifest 的只读 EXE，和已在该 runner 实际运行过的 Setup 共用同一 `VerifyVersionInfoW` 谓词。MSI 的 `NexaOsGuard` 是同步、检查退出码的 Type 2 动作，必须在目录/进程 guard 和安装事务之前成功；`VersionNT64` 架构限制保留。不在 DLL 内改用同样可能受宿主兼容影响的版本查询，也不因诊断困难而跳过 OS 门禁。
-
-早期私有 MSI 与生产 MSI 使用相同 OS EXE 和完整目录/进程 guard；日志必须出现它们的成功结束动作，不能仅凭 msiexec 返回 0。旧文件查询仅保留在不会分发的诊断 DLL，输出固定阶段码、是否成功、major/minor/build 和 Win32 错误码六个数值，由封闭 schema 过滤后共享。第四轮 `4067823` 的私有真实 MSI 探针已确认旧查询取文件/查询均成功，但得到 `6.3.20348`（stage 7），因此旧阈值错误拒绝；新 EXE 与完整 guard 成功。默认 MSI 安装、完整字节/登记、三种修复以及运行中拒绝也已实测通过。升级、回滚、卸载和剩余完整生命周期仍待后续 CI，不能把这些部分结果称为整个发布通过。
-
-
-## 维护模式的范围验证
-
-Windows Installer 对已经按用户安装的产品继续按用户修复，并可把命令行 `ALLUSERS` 重设为既有安装上下文。因此 `/fa ... ALLUSERS=1` 的退出 0 本身不代表扩大权限，也不能仅凭 0 判安全。[官方维护上下文规则](https://learn.microsoft.com/en-us/windows/win32/msi/msiinstallperuser)
-
-测试区分两种情况：
-
-- 尚未登记的首次 `/i` 请求机器级范围或外部安装目录，必须明确拒绝，且没有产品登记、程序/用户目录或机器级目标；早期只读私有 MSI 和最终生产包分别验证
-- 已安装产品的维护请求，可以明确拒绝，或由 Windows Installer 恢复原位置。两者都必须通过 `MsiEnumProductsExW` 核对只存在当前用户 unmanaged 实例（上下文 2），无机器级/用户 managed 实例，产品状态为已安装；原载荷和用户哨兵逐字节不变，机器级/外部目标不存在
-
-枚举错误、未知产品、广告状态、重复或扩大上下文均不能当作验证成功。诊断仅记录数值上下文及目标保留布尔值，不读取或上传用户 SID。生产每用户/固定路径/运行中 guard 保持不变，不为满足测试而改变安全规则。3010 私有 fixture 每次修改 MSI 时刷新并读回 PackageCode；Setup 修复始终使用本次从原 EXE 中重新校验提取的相同 MSI，不依赖 Windows 缓存 CAB。
+Windows Installer 维护模式可恢复已安装产品的上下文，不能仅凭命令行 `ALLUSERS` 或退出码判断是否改变范围。验收使用 `MsiEnumProductsExW` 核对当前用户 unmanaged 上下文，并检查实际载荷、登记及机器级目标；不读取或上传用户 SID。

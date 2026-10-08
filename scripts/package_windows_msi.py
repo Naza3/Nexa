@@ -295,7 +295,7 @@ def compile_native(work, msi=None, *, path_test=False, os_check=False, legacy_pr
         source = AUTHORING / ("legacy_os_probe.c" if legacy_probe else "path_test.c" if path_test else "guard.c")
         base.command([*common, "/LD", source, "/Fo" + str(work / "guard.obj"),
                       "/link", "/NODEFAULTLIB", "/NOENTRY", "/MACHINE:X64", "/DYNAMICBASE", "/NXCOMPAT",
-                      "/OUT:" + str(output), "/IMPLIB:" + str(work / "guard.lib"), "kernel32.lib", "user32.lib", "msi.lib", "shell32.lib", "ole32.lib", "uuid.lib", "version.lib"], env, cwd=work)
+                      "/OUT:" + str(output), "/IMPLIB:" + str(work / "guard.lib"), "kernel32.lib", "user32.lib", "msi.lib", "shell32.lib", "ole32.lib", "uuid.lib", "version.lib", "advapi32.lib"], env, cwd=work)
     else:
         output = work / ("nexa-os-check.exe" if os_check else "nexa-setup.exe")
         if not os_check:

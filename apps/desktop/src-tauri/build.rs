@@ -12,6 +12,8 @@ fn main() {
                 "ocr_history_delete",
                 "workbench_get",
                 "workbench_save",
+                "autostart_get",
+                "autostart_set",
                 "configuration_model_get",
                 "configuration_save",
                 "configuration_migrate",

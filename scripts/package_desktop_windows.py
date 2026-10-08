@@ -215,6 +215,18 @@ def copy_rust_licenses(stage, metadata, env):
             if base.digest(file) != original["sha256"]:
                 base.fail("native SDK original license hash mismatch")
             save(file, "licenses/native/" + original["path"], {"component": component["name"], "version": component["version"], "source": component["source"], "package_sha256": component["package_sha256"], "loader_sha256": component["sha256"]})
+    # Installers also redistribute NSIS stubs/plugins and WiX/Tauri material.
+    # Preserve their original bytes inside the existing consolidated inventory.
+    installer_root = ROOT / "packaging/tauri/windows/licenses"
+    installer_sources = base.strict_json(base.regular(installer_root / "sources.json").read_bytes())
+    for original in installer_sources["files"]:
+        base.relative(original["path"])
+        file = base.regular(installer_root / original["path"])
+        if base.digest(file) != original["sha256"]:
+            base.fail("installer original license hash mismatch")
+        save(file, "licenses/installers/" + original["path"], original)
+    save(installer_root / "sources.json", "licenses/installers/sources.json",
+         {"component": "Installer original-license source inventory", "source": "Nexa packaging source"})
     save(supplements_root / "SOURCES.md", "licenses/SUPPLEMENTAL_SOURCES.md", {"component": "Supplemental original-license source inventory", "source": "Nexa packaging source"})
     base.write_json(stage / "licenses/index.json", {"scope": "locked desktop normal/build closure, original license texts and native loader identity", "files": records})
     return records

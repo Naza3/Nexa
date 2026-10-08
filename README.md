@@ -11,19 +11,24 @@ Nexa 是面向 Windows 桌面处理器的本地大模型运行时。以固定版
 - 桌面模型库、选中文件零复制登记、混合目录诊断、受控 aria2 下载、配置/模型档案、服务控制与聊天验证
 - [统一推理性能](docs/inference-performance.md)：聊天、OCR、API 的 prefill/decode 速度、耗时、实际参数与最近 200 条终态记录，可筛选和复制 CSV
 - 合规单文件 GGUF 可尝试加载，不设特定型号/hash 许可名单；结构、完整性、原始模板、执行方式与资源检查仍必需，精确[模型矩阵](docs/model-matrix.md)只记录实测证据
-- 关闭窗口与停止服务分别处理；托盘、开机自启动、生产工具调用、完整 Harness 工具闭环、GPU/NPU 及其他系统仍不属于已实现承诺
+- 设置中可独立启用关闭到托盘和当前用户开机启动，默认均关闭；托盘退出继续执行保存和服务退出偏好，详见[使用说明](docs/desktop-startup.md)
+- 生产工具调用、完整 Harness 工具闭环、GPU/NPU 及其他系统仍不属于已实现承诺
 
 ## 当前开发分支：单图 OCR
 
 新增 GLM-OCR 双 GGUF 配对导入、CPU 图片识别和桌面 Markdown 原文/预览/保存。Linux真实PNG/JPEG、HTTP取消恢复及原有文本回归通过；本批Windows包与用户目标机仍待验，旧v0.1.0包不含此能力。见[使用说明](docs/ocr-windows-cpu.md)、[实现边界](docs/decisions/0032-local-single-image-ocr.md)和[验证记录](docs/verification/2026-10-07-local-ocr.md)。
 
-## 最新已交付版本
+## 当前开发分支：Tauri 安装器与窗口设置
+
+安装器改用 Tauri 的 WiX MSI 和 NSIS EXE，支持同格式同版本覆盖，固定当前用户目录并保留模型与配置。旧 Setup EXE 实际安装的是 MSI，应使用新 MSI 原位更新；切换格式先卸载程序。新安装器与托盘/登录启动的原生 Windows 运行验证状态见[当前状态](PROJECT_STATE.md)，以下历史发行包不包含本次更改。
+
+## 历史已交付版本
 
 2026-10-05 已交付版本 0.1.0 的便携 ZIP、MSI 与 Setup EXE，精确来源为 `de7732f031c11e44a27f86b33a341c48131a3906`。[Windows Actions37306309927](https://github.com/Naza3/Nexa/actions/runs/37306309927)通过真实模型/桌面 bridge 与全部 13 项安装生命周期门槛，随后独立产物审计通过。三格式来自同一 28 文件 payload，完整 10 份许可及 aria2 对应源码保留。
 
 这是开发分支构建的交付，实际 GitHub tag 发布尚未执行。安装器未签名；Server 2022 CI 与 Setup 向导通过不代替用户 Windows 10、应用原生窗口、两机 LAN、干净机器/离线或长期稳定性验收。精确文件/hash和证据边界见[三格式验证记录](docs/verification/2026-10-05-tag-release.md#最终de7732f原生成功与三格式交付)。随后开展的桌面源码清理另记[当前状态](PROJECT_STATE.md)，不把旧包当作清理后的新包。
 
-## 交付与使用
+## 历史交付文件与使用
 
 | 产物 | 内容 |
 | --- | --- |

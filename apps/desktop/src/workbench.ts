@@ -1,13 +1,13 @@
 import type { DesktopApi, LoadOptions, ModelConfiguration, WorkbenchPreferences, WorkbenchPreferencesSnapshot } from "./types";
 
 export const OCR_DEFAULT_LOAD: LoadOptions = { context_size: 8192, threads: 4, batch_size: 256 };
-export const defaultWorkbench = (): WorkbenchPreferences => ({ ocr: { ...OCR_DEFAULT_LOAD, model_id: null, max_output_tokens: 2048, prompt: "Text Recognition:", image_edge: 0, markdown: false, model_drafts: {} }, chat: { draft: "" } });
+export const defaultWorkbench = (): WorkbenchPreferences => ({ close_to_tray: false, ocr: { ...OCR_DEFAULT_LOAD, model_id: null, max_output_tokens: 2048, prompt: "Text Recognition:", image_edge: 0, markdown: false, model_drafts: {} }, chat: { draft: "" } });
 const integer = (value: number, min: number, max: number) => Number.isSafeInteger(value) && value >= min && value <= max;
 export const validLoad = (value: LoadOptions) => !!value && integer(value.context_size, 32, 131072) && integer(value.threads, 1, 256) && integer(value.batch_size, 1, Math.min(value.context_size, 4096));
 export const sameLoad = (a: LoadOptions, b: LoadOptions) => a.context_size === b.context_size && a.threads === b.threads && a.batch_size === b.batch_size;
 const invalidInput = "工作区输入尚未保存：请检查参数范围；提示词最多 4096 UTF-8 字节，聊天草稿最多 16 KiB。";
 export function validWorkbench(p: WorkbenchPreferences): boolean {
-  return !!p?.ocr && !!p.chat && validLoad(p.ocr) && integer(p.ocr.max_output_tokens, 1, 4096) && typeof p.ocr.prompt === "string" && new TextEncoder().encode(p.ocr.prompt).length <= 4096 &&
+  return typeof p?.close_to_tray === "boolean" && !!p.ocr && !!p.chat && validLoad(p.ocr) && integer(p.ocr.max_output_tokens, 1, 4096) && typeof p.ocr.prompt === "string" && new TextEncoder().encode(p.ocr.prompt).length <= 4096 &&
     [0, 1600, 2048].includes(p.ocr.image_edge) && typeof p.ocr.markdown === "boolean" && (p.ocr.model_id === null || typeof p.ocr.model_id === "string" && !!p.ocr.model_id) &&
     typeof p.chat.draft === "string" && new TextEncoder().encode(p.chat.draft).length <= 16384 && !!p.ocr.model_drafts && typeof p.ocr.model_drafts === "object" && !Array.isArray(p.ocr.model_drafts) && Object.values(p.ocr.model_drafts).every((v) => !!v && validLoad(v.base) && validLoad(v.draft));
 }

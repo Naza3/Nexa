@@ -1,5 +1,6 @@
 import { PerformanceSummary } from "./PerformanceSummary";
 import { WorkbenchNotice } from "./WorkbenchNotice";
+import { AutostartSettings } from "./AutostartSettings";
 import { PerformancePage } from "./PerformancePage";
 import { OcrPage } from "./OcrPage";
 import { followOnLoadAction } from "./modelLoad";
@@ -944,6 +945,13 @@ function SettingsPage({
         </div>
       </div>
       <DetailsGroup title="模型目录与维护" description={["missing", "unavailable", "unsupported", "stale"].includes(state.snapshot?.model_directory.state ?? "") ? "目录配置需检查" : "下载位置、手动扫描"} status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} initialOpen={!!returnToDownloads || !!state.directory_selection}><DirectorySettings state={state} controller={controller} /></DetailsGroup>
+      <section className="settings-card">
+        <div className="toggle-row"><div><h2>关闭到托盘</h2><p>启用后，点击标题栏关闭按钮只隐藏窗口，当前任务、运行服务和已加载模型继续保留。点击托盘图标可恢复窗口，托盘菜单“退出 Nexa”会按退出偏好清理并保存。</p></div>
+          <input className="switch" type="checkbox" role="switch" aria-label="关闭到托盘" checked={state.workbench.preferences.close_to_tray} disabled={!state.workbench.supported || !state.workbench.hydrated || state.closing} onChange={(event) => controller.setCloseToTray(event.target.checked)} />
+        </div>
+        <p className="small-note">{!state.workbench.supported ? "当前桌面版本不支持此偏好。" : !state.workbench.hydrated ? "正在读取工作区设置…" : state.workbench.error ? "关闭偏好尚未保存，请处理上方工作区保存提示。" : state.workbench.dirty || state.workbench.saving ? "正在自动保存，保存成功后生效。" : "已保存；默认关闭此选项。隐藏窗口不会阻止 Windows 睡眠或关机。"}</p>
+      </section>
+      <AutostartSettings api={controller.api} closing={state.closing} />
       {form.conflict && <div className="notice-band warning" role="alert"><div><strong>已保存配置发生变化</strong><p>保留了你的未保存草稿。请先重新读取新配置，再决定如何修改，避免覆盖其他窗口的更新。</p></div><button onClick={form.reset}>丢弃草稿并读取新配置</button></div>}
       {!state.snapshot?.initialized && state.snapshot?.connection === "stopped" && <section className="settings-card"><h2>先准备配置</h2><p>初始化本机配置与管理凭据，不启动服务、监听端口或扫描模型。</p><button disabled={!!state.operation} onClick={() => void controller.initialize()}>仅初始化配置</button></section>}
       {state.snapshot?.configuration && <><DetailsGroup title="运行默认值" description="全局加载参数" status={state.snapshot?.configuration?.pending_restart ? "待重启" : state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["global_defaults"]} initialOpen={state.snapshot.configuration.schema_version === 1}><GlobalConfiguration state={state} controller={controller} /></DetailsGroup><DetailsGroup title="请求参数" description="输出预算与采样" draftKeys={["request_defaults"]}><RequestDefaultsForm state={state} controller={controller} /></DetailsGroup></>}
@@ -1010,7 +1018,7 @@ function SettingsPage({
             <div>
               <h2>关闭窗口时同时退出运行服务</h2>
               <p>
-                默认关闭窗口会停止本窗口加载与生成，运行服务继续供其他客户端使用。
+                真正退出界面时，默认停止本窗口加载与生成，运行服务继续供其他客户端使用。关闭到托盘时不执行此退出策略。
               </p>
             </div>
             <input
@@ -1029,7 +1037,7 @@ function SettingsPage({
           </div>
           {draft.close_runtime_on_exit && (
             <p className="warning-text">
-              启用并保存后，关闭窗口会停止运行服务及所有客户端任务。
+              启用并保存后，真正退出界面会停止运行服务及所有客户端任务；关闭到托盘时不停止。
             </p>
           )}
         </section>
@@ -1180,8 +1188,8 @@ export default function App({
           <div className="sidebar-footer">
             <span>Windows · CPU</span>
             <button
-              title={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : "关闭窗口并保留服务"}
-              aria-label={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : "关闭窗口并保留服务"}
+              title={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : state.workbench.preferences.close_to_tray ? "退出 Nexa 并保留服务" : "关闭窗口并保留服务"}
+              aria-label={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : state.workbench.preferences.close_to_tray ? "退出 Nexa 并保留服务" : "关闭窗口并保留服务"}
               className="icon-button"
               disabled={!!state.operation && !state.testing_model && state.operation.kind !== "pick_models"}
               onClick={requestClose}

@@ -18,6 +18,8 @@ const MAX_FILE_BYTES: usize = 64 * 1024;
 #[derive(Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkbenchPreferences {
+    #[serde(default)]
+    pub close_to_tray: bool,
     pub ocr: OcrWorkbenchPreferences,
     pub chat: ChatWorkbenchPreferences,
 }
@@ -62,6 +64,8 @@ pub struct WorkbenchPreferencesSaveRequest {
 #[serde(deny_unknown_fields)]
 struct Store {
     schema_version: u32,
+    #[serde(default)]
+    close_to_tray: bool,
     ocr: OcrWorkbenchPreferences,
     chat: ChatWorkbenchPreferences,
 }
@@ -176,6 +180,7 @@ fn read_unlocked(root: &Path) -> Result<WorkbenchPreferencesSnapshot> {
         return Err(error("workbench_corrupt"));
     }
     let preferences = WorkbenchPreferences {
+        close_to_tray: store.close_to_tray,
         ocr: store.ocr,
         chat: store.chat,
     };
@@ -234,6 +239,7 @@ fn save(
     }
     let store = Store {
         schema_version: 1,
+        close_to_tray: request.preferences.close_to_tray,
         ocr: request.preferences.ocr.clone(),
         chat: request.preferences.chat.clone(),
     };
@@ -334,6 +340,59 @@ mod tests {
         );
         drop(held);
         assert_eq!(std::fs::read(root.join(FILE_NAME)).unwrap(), before);
+    }
+    #[test]
+    fn tray_preference_defaults_for_old_toml_and_persists_with_draft_cas() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        let initial = read(&root).unwrap();
+        assert!(!initial.preferences.close_to_tray);
+        let mut req = request(&initial);
+        req.preferences.chat.draft = "keep chat".into();
+        req.preferences.ocr.prompt = "keep OCR".into();
+        save(&root, req).unwrap();
+        let old = std::fs::read_to_string(root.join(FILE_NAME))
+            .unwrap()
+            .replace("close_to_tray = false\n", "");
+        token::atomic_replace_private(&root.join(FILE_NAME), old.as_bytes()).unwrap();
+        let previous = read(&root).unwrap();
+        assert!(!previous.preferences.close_to_tray);
+        let mut enable = request(&previous);
+        enable.preferences.close_to_tray = true;
+        save(&root, enable).unwrap();
+        let restored = read(&root).unwrap();
+        assert!(restored.preferences.close_to_tray);
+        assert_eq!(restored.preferences.chat.draft, "keep chat");
+        assert_eq!(restored.preferences.ocr.prompt, "keep OCR");
+        assert_eq!(
+            save(&root, request(&previous)).err().unwrap().code,
+            "workbench_conflict"
+        );
+        assert!(read(&root).unwrap().preferences.close_to_tray);
+        let mut disable = request(&restored);
+        disable.preferences.close_to_tray = false;
+        save(&root, disable).unwrap();
+        assert!(!read(&root).unwrap().preferences.close_to_tray);
+    }
+    #[test]
+    fn invalid_tray_preference_is_preserved_as_corrupt_instead_of_reset() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        let initial = read(&root).unwrap();
+        save(&root, request(&initial)).unwrap();
+        let invalid = std::fs::read_to_string(root.join(FILE_NAME))
+            .unwrap()
+            .replace("close_to_tray = false", "close_to_tray = 'yes'");
+        token::atomic_replace_private(&root.join(FILE_NAME), invalid.as_bytes()).unwrap();
+        assert_eq!(read(&root).err().unwrap().code, "workbench_corrupt");
+        assert_eq!(
+            save(&root, request(&initial)).err().unwrap().code,
+            "workbench_corrupt"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(FILE_NAME)).unwrap(),
+            invalid
+        );
     }
     #[test]
     fn invalid_boundaries_and_empty_drafts_are_checked_by_utf8_bytes() {

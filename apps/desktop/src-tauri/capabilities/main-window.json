@@ -9,6 +9,7 @@
     "allow-performance-get",
     "allow-ocr-history-list", "allow-ocr-history-get", "allow-ocr-history-save", "allow-ocr-history-delete",
     "allow-workbench-get", "allow-workbench-save",
+    "allow-autostart-get", "allow-autostart-set",
     "allow-runtime-initialize", "allow-configuration-get", "allow-configuration-model-get", "allow-configuration-save", "allow-configuration-migrate", "allow-model-load-profile", "allow-model-load-start", "allow-model-load-profile-start", "allow-model-load-next", "allow-model-load-cancel", "allow-ui-preferences-get", "allow-ui-preferences-save",
     "allow-desktop-snapshot", "allow-runtime-start", "allow-model-pick",
     "allow-models-pick",

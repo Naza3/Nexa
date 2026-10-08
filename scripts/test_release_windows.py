@@ -380,4 +380,5 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("pull_request_target", text)
         self.assertIn("needs: [release-identity, download-component, native]", text)
         self.assertIn("github.event_name == 'push' && github.ref_type == 'tag'", text)
-        self.assertIn("scripts/test_windows_msi_lifecycle.py", text)
+        self.assertIn("scripts/test_tauri_windows_lifecycle.py", text)
+        self.assertIn("scripts/package_tauri_windows.py --payload", text)

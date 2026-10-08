@@ -45,6 +45,8 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
 export const nativeApi: DesktopApi = {
   closeAcknowledge: (id) => call("desktop_close_ack", { id }),
   workbenchGet: () => call("workbench_get"),
+  autostartGet: () => call("autostart_get"),
+  autostartSet: (enabled) => call("autostart_set", { enabled }),
   workbenchSave: (request) => call("workbench_save", request),
   ocrHistoryList: () => call("ocr_history_list"),
   ocrHistoryGet: (id) => call("ocr_history_get", { id }),

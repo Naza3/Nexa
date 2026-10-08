@@ -1,6 +1,8 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 #[cfg(any(windows, test))]
+mod autostart;
+#[cfg(any(windows, test))]
 mod close_request;
 #[cfg(any(windows, test))]
 mod diagnostics;

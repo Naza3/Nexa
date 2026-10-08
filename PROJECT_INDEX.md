@@ -143,3 +143,7 @@
 - [Windows CPU OCR使用说明](docs/ocr-windows-cpu.md)：双文件下载、显式加载、图片/Markdown及i5-8400参数建议
 - [单图OCR开发验证](docs/verification/2026-10-07-local-ocr.md)：Linux真实模型/HTTP及文本回归，Windows与目标机另验
 - [OCR 配对与布局修复](docs/verification/2026-10-07-ocr-pair-and-layout.md)：Windows 选择路径、导入反馈/列表刷新及沿用全局风格的页面布局
+
+- [Tauri 安装器 ADR0039](docs/decisions/0039-tauri-windows-installers.md)：标准 WiX MSI/NSIS、旧包迁移、同版本覆盖及原生生命周期验证
+- [托盘与开机启动 ADR0040](docs/decisions/0040-desktop-tray-and-autostart.md) / [使用说明](docs/desktop-startup.md)：独立默认关闭的设置、TOML 偏好、当前用户启动登记及安全退出
+- [Tauri/托盘/启动验证](docs/verification/2026-10-08-tauri-installers-and-startup.md)：本地回归、NSIS载荷一致性、Windows交叉构建及原生待验边界

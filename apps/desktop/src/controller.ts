@@ -412,6 +412,7 @@ export class DesktopController {
   setChatDraft = (draft: string) => { if (!this.closing) this.workbenchStore.edit({ ...this.state.workbench.preferences, chat: { draft } }); };
   setOcrPreferences = (patch: Partial<WorkbenchPreferences["ocr"]>) => { if (!this.closing) this.workbenchStore.edit({ ...this.state.workbench.preferences, ocr: { ...this.state.workbench.preferences.ocr, ...patch } }); };
   saveWorkbench = () => this.workbenchStore.flush();
+  setCloseToTray = (close_to_tray: boolean) => { if (!this.closing) this.workbenchStore.edit({ ...this.state.workbench.preferences, close_to_tray }); };
   reloadWorkbench = () => this.closing ? Promise.resolve() : this.workbenchStore.load(true);
   overwriteWorkbench = () => this.closing ? Promise.resolve() : this.workbenchStore.overwrite();
   persistOcrHistory = (request: OcrHistorySaveRequest): Promise<boolean> => {

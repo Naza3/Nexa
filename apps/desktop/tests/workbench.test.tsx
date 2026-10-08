@@ -17,6 +17,28 @@ function preferencesApi(value = prefs()) {
 }
 
 describe("workbench writer", () => {
+  it("persists tray toggles with concurrent OCR and chat edits without losing drafts", async () => {
+    const first = deferred<WorkbenchPreferencesSnapshot>(); const api = preferencesApi();
+    vi.mocked(api.workbenchSave!).mockReturnValueOnce(first.promise).mockImplementationOnce(async ({ preferences }) => ({ revision: "revision-3", preferences }));
+    const store = new WorkbenchStore(api, () => {}); await store.load();
+    expect(store.state.preferences.close_to_tray).toBe(false);
+    const enabling = { ...store.state.preferences, close_to_tray: true };
+    store.edit(enabling); const writing = store.flush();
+    store.edit({ ...store.state.preferences, chat: { draft: "new chat" }, ocr: { ...store.state.preferences.ocr, prompt: "new OCR" } });
+    first.resolve({ revision: "revision-2", preferences: enabling });
+    expect(await writing).toBe(true);
+    expect(vi.mocked(api.workbenchSave!).mock.calls[1][0]).toMatchObject({ expected_revision: "revision-2", preferences: { close_to_tray: true, chat: { draft: "new chat" }, ocr: { prompt: "new OCR" } } });
+  });
+  it("keeps a conflicting tray toggle unsaved until the user reloads or overwrites", async () => {
+    const api = preferencesApi(); const store = new WorkbenchStore(api, () => {}); await store.load();
+    store.edit({ ...store.state.preferences, close_to_tray: true });
+    vi.mocked(api.workbenchSave!).mockRejectedValueOnce({ code: "workbench_conflict" });
+    expect(await store.flush()).toBe(false);
+    expect(store.state).toMatchObject({ dirty: true, conflict: true, preferences: { close_to_tray: true } });
+    expect(await store.flush()).toBe(false); expect(api.workbenchSave).toHaveBeenCalledTimes(1);
+    await store.load(true);
+    expect(store.state).toMatchObject({ dirty: false, conflict: false, preferences: { close_to_tray: false } });
+  });
   it("never saves defaults before hydration and reads once across consumers", async () => {
     const pending = deferred<WorkbenchPreferencesSnapshot>();
     const api = preferencesApi(); vi.mocked(api.workbenchGet!).mockReturnValue(pending.promise);
@@ -103,6 +125,30 @@ describe("model draft ancestry", () => {
 });
 
 describe("restored OCR and chat controls", () => {
+  it("offers an opt-in tray setting after hydration and restores the committed toggle", async () => {
+    const api = preferencesApi(); const pending = deferred<WorkbenchPreferencesSnapshot>();
+    vi.mocked(api.workbenchGet!).mockReturnValueOnce(pending.promise);
+    const controller = new DesktopController(api); const view = render(<App controller={controller} initialPage="settings" />);
+    const toggle = await screen.findByRole("switch", { name: "关闭到托盘" });
+    expect(toggle).toBeDisabled(); expect(toggle).not.toBeChecked();
+    pending.resolve(prefs()); await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle); await act(async () => { await controller.saveWorkbench(); });
+    expect(vi.mocked(api.workbenchSave!).mock.calls.at(-1)?.[0].preferences.close_to_tray).toBe(true);
+    expect(api.close).not.toHaveBeenCalled(); view.unmount();
+    render(<App controller={new DesktopController(api)} initialPage="settings" />);
+    await waitFor(() => expect(screen.getByRole("switch", { name: "关闭到托盘" })).toBeChecked());
+  });
+  it("explicit native exit still acknowledges, flushes and closes when tray preference is enabled", async () => {
+    const saved = prefs(); saved.preferences.close_to_tray = true;
+    const api = preferencesApi(saved); api.closeAcknowledge = vi.fn(async () => true);
+    const controller = new DesktopController(api); render(<App controller={controller} initialPage="chat" />);
+    await waitFor(() => expect(controller.getSnapshot().workbench.hydrated).toBe(true));
+    fireEvent.change(screen.getByLabelText("输入消息"), { target: { value: "tray exit draft" } });
+    window.dispatchEvent(new CustomEvent("nexa-close-requested", { detail: { id: "tray-exit" } }));
+    await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+    expect(api.closeAcknowledge).toHaveBeenCalledWith("tray-exit");
+    expect(vi.mocked(api.workbenchSave!).mock.calls.at(-1)?.[0].preferences).toMatchObject({ close_to_tray: true, chat: { draft: "tray exit draft" } });
+  });
   it("acknowledges native close before routing through the shared persistence flush", async () => {
     const ack = deferred<boolean>(); const api = preferencesApi(); api.closeAcknowledge = vi.fn(() => ack.promise);
     const controller = new DesktopController(api); render(<App controller={controller} initialPage="chat" />);

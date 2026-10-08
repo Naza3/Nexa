@@ -74,7 +74,7 @@ class WindowsInstallerTests(unittest.TestCase):
         setup = (pack.AUTHORING / "setup.c").read_text(encoding="utf-8")
         os_check = (pack.AUTHORING / "os_check.c").read_text(encoding="utf-8")
         header = (pack.AUTHORING / "os_version.h").read_text(encoding="utf-8")
-        guard = (pack.AUTHORING / "guard.c").read_text(encoding="utf-8")
+        guard = (pack.AUTHORING / "guard.c").read_text(encoding="utf-8") + (pack.AUTHORING / "guard_paths.h").read_text(encoding="utf-8")
         source = Path(pack.__file__).read_text(encoding="utf-8")
         self.assertIn('#include "os_version.h"', setup)
         self.assertIn('#include "os_version.h"', os_check)
@@ -144,7 +144,7 @@ class WindowsInstallerTests(unittest.TestCase):
                 pack.validate_tables(tables)
 
     def test_native_contract_has_no_force_kill_download_or_crt(self):
-        guard = (pack.AUTHORING / "guard.c").read_text(encoding="utf-8")
+        guard = (pack.AUTHORING / "guard.c").read_text(encoding="utf-8") + (pack.AUTHORING / "guard_paths.h").read_text(encoding="utf-8")
         setup = (pack.AUTHORING / "setup.c").read_text(encoding="utf-8")
         for forbidden in ("TerminateProcess(", "ShellExecute", "URLDownload", "WinHttp", "system(", "taskkill"):
             self.assertNotIn(forbidden, guard + setup)

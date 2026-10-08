@@ -225,7 +225,7 @@ describe("desktop React interaction", () => {
       screen.getByRole("switch", { name: "关闭窗口时同时退出运行服务" }),
     );
     expect(
-      screen.getByText(/关闭窗口会停止运行服务及所有客户端任务/),
+      screen.getByText(/真正退出界面会停止运行服务及所有客户端任务；关闭到托盘时不停止/),
     ).toBeInTheDocument();
   });
   it("copies via native command only after clipboard risk confirmation, with no token getter", async () => {

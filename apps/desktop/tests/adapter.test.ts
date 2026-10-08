@@ -19,6 +19,10 @@ describe("native-only adapter", () => {
     expect(invoke).toHaveBeenLastCalledWith("desktop_close_ack", { request: { id: "close-id" } });
     await nativeApi.workbenchGet?.();
     expect(invoke).toHaveBeenLastCalledWith("workbench_get", undefined);
+    await nativeApi.autostartGet?.();
+    expect(invoke).toHaveBeenLastCalledWith("autostart_get", undefined);
+    await nativeApi.autostartSet?.(true);
+    expect(invoke).toHaveBeenLastCalledWith("autostart_set", { request: { enabled: true } });
     await nativeApi.ocrHistoryList?.();
     expect(invoke).toHaveBeenLastCalledWith("ocr_history_list", undefined);
     await nativeApi.ocrHistoryGet?.("record-id");
