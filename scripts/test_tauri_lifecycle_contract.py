@@ -102,6 +102,21 @@ class TauriLifecycleContractTests(unittest.TestCase):
                     self.assertIsNone(lifecycle.build_released_legacy_fixture([], version, None, None, self.work))
         author.assert_not_called()
 
+    def test_fixture_workspace_uses_checkout_volume_instead_of_system_temp(self):
+        checkout = (self.work / "checkout with spaces").resolve()
+        system_temp = self.work / "system-temp"
+        checkout.mkdir()
+        system_temp.mkdir()
+        with mock.patch.object(lifecycle.legacy, "ROOT", checkout), \
+                mock.patch.object(lifecycle.tempfile, "tempdir", str(system_temp)):
+            first = lifecycle.fixture_workspace()
+            second = lifecycle.fixture_workspace()
+        self.assertEqual(first.parent, checkout / "build")
+        self.assertEqual(second.parent, checkout / "build")
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.is_dir() and second.is_dir())
+        self.assertEqual(list(system_temp.iterdir()), [])
+
     def test_native_lifecycle_stages_are_accepted_by_sanitized_diagnostics(self):
         self.assertLessEqual(lifecycle.STAGES, diagnostics.STAGES)
 

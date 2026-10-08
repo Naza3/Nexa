@@ -171,6 +171,16 @@ def build_tauri_fixture(payload, files, version, work, *, kinds=("msi", "nsis"))
     return {kind: pack.bundle(project, kind, work, version) for kind in kinds}
 
 
+def fixture_workspace():
+    # Tauri 2.12.1 ResourcePaths normalizes away Windows drive prefixes.
+    # Keep the project, repository icon and production/private payloads on the
+    # checkout's drive; runner TEMP can be C: while the checkout is on D:.
+    # Retain this private directory on failure, as with the previous TEMP root.
+    parent = legacy.base.resolve_checked_path(legacy.ROOT / "build")
+    parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="nexa-tauri-acceptance-", dir=parent)).resolve()
+
+
 def build_released_legacy_fixture(files, version, cabinet, guard, work):
     """Exercise the released legacy identity, not historical release binaries.
 
@@ -302,7 +312,7 @@ def lifecycle(msi, setup, payload, report):
     common.trace("preflight", "complete")
     # Retain private fixtures on failure for this disposable runner's diagnosis.
     # Never remove an installation tree or kill an active installer in cleanup.
-    work = Path(tempfile.mkdtemp(prefix="nexa-tauri-acceptance-"))
+    work = fixture_workspace()
     try:
         common.trace("fixture_build", "start")
         legacy_payload = work / "legacy-payload"
