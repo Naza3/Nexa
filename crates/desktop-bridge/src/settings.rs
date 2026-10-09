@@ -27,7 +27,7 @@ pub(crate) fn read_bounded(path: &Path, maximum: usize) -> Result<Vec<u8>> {
 pub(crate) fn config(root: &Path) -> Result<Config> {
     runtime_api::configuration::read(root)
         .map(|document| document.config)
-        .map_err(|e| BridgeError::new(e.code))
+        .map_err(BridgeError::from)
 }
 /// Uninitialized model-library operations retain the historical default, while
 /// malformed or unreadable existing configuration must never silently downgrade.
@@ -66,7 +66,7 @@ pub(crate) fn preferences(root: &Path) -> Result<DesktopPreferences> {
     if root.join("config.toml").exists() && config(root)?.schema_version == 2 {
         let config = config(root)?;
         let ui = runtime_api::configuration::ui_preferences_get(root)
-            .map_err(|e| BridgeError::new(e.code))?
+            .map_err(BridgeError::from)?
             .preferences;
         return Ok(DesktopPreferences {
             context_size: config.inference.context_size,
@@ -102,8 +102,8 @@ pub(crate) fn validate(settings: &DesktopPreferences) -> Result<()> {
 }
 pub(crate) fn save_preferences(root: &Path, preferences: &DesktopPreferences) -> Result<()> {
     validate(preferences)?;
-    let _lock = runtime_api::configuration::ConfigurationLock::acquire(root)
-        .map_err(|e| BridgeError::new(e.code))?;
+    let _lock =
+        runtime_api::configuration::ConfigurationLock::acquire(root).map_err(BridgeError::from)?;
     if root.join("config.toml").exists() && config(root)?.schema_version == 2 {
         return Err(BridgeError::new("configuration_revision_required"));
     }

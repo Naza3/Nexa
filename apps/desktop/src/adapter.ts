@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { DesktopApi, SafeError } from "./types";
+import { presentError } from "./errorPresentation";
 import { preferencesOnly } from "./runtimeSettingsValues";
 
 export class DesktopError extends Error {
@@ -10,21 +11,7 @@ export class DesktopError extends Error {
   }
 }
 export function safeError(error: unknown): SafeError {
-  if (
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    "message" in error &&
-    typeof error.code === "string" &&
-    /^[a-z0-9_]{1,96}$/.test(error.code) &&
-    typeof error.message === "string"
-  ) {
-    return { code: error.code, message: error.message.slice(0, 500) };
-  }
-  return {
-    code: "desktop_unavailable",
-    message: "无法完成桌面操作，请检查运行服务后重试。未自动重放请求。",
-  };
+  return presentError(error, error instanceof DesktopError);
 }
 async function call<T>(command: string, request?: unknown): Promise<T> {
   if (!isTauri())

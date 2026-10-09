@@ -1,12 +1,34 @@
 # Nexa 当前状态
 
-## 2026-10-09 移除启动未声明文件检验（本机测试与Windows交叉门槛通过，原生待验证）
+## 2026-10-09 模型发现显示名（与错误处理联合门槛通过）
 
-任务W05-LAYOUT-1。用户明确“不需要未声明文件的检验”。在codex/dev `68fcc0d`上移除layout递归库存、未知文件/目录拒绝及GGUF/下载残留例外；不再因NSIS生成的uninstall.exe阻止启动。声明payload大小/hash、来源/SHA256SUMS、普通文件/祖先防护保持，并显式要求各产品固定EXE必须声明。新增已安装MSI/NSIS的EXE诊断门槛，避免只有解压ZIP验收。
+任务W05-MODEL-NAME-1。按用户确认，仅为本机/LAN `/v1/models`兼容增加已有`display_name`，稳定ID、分页、模型调用/历史与LAN仅驻留范围保持；缺少名称元数据时回退ID，不改索引或客户端。
 
-用户批准隔离安装官方工具与微软条款后，Linux壳33项、native-identity5项、前端970项、严格Python364项（359通过/5平台skip）及静态检查通过；完整Windows交叉门槛退出0，两workspace strict Clippy、189项原生库编译、四个必需EXE真实链接和源码/PE身份检查通过。保留工具探测及缺CRT PDB的LNK4099警告，无lint屏蔽。Windows原生安装/运行仍待验；版本0.3.0不变，未提交/推送/发布，MSI独立configuration_unavailable未宣称解决。见[ADR0041](docs/decisions/0041-declared-payload-startup-validation.md)及[完整验证记录](docs/verification/2026-10-09-declared-payload-validation.md)。
+官方PI Desktop v0.17.0实际源码解析/设置搜索/名称JSX隔离测试通过；发现列表可读取显示名，但聊天选择器仍按用户别名或完整ID显示，需要在客户端“高级→别名”设置，不能声称本修复自动改变聊天标签。当前安装版本/原生GUI未验证。
 
-用户随后明确授权推送GitHub并构建。开发分支远端已复核仍为68fcc0d且包含最新main；下一步将本批精确提交，在干净提交上复跑缓存Windows交叉门槛后推送codex/dev并等待原生安装/运行结果，不创建tag或覆盖0.3.0正式Release。
+最终组合源码重新通过根Rust653项/10既有忽略、Linux桌面壳33、前端49文件1006、严格Python366项（361通过/5平台skip）与native身份5项；两host strict Clippy/fmt/typecheck/lint/build均退出0。两workspace Windows Release strict Clippy、10份native静态库、四EXE实际交叉链接与AMD64 PE/import复核全部通过，442个非Markdown代码文件前后hash一致。保留既有clang-cl探测、SDK缺PDB调试信息及前端大chunk warning，未关闭检查。
+
+结果仍为基线2a56b396上的未提交dirty工作树；未推送、未tag/Release、未生成新安装包，版本0.3.0保持。完整Windows原生CI/安装器生命周期、目标Win10、真实模型与PI Desktop GUI待后续独立验证。前轮三份旧验证文档保持，不把旧CI授予本轮代码。见[ADR0043](docs/decisions/0043-model-discovery-display-name.md)、[名称说明](docs/model-display-names.md)、[本轮联合记录](docs/verification/2026-10-09-model-display-names.md)。
+
+## 2026-10-09 全项目错误处理与LAN启动恢复（本地联合及Windows交叉验证通过）
+
+任务W05-ERROR-1 / W05-LAN-RECOVERY-1。实现覆盖启动诊断、配置固定原因、模型/推理错误展示、下载清理及不确定结果、安装预检说明；不声称穷尽所有错误。可选LAN仅OS绑定失败保留认证本机管理，明确未运行原因，原配置/密钥/安全边界不变；修正须显式停服。启动私有stdout只传固定码，默认stderr仍null；前端统一有界脱敏，活动不把未确认读回写成完成，业务请求不自动重放。
+
+冻结工作树通过根Rust652项/10既有忽略、Linux桌面壳33、前端49文件1006、严格Python366项（361通过/5平台skip）、native身份5项；fmt、两host strict Clippy、前端typecheck/lint/build全部退出0。联合门槛发现并最小修复xtask测试漏reason字段和安装Python夹具漏encoding，再完整重跑通过。
+
+复用已核验缓存完成两workspace Windows Release strict Clippy、10份native静态库身份及Runtime/worker/acceptance/desktop四EXE实际交叉链接和AMD64 PE/import复核；442份非Markdown源码构建前后hash一致。另复核三安装helper实际交叉链接及PE，未生成本轮发行包。保留clang-cl探测、SDK缺PDB调试信息与前端大chunk warning；没有关闭检查。
+
+本轮仍为基线2a56b396上的未提交dirty工作树，未推送、未tag/Release、版本仍0.3.0；不把旧CI赋予新代码。目标Windows GUI、真实局域网、新安装器原生生命周期、关闭桌面保留服务后的真实调用仍待独立验收。模型显示名是后续独立事项，未混入本次。见[错误恢复契约](docs/error-handling-and-recovery.md)、[ADR0042](docs/decisions/0042-lan-bind-startup-recovery.md)与[联合验证](docs/verification/2026-10-09-error-handling.md)。
+
+## 2026-10-09 移除启动未声明文件检验（原生验证与产物复核通过）
+
+任务W05-LAYOUT-1。按用户要求，启动layout不再扫描或拒绝未声明文件/目录，NSIS生成的uninstall.exe不再触发该拦截。声明文件hash、来源/校验表、必需EXE清单成员及路径防护保持，模型准入、ACL/token与数据配置未改。
+
+用户批准推送后，精确源码 `2a56b39602806fbaf3c74841a5a8b0d1534bcf77`（tree `3a3db727e5b78b1bf353319f06c72e3dd6d9e2a7`）先通过干净提交的完整本地Windows交叉门槛，再正常更新codex/dev。[Actions37910225699](https://github.com/Naza3/Nexa/actions/runs/37910225699)于2026-10-09 09:55:05 UTC成功，五个构建/验证job通过，分支release job正确跳过。
+
+Windows根Rust627通过/10忽略、桌面34、前端970、Python364项（362通过/2skip）、CTest5/5，真实模型/HTTP/CLI/bridge与17项安装生命周期通过。已安装MSI/NSIS的两个EXE诊断均package_verified=true、dirty=false、精确source一致；真实额外DLL正例和manifest篡改负例也通过。独立复核完整六文件发行库存、源码/hash/大小/安装证明及三份证据归档的62个文件通过，69事件安装诊断status=pass。
+
+[本次三格式测试包](https://github.com/Naza3/Nexa/actions/runs/37910225699/artifacts/11608851406)有效至2026-10-16 09:54:57 UTC。版本仍0.3.0，未创建tag/Release或合并main，旧正式Release保持。本次交付未签名；Windows Server 2022的安装包诊断不能代替用户Win10原生GUI/配置验收，MSI独立configuration_unavailable仍未由此证明解决。随后仅补记证据的文档提交不冒充此批二进制来源。详见[ADR0041](docs/decisions/0041-declared-payload-startup-validation.md)及[完整验证](docs/verification/2026-10-09-declared-payload-validation.md)。
 
 ## 2026-10-08 版本0.3.0、推送与tag（已完成；标签发行构建进行中）
 

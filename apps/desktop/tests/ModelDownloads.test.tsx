@@ -12,7 +12,7 @@ const entry: CatalogEntry = {
 };
 function stopped() { const value = snapshot(); value.connection = "stopped"; value.runtime = null; value.model_directory = { configured: { directory_id: "directory", display_path: "D:\\模型", library_generation: "generation" }, effective: null, state: "stopped" }; return value; }
 function failedDownload(patch: Partial<DownloadOperation> = {}): DownloadOperation {
-  return { operation_id: "download", catalog_id: "candidate", source: "modelscope", file_name: entry.file_name, directory_id: "directory", target_display_path: "D:\\模型", downloaded_bytes: 0, total_bytes: null, phase: "finished", status: "failed", terminal: true, result: null, error: { code: "model_download_network_failed", message: "请求下载源：网络等待超时。未切换下载源，未发布模型文件。" }, ...patch };
+  return { operation_id: "download", catalog_id: "candidate", source: "modelscope", file_name: entry.file_name, directory_id: "directory", target_display_path: "D:\\模型", downloaded_bytes: 0, total_bytes: null, phase: "finished", status: "failed", terminal: true, result: null, error: { code: "model_download_network_failed", message: "下载源域名解析失败（下载进程退出码 19）。未切换下载源，未发布模型文件。" }, ...patch };
 }
 async function mount(source: "modelscope" | "huggingface" = "modelscope") {
   const value = stopped(); value.settings.download_source = source;
@@ -74,7 +74,7 @@ describe("GGUF catalog interface", () => {
   it("shows controlled failure details and a reportable diagnostic code without retrying automatically", () => {
     const api = makeApi(); const controller = new DesktopController(api);
     render(<DownloadProgress state={{ ...controller.getSnapshot(), snapshot: stopped(), download: failedDownload() }} controller={controller} />);
-    expect(screen.getByText(/请求下载源：网络等待超时/)).toBeInTheDocument();
+    expect(screen.getByText(/下载源域名解析失败（下载进程退出码 19）/)).toBeInTheDocument();
     expect(screen.getByText("诊断码：model_download_network_failed")).toBeInTheDocument();
     expect(screen.getByText("保存到：D:\\模型")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新下载" })).toBeEnabled();
@@ -110,4 +110,13 @@ describe("GGUF catalog interface", () => {
     expect(screen.getByText("保存到：路径信息不可用")).toBeInTheDocument();
   });
 
+});
+
+it.each(["model_download_outcome_unknown", "model_download_cleanup_unconfirmed"])("does not offer immediate replay when %s", (code) => {
+  const api = makeApi(); const controller = new DesktopController(api);
+  render(<DownloadProgress state={{ ...controller.getSnapshot(), snapshot: stopped(), download: failedDownload({ error: { code, message: "private" } }) }} controller={controller} />);
+  expect(screen.queryByRole("button", { name: "重新下载" })).not.toBeInTheDocument();
+  expect(screen.getByText(/下载结果核对前不提供重复下载/)).toBeVisible();
+  if (code === "model_download_outcome_unknown") expect(screen.getByText("下载结果待确认")).toBeVisible();
+  expect(api.downloadStart).not.toHaveBeenCalled();
 });

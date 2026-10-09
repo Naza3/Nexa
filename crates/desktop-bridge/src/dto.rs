@@ -150,6 +150,8 @@ pub struct RuntimeStatus {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LanApiStatus {
+    #[serde(default)]
+    pub startup_error: Option<runtime_api::lan::LanStartupError>,
     pub enabled: bool,
     pub listen: Option<String>,
     pub running: bool,
@@ -672,3 +674,36 @@ pub struct ModelLoadProfileStartRequest {
 }
 
 pub use runtime_api::dto::{UnregisterModelRequest, UnregisterModelResult};
+
+#[cfg(test)]
+mod lan_status_tests {
+    use super::*;
+    #[test]
+    fn older_lan_status_defaults_to_no_startup_error() {
+        let status: LanApiStatus =
+            serde_json::from_str(r#"{"enabled":true,"listen":"192.168.1.2:18081","running":true}"#)
+                .unwrap();
+        assert!(status.startup_error.is_none());
+    }
+    #[test]
+    fn future_startup_code_uses_bounded_fallback() {
+        let status: LanApiStatus = serde_json::from_str(
+            r#"{"enabled":true,"listen":null,"running":false,"startup_error":"future OS error"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            status.startup_error,
+            Some(runtime_api::lan::LanStartupError::BindFailed)
+        );
+    }
+    #[test]
+    fn typed_lan_failure_roundtrips_without_affecting_saved_settings() {
+        let status: LanApiStatus = serde_json::from_str(r#"{"enabled":true,"listen":"192.168.1.2:18081","running":false,"startup_error":"address_unavailable"}"#).unwrap();
+        assert_eq!(
+            status.startup_error,
+            Some(runtime_api::lan::LanStartupError::AddressUnavailable)
+        );
+        assert!(status.enabled);
+        assert!(!status.running);
+    }
+}

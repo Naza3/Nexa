@@ -21,6 +21,95 @@ pub type Result<T> = std::result::Result<T, ConfigurationError>;
 pub struct ConfigurationError {
     pub code: &'static str,
     pub param: Option<&'static str>,
+    pub reason: Option<ConfigurationFailureReason>,
+}
+/// Bounded, content-free causes. Never retain OS/parser text or configuration values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigurationFailureReason {
+    Missing,
+    AccessDenied,
+    PathSecurity,
+    Io,
+    Oversized,
+    InvalidUtf8,
+    InvalidToml,
+    SchemaInvalid,
+    LockContended,
+}
+impl ConfigurationFailureReason {
+    /// Accept only fixed causes paired with their existing top-level protocol code.
+    pub fn from_reason_code(code: &str, reason: &str) -> Option<Self> {
+        match (code, reason) {
+            ("configuration_unavailable", "configuration_missing") => Some(Self::Missing),
+            ("configuration_unavailable", "configuration_access_denied") => {
+                Some(Self::AccessDenied)
+            }
+            ("configuration_unavailable", "configuration_path_security") => {
+                Some(Self::PathSecurity)
+            }
+            ("configuration_unavailable", "configuration_io_failed") => Some(Self::Io),
+            ("configuration_invalid", "configuration_oversized") => Some(Self::Oversized),
+            ("configuration_invalid", "configuration_invalid_utf8") => Some(Self::InvalidUtf8),
+            ("configuration_invalid", "configuration_invalid_toml") => Some(Self::InvalidToml),
+            ("configuration_invalid", "configuration_schema_invalid") => Some(Self::SchemaInvalid),
+            ("configuration_busy", "configuration_lock_contended") => Some(Self::LockContended),
+            _ => None,
+        }
+    }
+}
+impl ConfigurationError {
+    pub fn reason_code(&self) -> Option<&'static str> {
+        self.reason.map(|reason| match reason {
+            ConfigurationFailureReason::Missing => "configuration_missing",
+            ConfigurationFailureReason::AccessDenied => "configuration_access_denied",
+            ConfigurationFailureReason::PathSecurity => "configuration_path_security",
+            ConfigurationFailureReason::Io => "configuration_io_failed",
+            ConfigurationFailureReason::Oversized => "configuration_oversized",
+            ConfigurationFailureReason::InvalidUtf8 => "configuration_invalid_utf8",
+            ConfigurationFailureReason::InvalidToml => "configuration_invalid_toml",
+            ConfigurationFailureReason::SchemaInvalid => "configuration_schema_invalid",
+            ConfigurationFailureReason::LockContended => "configuration_lock_contended",
+        })
+    }
+    pub fn safe_message(&self) -> &'static str {
+        match self.reason {
+            Some(ConfigurationFailureReason::Missing) => {
+                "A required configuration file or directory is missing. Check the existing data directory before initializing or restoring it."
+            }
+            Some(ConfigurationFailureReason::AccessDenied) => {
+                "The operating system denied access to configuration storage. Check account access and file permissions without weakening its protection."
+            }
+            Some(ConfigurationFailureReason::PathSecurity) => {
+                "Configuration storage failed path or ownership protection checks. Use an owned regular file and secure directories; do not bypass these checks."
+            }
+            Some(ConfigurationFailureReason::Io) => {
+                "Configuration storage could not be accessed. Check storage availability and system diagnostics before retrying."
+            }
+            Some(ConfigurationFailureReason::Oversized) => {
+                "The configuration document exceeds its supported size limit. Review it before retrying; it has not been reset."
+            }
+            Some(ConfigurationFailureReason::InvalidUtf8) => {
+                "The configuration file is not valid UTF-8. Correct its encoding while preserving the existing settings."
+            }
+            Some(ConfigurationFailureReason::InvalidToml) => {
+                "The configuration file contains invalid TOML syntax. Correct the document before retrying."
+            }
+            Some(ConfigurationFailureReason::SchemaInvalid) => {
+                "Configuration fields or values are unsupported. Check the schema and allowed values before retrying."
+            }
+            Some(ConfigurationFailureReason::LockContended) => {
+                "Another process is changing configuration. Wait for it to finish, then refresh before retrying."
+            }
+            None if self.code == "model_profile_invalid"
+                && self.param.is_some_and(|p| p.ends_with(".context_size")) =>
+            {
+                "Context size exceeds the selected model's declared limit."
+            }
+            None => {
+                "Configuration could not be safely read or changed. Check the indicated field or group, and refresh before retrying."
+            }
+        }
+    }
 }
 impl std::fmt::Display for ConfigurationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -31,6 +120,7 @@ impl std::error::Error for ConfigurationError {}
 fn error(code: &'static str) -> ConfigurationError {
     ConfigurationError {
         code,
+        reason: None,
         param: if code == "configuration_conflict" {
             Some("expected_revision")
         } else {
@@ -41,6 +131,7 @@ fn error(code: &'static str) -> ConfigurationError {
 fn error_at(code: &'static str, param: &'static str) -> ConfigurationError {
     ConfigurationError {
         code,
+        reason: None,
         param: Some(param),
     }
 }
@@ -57,18 +148,11 @@ impl From<ConfigurationError> for crate::ApiError {
             "configuration_invalid" | "model_profile_invalid" => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        Self::new(
-            status,
-            e.code,
-            if e.code == "model_profile_invalid"
-                && e.param.is_some_and(|p| p.ends_with(".context_size"))
-            {
-                "Context size exceeds the selected model's declared limit."
-            } else {
-                "Configuration could not be safely read or changed. Check the indicated field or group, and refresh before retrying."
-            },
-            e.param,
-        )
+        let mut api = Self::new(status, e.code, e.safe_message(), e.param);
+        api.error.reason = e.reason_code().filter(|reason| {
+            ConfigurationFailureReason::from_reason_code(e.code, reason).is_some()
+        });
+        api
     }
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -383,22 +467,88 @@ fn valid_revision(s: &str) -> bool {
             .iter()
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
 }
+fn caused(code: &'static str, reason: ConfigurationFailureReason) -> ConfigurationError {
+    ConfigurationError {
+        reason: Some(reason),
+        ..error(code)
+    }
+}
+fn storage_error(code: &'static str, source: io::Error) -> ConfigurationError {
+    // token's protection checks deliberately share one fixed, content-free marker.
+    // OS permission errors must remain distinct from those local safety checks.
+    let path_security = source.raw_os_error().is_none()
+        && source.kind() == io::ErrorKind::PermissionDenied
+        && source.to_string() == "credential path, permissions, or format is invalid";
+    #[cfg(unix)]
+    let path_security =
+        path_security || matches!(source.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR));
+    let reason = if path_security {
+        ConfigurationFailureReason::PathSecurity
+    } else {
+        match source.kind() {
+            io::ErrorKind::NotFound => ConfigurationFailureReason::Missing,
+            io::ErrorKind::PermissionDenied => ConfigurationFailureReason::AccessDenied,
+            _ => ConfigurationFailureReason::Io,
+        }
+    };
+    caused(code, reason)
+}
+fn lock_error(source: io::Error) -> ConfigurationError {
+    if source.kind() == io::ErrorKind::WouldBlock
+        || source
+            .raw_os_error()
+            .is_some_and(|code| Some(code) == fs2::lock_contended_error().raw_os_error())
+    {
+        caused(
+            "configuration_busy",
+            ConfigurationFailureReason::LockContended,
+        )
+    } else {
+        storage_error("configuration_unavailable", source)
+    }
+}
 pub fn read_bytes(path: &Path, limit: usize) -> Result<Vec<u8>> {
-    let file = token::open_regular_file(path).map_err(|_| error("configuration_unavailable"))?;
+    let file = token::open_regular_file(path)
+        .map_err(|e| storage_error("configuration_unavailable", e))?;
     let mut bytes = Vec::new();
-    file.take((limit + 1) as u64)
+    file.take(limit.saturating_add(1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|_| error("configuration_unavailable"))?;
+        .map_err(|e| storage_error("configuration_unavailable", e))?;
     if bytes.len() > limit {
-        return Err(error("configuration_invalid"));
+        return Err(caused(
+            "configuration_invalid",
+            ConfigurationFailureReason::Oversized,
+        ));
     }
     Ok(bytes)
 }
 pub fn read(root: &Path) -> Result<Document> {
     let bytes = read_bytes(&root.join("config.toml"), MAX_CONFIG_BYTES)?;
-    let config =
-        Config::from_toml(std::str::from_utf8(&bytes).map_err(|_| error("configuration_invalid"))?)
-            .map_err(|_| error("configuration_invalid"))?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| {
+        caused(
+            "configuration_invalid",
+            ConfigurationFailureReason::InvalidUtf8,
+        )
+    })?;
+    // Separate syntax decoding from schema validation without retaining decoder text.
+    let value: toml::Value = toml::from_str(text).map_err(|_| {
+        caused(
+            "configuration_invalid",
+            ConfigurationFailureReason::InvalidToml,
+        )
+    })?;
+    let config: Config = value.try_into().map_err(|_| {
+        caused(
+            "configuration_invalid",
+            ConfigurationFailureReason::SchemaInvalid,
+        )
+    })?;
+    config.validate().map_err(|_| {
+        caused(
+            "configuration_invalid",
+            ConfigurationFailureReason::SchemaInvalid,
+        )
+    })?;
     Ok(Document {
         config,
         revision: revision(&bytes),
@@ -410,19 +560,20 @@ pub struct ConfigurationLock {
 }
 impl ConfigurationLock {
     pub fn acquire(root: &Path) -> Result<Self> {
-        token::create_private_dir(root).map_err(|_| error("configuration_unavailable"))?;
+        token::create_private_dir(root)
+            .map_err(|e| storage_error("configuration_unavailable", e))?;
         let dir = root.join("runtime");
-        token::create_private_dir(&dir).map_err(|_| error("configuration_unavailable"))?;
+        token::create_private_dir(&dir)
+            .map_err(|e| storage_error("configuration_unavailable", e))?;
         let path = dir.join("configuration.lock");
         match token::write_private_new(&path, b"") {
             Ok(()) => (),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
-            Err(_) => return Err(error("configuration_unavailable")),
+            Err(e) => return Err(storage_error("configuration_unavailable", e)),
         }
-        let file =
-            token::open_private_file(&path).map_err(|_| error("configuration_unavailable"))?;
-        file.try_lock_exclusive()
-            .map_err(|_| error("configuration_busy"))?;
+        let file = token::open_private_file(&path)
+            .map_err(|e| storage_error("configuration_unavailable", e))?;
+        file.try_lock_exclusive().map_err(lock_error)?;
         Ok(Self { _file: file })
     }
 }
@@ -1110,6 +1261,111 @@ mod tests {
     }
     fn legacy(root: &Path) {
         token::write_private_new(&root.join(PREFERENCES),br#"{"context_size":2048,"threads":2,"batch_size":128,"max_output_tokens":128,"close_runtime_on_exit":true,"download_source":"huggingface"}"#).unwrap();
+    }
+    #[test]
+    fn read_failures_keep_safe_causes_without_changing_files() {
+        use ConfigurationFailureReason::*;
+        let t = root();
+        let missing = read(t.path()).unwrap_err();
+        assert_eq!(missing.code, "configuration_unavailable");
+        assert_eq!(missing.reason, Some(Missing));
+        assert_eq!(missing.reason_code(), Some("configuration_missing"));
+        assert!(!t.path().join("config.toml").exists());
+        assert!(!t.path().join("secrets").exists());
+        for (bytes, reason) in [
+            (vec![b' '; MAX_CONFIG_BYTES + 1], Oversized),
+            (vec![0xff, 0xfe], InvalidUtf8),
+            (b"[private_sentinel_secret".to_vec(), InvalidToml),
+            (b"private_sentinel_secret = 1".to_vec(), SchemaInvalid),
+            (b"schema_version = 999".to_vec(), SchemaInvalid),
+            (
+                b"[inference]\ncontext_size = 'private_sentinel_secret'".to_vec(),
+                SchemaInvalid,
+            ),
+        ] {
+            fs::write(t.path().join("config.toml"), &bytes).unwrap();
+            let failure = read(t.path()).unwrap_err();
+            assert_eq!(failure.code, "configuration_invalid");
+            assert_eq!(failure.reason, Some(reason));
+            assert_eq!(failure.to_string(), "configuration_invalid");
+            let debug = format!("{failure:?}");
+            let api: crate::ApiError = failure.clone().into();
+            assert_eq!(api.status, axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(api.error.code, failure.code);
+            assert_eq!(api.error.message, failure.safe_message());
+            let wire = serde_json::to_string(&api).unwrap();
+            for output in [&debug, &wire] {
+                assert!(!output.contains("private_sentinel_secret"));
+                assert!(!output.contains(t.path().to_str().unwrap()));
+            }
+            assert_eq!(fs::read(t.path().join("config.toml")).unwrap(), bytes);
+            assert!(!t.path().join("secrets").exists());
+        }
+    }
+    #[test]
+    fn storage_and_lock_causes_do_not_mislabel_io_as_contention() {
+        use ConfigurationFailureReason::*;
+        let denied = storage_error(
+            "configuration_unavailable",
+            io::Error::new(io::ErrorKind::PermissionDenied, "private_sentinel_secret"),
+        );
+        assert_eq!(denied.reason, Some(AccessDenied));
+        let io = storage_error(
+            "configuration_unavailable",
+            io::Error::other("private_sentinel_secret"),
+        );
+        assert_eq!(io.reason, Some(Io));
+        for source in [
+            io::Error::new(io::ErrorKind::PermissionDenied, "private_sentinel_secret"),
+            io::Error::other("private_sentinel_secret"),
+        ] {
+            let failure = lock_error(source);
+            assert_eq!(failure.code, "configuration_unavailable");
+            assert_ne!(failure.reason, Some(LockContended));
+            assert!(
+                !format!("{failure:?} {}", failure.safe_message())
+                    .contains("private_sentinel_secret")
+            );
+        }
+        let t = root();
+        let guard = ConfigurationLock::acquire(t.path()).unwrap();
+        let busy = ConfigurationLock::acquire(t.path()).err().unwrap();
+        assert_eq!(busy.code, "configuration_busy");
+        assert_eq!(busy.reason, Some(LockContended));
+        assert_eq!(
+            lock_error(fs2::lock_contended_error()).reason,
+            Some(LockContended)
+        );
+        drop(guard);
+        assert!(ConfigurationLock::acquire(t.path()).is_ok());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn protected_config_paths_report_security_without_bypassing_checks() {
+        use std::os::unix::fs::symlink;
+        let t = root();
+        let config = t.path().join("config.toml");
+        let target = t.path().join("private_sentinel_secret");
+        fs::write(&target, b"schema_version = 2").unwrap();
+        symlink(&target, &config).unwrap();
+        assert_eq!(
+            read(t.path()).unwrap_err().reason,
+            Some(ConfigurationFailureReason::PathSecurity)
+        );
+        fs::remove_file(&config).unwrap();
+        fs::hard_link(&target, &config).unwrap();
+        assert_eq!(
+            read(t.path()).unwrap_err().reason,
+            Some(ConfigurationFailureReason::PathSecurity)
+        );
+        fs::remove_file(&config).unwrap();
+        fs::create_dir(&config).unwrap();
+        assert_eq!(
+            read(t.path()).unwrap_err().reason,
+            Some(ConfigurationFailureReason::PathSecurity)
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"schema_version = 2");
+        assert!(!t.path().join("secrets").exists());
     }
     #[test]
     fn read_and_preview_never_write_or_migrate() {

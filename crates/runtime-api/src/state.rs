@@ -33,6 +33,7 @@ pub struct ApiState {
     configuration_gate: Arc<tokio::sync::Mutex<()>>,
     pub shutdown: ServiceShutdown,
     pub diagnostics: Option<ProcessDiagnostics>,
+    pub lan_startup_error: Option<crate::lan::LanStartupError>,
     lan_listening: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) store: Arc<ModelStore>,
     pub(crate) probe_build: ProbeBuild,
@@ -69,6 +70,7 @@ impl ApiState {
             configuration_gate: Arc::new(tokio::sync::Mutex::new(())),
             shutdown: ServiceShutdown::new(runtime, import_cancel.clone()),
             diagnostics,
+            lan_startup_error: None,
             lan_listening: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             store,
             probe_build: Arc::new(std::sync::OnceLock::new()),
@@ -121,6 +123,7 @@ impl ApiState {
             .map_err(|_| crate::configuration::ConfigurationError {
                 code: "configuration_busy",
                 param: None,
+                reason: None,
             })?;
         let active = self
             .active_configuration
@@ -147,6 +150,7 @@ impl ApiState {
                 .map_err(|_| crate::configuration::ConfigurationError {
                     code: "configuration_unavailable",
                     param: None,
+                    reason: None,
                 })? = next.clone();
             crate::configuration::snapshot(&root, &next, Some(&next))
         })
@@ -195,6 +199,7 @@ impl ApiState {
                 return Err(crate::configuration::ConfigurationError {
                     code: "configuration_restart_required",
                     param: None,
+                    reason: None,
                 }
                 .into());
             }

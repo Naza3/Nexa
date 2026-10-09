@@ -1,5 +1,10 @@
 # Nexa 项目索引
 
+- [模型发现显示名 ADR0043](docs/decisions/0043-model-discovery-display-name.md) / [名称与PI边界](docs/model-display-names.md) / [联合验证](docs/verification/2026-10-09-model-display-names.md)：本机/LAN新增display_name；PI聊天仍需别名或使用ID
+
+- [错误诊断与显式恢复](docs/error-handling-and-recovery.md) / [联合验证](docs/verification/2026-10-09-error-handling.md)：启动、配置、下载、模型/推理UI及安装检查；未确认结果不自动重试
+- [LAN绑定恢复 ADR0042](docs/decisions/0042-lan-bind-startup-recovery.md)：可选LAN绑定失败保留认证回环，typed原因与明确停服修复
+
 本文件只负责定位，不将计划写成实现。动态状态见 [PROJECT_STATE.md](PROJECT_STATE.md)，当前范围见 [ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)。
 
 ## 当前文档

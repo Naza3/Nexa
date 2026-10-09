@@ -13,9 +13,14 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let desktop_report = matches!(options.command, runtime_cli::command::Command::Serve)
+        && std::env::var_os(runtime_cli::DESKTOP_STARTUP_REPORT_ENV).is_some_and(|v| v == "1");
     match runtime_cli::command::execute(options).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
+            if desktop_report {
+                runtime_cli::report_desktop_startup_error(error.as_ref(), std::io::stdout().lock());
+            }
             eprintln!("ai-runtime: {error}");
             ExitCode::FAILURE
         }

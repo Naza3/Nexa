@@ -98,7 +98,12 @@ async fn loaded_models(State(state): State<ApiState>) -> Result<Json<Value>, Api
             status
                 .selected_model
                 .into_iter()
-                .map(|id| json!({"id":id,"object":"model","owned_by":"local"}))
+                .map(|id| {
+                    let display_name = state
+                        .selected_display_name(Some(&id))
+                        .unwrap_or_else(|| id.to_string());
+                    json!({"id":id,"display_name":display_name,"object":"model","owned_by":"local"})
+                })
                 .collect()
         } else {
             Vec::new()
@@ -132,7 +137,9 @@ async fn available_models(
     )?;
     let data: Vec<_> = models
         .into_iter()
-        .map(|model| json!({"id":model.id,"object":"model","owned_by":"local"}))
+        .map(|model| {
+            json!({"id":model.id,"display_name":model.display_name,"object":"model","owned_by":"local"})
+        })
         .collect();
     Ok(Json(
         json!({"object":"list","data":data,"next_after":next_after,"generation":generation}),
@@ -198,7 +205,7 @@ pub(crate) fn status_json(state: &ApiState, status: RuntimeStatus) -> Value {
     let available = std::thread::available_parallelism().ok().map(|n| n.get());
     let threads = status.load_options.map(|options| options.threads);
     json!({
-        "lan_api":{"enabled":state.config.lan_api.enabled,"listen":state.config.lan_api.listen,"running":state.lan_is_listening()},
+        "lan_api":{"enabled":state.config.lan_api.enabled,"listen":state.config.lan_api.listen,"running":state.lan_is_listening(),"startup_error":state.lan_startup_error},
         "state":state_name(status.state), "selected_model_display_name":state.selected_display_name(status.selected_model.as_ref()), "selected_model":status.selected_model,
         "model_library":{"supported":true,"directory":state.model_library_info()},
         "load_options":status.load_options, "active_request":status.active_request,

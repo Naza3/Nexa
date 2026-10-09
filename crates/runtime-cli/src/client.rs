@@ -10,6 +10,7 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use runtime_api::{
+    configuration::ConfigurationFailureReason,
     proof::{ProofContext, decode_hex, encode_hex, verify_server_proof},
     token::SecretToken,
 };
@@ -81,6 +82,7 @@ pub enum ClientError {
         status: u16,
         code: Option<String>,
         param: Option<String>,
+        reason: Option<ConfigurationFailureReason>,
     },
 }
 impl fmt::Display for ClientError {
@@ -94,6 +96,7 @@ impl fmt::Display for ClientError {
                 status,
                 code,
                 param,
+                ..
             } => {
                 write!(f, "local API returned HTTP {status}")?;
                 if let Some(code) = code {
@@ -444,30 +447,43 @@ impl VerifiedConnection {
         let status = response.status();
         let bytes = collect_bounded(response.into_body(), 1024 * 1024, REQUEST_TIMEOUT).await?;
         if !status.is_success() {
-            let value = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
-            let safe = |name: &str| {
-                value
-                    .as_ref()?
-                    .get("error")?
-                    .get(name)?
-                    .as_str()
-                    .filter(|s| {
-                        !s.is_empty()
-                            && s.len() <= 128
-                            && s.bytes().all(|b| {
-                                b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.')
-                            })
-                    })
-                    .map(str::to_owned)
-            };
-            return Err(ClientError::Api {
-                status: status.as_u16(),
-                code: safe("code"),
-                param: safe("param"),
-            });
+            return Err(api_error(status.as_u16(), &bytes));
         }
         serde_json::from_slice(&bytes)
             .map_err(|_| ClientError::Connection("invalid API JSON response"))
+    }
+}
+/// Keep arbitrary HTTP messages out of diagnostics. Reasons are a fixed local
+/// catalog, validated together with the top-level code; old peers omit them.
+fn api_error(status: u16, bytes: &[u8]) -> ClientError {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok();
+    let detail = value.as_ref().and_then(|v| v.get("error"));
+    let safe = |name: &str| {
+        detail?
+            .get(name)?
+            .as_str()
+            .filter(|s| {
+                !s.is_empty()
+                    && s.len() <= 128
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+            })
+            .map(str::to_owned)
+    };
+    let code = safe("code");
+    let reason = code
+        .as_deref()
+        .zip(
+            detail
+                .and_then(|d| d.get("reason"))
+                .and_then(|r| r.as_str()),
+        )
+        .and_then(|(code, reason)| ConfigurationFailureReason::from_reason_code(code, reason));
+    ClientError::Api {
+        status,
+        code,
+        param: safe("param"),
+        reason,
     }
 }
 struct DriverGuard(Option<JoinHandle<()>>);
@@ -533,6 +549,87 @@ mod readiness_tests {
     use super::*;
     use http_body_util::Full;
     use std::sync::{Arc, Mutex};
+    #[test]
+    fn configuration_reasons_round_trip_without_forwarding_remote_messages() {
+        use ConfigurationFailureReason::*;
+        for (code, reason) in [
+            ("configuration_unavailable", Missing),
+            ("configuration_unavailable", AccessDenied),
+            ("configuration_unavailable", PathSecurity),
+            ("configuration_unavailable", Io),
+            ("configuration_invalid", Oversized),
+            ("configuration_invalid", InvalidUtf8),
+            ("configuration_invalid", InvalidToml),
+            ("configuration_invalid", SchemaInvalid),
+            ("configuration_busy", LockContended),
+        ] {
+            let source = runtime_api::configuration::ConfigurationError {
+                code,
+                param: None,
+                reason: Some(reason),
+            };
+            let api: runtime_api::ApiError = source.into();
+            let mut payload = serde_json::to_value(&api).unwrap();
+            payload["error"]["message"] =
+                serde_json::json!("private_sentinel_secret /private/path/config.toml");
+            let client = api_error(api.status.as_u16(), &serde_json::to_vec(&payload).unwrap());
+            match &client {
+                ClientError::Api {
+                    code: actual,
+                    reason: actual_reason,
+                    ..
+                } => {
+                    assert_eq!(actual.as_deref(), Some(code));
+                    assert_eq!(*actual_reason, Some(reason));
+                }
+                _ => panic!("expected API failure"),
+            }
+            assert!(!format!("{client:?} {client}").contains("private_sentinel_secret"));
+            assert!(!format!("{client:?} {client}").contains("/private/path"));
+        }
+    }
+    #[test]
+    fn optional_configuration_reason_rejects_unknown_malformed_and_mismatched_values() {
+        for payload in [
+            serde_json::json!({"error":{"code":"configuration_invalid"}}),
+            serde_json::json!({"error":{"code":"configuration_invalid","reason":null}}),
+            serde_json::json!({"error":{"code":"configuration_invalid","reason":42}}),
+            serde_json::json!({"error":{"code":"configuration_invalid","reason":{ "private_sentinel_secret":true }}}),
+            serde_json::json!({"error":{"code":"configuration_invalid","reason":["configuration_invalid_toml"]}}),
+            serde_json::json!({"error":{"code":"configuration_invalid","reason":"private_sentinel_secret"}}),
+            serde_json::json!({"error":{"code":"configuration_invalid","reason":"configuration_missing"}}),
+            serde_json::json!({"error":{"code":"configuration_unavailable","reason":"configuration_lock_contended"}}),
+            serde_json::json!({"error":{"code":"runtime_busy","reason":"configuration_lock_contended"}}),
+            serde_json::json!({"error":{"reason":"configuration_missing"}}),
+        ] {
+            let failure = api_error(500, &serde_json::to_vec(&payload).unwrap());
+            assert!(matches!(&failure, ClientError::Api { reason: None, .. }));
+            assert!(!format!("{failure:?} {failure}").contains("private_sentinel_secret"));
+        }
+        assert!(matches!(
+            api_error(500, b"not json private_sentinel_secret"),
+            ClientError::Api {
+                code: None,
+                param: None,
+                reason: None,
+                ..
+            }
+        ));
+    }
+    #[test]
+    fn ordinary_api_errors_keep_legacy_shape_and_safe_param() {
+        let source = runtime_api::ApiError::invalid("update.runtime", "private_sentinel_secret");
+        let payload = serde_json::to_value(&source).unwrap();
+        assert!(payload["error"].get("reason").is_none());
+        let failure = api_error(400, &serde_json::to_vec(&payload).unwrap());
+        assert!(
+            matches!(&failure, ClientError::Api { status: 400, code: Some(code), param: Some(param), reason: None }
+            if code == "invalid_request" && param == "update.runtime")
+        );
+        assert!(!format!("{failure:?} {failure}").contains("private_sentinel_secret"));
+        let old = api_error(400, br#"{"error":{"code":"configuration_invalid","param":"update.runtime","message":"private_sentinel_secret"}}"#);
+        assert!(matches!(old, ClientError::Api { reason: None, .. }));
+    }
     #[test]
     fn verification_wait_is_route_method_and_budget_bounded_without_extending_defaults() {
         for path in [

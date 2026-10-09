@@ -1,5 +1,9 @@
 # Nexa Runtime v0.1 开发执行文档
 
+> 2026-10-09：启动私有诊断、配置附加固定reason、结果不确定与UI安全呈现遵循[错误恢复契约](docs/error-handling-and-recovery.md)；公共主错误码/HTTP状态、锁/CAS与不自动重放边界保持。
+
+> 2026-10-09：按 [ADR0042](docs/decisions/0042-lan-bind-startup-recovery.md)，可选 LAN 的 OS bind 失败保留认证回环管理，`lan_api.startup_error` 报告有界原因且 `running=false`；配置/安全校验及本机绑定失败仍失败关闭，修正设置须显式停服。
+
 - 版本：2.2（本机单图 OCR 开发契约）
 - 日期：2026-10-07
 - 项目名：Nexa；命令与原生符号沿用 `ai-runtime` / `ai-runtime-worker` / `air_*`
@@ -374,6 +378,8 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 ADR0027增量：桌面可停止自己的文件准备/hash、显式切换/加载及同操作私有短测。取消直接作用于操作令牌，不排在Load后；显式加载独占期间不接受其他客户端排队；取消Loaded竞态需再卸载并等ACK。不合作worker沿用5秒宽限/强制终止/确认回收；清理未确认是永久故障，不能返回cancelled/unloaded。加载已结束后的Stop只取消私有probe，可能保留驻留模型；不取消别人的生成，不保存取消为失败模型证明，不用shutdown替代。完整身份/回执恢复/自动流程边界见[ADR0027](docs/decisions/0027-owned-model-load-cancellation.md)。
 
 T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。35bfd85基线`/v1/models`仅列旧准入模型；ADR0015增量改按当前available/loadable筛选，未有历史validated的合法候选也可列出，列表不承诺实际load必成功；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
+
+2026-10-09名称增量：本机与LAN的`/v1/models`每条记录新增`display_name`，复用已登记的显示名；`id/object/owned_by`及原请求中的ModelId保持。显示名允许重复，不用于匹配、加载或改变准入；不重新生成ID、不迁移旧索引、不覆盖自定义名称。LAN仍只列当前驻留模型，注册表名称暂不可得时以该ID作显示名。客户端是否展示此字段取决于实际实现；PI Desktop v0.17.0的添加模型列表读取该字段，聊天选择器仍使用用户别名或ID。见[兼容说明](docs/model-display-names.md)。
 
 所有 `/v1/*` 和 `/runtime/*` 使用 `Authorization: Bearer <token>`。本机管理监听只接受回环连接，不提供 `0.0.0.0` 监听开关；用户显式启用的独立LAN推理监听遵循ADR0020，不放宽本段管理接口约束。令牌由 init 生成，日志不得输出，读取权限限当前用户。
 

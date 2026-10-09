@@ -1,3 +1,4 @@
+import { errorText } from "./errorPresentation";
 import { useEffect, useState } from "react";
 import type { DesktopController, ViewState } from "./controller";
 import type { ConfigurationSnapshot, LoadOptions, LoadOverrides, ModelConfiguration, UiPreferences } from "./types";
@@ -46,7 +47,7 @@ export function UiPreferencesForm({ state, controller }: { state: ViewState; con
     <label className="auto-test-option"><input type="checkbox" checked={form.draft.close_runtime_on_exit} onChange={(event) => set({ close_runtime_on_exit: event.target.checked })} />关闭窗口时同时退出运行服务</label><p>{form.draft.close_runtime_on_exit ? "保存后，真正退出界面将停止所有客户端任务并释放模型。" : "真正退出界面取消本窗口任务并保留服务。重新打开 Nexa 可连接现有服务。"}关闭到托盘时只隐藏窗口，不执行此退出策略。</p><button disabled={!!state.operation || !form.dirty || form.conflict} onClick={() => void controller.saveUiPreferences(form.draft, form.baseRevision!)}>保存界面偏好</button></section>;
 }
 
-function ProfileEditor({ config, state, controller }: { config: ModelConfiguration; state: ViewState; controller: DesktopController }) {
+function ProfileEditor({ config, state, controller, readUnconfirmed = false }: { config: ModelConfiguration; state: ViewState; controller: DesktopController; readUnconfirmed?: boolean }) {
   const form = useConfigDraft(config.load_overrides, config.configuration_revision, `model_profile:${config.model_id}`);
   const [apply, setApply] = useState<"saved" | "save" | "temporary" | null>(null);
   const temporaryDraft = useConfigDraft<Partial<LoadOptions>>({}, undefined, `model_temporary:${config.model_id}`);
@@ -60,14 +61,15 @@ function ProfileEditor({ config, state, controller }: { config: ModelConfigurati
   const resident = runtime?.selected_model === config.model_id && ["ready", "generating"].includes(runtime.state);
   const currentOptions = resident ? runtime?.load_options : null;
   const restoreOptions = !resident && runtime?.selected_model === config.model_id ? runtime.load_options : null;
-  const busy = !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle" || !!runtime?.active_request || !!runtime?.queued_jobs || !!runtime?.stopping || !!runtime?.registry_busy || ["loading", "generating", "unloading"].includes(runtime?.state ?? "");
+  const busy = readUnconfirmed || !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || state.chat_phase !== "idle" || !!runtime?.active_request || !!runtime?.queued_jobs || !!runtime?.stopping || !!runtime?.registry_busy || ["loading", "generating", "unloading"].includes(runtime?.state ?? "");
   return <div className="profile-editor">{form.conflict && <DraftConflict reset={form.reset} rebase={form.rebase} draft={form.draft} saved={config.load_overrides} />}<p>空字段继承全局默认；仅保存本模型档案，不改变当前驻留。未保存草稿切页保留。恢复副本不是后端配置；重开后须确认恢复并重新核对版本。</p><p>继承来源：全局上下文 {state.snapshot?.configuration?.saved.global_defaults.context_size} · 线程 {state.snapshot?.configuration?.saved.global_defaults.threads ?? "自动"} · 批次 {state.snapshot?.configuration?.saved.global_defaults.batch_size}；草稿有效结果将在保存后由后端重新解析。</p><div className="settings-grid">{(["context_size", "threads", "batch_size"] as const).map((key) => <label className="setting-field" key={key}><span>{{ context_size: "模型上下文长度", threads: "模型线程数", batch_size: "模型批次大小" }[key]}</span><input type="number" placeholder="继承全局" value={values[key] === null || Number.isNaN(values[key]) ? "" : values[key]} onChange={(event) => form.setDraft({ ...values, [key]: event.target.value === "" ? null : event.target.valueAsNumber } as LoadOverrides)} /><small>已保存解析值 {saved[key]} · 来源 {config.saved_sources[key]}</small></label>)}</div>
     <p>模型上下文上限：{config.context_limit ?? "未知"}；上限不代表内存保证。</p><p>当前驻留参数：{currentOptions ? JSON.stringify(currentOptions) : "无"}</p>{restoreOptions && <p>上次会话恢复参数：{JSON.stringify(restoreOptions)}；本机同 ID 自动恢复沿用此值，主动加载采用已保存档案。</p>}
     <p>{config.pending_apply ? "新档案尚未应用到驻留模型" : "下次主动加载使用已保存解析值"}</p>{!valid && <p role="alert" className="warning-text">{values.context_size !== null && config.context_limit !== null && values.context_size > config.context_limit ? `该模型声明上限为 ${config.context_limit}，当前填写 ${values.context_size}，请调整后保存。` : "参数超出范围或批次大于上下文，请调整后保存。"}</p>}
-    <div className="workspace-actions"><button disabled={!!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || !form.dirty || form.conflict || !valid || state.snapshot?.configuration?.migration.state === "required"} onClick={() => void controller.saveConfiguration({ expected_revision: form.baseRevision!, update: { kind: "model_profile", model_id: config.model_id, load_overrides: values } })}>保存模型档案</button><button disabled={busy || form.dirty || state.snapshot?.configuration?.pending_restart} onClick={() => setApply("saved")}>按已保存档案加载并测试</button><button disabled={busy || !form.dirty || form.conflict || !valid || state.snapshot?.configuration?.migration.state === "required" || state.snapshot?.configuration?.pending_restart} onClick={() => setApply("save")}>保存并重新加载</button><button onClick={() => form.setDraft({ context_size: null, threads: null, batch_size: null })}>恢复继承</button><button disabled={!form.dirty && !form.conflict} onClick={form.reset}>放弃档案更改</button></div>
+    <div className="workspace-actions"><button disabled={readUnconfirmed || !!state.operation || state.library_phase !== "idle" || state.download_phase !== "idle" || !form.dirty || form.conflict || !valid || state.snapshot?.configuration?.migration.state === "required"} onClick={() => void controller.saveConfiguration({ expected_revision: form.baseRevision!, update: { kind: "model_profile", model_id: config.model_id, load_overrides: values } })}>保存模型档案</button><button disabled={busy || form.dirty || state.snapshot?.configuration?.pending_restart} onClick={() => setApply("saved")}>按已保存档案加载并测试</button><button disabled={busy || !form.dirty || form.conflict || !valid || state.snapshot?.configuration?.migration.state === "required" || state.snapshot?.configuration?.pending_restart} onClick={() => setApply("save")}>保存并重新加载</button><button onClick={() => form.setDraft({ context_size: null, threads: null, batch_size: null })}>恢复继承</button><button disabled={!form.dirty && !form.conflict} onClick={form.reset}>放弃档案更改</button></div>
     {state.snapshot?.configuration?.pending_restart && <p>磁盘配置尚未被当前服务采用，请先显式停止并重启服务。</p>}
     <details><summary>仅本次加载的临时覆盖</summary><p>留空使用后端档案。此处不会保存配置，主动重新加载或服务重启后结束；空闲恢复沿用本次会话参数。</p><div className="settings-grid">{(["context_size", "threads", "batch_size"] as const).map((key) => <label className="setting-field" key={key}><span>临时 {key}</span><input type="number" value={temporary[key] === undefined || Number.isNaN(temporary[key]) ? "" : temporary[key]} onChange={(event) => { const next = { ...temporary }; if (event.target.value === "") delete next[key]; else next[key] = event.target.valueAsNumber; setTemporary(next); }} /></label>)}</div><button disabled={busy || state.snapshot?.configuration?.schema_version !== 2 || state.snapshot?.configuration?.pending_restart || Object.entries(temporary).some(([key, value]) => !Number.isInteger(value) || value < (key === "context_size" ? 32 : 1) || value > (key === "context_size" ? Math.min(config.context_limit ?? 131072, 131072) : key === "threads" ? 256 : 4096))} onClick={() => setApply("temporary")}>按临时覆盖加载并测试</button></details>
     {apply && <Modal title={apply === "save" ? "保存档案并重新加载？" : "应用已保存的模型档案？"} confirm="加载并测试" onCancel={() => setApply(null)} onConfirm={() => {
+      if (readUnconfirmed) { setApply(null); return; }
       const action = apply; setApply(null);
       void (async () => {
         if (action === "save" && !await controller.saveConfiguration({ expected_revision: form.baseRevision!, update: { kind: "model_profile", model_id: config.model_id, load_overrides: values } })) return;
@@ -78,13 +80,19 @@ function ProfileEditor({ config, state, controller }: { config: ModelConfigurati
 }
 export function ModelProfile({ modelId, state, controller }: { modelId: string; state: ViewState; controller: DesktopController }) {
   const [open, setOpen] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const revision = state.snapshot?.configuration?.revision;
   const runtimeScope = JSON.stringify([state.snapshot?.connection, state.snapshot?.runtime?.state, state.snapshot?.runtime?.selected_model, state.snapshot?.runtime?.load_options]);
   useEffect(() => { if (open) void controller.refreshModelConfiguration(modelId); }, [open, modelId, revision, runtimeScope, controller]);
   if (!state.snapshot?.configuration) return <p className="small-note">当前版本未提供逐模型运行档案。</p>;
   const config = ownRecord(state.model_configurations, modelId);
   const error = ownRecord(state.model_configuration_errors, modelId);
-  return <details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>运行档案与当前参数</summary>{error && <p className="warning-text">{error.message}</p>}{open && (config ? <ProfileEditor config={config} state={state} controller={controller} /> : <p>正在读取后端解析结果…</p>)}</details>;
+  const retry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try { await controller.refreshModelConfiguration(modelId); } finally { setRetrying(false); }
+  };
+  return <details onToggle={(event) => setOpen(event.currentTarget.open)}><summary>运行档案与当前参数</summary>{error && <div role="alert" className="warning-text"><p>{errorText(error)}</p><button disabled={retrying || state.closing} onClick={() => void retry()}>{retrying ? "正在重新读取档案…" : "重新读取模型档案"}</button>{config && <p>以下为上次读取的档案，当前状态尚未确认。</p>}</div>}{open && (config ? <ProfileEditor config={config} state={state} controller={controller} readUnconfirmed={!!error || retrying} /> : !error ? <p>正在读取后端解析结果…</p> : null)}</details>;
 }
 
 export function RequestDefaultsForm({ state, controller }: { state: ViewState; controller: DesktopController }) {

@@ -73,3 +73,14 @@ export function validLanAddresses(value: unknown): value is LanAddressDiscovery 
     return true;
   });
 }
+
+/** Only bounded codes are rendered; raw server/OS text is never shown. */
+export function lanStartupMessage(error: string | null | undefined): string | null {
+  if (!error) return null;
+  switch (error) {
+    case "address_unavailable": return "配置的局域网 IP 当前不属于可用网卡。请停止服务，刷新网卡地址并选择当前 IPv4，保存后重新启动。";
+    case "port_in_use": return "配置的局域网端口已被占用。请停止服务后选择未占用的端口，或关闭占用端口的程序，再重新启动。";
+    case "permission_denied": return "系统拒绝绑定局域网地址或端口。请检查端口保留和安全软件限制，或停止服务后选择其他端口，再重新启动。";
+    default: return "未能绑定配置的局域网地址和端口。请检查网络，停止服务后核对局域网设置，再重新启动。";
+  }
+}

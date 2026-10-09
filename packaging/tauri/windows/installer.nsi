@@ -283,6 +283,7 @@ FunctionEnd
 Function ${prefix}NexaCheck
   ; Compare the actual NSIS destination before any SetOutPath or removal.
   ${If} $INSTDIR != "$LOCALAPPDATA\Programs\Nexa"
+    DetailPrint "Nexa preflight: unsupported_destination"
     MessageBox MB_ICONSTOP|MB_OK "Nexa requires %LOCALAPPDATA%\Programs\Nexa. Custom install locations are not supported.$\r$\n安装路径必须为当前用户的 Programs\Nexa。" /SD IDOK
     SetErrorLevel 1603
     Quit
@@ -291,21 +292,45 @@ Function ${prefix}NexaCheck
   ClearErrors
   File "/oname=$PLUGINSDIR\nexa-install-check.exe" "${NEXA_CHECK_SOURCE}"
   ${If} ${Errors}
+    DetailPrint "Nexa preflight: helper_prepare_failed"
     MessageBox MB_ICONSTOP|MB_OK "Could not prepare the installation check. 安装检查程序无法准备。" /SD IDOK
     SetErrorLevel 1603
     Quit
   ${EndIf}
   ClearErrors
-  ExecWait '$\"$PLUGINSDIR\nexa-install-check.exe$\" ${mode}' $NexaCheckResult
+  ExecWait '$\"$PLUGINSDIR\nexa-install-check.exe$\" ${mode} /diagnostic' $NexaCheckResult
   ${If} ${Errors}
-    StrCpy $NexaCheckResult 1603
+    DetailPrint "Nexa preflight: helper_launch_failed"
+    MessageBox MB_ICONSTOP|MB_OK "Could not start the installation check. Retry the installer; if this continues, check Windows security settings. [helper_launch_failed]$\r$\n无法启动安装检查程序。请重试；如仍失败，请检查 Windows 安全设置。" /SD IDOK
+    SetErrorLevel 1603
+    Quit
   ${EndIf}
   ${If} $NexaCheckResult = 1638
+    DetailPrint "Nexa preflight: msi_format_conflict"
     MessageBox MB_ICONSTOP|MB_OK "Nexa is installed using MSI (including the old Setup.exe). Use the new MSI to upgrade it. To switch to NSIS, uninstall Nexa first; models and user data are kept.$\r$\n检测到 MSI 安装（包括旧版 Setup.exe）。请下载新 MSI 原位升级；如需切换 NSIS，请先卸载程序，模型和用户数据会保留。" /SD IDOK
     SetErrorLevel 1638
     Quit
   ${ElseIf} $NexaCheckResult != 0
-    MessageBox MB_ICONSTOP|MB_OK "Nexa cannot modify this installation. Stop its service and close all Nexa windows, then retry. The install path must not contain links. Models and user data have not been removed.$\r$\n请先停止 Nexa 服务并关闭窗口，再重试。安装路径不可包含链接。模型和用户数据未被删除。" /SD IDOK
+    ; Only fixed allowlisted reasons are displayed; never include paths or raw OS text.
+    ${If} $NexaCheckResult = 20001
+      DetailPrint "Nexa preflight: unsupported_os"
+      MessageBox MB_ICONSTOP|MB_OK "Nexa requires Windows 10 or later. [unsupported_os]$\r$\nNexa 需要 Windows 10 或更新版本。" /SD IDOK
+    ${ElseIf} $NexaCheckResult = 20002
+      DetailPrint "Nexa preflight: directory_lookup_failed"
+      MessageBox MB_ICONSTOP|MB_OK "Windows could not provide a usable current-user installation or Start menu directory. Check your Windows user profile and retry. [directory_lookup_failed]$\r$\n无法获取可用的当前用户安装目录或开始菜单目录。请检查 Windows 用户配置后重试。" /SD IDOK
+    ${ElseIf} $NexaCheckResult = 20003
+      DetailPrint "Nexa preflight: path_verification_failed"
+      MessageBox MB_ICONSTOP|MB_OK "The installation or Start menu path could not be verified. Check directory access and links before retrying. [path_verification_failed]$\r$\n无法验证安装路径或开始菜单路径。请检查目录访问权限及链接后重试。" /SD IDOK
+    ${ElseIf} $NexaCheckResult = 20004
+      DetailPrint "Nexa preflight: process_verification_failed"
+      MessageBox MB_ICONSTOP|MB_OK "Nexa may still be running, or Windows could not verify its process state. Stop Nexa's service and close its windows, then retry. If it persists, check process access permissions. [process_verification_failed]$\r$\nNexa 可能仍在运行，或 Windows 无法验证进程状态。请停止服务并关闭窗口后重试；如仍失败，请检查进程访问权限。" /SD IDOK
+    ${ElseIf} $NexaCheckResult = 20005
+      DetailPrint "Nexa preflight: msi_inventory_failed"
+      MessageBox MB_ICONSTOP|MB_OK "Windows could not check existing MSI installations. Check Windows Installer availability and retry. [msi_inventory_failed]$\r$\n无法查询已有 MSI 安装登记。请检查 Windows Installer 是否可用后重试。" /SD IDOK
+    ${Else}
+      DetailPrint "Nexa preflight: check_failed"
+      MessageBox MB_ICONSTOP|MB_OK "The installation check did not complete successfully. Retry using a verified Nexa installer. [check_failed]$\r$\n安装检查未成功完成。请使用已验证的 Nexa 安装包重试。" /SD IDOK
+    ${EndIf}
     SetErrorLevel 1603
     Quit
   ${EndIf}

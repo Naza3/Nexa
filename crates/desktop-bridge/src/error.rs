@@ -46,6 +46,12 @@ impl BridgeError {
                 "此旧写入接口不支持配置版本检查。请使用新版设置页面。"
             }
             "configuration_busy" => "另一个配置事务正在进行，请稍后重试。",
+            "configuration_unavailable" => {
+                "无法安全读取本机配置。请检查数据目录、配置文件及访问权限，原配置未被替换。"
+            }
+            "configuration_write_failed" => {
+                "配置保存失败。请检查数据目录的可用空间和写入权限，再重新读取核对。"
+            }
             "configuration_invalid" | "model_profile_invalid" => {
                 "配置或模型档案超出有效范围，未保存。"
             }
@@ -76,6 +82,9 @@ impl BridgeError {
             }
             "model_download_cleanup_unconfirmed" => {
                 "Download cleanup has not completed. Keep the window open and retry closing."
+            }
+            "model_download_outcome_unknown" => {
+                "下载操作结果暂时无法确认，文件可能已经发布，不会自动重试。请先刷新模型目录和模型库并核对，再决定是否手动重试。"
             }
             "model_download_cancelled" => "The download was cancelled before publication.",
             "model_download_timeout" => {
@@ -115,6 +124,34 @@ impl BridgeError {
             }
             "runtime_start_failed" => {
                 "The packaged runtime did not become available. No business request was replayed."
+            }
+            "runtime_loopback_bind_failed" => {
+                "本机 API 监听失败。请检查设置中的回环地址和端口是否可用或被占用，修正后手动启动服务。"
+            }
+            "runtime_security_invalid" => {
+                "服务安全配置无效。请检查本机及局域网安全设置，并使用同一完整安装包重新启动。"
+            }
+            "model_not_loaded" => "当前没有可用于推理的模型。请先加载模型，再手动发送请求。",
+            "model_not_found" => "找不到已登记模型。请刷新模型库并重新选择，不会自动换用其他模型。",
+            "model_conflict" => {
+                "请求模型与当前已加载模型不一致。请等待当前任务结束，再明确切换模型。"
+            }
+            "runtime_busy" | "queue_full" => {
+                "服务正在处理任务或等待队列已满。请等待已有任务结束，再手动重试。"
+            }
+            "queue_timeout" => "请求等待队列超时，尚未开始推理。请等待服务空闲后手动重试。",
+            "load_timeout" => "模型加载超时。请刷新模型状态，确认清理完成后再手动加载。",
+            "worker_lost" | "runtime_faulted" => {
+                "推理进程异常结束，当前任务未完成。请刷新服务状态，确认清理完成后显式重新加载模型；已输出内容不会自动重放。"
+            }
+            "runtime_shutdown" => {
+                "服务已停止，当前任务未完成。请重新启动服务并加载模型后再手动操作。"
+            }
+            "model_load_failed" => {
+                "模型加载失败。请检查模型是否受支持、文件是否完整及可用内存，刷新状态后再手动加载。"
+            }
+            "insufficient_storage" => {
+                "模型存储空间不足，操作未完成。请释放空间并刷新模型库后再操作。"
             }
             "runtime_stop_unconfirmed" => {
                 "Runtime cleanup could not be confirmed. The window remains open."
@@ -236,6 +273,7 @@ impl BridgeError {
             "unsupported_chat_template",
             "context_length_exceeded",
             "model_not_found",
+            "model_not_loaded",
             "request_not_found",
             "model_conflict",
             "model_unregister_loaded",
@@ -287,8 +325,35 @@ impl std::error::Error for BridgeError {}
 impl From<runtime_cli::client::ClientError> for BridgeError {
     fn from(e: runtime_cli::client::ClientError) -> Self {
         match e {
-            runtime_cli::client::ClientError::Api { code, param, .. } => {
-                Self::api(code.as_deref()).with_configuration_param(param.as_deref())
+            runtime_cli::client::ClientError::Api {
+                code,
+                param,
+                reason,
+                ..
+            } => {
+                let mut error = Self::api(code.as_deref());
+                let configuration_code = match error.code.as_str() {
+                    "configuration_unavailable" => Some("configuration_unavailable"),
+                    "configuration_invalid" => Some("configuration_invalid"),
+                    "configuration_busy" => Some("configuration_busy"),
+                    _ => None,
+                };
+                if let (Some(code), Some(reason)) = (configuration_code, reason) {
+                    let source = runtime_api::configuration::ConfigurationError {
+                        code,
+                        param: None,
+                        reason: Some(reason),
+                    };
+                    if runtime_api::configuration::ConfigurationFailureReason::from_reason_code(
+                        code,
+                        source.reason_code().unwrap(),
+                    )
+                    .is_some()
+                    {
+                        error.message = source.safe_message().into();
+                    }
+                }
+                error.with_configuration_param(param.as_deref())
             }
             _ => Self::new("connection_failed"),
         }
@@ -296,7 +361,11 @@ impl From<runtime_cli::client::ClientError> for BridgeError {
 }
 impl From<runtime_api::configuration::ConfigurationError> for BridgeError {
     fn from(e: runtime_api::configuration::ConfigurationError) -> Self {
-        Self::new(e.code).with_configuration_param(e.param)
+        let mut error = Self::new(e.code);
+        if e.reason_code().is_some() {
+            error.message = e.safe_message().into();
+        }
+        error.with_configuration_param(e.param)
     }
 }
 pub type Result<T> = std::result::Result<T, BridgeError>;
@@ -369,6 +438,53 @@ mod download_diagnostic_tests {
             assert!(!error.message.contains("999"));
             assert!(!error.message.contains("https://"));
             assert!(error.message.len() < 400);
+        }
+    }
+    #[test]
+    fn model_not_loaded_survives_api_allowlist_and_unknown_codes_are_redacted() {
+        let error = BridgeError::api(Some("model_not_loaded"));
+        assert_eq!(error.code, "model_not_loaded");
+        assert!(error.message.contains("加载模型"));
+        let error = BridgeError::api(Some("private-token-or-path"));
+        assert_eq!(error.code, "api_error");
+        assert!(!error.message.contains("private"));
+    }
+    #[test]
+    fn configuration_reason_survives_without_exposing_parser_or_path_text() {
+        use runtime_api::configuration::{ConfigurationError, ConfigurationFailureReason};
+        let source = ConfigurationError {
+            code: "configuration_invalid",
+            param: None,
+            reason: Some(ConfigurationFailureReason::InvalidUtf8),
+        };
+        let expected = source.safe_message();
+        let error = BridgeError::from(source);
+        assert_eq!(error.code, "configuration_invalid");
+        assert_eq!(error.message, expected);
+    }
+    #[test]
+    fn online_configuration_reason_is_fixed_and_must_match_primary_code() {
+        use runtime_api::configuration::{ConfigurationError, ConfigurationFailureReason};
+        let error = BridgeError::from(runtime_cli::client::ClientError::Api {
+            status: 400,
+            code: Some("configuration_invalid".into()),
+            param: None,
+            reason: Some(ConfigurationFailureReason::InvalidUtf8),
+        });
+        let expected = ConfigurationError {
+            code: "configuration_invalid",
+            param: None,
+            reason: Some(ConfigurationFailureReason::InvalidUtf8),
+        };
+        assert_eq!(error.message, expected.safe_message());
+        for reason in [None, Some(ConfigurationFailureReason::Missing)] {
+            let error = BridgeError::from(runtime_cli::client::ClientError::Api {
+                status: 400,
+                code: Some("configuration_invalid".into()),
+                param: None,
+                reason,
+            });
+            assert_eq!(error, BridgeError::new("configuration_invalid"));
         }
     }
 }

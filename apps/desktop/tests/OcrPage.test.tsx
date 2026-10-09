@@ -57,7 +57,7 @@ it("shows preparation and failure beside the preview and retries the same File o
   expect(feedback).toHaveTextContent("已选择：retry.png");
   expect(feedback).toHaveTextContent("正在检查原图");
   expect(screen.getByRole("button", { name: "识别图片" })).toBeDisabled();
-  await act(async () => pending.reject(new Error("图片损坏或无法解码。")));
+  await act(async () => pending.reject(new DesktopError("ocr_image_invalid", "图片损坏或无法解码。")));
   expect(feedback).toHaveTextContent("图片损坏或无法解码。");
   expect(screen.getByText("图片准备失败，请重新选择图片。")).toBeVisible();
   expect(screen.queryByAltText("待识别图片预览")).not.toBeInTheDocument();
@@ -160,7 +160,7 @@ it("retains early cancellation until the request id arrives", async () => {
   expect(screen.getByText(/已停止，已生成内容可能不完整/)).toBeVisible();
 });
 it("rejects bad images and invalid token limits before any request", async () => {
-  vi.mocked(ocrImage.prepareOcrImage).mockRejectedValue(new Error("图片损坏或无法解码。"));
+  vi.mocked(ocrImage.prepareOcrImage).mockRejectedValue(new DesktopError("ocr_image_invalid", "图片损坏或无法解码。"));
   const api = await mount();
   fireEvent.change(screen.getByLabelText("OCR 图片"), { target: { files: [new File(["bad"], "bad.png", { type: "image/png" })] } });
   expect(await screen.findByText("图片损坏或无法解码。")).toBeVisible();
@@ -305,7 +305,7 @@ it("preserves partial output after a controlled stream failure without replay", 
   const api = await mount({ chatNext: vi.fn(async (): Promise<ChatBatch> => ({ request_id: "ocr-1", terminal: true, events: [{ type: "delta", text: "部分原文" }, { type: "failed", code: "worker_failed", message: "工作进程已结束" }] })) });
   await upload();
   fireEvent.click(screen.getByRole("button", { name: "识别图片" }));
-  expect(await screen.findByText(/识别失败：工作进程已结束/)).toBeVisible();
+  expect(await screen.findByText(/识别失败：推理进程异常/)).toBeVisible();
   expect(screen.getByText("部分原文")).toBeVisible();
   expect(api.ocrStart).toHaveBeenCalledTimes(1);
 });

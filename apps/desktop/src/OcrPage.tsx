@@ -8,7 +8,8 @@ import type { LoadOptions, ModelFileSelection, OcrHistorySaveRequest, Usage } fr
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ModelLoadControl } from "./ModelLoadControl";
 import { prepareOcrImage } from "./ocrImage";
-import { safeError } from "./adapter";
+import { errorText } from "./errorPresentation";
+import { DesktopError, safeError } from "./adapter";
 import { validModelSelection } from "./modelSelection";
 import { OCR_DEFAULT_LOAD, resolveOcrProfile, validLoad } from "./workbench";
 import { ownRecord } from "./records";
@@ -191,7 +192,7 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
         setImage(value);
         setImageError("");
       }).catch((error: unknown) => {
-        if (current()) setImageError(error instanceof Error ? error.message : "图片准备失败，请重新选择图片。");
+        if (current()) setImageError(safeError(error).message);
       }).finally(() => { if (current()) setPreparing(false); });
     }
     return () => { active = false; };
@@ -202,7 +203,7 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
     if (!current) { setStatus("已停止批量识别，剩余图片未开始。"); return; }
     current.cancelled = true;
     setStatus("停止中…");
-    try { if (current.id) await api.chatCancel(current.id); } catch { setStatus("停止未确认，请重试停止。"); }
+    try { if (current.id) await api.chatCancel(current.id); } catch (error) { setStatus(`停止未确认，请重试停止。${errorText(error)}`); }
   };
   const consume = useCallback(async (current: NonNullable<typeof task.current>) => {
     if (!current.id || current.reading) return;
@@ -214,9 +215,9 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
       while (!terminal) {
         const batch = await api.chatNext(current.id);
         if (current.epoch !== performanceEpoch.current) return;
-        if (batch.request_id !== current.id) throw new Error("响应标识不一致");
+        if (batch.request_id !== current.id) throw new DesktopError("invalid_stream", "响应标识不一致");
         const terminalIndex = batch.events.findIndex((event) => ["completed", "cancelled", "failed"].includes(event.type));
-        if (batch.terminal !== (terminalIndex >= 0) || (terminalIndex >= 0 && terminalIndex !== batch.events.length - 1)) throw new Error("终态回执不完整或终态后仍有事件");
+        if (batch.terminal !== (terminalIndex >= 0) || (terminalIndex >= 0 && terminalIndex !== batch.events.length - 1)) throw new DesktopError("invalid_stream", "终态回执不完整或终态后仍有事件");
         for (const event of batch.events) {
           if (event.type === "delta" && !current.overflow) {
             const content = current.content + event.text;
@@ -229,7 +230,7 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
           }
           if (event.type === "completed") setStatus(event.finish_reason === "length" ? `已达到输出 token 上限，内容可能截断；请核对原图，可调整上限后手动重试。${current.hadReadFailure ? "读取曾中断，原文还可能缺失内容。" : ""}` : current.hadReadFailure ? "终态已确认，但读取曾中断，原文可能缺失内容；请核对原图。" : "识别完成，请核对原图。");
           if (event.type === "cancelled") setStatus("已停止，已生成内容可能不完整。");
-          if (event.type === "failed") setStatus(event.code === "execution_timeout" ? "推理执行超时（execution_timeout）。已保留已生成内容，但可能不完整，不会自动重试。可将图片裁成较小区域分别识别，或停止服务后在“设置→资源与校验”中适当调大“推理执行超时”，再启动服务、重新加载模型并手动重试。" : `识别失败：${event.message}（${event.code}）。已生成内容可能不完整。`);
+          if (event.type === "failed") setStatus(event.code === "execution_timeout" ? "推理执行超时（execution_timeout）。已保留已生成内容，但可能不完整，不会自动重试。可将图片裁成较小区域分别识别，或停止服务后在“设置→资源与校验”中适当调大“推理执行超时”，再启动服务、重新加载模型并手动重试。" : `识别失败：${errorText(event)}。已生成内容可能不完整。`);
         }
         terminal = batch.terminal;
         const terminalEvent = batch.events[terminalIndex];
@@ -275,11 +276,11 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
       task.current = null;
       void controller.refresh();
       return advance;
-    } catch {
+    } catch (error) {
       current.hadReadFailure = true;
       current.cancelled = true;
       await api.chatCancel(current.id).catch(() => {});
-      setStatus("识别结果与停止尚未确认，已保留任务。请重新确认识别任务；不会自动重新生成。");
+      setStatus(`识别结果与停止尚未确认，已保留任务。请重新确认识别任务；不会自动重新生成。${errorText(error)}`);
       setRecovering(true);
     } finally { current.reading = false; current.readWaiters.forEach((resolve) => resolve()); current.readWaiters.clear(); }
   }, [api, controller, updateItem]);
@@ -332,7 +333,7 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
           try {
             prepared = !resume && queueRef.current.length === 1 ? image : await prepareOcrImage(item.file, settings.edge);
           } catch (error) {
-            updateItem(item.id, { status: "失败" }); setStatus(error instanceof Error ? error.message : "图片准备失败，批量已暂停。"); break;
+            updateItem(item.id, { status: "失败" }); setStatus(`图片准备失败，批量已暂停。${safeError(error).message}`); break;
           } finally { setPreparing(false); }
           if (run.stopped || controller.getSnapshot().closing || !controller.ownsOcrBatch(token)) { updateItem(item.id, { status: "待开始" }); break; }
           await controller.refreshOcrBatch(token);
@@ -349,10 +350,10 @@ export function OcrPage({ controller, state }: { controller: DesktopController; 
           try {
             current.id = (await api.ocrStart!({ model_id: settings.model, image_data_url: prepared, prompt: settings.prompt, max_output_tokens: settings.tokens })).request_id;
             current.markStarted();
-            if (!current.id) throw new Error("识别请求未返回有效标识。");
+            if (!current.id) throw new DesktopError("invalid_stream", "识别请求未返回有效标识。");
           } catch (error) {
             current.markStarted(); task.current = null; updateItem(item.id, { status: "失败" });
-            setStatus(error instanceof Error ? error.message : "识别未能开始，批量已暂停。"); break;
+            setStatus(`识别未能开始，批量已暂停。${errorText(error)}`); break;
           }
           if (current.cancelled || run.stopped) { current.cancelled = true; await api.chatCancel(current.id).catch(() => {}); }
           const advance = await consume(current);

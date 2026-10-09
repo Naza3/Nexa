@@ -152,6 +152,84 @@ fn synthetic_gguf() -> Vec<u8> {
     bytes
 }
 #[tokio::test]
+async fn v1_model_names_preserve_ids_duplicates_and_lan_resident_scope() {
+    async fn lan_models(state: ApiState) -> Value {
+        let config = runtime_api::LanApiConfig {
+            enabled: true,
+            listen: Some("192.168.10.2:18081".parse().unwrap()),
+            allowed_cidrs: vec!["192.168.10.3/32".into()],
+        };
+        let token = SecretToken::generate().unwrap();
+        let bearer = token.bearer_header_value();
+        let security = Arc::new(runtime_api::lan::LanSecurityContext::new(token, &config).unwrap());
+        let mut request = Request::builder()
+            .uri("/v1/models")
+            .header("host", "192.168.10.2:18081")
+            .header("authorization", bearer)
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(PeerEndpoints {
+            client: "192.168.10.3:25000".parse().unwrap(),
+            server: config.listen.unwrap(),
+        });
+        let response = runtime_api::routes::lan_router(state, security)
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
+    }
+
+    let harness = Harness::new().await;
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("synthetic.gguf");
+    std::fs::write(&path, synthetic_gguf()).unwrap();
+    let name = "自定义 Qwen 模型 · Q8_0 \"副本\"";
+    for id in ["ext-a", "ext-b", "legacy-id"] {
+        let mut import = json!({"id":id,"file":path});
+        if id != "legacy-id" {
+            import["display_name"] = json!(name);
+        }
+        let (status, result) = harness
+            .call("POST", "/runtime/models/import", &import.to_string())
+            .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+    }
+    let (_, local) = harness.call("GET", "/v1/models", "").await;
+    assert_eq!(
+        local["data"],
+        json!([
+            {"id":"ext-a","display_name":name,"object":"model","owned_by":"local"},
+            {"id":"ext-b","display_name":name,"object":"model","owned_by":"local"},
+            {"id":"legacy-id","display_name":"legacy-id","object":"model","owned_by":"local"}
+        ])
+    );
+    let (_, page) = harness.call("GET", "/v1/models?limit=1", "").await;
+    assert_eq!(page["data"], json!([local["data"][0].clone()]));
+    assert_eq!(page["next_after"], "ext-a");
+    assert_eq!(lan_models(harness.state.clone()).await["data"], json!([]));
+
+    // Equal display names do not become aliases or merge identities. Existing
+    // ID-based loads still work and LAN only advertises the resident model.
+    for (index, id) in ["ext-a", "ext-b"].into_iter().enumerate() {
+        let (status, result) = harness
+            .call(
+                "POST",
+                "/runtime/load",
+                &json!({"model":id,"context_size":2048}).to_string(),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        let lan = lan_models(harness.state.clone()).await;
+        assert_eq!(lan["data"], json!([local["data"][index].clone()]));
+        let (status, _) = harness.call("POST", "/runtime/unload", "{}").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(lan_models(harness.state.clone()).await["data"], json!([]));
+    }
+    harness.close().await;
+}
+
+#[tokio::test]
 async fn safe_model_summaries_paginate_without_exposing_manifest_or_sources() {
     let harness = Harness::new().await;
     let source = tempfile::tempdir().unwrap();

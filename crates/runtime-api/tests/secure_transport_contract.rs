@@ -1432,6 +1432,12 @@ async fn lan_inference_requires_local_load_and_preserves_sse_and_nonstream_contr
         serde_json::from_str::<Value>(&body).unwrap()["data"][0]["id"],
         "fixture"
     );
+    // This synthetic runtime has no registry metadata. Discovery still keeps
+    // the wire ID as a usable label instead of returning null or an empty name.
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["data"][0]["display_name"],
+        "fixture"
+    );
     for streaming in [false, true] {
         let (code, headers, body) = h.reply(streaming).await;
         assert_eq!(code, 200, "{body}");

@@ -476,15 +476,7 @@ export class DesktopController {
     if (this.state.notice === notice) this.update({ notice: null });
   };
   private report(error: unknown) {
-    const safe = safeError(error);
-    const messages: Record<string, string> = {
-      configuration_conflict: "配置已被其他窗口修改。草稿保留，请重新读取并核对后再保存；未自动重试。",
-      configuration_durability_unconfirmed: "配置可能已发布，但持久化尚未确认。请重新读取核对，不要直接重复保存。",
-      configuration_restart_required: "已保存配置与当前运行实例不一致，请先显式停止并重新启动服务。",
-      configuration_migration_required: "请先在设置中确认旧配置迁移来源。",
-      configuration_unavailable: "当前后台无法提供统一配置。请检查版本；必要时显式停止并重新启动匹配版本，不会自动替换实例。",
-    };
-    this.update({ error: { ...safe, message: messages[safe.code] ?? safe.message } });
+    this.update({ error: safeError(error) });
   }
   mount = () => {
     void this.workbenchStore.load();
@@ -620,6 +612,7 @@ export class DesktopController {
       if (this.modelsPromise) await this.modelsPromise;
       await this.loadPage(null);
       await this.refresh();
+      if (this.snapshotReadError || this.getSnapshot().snapshot?.connection !== "connected") return "recovery";
     }, false, false, "start");
   loadPage = (after: string | null): Promise<void> => {
     if (after !== this.state.page_after) this.leaveModelPage();
@@ -1263,7 +1256,8 @@ export class DesktopController {
       if (this.modelLoadTask !== task || task.view.progress?.terminal) return;
       const failure = { code: safeError(error).code, message: "停止请求尚未确认，任务仍可能进行。可重试停止或等待真实结果。" };
       this.updateModelLoad(task, { phase: task.view.phase === "recovery" ? "recovery" : "running", cancel_error: failure });
-      this.report(failure);
+      // This message is authored above, not supplied by the native exception.
+      this.update({ error: failure });
     } finally { task.cancelPending = false; }
   }
   recoverModelLoad = () => {
@@ -1756,6 +1750,7 @@ export class DesktopController {
     } catch (error) { this.markServiceUnknown(); throw error; }
     await this.refreshAfterMutation();
     this.update({ notice: this.state.configuration_recovery_error ? "停止操作已确认；配置仍不可读取，须修复配置后再启动。" : "停止检查已完成，请以重新读取的当前服务状态为准。" });
+    if (this.snapshotReadError || this.state.snapshot?.connection !== "stopped") return "recovery";
   }, false, false, "stop");
   private markServiceUnknown() {
     ++this.snapshotEpoch;
@@ -1788,7 +1783,10 @@ export class DesktopController {
       });
       if (this.snapshotPromise) await this.snapshotPromise;
       await this.refresh();
-      if (this.getSnapshot().snapshot?.connection !== "stopped") this.update({ notice: null });
+      if (this.getSnapshot().snapshot?.connection !== "stopped") {
+        this.update({ notice: null });
+        return "recovery";
+      }
     }, false, false, "stop");
   close = async () => {
     if (this.closing || (this.state.operation && !this.state.testing_model && this.state.operation.kind !== "pick_models")) return;
@@ -2040,7 +2038,7 @@ export class DesktopController {
             : terminal.type === "cancelled"
               ? "已停止生成"
               : terminal.type === "failed"
-                ? terminal.message
+                ? safeError(terminal).message
                 : "回复不完整",
         };
       if (terminal.type === "failed") { stream.error = safeError(terminal); this.report(terminal); }

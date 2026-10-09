@@ -13,6 +13,8 @@ pub struct ErrorDetail {
     pub kind: String,
     pub param: Option<String>,
     pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ApiError {
@@ -39,6 +41,7 @@ impl ApiError {
                 .into(),
                 param: param.map(str::to_owned),
                 code: code.into(),
+                reason: None,
             },
         }
     }

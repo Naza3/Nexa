@@ -1,3 +1,5 @@
+import { ErrorDetails } from "./ErrorDetails";
+import { lanStartupMessage } from "./lanApi";
 import { PerformanceSummary } from "./PerformanceSummary";
 import { WorkbenchNotice } from "./WorkbenchNotice";
 import { AutostartSettings } from "./AutostartSettings";
@@ -1217,6 +1219,15 @@ export default function App({
           }
         >
           <RuntimeBanner state={state} />
+          {state.snapshot?.connection === "connected" && state.snapshot.runtime?.lan_api?.enabled && !state.snapshot.runtime.lan_api.running && state.snapshot.runtime.lan_api.startup_error && (
+            <section className="notice-band warning" role="alert"><div>
+              <strong>局域网 API 启动失败，本机服务仍可用</strong>
+              <p>{lanStartupMessage(state.snapshot.runtime.lan_api.startup_error)}</p>
+              <p>局域网配置已保留，未自动更换地址或重试。停止服务会中断所有客户端任务并卸载模型。</p>
+              <button disabled={!!state.operation || state.ocr_batch_active || state.chat_phase !== "idle" || state.library_phase !== "idle" || state.download_phase !== "idle" || state.snapshot.runtime.stopping} onClick={() => setConfirmStop(true)}>停止服务以修正局域网设置</button>
+              <button onClick={() => setPage("api")}>查看局域网设置</button>
+            </div></section>
+          )}
           <WorkbenchNotice state={state} controller={controller} />
           {state.persistence_error && <div className="notice-band warning" role="status"><div><p>{state.persistence_error}</p><button onClick={() => void controller.flushOcrHistory()}>重试保存识别历史</button></div></div>}
           {state.activity_storage_warning && <div className="notice-band warning" role="alert"><p>{state.activity_storage_warning}</p></div>}
@@ -1252,6 +1263,7 @@ export default function App({
                     </p>
                   )}
                 <span>{state.error.code}</span>
+                <ErrorDetails error={state.error} />
               </div>
               <button
                 className="icon-button"

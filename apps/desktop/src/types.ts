@@ -37,7 +37,9 @@ export interface LanAddressDiscovery {
   status: "available" | "empty" | "unsupported";
   addresses: LanAddress[];
 }
+export type LanStartupError = "address_unavailable" | "port_in_use" | "permission_denied" | "bind_failed";
 export interface LanApiStatus {
+  startup_error?: LanStartupError | null;
   enabled: boolean;
   listen: string | null;
   running: boolean;

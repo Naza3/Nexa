@@ -1,6 +1,6 @@
 # 启动声明文件校验调整
 
-任务 W05-LAYOUT-1；2026-10-09。状态：源码、本机测试与完整Windows交叉门槛通过，原生运行待验证。下方保留先前工具缺失阶段与后续验证结果。
+任务 W05-LAYOUT-1；2026-10-09。状态：源码、本机检查、完整Windows交叉门槛与原生CI通过，用户Windows10 GUI/配置待验。下方保留先前阶段与后续实际结果。
 
 ## 基线与范围
 
@@ -82,3 +82,37 @@
 ## 推送授权与后续门槛
 
 用户随后明确要求“推送到GitHub 然后构建”。重新fetch确认远端codex/dev仍为68fcc0d、main仍为1c3650c，工作树17文件与交接摘要一致，无他人改动。按既定顺序：精确暂存本批文件并中文提交，在该干净提交上重新记录源码收据、复跑缓存Windows交叉门槛，成功后才正常推送codex/dev，由既有分支工作流执行Windows原生验证。未授权tag、main合并或正式Release发布；后续原生结果另据对应提交与run记录，不把本段计划写成已经推送。
+
+## 原生Windows完成与三格式测试包复核
+
+用户明确授权后，远端再次核验仍为68fcc0d且包含main；精确暂存17文件。初次本地提交a9f22f1已通过干净提交交叉门槛，但本环境未配置Git HTTPS登录，直接push失败、远端未变。随后通过用户已连接的GitHub账户创建逐blob核验相同的tree `3a3db727e5b78b1bf353319f06c72e3dd6d9e2a7`，得到提交 `2a56b39602806fbaf3c74841a5a8b0d1534bcf77`，作者为GitHub认证的Naza3/noreply身份。
+
+该提交先fetch到本地，再以dirty=false的新源码收据重跑完整缓存Windows门槛，两个strict Clippy、原生配置/库、四EXE真实构建与PE核验全部退出0，之后才使用expected head保护正常更新codex/dev，force=false。git ls-remote复核远端SHA一致。原本地a9提交仅保存在本地备用分支，无远端强推或历史覆盖。精确提交的门槛记录在 `/workspace/shared/nexa-tooling/provenance/committed-2a56b39602806fbaf3c74841a5a8b0d1534bcf77/`。
+
+[原生Actions37910225699](https://github.com/Naza3/Nexa/actions/runs/37910225699)自动触发，最终completed/success，2026-10-09 09:55:05 UTC更新完成；release-identity、download-component、desktop-build、runtime-build、native五job均成功，非tag的release job正确skipped。没有后续代码修补或CI重跑，没有创建tag、合并main或发布Release。
+
+实际Windows证据：
+
+- 根Rust55组：627通过、0失败、10忽略；桌面壳34通过，包括额外文件允许、必需EXE不能从自洽清单省略、同大小篡改拒绝和Windows junction正负例
+- 前端46文件970通过；Windows Python364项（362通过/2平台skip）、CTest5/5、Rust严格Clippy/真实Release链接通过
+- 固定真实模型、停止/恢复、model-store/调度、worker信用与取消、隔离进程、HTTP/CLI生命周期及桌面bridge通过
+- 原版MSI/NSIS安装后的EXE `--diagnose`均报告schema2、package_verified=true、error=null、project_dirty=false、上述精确源码及WebView2 `131.0.2903.86`，native_window_tested=false。两份报告已真实归档，不再只有解压ZIP诊断
+- 实际EXE输入兼容七项均true，包含unlisted_dll_accepted、tampered_manifest_rejected和测试payload恢复
+- 17项安装生命周期全部true，包括同版本替换、升级/降级拒绝、MSI回滚、跨格式保护、忙进程、数据保留、per-user及开机启动生命周期；独立69事件安装诊断status=pass
+
+### 下载产物的独立复核
+
+通过GitHub下载实际artifact后核验服务器摘要、完整库存、各文件大小/SHA、源码与安装证明。生产 `release_windows.verify` 对六文件集合退出0；便携包逐项库存/hash/清单绑定及aria2对应源码闭合验证通过。另核验desktop/runtime/native三份证据归档，共8+39+15=62份文件的hash/大小、pass状态与精确source；两份真实已安装诊断按字段另行检查。这里的62是证据文件数，不是新增功能测试总数。
+
+[完整三格式artifact](https://github.com/Naza3/Nexa/actions/runs/37910225699/artifacts/11608851406)：54,048,835字节，外层ZIP SHA256 `a745ca123cdf4fd1dc58b5915356f5cbb04775a87a7f21f3bbe4dff095c42865`；过期时间2026-10-16 09:54:57 UTC。
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| Nexa-0.3.0-windows-x64-setup.exe | 13841350 | `0e9891d4a93df178973e3353324e28965d6479cf54737ced735c145c6b875df0` |
+| Nexa-0.3.0-windows-x64-setup.msi | 17612800 | `051ca75eb14937028709f5d45e2786fe6bc5331d671b6a5f445a5550b6802470` |
+| Nexa-0.3.0-windows-x64-portable.zip | 17276936 | `3838cb2ad1a9758b53a66acc693cded1e489d7d40c8aacb67550afa21a086cb6` |
+| Nexa-0.3.0-aria2-1.37.0-nexa-corresponding-source.tar.gz | 5740655 | `0b5f800698d01289eb8b967a78856d5d4a9bd7b2fa1de506cf050bdd3877cce0` |
+
+此外包含release-manifest.json与SHA256SUMS。下载与复核结果保存在 `/workspace/shared/nexa-tooling/provenance/native-37910225699/`，文件位于其release子目录。版本号仍0.3.0，但本批为2a56b396开发提交测试产物，不能混同旧v0.3.0正式Release。
+
+本地交叉EXE与本节原生CI包是不同产物，不混用hash或运行证明。Windows Server 2022原生自动验收不等于用户Win10/i5、真实GUI、离线干净机器和长期稳定性验收；本批未签名，MSI的独立configuration_unavailable仍未由包诊断证明解决。本次后续纯文档提交只记录结果，不改变2a56b396二进制来源、不重跑完整构建。

@@ -57,7 +57,7 @@ export function ApiPage({ state, controller, goChat }: { state: ViewState; contr
     </section>
     {state.snapshot?.configuration && <DetailsGroup title="本机监听设置" description="地址与端口" status={state.snapshot.configuration.pending_restart ? "待重启" : state.snapshot.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["local_api"]}><LocalApiConfiguration state={state} controller={controller} /></DetailsGroup>}
     {state.snapshot?.configuration?.runtime_effective && <p>运行中空闲策略：{state.snapshot.configuration.runtime_effective.values.runtime.idle_unload_enabled ? `空闲 ${state.snapshot.configuration.runtime_effective.values.runtime.idle_unload_seconds} 秒后卸载` : "不自动卸载"}</p>}
-    <DetailsGroup title="局域网接入" description={view.lanListening ? "运行中 · 仅受信任的设备" : "按需开启 · 仅受信任的设备"} status={state.snapshot?.configuration?.pending_restart ? "已保存配置待重启" : undefined} draftKeys={["lan_api"]}><LanApiSettings state={state} controller={controller} /></DetailsGroup>
+    <DetailsGroup title="局域网接入" description={view.lanDegraded ? "启动失败 · 本机服务可用" : view.lanListening ? "运行中 · 仅受信任的设备" : "按需开启 · 仅受信任的设备"} status={state.snapshot?.configuration?.pending_restart ? "已保存配置待重启" : undefined} draftKeys={["lan_api"]}><LanApiSettings state={state} controller={controller} /></DetailsGroup>
     {copy && <Modal title="将令牌复制到系统剪贴板？" confirm="确认复制" onCancel={() => setCopy(false)} onConfirm={() => { setCopy(false); void controller.copyToken(); }}><p>其他应用或剪贴板历史可能读取这份凭据。请仅粘贴到你信任的本机客户端，使用后及时清除。</p></Modal>}
   </>;
 }

@@ -1494,6 +1494,7 @@ mod tests {
             status: 503,
             code: Some("../../sensitive".into()),
             param: Some("secret".into()),
+            reason: None,
         };
         let encoded =
             serde_json::to_string(&ProbeFailure::from_error("http_request", &api)).unwrap();

@@ -1,5 +1,9 @@
 # Nexa Windows 总体方案与架构
 
+> 2026-10-09：启动私有诊断、配置附加固定reason、结果不确定与UI安全呈现遵循[错误恢复契约](error-handling-and-recovery.md)；公共主错误码/HTTP状态、锁/CAS与不自动重放边界保持。
+
+> 2026-10-09：按 [ADR0042](decisions/0042-lan-bind-startup-recovery.md)，可选 LAN 的 OS bind 失败保留认证回环管理，`lan_api.startup_error` 报告有界原因且 `running=false`；配置/安全校验及本机绑定失败仍失败关闭，修正设置须显式停服。
+
 > 2026-10-08 PI Desktop 调用插件按 [ADR0038](decisions/0038-pi-desktop-ocr-plugin.md)：独立 `.piplug` 提供图片队列、Markdown、性能和 TOML 历史；通过带本机身份验证的既有接口加载与识别，Nexa 公共协议和模型/服务归属不变。
 
 > 2026-10-08 桌面持久化按 [ADR0036](decisions/0036-desktop-results-and-preferences.md)：输出下方的性能摘要、桌面最近100条OCR结果归档、TOML工作区设置与关闭前保存。OCR归档由调用层持有，不改变runtime数据归属。

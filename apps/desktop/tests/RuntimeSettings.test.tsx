@@ -147,7 +147,7 @@ describe("separate idle and verification settings", () => {
     expect(screen.getByRole("button", { name: "添加模型" })).toBeDisabled();
     await act(async () => pending.reject({ code: "settings_save_failed", message: "设置保存失败，请重试。" }));
     await user.click(screen.getByRole("button", { name: "设置" }));
-    expect(screen.getByText("设置保存失败，请重试。")).toBeInTheDocument();
+    expect(screen.getByText("settings_save_failed")).toBeInTheDocument();
     expect(screen.getByLabelText("已保存模型文件校验超时")).toHaveTextContent("300 秒");
     expect(screen.queryByText(/模型文件校验超时已保存/)).not.toBeInTheDocument();
   });

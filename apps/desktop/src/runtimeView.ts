@@ -11,13 +11,14 @@ export function runtimeView(snapshot: Snapshot | null) {
   const busy = !!runtime && (runtime.stopping || runtime.registry_busy || !!runtime.active_request || runtime.queued_jobs > 0 || ["loading", "generating", "unloading"].includes(runtime.state));
   const localListening = connected && !!snapshot?.api_address;
   const lanListening = connected && runtime?.lan_api?.running === true && runtime.lan_api.enabled && !!runtime.lan_api.listen;
+  const lanDegraded = connected && runtime?.lan_api?.enabled === true && !runtime.lan_api.running && !!runtime.lan_api.startup_error;
   // Queue capacity is not currently observable. Do not invent queue fullness or auth success.
   const readiness = !localListening ? "本机 API 未确认在线" : runtime?.stopping ? "服务停止中，暂不可调用" : runtime?.registry_busy ? "服务在线，模型操作中" : !resident ? "服务在线，无就绪驻留模型" : runtime.state === "generating" ? "服务在线，正在生成；新请求仍需准入" : "服务在线，驻留模型可供调用";
   return { runtime, service, serviceLabel, modelLabel, resident, residentId: resident ? runtime.selected_model : null,
     residentName: resident ? runtime.selected_model_display_name ?? runtime.selected_model : null,
     residentOptions: resident ? runtime.load_options : null,
     lastSelectedId: runtime?.selected_model ?? null, lastSelectedName: runtime?.selected_model_display_name ?? runtime?.selected_model ?? null,
-    busy, localListening, lanListening, readiness };
+    busy, localListening, lanListening, lanDegraded, readiness };
 }
 export function localBaseUrl(address: string | null | undefined): string | null {
   if (!address) return null;

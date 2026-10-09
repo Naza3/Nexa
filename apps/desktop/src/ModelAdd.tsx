@@ -1,3 +1,4 @@
+import { errorText } from "./errorPresentation";
 import { followOnLoadAction, followOnLoadLabel } from "./modelLoad";
 import type { ModelFileResult } from "./types";
 import type { DesktopController, ViewState } from "./controller";
@@ -49,7 +50,7 @@ export function AddModelProgress({ state, controller }: { state: ViewState; cont
     <p>{state.library_phase === "recovery" ? "连接或状态读取中断，尚未确认结果。不会重放添加，请重新确认后再操作。" : "只处理所选文件，零复制，保留现有索引。登记结果与加载、测试结果分别记录。"}</p>
     {operation?.phase === "testing" && <p>加载最多 300 秒，基础短测最多 30 秒。取消或测试失败不撤销已经登记的模型。</p>}
     {durabilityUnconfirmed && <p className="warning-text">已发布的新索引需要刷新核对，不能假定已回滚。请勿重复添加。</p>}
-    {operation?.error && <p className="warning-text">{operation.error.message}（{operation.error.code}）</p>}
+    {operation?.error && <p className="warning-text">{errorText(operation.error)}</p>}
     <ol className="selected-model-files add-file-results">{files.map((file) => <li key={file.selection_index}>
       <div><strong>{file.file_name}</strong><p>{labels[file.status]}{file.error_code ? `（${file.error_code}）` : ""}</p>
         {file.local_validation ? <LocalValidationFeedback value={file.local_validation} /> : (file.status === "registered" || file.status === "already_registered") && <p className="small-note">本次未取得加载或测试通过记录，可在模型列表显式加载与测试。</p>}
