@@ -75,12 +75,12 @@
 ## 7. 首包与验证门槛
 
 - 私有开发 `desktop-windows` ZIP：Tauri EXE/嵌入前端 + `runtime/`下完整匹配T05产品包及其manifest/许可；额外桌面依赖按实际PE闭包补齐。模型仍外部导入，不复制用户数据/token；UI与runtime大小分开统计。
-- 发行 ZIP 继续严格无模型、文件集合与 manifest/SHA256SUMS 一致。用户解压后的程序根目录，以及固定`model/`、`models/`目录允许直接普通`.gguf`输入，扩展名大小写不敏感、只读四字节GGUF头、保持symlink/reparse拒绝；不hash整个输入、不计产品清单或体积、不自动导入。两个固定目录可为空，不允许未知文件或嵌套目录；runtime/licenses等其他位置、未声明EXE/DLL/脚本继续严格拒绝，全部声明文件hash/来源校验不变。本轮仅新增root/model/models直接子级严格UUID命名的下载.part例外，普通文件≤16GiB、至多64项；只允许惰性残留，不执行/自动删除，任意.part/链接/其他层级继续拒绝。原生选择其他包内目录时立即明确拒绝，不等重启；选包内允许目录时在pick/apply/重扫前复用layout校验，以拒绝UI打开后新增的不合法文件。重扫validator使用bridge持实例锁时确定的实际目录/索引，不能从display_path读取授权。包外任意受支持目录不属于产品库存。包校验不读取用户配置决定豁免，四字节识别不代替注册/加载的完整核验。混合坏文件诊断验收使用包外授权目录，不为本轮partial功能放宽包内preflight。
+- 发行ZIP仍严格匹配manifest/SHA256SUMS且不包含用户模型。启动及包内目录pick/apply/rescan仅验证声明产品文件；任意未声明文件、目录和惰性下载残留不扫描、不拒绝、不自动导入或执行。固定可执行文件必须声明且hash匹配，声明路径及祖先继续拒绝symlink/reparse；模型扫描、目录选择位置和bridge授权边界保持。详见[ADR0041](decisions/0041-declared-payload-startup-validation.md)。
 - 启动包校验保留固定错误码到原生中文提示与 `--diagnose` schema 2；不回显用户绝对路径或任意错误文本。CI wrapper 与 evidence stager 对成功/失败报告执行同一闭合字段/错误码白名单，非零退出的合法失败报告也保存。
 - 本轮用已安装的Evergreen WebView2，不自动下载、安装或改变系统权限。缺失时在WebView建立前给原生可读错误及微软官方安装入口；不能只做网页内错误（网页根本无法启动）。检测实际版本并纳入验证证据，Windows 10或装有Edge都不等于WebView2一定存在。
 - 不新增fixed WebView2；微软当前文档说明Win10非打包Win32使用fixed v120+涉及AppContainer目录ACL要求，不适合本轮未经批准的系统权限变化。
 - 自动验证：根回归；bridge假服务恶意proof/redirect/丢帧/大帧/取消竞态/慢消费者/终态一次；Linux真实模型import→load→流→cancel→再次生成→unload→stop；Windows相同宿主链及实际Tauri构建/PE闭包/中文空格路径。
-- 既有 Windows 桌面解压验收步骤另用实际 EXE 检查：同级真实 GGUF 输入允许；未声明 DLL 与改动 manifest 均拒绝；只清理测试独占创建的输入，恢复清单原字节后重新严格核验产品 payload。此项不建立窗口、不替代独立原生UI验收。
+- 既有Windows解压验收用实际EXE检查GGUF及未声明DLL允许、改动manifest仍拒绝；仅清理独占测试输入并恢复严格payload校验。MSI/NSIS生命周期另诊断已安装EXE，覆盖安装器额外文件。两者都不替代原生GUI、数据配置与目标机验收。
 - Windows关闭语义须用真实子进程验证：默认关UI后必须证明同实例API仍可调用；同时退出后实例锁/记录释放、worker回收。正常关闭自身UI与外部宿主终止整个Job/会话分开，不以启动探针代替完整生命周期证据。关闭中重复点击、连接既有runtime、异协议/proof失败、端口占用、取消在started前后均覆盖。bridge harness不能冒充已验证原生窗口事件；壳若暂不能自动驱动，明确保留Windows 10独立手工操作验收。
 - 前端单测/浏览器检查三页、键盘/中文输入、无模型/忙碌/失败/清空/重复点击/切页；mock只证明UI。T06完成仍需Windows UI实际导入、真实聊天、停止和关闭两种语义，不用截图代替生成。
 

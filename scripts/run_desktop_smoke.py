@@ -77,7 +77,8 @@ PROBE_KEYS = frozenset({"schema_version", "kind", "success", "code", "os_error",
                         "parent_job_os_error", "child_job_os_error"})
 PROBE_REPORTS = {"breakaway": "launch-probe-breakaway.json", "inherit_job": "launch-probe-inherit-job.json"}
 DIAGNOSTIC_REPORTS = ("diagnostics.json", "diagnostics-root-model.json", "diagnostics-model-directory.json",
-                      "diagnostics-models-directory.json", "diagnostics-unlisted-dll.json", "diagnostics-tampered-manifest.json")
+                      "diagnostics-models-directory.json", "diagnostics-unlisted-dll.json", "diagnostics-tampered-manifest.json",
+                      "diagnostics-installed-msi.json", "diagnostics-installed-nsis.json")
 DIAGNOSTIC_KEYS = frozenset({"schema_version", "package_verified", "package_error_code", "project_commit", "project_dirty", "webview2_version", "native_window_tested"})
 PACKAGE_ERROR_CODES = frozenset({
     "current_executable_unavailable", "desktop_executable_name_invalid", "package_root_unavailable",
@@ -85,7 +86,7 @@ PACKAGE_ERROR_CODES = frozenset({
     "package_directory_unavailable", "package_file_unavailable", "package_manifest_unavailable",
     "package_manifest_too_large", "package_manifest_invalid", "package_identity_invalid", "package_inventory_invalid",
     "package_path_invalid", "package_indirect_path", "package_file_hash_mismatch", "package_checksum_invalid",
-    "package_checksum_mismatch", "package_unlisted_file", "package_external_model_header_invalid",
+    "package_checksum_mismatch",
     "runtime_source_identity_mismatch", "package_validation_failed",
 })
 EXTERNAL_LIBRARY_KEYS = frozenset({
@@ -359,9 +360,11 @@ def package_input_checks(package, model, cwd, env, evidence, manifest, checks):
             with extra_dll.open("xb") as destination:
                 dll_created = True
                 destination.write(b"MZsynthetic unlisted file; never executed")
-            expect_package_rejection(executable, cwd, env, "package_unlisted_file",
-                                     evidence / "diagnostics-unlisted-dll.json")
-            checks["unlisted_dll_rejected"] = True
+            observed = checked_json([executable, "--diagnose"], cwd, env, 60, phase="desktop_diagnose",
+                                    diagnostic_file=evidence / "diagnostics-unlisted-dll.json")
+            if observed["project_commit"] != manifest["project_commit"] or observed["project_dirty"] != manifest["project_dirty"]:
+                raise ValueError("extra file changed package identity")
+            checks["unlisted_dll_accepted"] = True
         finally:
             if dll_created:
                 extra_dll.unlink()
@@ -449,7 +452,7 @@ def run(archive, model, harness, evidence):
             report["last_stage"] = "desktop_input_compatibility"
             report["input_compatibility"] = {name: False for name in (
                 "root_gguf_accepted", "model_directory_gguf_accepted", "models_directory_gguf_accepted",
-                "unlisted_dll_rejected", "tampered_manifest_rejected",
+                "unlisted_dll_accepted", "tampered_manifest_rejected",
                 "owned_model_input_removed", "package_payload_restored")}
             package_input_checks(package, local_model, cwd, env, evidence, manifest, report["input_compatibility"])
             report["last_stage"] = "bridge_harness"

@@ -144,14 +144,14 @@ class EvidenceStagingTests(unittest.TestCase):
         self.assert_rejected("windows-desktop/bridge-failure.json")
 
     def test_desktop_startup_failure_preserves_only_closed_diagnostic(self):
-        report = {"schema_version": 2, "package_verified": False, "package_error_code": "package_unlisted_file",
+        report = {"schema_version": 2, "package_verified": False, "package_error_code": "package_file_hash_mismatch",
                   "project_commit": None, "project_dirty": None, "webview2_version": "131.0.2903.86", "native_window_tested": False}
         self.put("windows-desktop/diagnostics.json", json.dumps(report))
         self.assertEqual(self.run_stage()["result"], "pass")
         self.assertEqual(json.loads((self.out / "windows-desktop/diagnostics.json").read_text(encoding="utf-8")), report)
 
     def test_desktop_startup_diagnostic_unknown_field_is_rejected(self):
-        report = {"schema_version": 2, "package_verified": False, "package_error_code": "package_unlisted_file",
+        report = {"schema_version": 2, "package_verified": False, "package_error_code": "package_file_hash_mismatch",
                   "project_commit": None, "project_dirty": None, "webview2_version": None, "native_window_tested": False,
                   "detail": "unreviewed private data"}
         self.put("windows-desktop/diagnostics.json", json.dumps(report))

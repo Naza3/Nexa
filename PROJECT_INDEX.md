@@ -35,6 +35,8 @@
 
 - [顺序OCR队列 ADR0037](docs/decisions/0037-sequential-image-ocr-queue.md) / [验证记录](docs/verification/2026-10-08-sequential-ocr.md)：按导入顺序、逐图准备与串行生成、停止/恢复及每图历史
 
+- [启动声明文件校验 ADR0041](docs/decisions/0041-declared-payload-startup-validation.md) / [验证记录](docs/verification/2026-10-09-declared-payload-validation.md)：移除未声明内容拒绝，保留必需文件完整性，并诊断实际MSI/NSIS安装布局
+
 ## 实际 Windows 工程
 
 | 路径 | 作用 / 说明 |

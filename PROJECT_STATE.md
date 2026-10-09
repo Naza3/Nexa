@@ -1,5 +1,13 @@
 # Nexa 当前状态
 
+## 2026-10-09 移除启动未声明文件检验（本机测试与Windows交叉门槛通过，原生待验证）
+
+任务W05-LAYOUT-1。用户明确“不需要未声明文件的检验”。在codex/dev `68fcc0d`上移除layout递归库存、未知文件/目录拒绝及GGUF/下载残留例外；不再因NSIS生成的uninstall.exe阻止启动。声明payload大小/hash、来源/SHA256SUMS、普通文件/祖先防护保持，并显式要求各产品固定EXE必须声明。新增已安装MSI/NSIS的EXE诊断门槛，避免只有解压ZIP验收。
+
+用户批准隔离安装官方工具与微软条款后，Linux壳33项、native-identity5项、前端970项、严格Python364项（359通过/5平台skip）及静态检查通过；完整Windows交叉门槛退出0，两workspace strict Clippy、189项原生库编译、四个必需EXE真实链接和源码/PE身份检查通过。保留工具探测及缺CRT PDB的LNK4099警告，无lint屏蔽。Windows原生安装/运行仍待验；版本0.3.0不变，未提交/推送/发布，MSI独立configuration_unavailable未宣称解决。见[ADR0041](docs/decisions/0041-declared-payload-startup-validation.md)及[完整验证记录](docs/verification/2026-10-09-declared-payload-validation.md)。
+
+用户随后明确授权推送GitHub并构建。开发分支远端已复核仍为68fcc0d且包含最新main；下一步将本批精确提交，在干净提交上复跑缓存Windows交叉门槛后推送codex/dev并等待原生安装/运行结果，不创建tag或覆盖0.3.0正式Release。
+
 ## 2026-10-08 版本0.3.0、推送与tag（已完成；标签发行构建进行中）
 
 用户明确授权统一版本至0.3.0、推送GitHub并创建v0.3.0。已fetch确认main 1c3650c为当前开发分支祖先；远端codex/dev a18e9a1为本地祖先，v0.3.0尚不存在。一键工具同步七版本文件，重复执行零修改；两Cargo锁及npm锁第三方依赖不变，锁定离线metadata和严格Python检查通过。

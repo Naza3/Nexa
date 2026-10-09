@@ -25,6 +25,27 @@ import package_windows_msi as legacy
 import test_windows_msi_lifecycle as common
 from windows_installer_diagnostics import Trace
 from windows_msi_api import Msi
+import run_desktop_smoke as desktop_smoke
+
+
+def diagnose_installed(root, manifest, evidence, installer):
+    """Run the installed desktop EXE, including NSIS's generated uninstall.exe.
+
+    This read-only startup diagnostic does not initialize data, start runtime,
+    open a WebView, or validate the separate service configuration path.
+    """
+    require(installer in ("msi", "nsis"), "unknown installed diagnostic kind")
+    evidence.mkdir(parents=True, exist_ok=True)
+    env = legacy.base.windows_environment(os.environ, "")
+    env["PATH"] = env["SYSTEMROOT"] + r"\System32;" + env["SYSTEMROOT"]
+    with tempfile.TemporaryDirectory(prefix="nexa-installed-diagnose-") as temporary:
+        observed = desktop_smoke.checked_json(
+            [root / "nexa-desktop.exe", "--diagnose"], Path(temporary), env, 60,
+            phase="desktop_diagnose",
+            diagnostic_file=evidence / f"diagnostics-installed-{installer}.json")
+    require(observed["project_commit"] == manifest["project_commit"]
+            and observed["project_dirty"] == manifest["project_dirty"],
+            "installed desktop diagnostic source identity mismatch")
 
 
 CHECKS = (
@@ -428,6 +449,7 @@ def lifecycle(msi, setup, payload, report):
         # not a command owned by Nexa, and must not turn uninstall into failure.
         oversized_foreign_autostart = foreign_autostart + " " + "x" * 40000
         write_test_autostart(oversized_foreign_autostart)
+        diagnose_installed(root, manifest, legacy.base.ROOT / "artifacts/verification/windows-desktop", "msi")
         checks["msi_install"] = True
         common.msi_command(msi, "/x", logs / "uninstall.log")
         assert_removed(root, files, sentinels)
@@ -438,6 +460,7 @@ def lifecycle(msi, setup, payload, report):
         assert_nsis(api, version, root, files, sentinels, machine_targets)
         require(autostart_value() is None, "NSIS install automatically enabled autostart")
         write_test_autostart(enabled_autostart)
+        diagnose_installed(root, manifest, legacy.base.ROOT / "artifacts/verification/windows-desktop", "nsis")
         checks["nsis_install"] = True
         common.msi_command(msi, "/i", logs / "cross-format.log", accepted=(1603,))
         assert_nsis(api, version, root, files, sentinels, machine_targets)

@@ -142,7 +142,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
 
     def diagnostic(self, verified=False):
         return {"schema_version": 2, "package_verified": verified,
-                "package_error_code": None if verified else "package_unlisted_file",
+                "package_error_code": None if verified else "package_file_hash_mismatch",
                 "project_commit": "a" * 40 if verified else None,
                 "project_dirty": False if verified else None,
                 "webview2_version": "131.0.2903.86", "native_window_tested": False}
@@ -222,19 +222,18 @@ class DesktopSmokeFailureTests(unittest.TestCase):
                 self.assertEqual(len(existing), 1)
                 self.assertEqual(existing[0].read_bytes(), model.read_bytes())
                 self.assertIn(kwargs["diagnostic_file"].name, smoke.DIAGNOSTIC_REPORTS)
+                if kwargs["diagnostic_file"].name == "diagnostics-unlisted-dll.json":
+                    self.assertTrue((package / "nexa-test-unlisted.dll").exists())
                 return self.diagnostic(True)
 
             def negative(executable, cwd, env, code, output):
                 self.assertTrue((package / "验收 同级外置模型.GGUF").exists())
-                if code == "package_unlisted_file":
-                    self.assertTrue((package / "nexa-test-unlisted.dll").exists())
-                else:
-                    self.assertEqual(code, "package_checksum_mismatch")
-                    self.assertEqual((package / "manifest.json").read_bytes(), original + b"\n ")
+                self.assertEqual(code, "package_checksum_mismatch")
+                self.assertEqual((package / "manifest.json").read_bytes(), original + b"\n ")
 
             with mock.patch.object(smoke, "checked_json", side_effect=positive), mock.patch.object(smoke, "expect_package_rejection", side_effect=negative), mock.patch.object(smoke.desktop, "verify") as verify:
                 smoke.package_input_checks(package, model, root, {}, evidence, {"project_commit": "a" * 40, "project_dirty": False}, checks)
-            self.assertEqual(set(checks), {"root_gguf_accepted", "model_directory_gguf_accepted", "models_directory_gguf_accepted", "unlisted_dll_rejected", "tampered_manifest_rejected", "owned_model_input_removed", "package_payload_restored"})
+            self.assertEqual(set(checks), {"root_gguf_accepted", "model_directory_gguf_accepted", "models_directory_gguf_accepted", "unlisted_dll_accepted", "tampered_manifest_rejected", "owned_model_input_removed", "package_payload_restored"})
             self.assertTrue(all(checks.values()))
             self.assertEqual((package / "manifest.json").read_bytes(), original)
             self.assertEqual(set(item.name for item in package.iterdir()), {"manifest.json"})
@@ -257,7 +256,7 @@ class DesktopSmokeFailureTests(unittest.TestCase):
             model.write_bytes(b"GGUFsynthetic")
             original = b"original manifest bytes"
             (root / "manifest.json").write_bytes(original)
-            with mock.patch.object(smoke, "checked_json", return_value=self.diagnostic(True)), mock.patch.object(smoke, "expect_package_rejection", side_effect=[None, ValueError("synthetic probe failure")]):
+            with mock.patch.object(smoke, "checked_json", return_value=self.diagnostic(True)), mock.patch.object(smoke, "expect_package_rejection", side_effect=ValueError("synthetic probe failure")):
                 with self.assertRaisesRegex(ValueError, "synthetic probe failure"):
                     smoke.package_input_checks(root, model, root, {}, root, {"project_commit": "a" * 40, "project_dirty": False}, {})
             self.assertEqual((root / "manifest.json").read_bytes(), original)
@@ -293,17 +292,17 @@ class DesktopSmokeFailureTests(unittest.TestCase):
             self.assertFalse((root / "验收 同级外置模型.GGUF").exists())
 
     def test_negative_package_probe_requires_exit_one_and_exact_code(self):
-        for code, exit_code, accepted in (("package_unlisted_file", 1, True), ("package_unlisted_file", 0, False), ("package_checksum_mismatch", 1, False)):
+        for code, exit_code, accepted in (("package_file_hash_mismatch", 1, True), ("package_file_hash_mismatch", 0, False), ("package_checksum_mismatch", 1, False)):
             with self.subTest(code=code, exit_code=exit_code), tempfile.TemporaryDirectory() as temporary:
                 report = self.diagnostic()
                 report["package_error_code"] = code
                 path = Path(temporary) / "diagnostic.json"
                 with mock.patch.object(smoke, "bounded_process", return_value=subprocess.CompletedProcess([], exit_code, json.dumps(report))):
                     if accepted:
-                        smoke.expect_package_rejection("fixed", Path("."), {}, "package_unlisted_file", path)
+                        smoke.expect_package_rejection("fixed", Path("."), {}, "package_file_hash_mismatch", path)
                     else:
                         with self.assertRaisesRegex(ValueError, "did not reject the expected condition"):
-                            smoke.expect_package_rejection("fixed", Path("."), {}, "package_unlisted_file", path)
+                            smoke.expect_package_rejection("fixed", Path("."), {}, "package_file_hash_mismatch", path)
                 self.assertEqual(json.loads(path.read_text(encoding="utf-8")), report)
 
     def test_timeout_launch_and_decode_errors_are_phase_labeled_without_raw_output(self):

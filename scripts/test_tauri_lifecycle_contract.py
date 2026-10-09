@@ -58,6 +58,29 @@ class TauriLifecycleContractTests(unittest.TestCase):
             (folder / name).write_bytes(("fixture " + name).encode("ascii"))
         return folder
 
+    def test_installed_diagnostic_targets_installed_exe_and_checks_identity(self):
+        manifest = {"project_commit": "a" * 40, "project_dirty": False}
+        installed = self.work / "installed"
+        installed.mkdir()
+        (installed / "uninstall.exe").write_bytes(b"synthetic installer extra")
+        for installer in ("msi", "nsis"):
+            with mock.patch.object(lifecycle.legacy.base, "windows_environment", return_value={"SYSTEMROOT": "C:\\Windows"}), mock.patch.object(lifecycle.desktop_smoke, "checked_json", return_value=manifest) as check:
+                lifecycle.diagnose_installed(installed, manifest, self.work, installer)
+                args, kwargs = check.call_args
+                self.assertEqual(args[0], [installed / "nexa-desktop.exe", "--diagnose"])
+                self.assertNotEqual(args[1], installed)
+                self.assertEqual(kwargs["phase"], "desktop_diagnose")
+                self.assertEqual(kwargs["diagnostic_file"].name, f"diagnostics-installed-{installer}.json")
+                self.assertIn(kwargs["diagnostic_file"].name, lifecycle.desktop_smoke.DIAGNOSTIC_REPORTS)
+        for observed in ({"project_commit": "b" * 40, "project_dirty": False},
+                         {"project_commit": "a" * 40, "project_dirty": True}):
+            with mock.patch.object(lifecycle.legacy.base, "windows_environment", return_value={"SYSTEMROOT": "C:\\Windows"}), mock.patch.object(lifecycle.desktop_smoke, "checked_json", return_value=observed):
+                with self.assertRaisesRegex(ValueError, "source identity mismatch"):
+                    lifecycle.diagnose_installed(installed, manifest, self.work, "nsis")
+        with mock.patch.object(lifecycle.legacy.base, "windows_environment", return_value={"SYSTEMROOT": "C:\\Windows"}), mock.patch.object(lifecycle.desktop_smoke, "checked_json", side_effect=ValueError("diagnostic failed")):
+            with self.assertRaisesRegex(ValueError, "diagnostic failed"):
+                lifecycle.diagnose_installed(installed, manifest, self.work, "msi")
+
     def test_changed_fixture_replaces_bytes_adds_and_removes_only_private_copy(self):
         payload = self.payload()
         original = base.entries(payload)
