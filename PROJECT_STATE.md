@@ -1,5 +1,13 @@
 # Nexa 当前状态
 
+## 2026-10-09 原生安装验收启动竞态修复（验证中）
+
+错误处理与模型显示名已获授权提交并推送至`codex/dev`：`085cf4024ec5f742e8b46e91210dd3511de01f8c`。原生CI [37926350189](https://github.com/Naza3/Nexa/actions/runs/37926350189) 的构建/单测通过，但安装生命周期在NSIS重复安装后的runtime启动阶段失败；安装包仍为UNVERIFIED，不交付为已验证包。Windows根Rust655通过/10忽略、桌面34通过、Python366项（364通过/2skip）、CTest5项已独立核对证据。
+
+受控宿主复现确认验收脚本立即调用status存在抢占serve实例锁的窗口，但原失败未保留原因，不能断言该次必由锁竞态造成。修复验收为全新数据目录、无旧discovery，等待新进程发布discovery后才执行原认证status；保持30秒期限、存活检查、全部安装门槛与原停止确认。增加固定`runtime_instance_busy`启动码及有界白名单诊断/退出码，产品锁不绕过、serve不重试。修复后正在重新执行本地门槛和原生CI，结果见[验收记录](docs/verification/2026-10-09-installer-startup-order.md)。
+
+以下两节为推送前验证快照；当前发布状态以上节为准。
+
 ## 2026-10-09 模型发现显示名（与错误处理联合门槛通过）
 
 任务W05-MODEL-NAME-1。按用户确认，仅为本机/LAN `/v1/models`兼容增加已有`display_name`，稳定ID、分页、模型调用/历史与LAN仅驻留范围保持；缺少名称元数据时回退ID，不改索引或客户端。

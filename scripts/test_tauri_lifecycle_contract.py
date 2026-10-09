@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from pathlib import Path
 import tempfile
+import io
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -50,6 +51,70 @@ class TauriLifecycleContractTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="nexa-lifecycle-unit-")
         self.addCleanup(self.temporary.cleanup)
         self.work = Path(self.temporary.name)
+
+    def test_runtime_startup_diagnostic_is_fixed_bounded_and_redacted(self):
+        for code in lifecycle.STARTUP_CODES:
+            for newline in (b"\n", b"\r\n"):
+                report = b"nexa-startup-v1:" + code.encode("ascii") + newline
+                self.assertEqual(lifecycle.startup_failure_code(io.BytesIO(report)), code)
+        for raw in (b"", b"secret token /private/path", b"x" * 100000,
+                    b"nexa-startup-v1:unknown\n",
+                    b"nexa-startup-v1:configuration_busy\nsecret"):
+            self.assertEqual(lifecycle.startup_failure_code(io.BytesIO(raw)), "runtime_start_failed")
+        output = mock.Mock()
+        output.read.return_value = b""
+        lifecycle.startup_failure_code(output)
+        output.read.assert_called_once_with(257)
+
+    def test_readiness_waits_for_discovery_then_requires_authenticated_status(self):
+        root, work = self.work / "installed", self.work / "busy"
+        discovery = work / "runtime-data/runtime/instance.json"
+        process = mock.Mock()
+        process.poll.side_effect = [None, None, None, None]
+        process.wait.return_value = 0
+        def publish(_):
+            discovery.parent.mkdir(parents=True, exist_ok=True)
+            discovery.write_text("{}", encoding="utf-8")
+        def prove(*args, **kwargs):
+            self.assertTrue(discovery.is_file())
+            return SimpleNamespace(returncode=0)
+        with mock.patch.object(lifecycle.common, "invoke") as invoke, \
+                mock.patch.object(lifecycle.common, "trace"), \
+                mock.patch.object(lifecycle.common, "short_path", side_effect=lambda p: p), \
+                mock.patch.object(lifecycle.subprocess, "Popen", return_value=process), \
+                mock.patch.object(lifecycle.subprocess, "run", side_effect=prove) as status, \
+                mock.patch.object(lifecycle.time, "sleep", side_effect=publish) as sleep:
+            with lifecycle.live_runtime(root, work) as child:
+                self.assertIs(child, process)
+            sleep.assert_called_once_with(0.2)
+            status.assert_called_once()
+            self.assertEqual(invoke.call_args.args[0][-1], "stop")
+            process.wait.assert_called_once_with(timeout=30)
+
+    def test_readiness_rejects_reused_data_before_launch(self):
+        work = self.work / "busy"
+        (work / "runtime-data").mkdir(parents=True)
+        with mock.patch.object(lifecycle.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(ValueError, "fresh"):
+                with lifecycle.live_runtime(self.work, work):
+                    self.fail("must not yield")
+            launch.assert_not_called()
+
+    def test_exited_runtime_reports_only_fixed_code_and_preserves_failure(self):
+        process = mock.Mock()
+        process.poll.return_value = 1
+        with mock.patch.object(lifecycle.common, "invoke"), \
+                mock.patch.object(lifecycle.common, "trace") as trace, \
+                mock.patch.object(lifecycle.common, "short_path", side_effect=lambda p: p), \
+                mock.patch.object(lifecycle.subprocess, "Popen", return_value=process), \
+                mock.patch.object(lifecycle.subprocess, "run") as status, \
+                mock.patch("builtins.print") as output:
+            with self.assertRaisesRegex(ValueError, "exited"):
+                with lifecycle.live_runtime(self.work, self.work / "busy"):
+                    self.fail("must not yield")
+            status.assert_not_called()
+            trace.assert_any_call("runtime_ready", "error", exit_code=1)
+            self.assertIn('"startup_error": "runtime_start_failed"', output.call_args.args[0])
 
     def payload(self):
         folder = self.work / "payload"

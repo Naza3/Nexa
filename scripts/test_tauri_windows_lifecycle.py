@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import ctypes
+import json
 import os
 from pathlib import Path
 import shutil
@@ -244,31 +245,72 @@ def add_rollback_fixture(source, destination, api=None):
     return destination
 
 
+STARTUP_CODES = frozenset("runtime_loopback_bind_failed configuration_unavailable configuration_invalid configuration_busy runtime_instance_busy packaged_runtime_missing runtime_security_invalid runtime_start_failed".split())
+
+
+def startup_failure_code(output):
+    """Read only the private fixed-code report; never publish raw child output."""
+    output.seek(0)
+    raw = output.read(257)
+    for code in STARTUP_CODES:
+        if raw in (("nexa-startup-v1:" + code + "\n").encode("ascii"),
+                   ("nexa-startup-v1:" + code + "\r\n").encode("ascii")):
+            return code
+    return "runtime_start_failed"
+
+
 @contextmanager
 def live_runtime(root, work):
     runtime = root / "runtime/ai-runtime.exe"
     data = work / "runtime-data"
+    require(not data.exists(), "busy-test runtime data directory must be fresh")
     common.invoke([runtime, "--data-dir", data, "init"], stage="runtime_init")
+    discovery = data / "runtime/instance.json"
+    require(not discovery.exists(), "fresh busy-test runtime has stale discovery")
     common.trace("runtime_ready", "start")
-    process = subprocess.Popen([str(common.short_path(runtime)), "--data-dir", str(data), "serve"],
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    env = dict(os.environ)
+    env["NEXA_DESKTOP_STARTUP_REPORT"] = "1"
+    # A private temporary file avoids a pipe lifetime dependency for native
+    # workers. Only a bounded allowlisted code is read after service exit.
+    output = tempfile.TemporaryFile()
+    try:
+        process = subprocess.Popen([str(common.short_path(runtime)), "--data-dir", str(data), "serve"],
+                                   stdin=subprocess.DEVNULL, stdout=output,
+                                   stderr=subprocess.DEVNULL, env=env)
+    except BaseException:
+        output.close()
+        raise
     try:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            require(process.poll() is None, "installed runtime exited before the busy test")
-            status = subprocess.run([str(runtime), "--data-dir", str(data), "status"],
-                                    capture_output=True, timeout=10)
-            if status.returncode == 0:
-                break
+            code = process.poll()
+            if code is not None:
+                common.trace("runtime_ready", "error", exit_code=code & 0xffffffff)
+                print(json.dumps({"installer_stage": "runtime_ready",
+                                  "startup_error": startup_failure_code(output),
+                                  "exit_code": code & 0xffffffff}, sort_keys=True), flush=True)
+                raise ValueError("installed runtime exited before the busy test")
+            # status briefly acquires the offline instance lock if serve has
+            # not acquired it yet. Wait for publication to avoid racing our
+            # own child. The file alone never proves readiness: status still
+            # performs the authenticated instance/endpoint verification.
+            if discovery.is_file():
+                status = subprocess.run([str(runtime), "--data-dir", str(data), "status"],
+                                        capture_output=True, timeout=10)
+                if status.returncode == 0:
+                    break
             time.sleep(0.2)
         else:
             raise ValueError("installed runtime did not become ready")
         common.trace("runtime_ready", "complete")
         yield process
     finally:
-        if process.poll() is None:
-            common.invoke([runtime, "--data-dir", data, "stop"], stage="runtime_stop")
-            require(process.wait(timeout=30) == 0, "runtime did not stop normally")
+        try:
+            if process.poll() is None:
+                common.invoke([runtime, "--data-dir", data, "stop"], stage="runtime_stop")
+                require(process.wait(timeout=30) == 0, "runtime did not stop normally")
+        finally:
+            output.close()
 
 
 def uninstall_nsis(root, *, accepted=(0,), stage="nsis_uninstall"):

@@ -1,5 +1,7 @@
 # Nexa 项目索引
 
+- [安装验收启动顺序修复](docs/verification/2026-10-09-installer-startup-order.md)：fresh discovery后再认证status，保留实例锁与全部安装门槛
+
 - [模型发现显示名 ADR0043](docs/decisions/0043-model-discovery-display-name.md) / [名称与PI边界](docs/model-display-names.md) / [联合验证](docs/verification/2026-10-09-model-display-names.md)：本机/LAN新增display_name；PI聊天仍需别名或使用ID
 
 - [错误诊断与显式恢复](docs/error-handling-and-recovery.md) / [联合验证](docs/verification/2026-10-09-error-handling.md)：启动、配置、下载、模型/推理UI及安装检查；未确认结果不自动重试

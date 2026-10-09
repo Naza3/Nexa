@@ -49,6 +49,30 @@ fn diagnostic_is_opt_in_and_never_changes_other_command_output() {
 }
 
 #[test]
+fn competing_instance_lock_reports_busy_without_bypassing_ownership() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    runtime_api::configuration::initialize(&root).unwrap();
+    let lock = runtime_cli::instance::InstanceLock::try_acquire(&root)
+        .unwrap()
+        .unwrap();
+    let observed = command(&root)
+        .env(DESKTOP_STARTUP_REPORT_ENV, "1")
+        .arg("serve")
+        .output()
+        .unwrap();
+    assert_eq!(observed.status.code(), Some(1));
+    assert_eq!(observed.stdout, b"nexa-startup-v1:runtime_instance_busy\n");
+    assert!(!lock.has_discovery());
+    assert!(
+        runtime_cli::instance::InstanceLock::try_acquire(&root)
+            .unwrap()
+            .is_none()
+    );
+    drop(lock);
+}
+
+#[test]
 fn closed_reader_does_not_change_cli_failure_exit() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("data");

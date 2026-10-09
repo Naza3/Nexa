@@ -35,6 +35,7 @@ const messages: Readonly<Record<string, string>> = {
   "configuration_migration_required": "请先在设置中确认旧配置迁移来源。",
   "configuration_restart_required": "已保存配置与当前运行实例不一致，请先显式停止并重新启动服务。",
   "configuration_revision_required": "此旧写入接口不支持配置版本检查。请使用新版设置页面。",
+  "runtime_instance_busy": "服务数据目录正被另一个进程占用。请刷新服务状态，确认现有服务或管理操作已结束后再启动。",
   "configuration_busy": "另一个配置事务正在进行，请稍后重试。",
   "configuration_invalid": "配置或模型档案超出有效范围，未保存。",
   "model_profile_invalid": "参数或请求超出支持范围。请检查字段提示和模型限制，修改后再提交。",

@@ -43,6 +43,9 @@ pub fn report_desktop_startup_error(
         }
         Some(b"configuration_unavailable") => b"nexa-startup-v1:configuration_unavailable\n",
         Some(b"configuration_invalid") => b"nexa-startup-v1:configuration_invalid\n",
+        Some(b"another instance owns this data directory") => {
+            b"nexa-startup-v1:runtime_instance_busy\n"
+        }
         Some(b"configuration_busy") => b"nexa-startup-v1:configuration_busy\n",
         Some(
             b"packaged worker is missing beside ai-runtime"
