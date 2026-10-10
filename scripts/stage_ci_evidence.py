@@ -33,7 +33,7 @@ JSON_REPORTS = (
 LOG_REPORTS = tuple(f"windows-{name}.log" for name in (
     "rust-setup", "cmake-setup", "toolchain-identity", "upstream-runner-tests", "process-host-dependencies",
     "management-build", "api-cli-dependencies", "api-cli-independent-build", "configure",
-    "native-build", "native-identity-tests", "ctest", "rustfmt", "rust-tests", "clippy", "real-model",
+    "native-build", "native-identity-tests", "ctest", "rustfmt", "rust-tests", "clippy", "real-model", "real-tools",
     "real-runtime", "worker-real-credit", "real-process-runtime",
     "desktop-dependencies", "desktop-rust-tests", "desktop-clippy", "desktop-build", "desktop-source-status", "desktop-transport-tests",
     "desktop-external-store-tests", "desktop-external-guard-tests", "desktop-mapping-observation", "desktop-discovery-download-tests",
@@ -136,6 +136,52 @@ def scrub(text, roots):
     return DRIVE_PATH.sub("<local-path>", text)
 
 
+def tool_test_log(text, roots):
+    """Keep only reviewed test outcomes and typed thread telemetry.
+
+    Failed tool assertions can print model arguments or generated answers. Never
+    copy those bodies, even after path/credential screening. The evidence index
+    retains the original byte identity separately from this bounded summary.
+    """
+    text = scrub(text, roots)
+    test = "actual_model_two_round_tool_cycle"
+    test_names = rf"(?:{test}|test_thread_configuration_is_bounded_and_explicit)"
+    safe_line = re.compile(
+        rf"(?:running [0-9]+ tests?|test {test_names} \.\.\. (?:ok|FAILED|ignored)|"
+        r"test result: (?:ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; "
+        r"[0-9]+ measured; [0-9]+ filtered out; finished in [0-9]+(?:\.[0-9]+)?s)"
+    )
+    output, omitted = [], 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if safe_line.fullmatch(line):
+            output.append(line)
+            continue
+        if line.startswith("{"):
+            try:
+                value = json.loads(line, object_pairs_hook=unique_object)
+            except ValueError:
+                value = None
+            if isinstance(value, dict) and value.get("test") == test:
+                fields = {"test", "inference_threads", "available_parallelism", "oversubscribed", "source"}
+                if (set(value) != fields
+                        or type(value["inference_threads"]) is not int or not 1 <= value["inference_threads"] <= 256
+                        or type(value["available_parallelism"]) is not int or not 1 <= value["available_parallelism"] <= 2**32
+                        or type(value["oversubscribed"]) is not bool
+                        or value["oversubscribed"] != (value["inference_threads"] > value["available_parallelism"])
+                        or value["source"] not in ("NEXA_TEST_THREADS", "available_parallelism")):
+                    raise ValueError("invalid real tool test telemetry")
+                output.append(json.dumps(value, sort_keys=True, allow_nan=False))
+                continue
+        omitted += 1
+    if not any(line.startswith("test result:") for line in output):
+        output.append("No complete test summary observed.")
+    output.append(f"Non-summary log lines omitted: {omitted}; original byte identity is in evidence-index.json.")
+    return "\n".join(output) + "\n"
+
+
 def clean(value, roots):
     if isinstance(value, str):
         return scrub(value, roots)
@@ -182,6 +228,8 @@ def stage(source, destination, repo, environment=None):
                     if name == "windows-desktop/bridge-real.json":
                         external_library_report(value.get("external_library") if isinstance(value, dict) else None)
                     output = (json.dumps(clean(value, roots), ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
+                elif name == "windows-real-tools.log":
+                    output = tool_test_log(text, roots).encode("utf-8")
                 else:
                     output = scrub(text, roots).encode("utf-8")
             except (ValueError, OSError, UnicodeError):

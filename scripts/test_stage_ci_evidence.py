@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from stage_ci_evidence import MAX_REPORT_BYTES, catalog_download_report, read_regular, stage
+from stage_ci_evidence import LOG_REPORTS, MAX_REPORT_BYTES, catalog_download_report, read_regular, stage, tool_test_log
 from run_desktop_smoke import DIAGNOSTIC_REPORTS, EXTERNAL_LIBRARY_KEYS
 
 
@@ -98,6 +98,67 @@ class EvidenceStagingTests(unittest.TestCase):
     def test_explicit_credential_text_is_not_blindly_scrubbed(self):
         self.put("windows-rust-tests.log", "Authorization: Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ")
         self.assert_rejected("windows-rust-tests.log")
+
+    def test_real_tools_gate_has_reviewed_summary_evidence(self):
+        # Tie the CI producer to the closed inventory, rather than merely adding
+        # a filename fixture that could outlive or drift from the real command.
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/native-windows.yml").read_text(encoding="utf-8")
+        command = next(line for line in workflow.splitlines() if "--test tool_model -- --ignored" in line)
+        self.assertIn("--test-threads=1 --nocapture", command)
+        self.assertIn("artifacts/verification/windows-real-tools.log", command)
+        self.assertIn("windows-real-tools.log", LOG_REPORTS)
+        telemetry = {"test": "actual_model_two_round_tool_cycle", "inference_threads": 4,
+                     "available_parallelism": 4, "oversubscribed": False, "source": "NEXA_TEST_THREADS"}
+        raw = (r"Compiling llama-adapter (C:\Users\Private Name\Nexa)" + "\n"
+               "running 1 test\n" + json.dumps(telemetry) + "\n"
+               "test actual_model_two_round_tool_cycle ... ok\n"
+               "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 6.45s\n")
+        self.put("windows-real-tools.log", raw)
+        result = self.run_stage()
+        self.assertEqual(result["result"], "pass")
+        staged = (self.out / "windows-real-tools.log").read_text(encoding="utf-8")
+        self.assertIn("finished in 6.45s", staged)
+        self.assertIn(json.dumps(telemetry, sort_keys=True), staged)
+        self.assertNotIn("Private Name", staged)
+        record, = result["files"]
+        self.assertEqual(record["source_sha256"], hashlib.sha256(raw.encode("utf-8")).hexdigest())
+        self.assertEqual(record["sha256"], hashlib.sha256(staged.encode("utf-8")).hexdigest())
+
+    def test_real_tools_failed_assertions_never_upload_generated_bodies(self):
+        raw = ("running 1 test\n"
+               "thread 'actual_model_two_round_tool_cycle' panicked at private path:\n"
+               "assertion `left == right` failed\n"
+               'left: "PRIVATE_GENERATED_ARGUMENTS"\n'
+               'right: "PRIVATE_EXPECTED_VALUE"\n'
+               '{"response_body":"PRIVATE_RESPONSE_BODY"}\n'
+               "PRIVATE_UNSTRUCTURED_ANSWER\n"
+               "test actual_model_two_round_tool_cycle ... FAILED\n"
+               "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.03s\n")
+        self.put("windows-real-tools.log", raw)
+        self.assertEqual(self.run_stage()["result"], "pass")
+        staged = (self.out / "windows-real-tools.log").read_text(encoding="utf-8")
+        self.assertIn("test result: FAILED.", staged)
+        self.assertNotIn("PRIVATE", staged)
+        self.assertNotIn("private path", staged)
+
+    def test_real_tools_credential_screening_still_rejects_the_whole_log(self):
+        self.put("windows-real-tools.log", "Authorization: Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        self.assert_rejected("windows-real-tools.log")
+
+    def test_real_tools_telemetry_has_a_closed_typed_schema(self):
+        telemetry = {"test": "actual_model_two_round_tool_cycle", "inference_threads": 4,
+                     "available_parallelism": 4, "oversubscribed": False, "source": "NEXA_TEST_THREADS"}
+        for changes in ({"response_body": "private"}, {"inference_threads": True},
+                        {"inference_threads": 0}, {"inference_threads": 257},
+                        {"available_parallelism": False}, {"available_parallelism": 0},
+                        {"oversubscribed": 0}, {"oversubscribed": True}, {"source": "private"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                tool_test_log(json.dumps(telemetry | changes), set())
+
+    def test_real_tools_missing_summary_cannot_be_promoted_to_pass(self):
+        self.assertEqual(tool_test_log("private build failure\n", set()),
+                         "No complete test summary observed.\n"
+                         "Non-summary log lines omitted: 1; original byte identity is in evidence-index.json.\n")
 
     def test_binary_magic_rejected_under_allowed_filename(self):
         self.put("windows-rust-tests.log", b"MZhidden bytes")

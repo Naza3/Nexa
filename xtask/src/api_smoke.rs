@@ -168,6 +168,86 @@ struct Oracle {
     report: Report,
     phase: &'static str,
 }
+struct ChatValidationProbe {
+    id: &'static str,
+    body: Vec<u8>,
+    code: &'static str,
+    param: &'static str,
+}
+impl ChatValidationProbe {
+    fn matches(&self, status: u16, value: &Value) -> bool {
+        status == 400
+            && value["error"]["code"] == self.code
+            && value["error"]["param"] == self.param
+    }
+}
+fn chat_validation_probes(base: Value) -> Result<Vec<ChatValidationProbe>> {
+    let mut probes = Vec::new();
+    for (id, field, value, code, param) in [
+        (
+            "unknown_chat_field",
+            "unexpected",
+            json!(true),
+            "invalid_request",
+            "unexpected",
+        ),
+        (
+            "unsupported_response_format",
+            "response_format",
+            json!({"type":"json_object"}),
+            "unsupported_parameter",
+            "response_format",
+        ),
+        (
+            "unsupported_strict_tools",
+            "tools",
+            json!([{"type":"function","function":{"name":"lookup_fixture","parameters":{"type":"object"},"strict":true}}]),
+            "unsupported_parameter",
+            "tools.0.function.strict",
+        ),
+        (
+            "token_alias_conflict",
+            "max_completion_tokens",
+            json!(1),
+            "invalid_request",
+            "max_completion_tokens",
+        ),
+    ] {
+        let mut body = base.clone();
+        body[field] = value;
+        probes.push(ChatValidationProbe {
+            id,
+            body: serde_json::to_vec(&body)?,
+            code,
+            param,
+        });
+    }
+    let model = serde_json::to_string(&base["model"])?;
+    probes.push(ChatValidationProbe {
+        id: "duplicate_json_keys",
+        body: format!(
+            "{{\"model\":{model},\"model\":{model},\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}"
+        )
+        .into_bytes(),
+        code: "invalid_request",
+        param: "body",
+    });
+    Ok(probes)
+}
+fn empty_tools_chat(mut base: Value) -> Value {
+    // An empty definition list alone is a legal text-only no-op. Do not add
+    // other compatibility fields here that could mask which behavior is tested.
+    base["tools"] = json!([]);
+    base
+}
+fn valid_text_completion(status: u16, value: &Value, model: &str) -> bool {
+    status == 200
+        && valid_completion(value, model)
+        && value["choices"][0]["message"]["content"]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty())
+        && value["choices"][0]["message"].get("tool_calls").is_none()
+}
 impl Oracle {
     fn check(&mut self, id: &str, pass: bool, detail: &str) {
         self.report.checks.push(Check {
@@ -348,12 +428,21 @@ impl Oracle {
                 "untrusted browser origin or Host is rejected",
             );
         }
-        for (id,body,code) in [
-            ("unknown_chat_field",{let mut b=self.chat(1,false);b["unexpected"]=json!(true);serde_json::to_vec(&b)?},"invalid_request"),
-            ("unsupported_tools",{let mut b=self.chat(1,false);b["tools"]=json!([]);serde_json::to_vec(&b)?},"unsupported_parameter"),
-            ("duplicate_json_keys",format!("{{\"model\":\"{}\",\"model\":\"{}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}",self.options.model,self.options.model).into_bytes(),"invalid_request"),
-            ("token_alias_conflict",{let mut b=self.chat(1,false);b["max_completion_tokens"]=json!(1);serde_json::to_vec(&b)?},"invalid_request"),
-        ]{let(status,value)=self.request(Method::POST,"/v1/chat/completions",body,HeaderMap::new()).await?;self.check(id,status==400&&value["error"]["code"]==code,"HTTP 400 and exact public error code independently checked");}
+        for probe in chat_validation_probes(self.chat(1, false))? {
+            let (status, value) = self
+                .request(
+                    Method::POST,
+                    "/v1/chat/completions",
+                    probe.body.clone(),
+                    HeaderMap::new(),
+                )
+                .await?;
+            self.check(
+                probe.id,
+                probe.matches(status, &value),
+                "HTTP 400 and exact public error code and parameter independently checked",
+            );
+        }
         let(status,value)=self.post("/runtime/load",json!({"model":self.options.model,"backend":"cpu","context_size":2048,"gpu_layers":0,"threads":2,"batch_size":128})).await?;
         self.check(
             "explicit_cpu_load",
@@ -374,7 +463,18 @@ impl Oracle {
         let (status, completion) = self
             .post("/v1/chat/completions", self.chat(24, false))
             .await?;
-        self.check("A01_A03_nonstream_usage",status==200&&valid_completion(&completion,&self.options.model)&&completion["choices"][0]["message"]["content"].as_str().is_some_and(|s|!s.trim().is_empty()),"completion schema, assistant text, finish reason, and arithmetic token usage independently checked");
+        self.check("A01_A03_nonstream_usage",valid_text_completion(status,&completion,&self.options.model),"completion schema, assistant text, finish reason, and arithmetic token usage independently checked");
+        let (status, empty_tools_completion) = self
+            .post(
+                "/v1/chat/completions",
+                empty_tools_chat(self.chat(24, false)),
+            )
+            .await?;
+        self.check(
+            "empty_tools_text_completion",
+            valid_text_completion(status, &empty_tools_completion, &self.options.model),
+            "empty tools succeeds after explicit load with assistant text, no tool calls, and valid token usage",
+        );
         self.phase = "messages_stop_isolation";
         self.messages_stop(&completion).await?;
         self.phase = "streaming";
@@ -1357,6 +1457,90 @@ pub fn main(args: &[OsString]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixture_chat() -> Value {
+        json!({"model":"fixture","messages":[{"role":"user","content":"hello"}],"max_tokens":24,"stream":false})
+    }
+    #[test]
+    fn validation_probe_payloads_match_the_current_parser_contract() {
+        // Only tests use the product parser: expected outcomes remain fixed in
+        // the independent oracle, so API changes cannot silently stale its cases.
+        for probe in chat_validation_probes(fixture_chat()).unwrap() {
+            let parsed = runtime_api::dto::parse_chat(
+                &probe.body,
+                runtime_types::RequestId::new(),
+                &runtime_api::Config::default(),
+            );
+            let error = parsed.err().expect("negative probe must remain invalid");
+            assert!(
+                probe.matches(error.status.as_u16(), &serde_json::to_value(error).unwrap()),
+                "{} no longer matches the public validation contract",
+                probe.id
+            );
+        }
+    }
+    #[test]
+    fn empty_tools_probe_is_a_legal_text_noop() {
+        let base = fixture_chat();
+        let body = empty_tools_chat(base.clone());
+        assert_eq!(body["tools"], json!([]));
+        let mut without_tools = body.clone();
+        without_tools.as_object_mut().unwrap().remove("tools");
+        assert_eq!(without_tools, base);
+        let parsed = runtime_api::dto::parse_chat(
+            &serde_json::to_vec(&body).unwrap(),
+            runtime_types::RequestId::new(),
+            &runtime_api::Config::default(),
+        )
+        .unwrap();
+        assert!(parsed.tools.definitions.is_empty());
+        assert_eq!(parsed.tools.choice, runtime_types::ToolChoice::None);
+        assert_eq!(parsed.messages[0].content.as_deref(), Some("hello"));
+        assert!(!parsed.stream);
+    }
+    #[test]
+    fn validation_oracle_checks_status_code_and_exact_parameter() {
+        for probe in chat_validation_probes(fixture_chat()).unwrap() {
+            let value = json!({"error":{"code":probe.code,"param":probe.param}});
+            assert!(probe.matches(400, &value));
+            for status in [200, 401, 404, 500] {
+                assert!(!probe.matches(status, &value));
+            }
+            for field in ["code", "param"] {
+                for replacement in [json!(null), json!("wrong"), json!([])] {
+                    let mut changed = value.clone();
+                    changed["error"][field] = replacement;
+                    assert!(!probe.matches(400, &changed));
+                }
+                let mut missing = value.clone();
+                missing["error"].as_object_mut().unwrap().remove(field);
+                assert!(!probe.matches(400, &missing));
+            }
+        }
+    }
+    #[test]
+    fn empty_tools_success_requires_real_text_completion_shape() {
+        let completion = json!({"object":"chat.completion","model":"fixture","id":"chatcmpl-fixture","created":1,
+            "choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"length"}],
+            "usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}});
+        assert!(valid_text_completion(200, &completion, "fixture"));
+        assert!(!valid_text_completion(400, &completion, "fixture"));
+        assert!(!valid_text_completion(200, &completion, "another-model"));
+        for (pointer, replacement) in [
+            ("/choices/0/message/content", json!(" ")),
+            ("/choices/0/message/content", json!(null)),
+            ("/choices/0/message/role", json!("tool")),
+            ("/choices/0/finish_reason", json!("tool_calls")),
+            ("/usage/total_tokens", json!(5)),
+            ("/usage/completion_tokens", json!(0)),
+        ] {
+            let mut changed = completion.clone();
+            *changed.pointer_mut(pointer).unwrap() = replacement;
+            assert!(!valid_text_completion(200, &changed, "fixture"));
+        }
+        let mut unexpected_tool = completion;
+        unexpected_tool["choices"][0]["message"]["tool_calls"] = json!([{"id":"unexpected"}]);
+        assert!(!valid_text_completion(200, &unexpected_tool, "fixture"));
+    }
     #[test]
     fn oracle_rejects_fake_success_and_wrong_usage() {
         assert!(!valid_completion(&json!({"object":"chat.completion"}), "m"));

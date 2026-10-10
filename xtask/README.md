@@ -39,6 +39,8 @@ NEXA_TEST_MODEL=/path/to/Qwen3-0.6B-Q8_0.gguf NEXA_TEST_THREADS=2 cargo test --l
 
 必须指向本机匹配发现记录的短命测试服务。工具先验证同连接HMAC proof，再发送Bearer；独立解析JSON/SSE，报告每项pass/fail/skipped，不调用服务端DTO/编码器作测试oracle。该命令末尾执行真实shutdown并等待原实例释放，不能用于希望继续保留的生产服务。可选`--disconnect-cycles N`默认5，允许1..50，用于有限断连后恢复压力验证；任何首次失败立即停止循环且保留已记录结果。
 
+工具兼容验收按当前协议区分正反例：`tools:[]` 在显式加载后必须返回HTTP 200、非空assistant文本、无工具调用及正确usage；`response_format`与`strict:true`仍须返回400及精确`error.code`/`error.param`。仅单元测试用实际验收请求核对服务端解析器以防契约过期，生产黑盒oracle不调用解析器；这些文本兼容检查不能代替真实两轮工具调用测试。
+
 跨平台真实短命服务编排：
 
 ```
@@ -87,6 +89,8 @@ python scripts/stage_ci_evidence.py
 ```
 
 Windows独立identity测试程序后缀为`.exe`。证据stage只接受闭合已审查报告，保留状态、参数、身份与脱敏前后hash；上游合成正文只留hash/字节数/fixture关联。拒绝内容产生安全失败report并exit1，不上传原始整个目录。真正Windows/目标机结果见[T05记录](../docs/verification/2026-10-01-t05-windows-package.md)。
+
+`windows-real-tools.log`额外只保留固定测试结果及封闭类型化线程配置，断言失败可能打印的工具参数、生成正文、路径和其他原始行不进入上传树；源日志hash/字节数仍进入证据索引。未观察到完整测试摘要时明确标记，不补造成功。
 
 2026-10-01，源码6a7e9d0的[Windows Release CI36829233039](https://github.com/Naza3/Nexa/actions/runs/36829233039)已完成上述打包与解压后的真实独立验收：包检查16pass/2范围skip，HTTP89pass/9skip，50次断流全部实际执行并恢复。四类路径含中文/空格，受限PATH/空CWD、服务回收与自有data清理通过。另有独立Windows 10手工短验通过，与CI工程证据分层记录；A20无开发工具/离线与长期稳定性留作后期验证，T05按当前范围收口并继续T06。
 

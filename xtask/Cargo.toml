@@ -23,5 +23,10 @@ bytes.workspace = true
 uuid.workspace = true
 tempfile.workspace = true
 
+[dev-dependencies]
+# Contract drift tests only; the independent production oracle never calls DTOs.
+runtime-api = { path = "../crates/runtime-api" }
+runtime-types = { path = "../crates/runtime-types" }
+
 [lints]
 workspace = true
