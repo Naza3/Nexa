@@ -1,5 +1,7 @@
 # Windows API 与 DeepSeek Harness 接入契约（规划）
 
+> 2026-10-10：工具协议实现以[ADR0044](decisions/0044-openai-tool-calling-compatibility.md)和[当前兼容说明](tool-calling.md)为准。下文保留此前文本/T0设计与验证历史，不代表新切片已完成所有平台验收。
+
 日期：2026-10-03。用户要求API兼容官方 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（命令dsh）。本文件基于官方固定源码审计定义接入路线；官方pi-ai已安装为隔离测试依赖，窄文本协议切片经局部实测、native-free聚合与独立审查完成，DSH本体未安装执行、工具协议和真实Windows模型联调尚未完成，不能据此宣布完整兼容。局部结果见[分层验证](verification/2026-10-03-windows-scope-and-harness.md)。范围见[ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，排期见[W04](roadmap.md#5-w04-兼容门槛)。
 
 ## 1. 版本与低改造接入路线

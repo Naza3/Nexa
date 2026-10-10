@@ -25,6 +25,7 @@ impl Drop for TestDirectory {
 }
 fn request(model: &ModelId, text: &str, max_tokens: u32) -> GenerationRequest {
     GenerationRequest {
+        tools: Default::default(),
         request_id: RequestId::new(),
         model: model.clone(),
         messages: vec![Message::new(Role::User, text)],

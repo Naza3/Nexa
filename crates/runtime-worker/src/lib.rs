@@ -444,7 +444,10 @@ impl ExecutionEventSink for WireSink {
                 | ExecutorEvent::GenerationFailed { .. }
                 | ExecutorEvent::Faulted(_)
         );
-        let text = matches!(event, ExecutorEvent::TextDelta(_));
+        let text = matches!(
+            event,
+            ExecutorEvent::TextDelta(_) | ExecutorEvent::ToolCallDelta(_)
+        );
         let mut state = self.shared.state.lock().unwrap();
         loop {
             let Some(active) = state
@@ -476,6 +479,11 @@ impl ExecutionEventSink for WireSink {
         }
         if let ExecutorEvent::TextDelta(piece) = &event
             && (piece.is_empty() || piece.len() > MAX_TEXT_BYTES)
+        {
+            return false;
+        }
+        if let ExecutorEvent::ToolCallDelta(delta) = &event
+            && !runtime_core::valid_tool_piece(delta)
         {
             return false;
         }

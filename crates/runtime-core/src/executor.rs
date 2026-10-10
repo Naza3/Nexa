@@ -56,6 +56,7 @@ pub enum ExecutorEvent {
         prompt_tokens: u32,
     },
     TextDelta(String),
+    ToolCallDelta(runtime_types::ToolCallDelta),
     Completed {
         usage: Usage,
         finish_reason: FinishReason,
@@ -122,6 +123,9 @@ impl ExecutionEvents {
     /// False means cancellation, disconnect, slow consumer, or shutdown. No replay.
     pub fn emit(&self, event: ExecutorEvent) -> bool {
         self.emit_inner(event)
+    }
+    pub fn tool_call_delta(&self, delta: runtime_types::ToolCallDelta) -> bool {
+        self.emit(ExecutorEvent::ToolCallDelta(delta))
     }
     pub fn text_delta(&self, text: &str) -> bool {
         self.emit_text(text)

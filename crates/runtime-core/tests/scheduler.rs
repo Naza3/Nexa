@@ -188,6 +188,7 @@ fn config() -> RuntimeConfig {
 }
 fn request() -> GenerationRequest {
     GenerationRequest {
+        tools: runtime_types::ToolConfig::default(),
         request_id: RequestId::new(),
         model: ModelId::new("qa-small").unwrap(),
         messages: vec![Message::new(Role::User, "synthetic")],
@@ -2474,7 +2475,7 @@ fn performance_history_is_bounded_newest_first_and_accepts_reused_request_ids() 
 fn performance_history_tracks_image_failure_queued_cancel_and_omits_rejections() {
     let h = Harness::new(config(), true);
     let mut req = request();
-    req.messages[0].content = "private prompt never retained in history".into();
+    req.messages[0].content = Some("private prompt never retained in history".into());
     req.messages[0].image = Some(ImageInput::from_data_url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lX8AAAAASUVORK5CYII=").unwrap());
     let active = h.handle.submit(req.clone()).unwrap();
     let pending = h.pending();

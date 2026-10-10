@@ -72,13 +72,13 @@ fn check_size(frame: &Frame, size: usize, limit: usize) -> Result<(), RuntimeErr
     if matches!(
         frame.message,
         Message::Event {
-            event: ExecutorEvent::TextDelta(_),
+            event: ExecutorEvent::TextDelta(_) | ExecutorEvent::ToolCallDelta(_),
             ..
         }
     ) && size > MAX_TEXT_FRAME_BYTES
     {
         return Err(protocol_error(
-            "encoded text frame exceeds credit accounting bound",
+            "encoded payload frame exceeds credit accounting bound",
         ));
     }
     Ok(())
@@ -117,8 +117,12 @@ fn validate(frame: &Frame) -> Result<(), RuntimeError> {
                 {
                     return Err(protocol_error("invalid text delta or credit"));
                 }
+            } else if let ExecutorEvent::ToolCallDelta(delta) = event {
+                if delta.validate_piece().is_err() || credit_id.is_none_or(|id| id == 0) {
+                    return Err(protocol_error("invalid tool delta or credit"));
+                }
             } else if credit_id.is_some() {
-                return Err(protocol_error("credit attached to non-text event"));
+                return Err(protocol_error("credit attached to non-payload event"));
             }
         }
         message => {

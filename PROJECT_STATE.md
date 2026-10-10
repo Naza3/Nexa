@@ -1,5 +1,11 @@
 # Nexa 当前状态
 
+## 2026-10-10 通用工具调用兼容层（Linux真实闭环验证完成）
+
+任务 W04-TOOLS-1：按用户“补齐Nexa的功能”和通用兼容模式要求，接入 OpenAI tools/tool_calls/tool 结果历史、流式/非流式、模型原始模板严格解析、输出信用及完整 prompt 预算。无需 PI 专用开关，不按型号白名单授予工具能力，Nexa 不执行客户端工具。目标口述模型已更正为 Qwen3.5-4B-Q4；样例使用固定 Q4_K_M，用户文件身份尚未确认。
+
+根 Linux 全 workspace 689 通过/11 既有忽略、strict Clippy/fmt、桌面壳33项、Python 367 通过/5 平台 skip、CTest 5/5；固定 PI 客户端实际 serializer/parser 通过 Nexa HTTP/worker 的真实0.6B与Qwen3.5-4B-Q4_K_M两轮工具闭环均通过，分别30.1/130.3秒、无重试，各仅执行一次内存查表。私有 IPC/shim 升至 5，公共版本仍 0.3.0。本轮未推送、未发布新包，Windows 各层独立待验。见[使用说明](docs/tool-calling.md)、[ADR0044](docs/decisions/0044-openai-tool-calling-compatibility.md)和[本轮验证](docs/verification/2026-10-10-tool-calling.md)。
+
 ## 2026-10-10 Rust 错误规范（本地主机验证完成）
 
 任务 W05-RUST-ERROR-1：在 codex/dev 9b18f41 基线上新增[全项目规范](docs/rust-error-handling.md)，类型化启动与私有文件错误，取消按 Display 字符串分类，保留安全公开诊断与底层 source；统一两个 workspace 的错误结果/调试宏 lint。本轮本地中文提交，未推送。

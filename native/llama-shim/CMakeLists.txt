@@ -155,6 +155,7 @@ add_executable(air-tool-parser-test tests/tool_parser_test.cpp)
 target_link_libraries(air-tool-parser-test PRIVATE air_llama llama-common llama)
 target_compile_definitions(air-tool-parser-test PRIVATE
   AIR_TOOL_TEMPLATE="${LLAMA_SOURCE}/models/templates/Qwen-Qwen3-0.6B.jinja"
+  AIR_TOOL_TAGGED_TEMPLATE="${LLAMA_SOURCE}/models/templates/Qwen3.5-4B.jinja"
   AIR_TOOL_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fixtures/tools/single-tool-cycle.json")
 if(MSVC)
   target_compile_options(air-tool-parser-test PRIVATE /UNDEBUG)

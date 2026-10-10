@@ -1,5 +1,9 @@
 # Nexa Windows 总体方案与架构
 
+## 2026-10-10 工具兼容增量
+
+[ADR0044](decisions/0044-openai-tool-calling-compatibility.md)统一新增工具协议：原API/原生线程隔离不变，Message增加nullable content、tool_calls/tool_call_id及Tool角色，GenerationRequest带ToolConfig；工具增量共用一次性信用，ToolCalls结束原因。工具模式支持标准流式与非流式，完整校验后分片；普通文本保持实时输出。工具输出账本768KiB（保留384KiB），文本账本仍256KiB，原生解析临时工作区与模型内存单列。私有IPC/shim行为身份迁移5，C ABI新增v3入口而旧布局不变。旧正文的纯文本/三角色限制是该增量之前的基线，不能据此拒绝本次已实现工具字段；未实现项和验证范围按ADR与本轮证据，不扩大为所有模型/平台已验。
+
 > 2026-10-09：启动私有诊断、配置附加固定reason、结果不确定与UI安全呈现遵循[错误恢复契约](error-handling-and-recovery.md)；公共主错误码/HTTP状态、锁/CAS与不自动重放边界保持。
 
 > 2026-10-09：按 [ADR0042](decisions/0042-lan-bind-startup-recovery.md)，可选 LAN 的 OS bind 失败保留认证回环管理，`lan_api.startup_error` 报告有界原因且 `running=false`；配置/安全校验及本机绑定失败仍失败关闭，修正设置须显式停服。

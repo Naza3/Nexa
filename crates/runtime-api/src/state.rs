@@ -544,6 +544,19 @@ impl ApiState {
         self.execute(move |runtime| runtime.submit_current(request_id, messages, options))
             .await
     }
+    pub async fn submit_current_chat(
+        &self,
+        request_id: RequestId,
+        messages: Vec<Message>,
+        options: GenerationOptions,
+        tools: runtime_types::ToolConfig,
+    ) -> Result<(ModelId, EventReceiver), ApiError> {
+        self.ensure_running()?;
+        self.execute(move |runtime| {
+            runtime.submit_current_chat(request_id, messages, options, tools)
+        })
+        .await
+    }
     pub async fn execute<T, F>(&self, action: F) -> Result<T, ApiError>
     where
         T: Send + 'static,

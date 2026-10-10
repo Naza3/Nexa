@@ -1,5 +1,6 @@
 # Nexa 项目索引
 
+- [OpenAI工具调用兼容](docs/tool-calling.md) / [ADR0044](docs/decisions/0044-openai-tool-calling-compatibility.md)：通用协议、原模板适配、校验后流式与客户端执行边界
 - [Rust 错误处理开发规范](docs/rust-error-handling.md)：具名错误、source、公开诊断、结果状态及审查/测试门槛
 - [安装验收启动顺序修复](docs/verification/2026-10-09-installer-startup-order.md)：fresh discovery后再认证status，保留实例锁与全部安装门槛
 

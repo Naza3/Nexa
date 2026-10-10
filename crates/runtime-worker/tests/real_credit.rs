@@ -124,6 +124,7 @@ fn model() -> ResolvedModel {
 }
 fn request(model: &ModelId, prompt: &str) -> GenerationRequest {
     GenerationRequest {
+        tools: runtime_types::ToolConfig::default(),
         request_id: RequestId::new(),
         model: model.clone(),
         messages: vec![runtime_types::Message::new(Role::User, prompt)],

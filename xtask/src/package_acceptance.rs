@@ -682,8 +682,8 @@ fn verify_package(root: &Path) -> Result<Package> {
         || manifest.backend != "cpu"
         || manifest.configuration != "Release"
         || manifest.protocol_version != 1
-        || manifest.worker_protocol_version != 4
-        || manifest.shim_version != 4
+        || manifest.worker_protocol_version != 5
+        || manifest.shim_version != 5
         || manifest.llama_commit != LLAMA_COMMIT
         || !valid_hex(&manifest.project_commit, 40)
         || manifest.package_version != env!("CARGO_PKG_VERSION")
@@ -1545,7 +1545,7 @@ mod tests {
         let mut files = BTreeSet::new();
         inventory(temp.path(), "", &mut files).unwrap();
         let entries: Vec<_> = files.iter().map(|p|json!({"path":p,"size_bytes":fs::metadata(temp.path().join(p)).unwrap().len(),"sha256":file_hash(&temp.path().join(p)).unwrap()})).collect();
-        let manifest = json!({"schema_version":1,"product":"nexa-runtime","package_version":env!("CARGO_PKG_VERSION"),"project_commit":"a".repeat(40),"llama_commit":LLAMA_COMMIT,"protocol_version":1,"worker_protocol_version":4,"shim_version":4,"platform":"windows-x64","target":"x86_64-pc-windows-msvc","architecture":"x86_64","backend":"cpu","configuration":"Release","native_build":{"MTMD_VIDEO":"OFF"},"native_archives":NATIVE_ARCHIVES.iter().map(|name|json!({"name":name,"sha256":"b".repeat(64),"size_bytes":128})).collect::<Vec<_>>(),"files":entries,"dependencies":{"ai-runtime.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]},"ai-runtime-worker.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]}}});
+        let manifest = json!({"schema_version":1,"product":"nexa-runtime","package_version":env!("CARGO_PKG_VERSION"),"project_commit":"a".repeat(40),"llama_commit":LLAMA_COMMIT,"protocol_version":1,"worker_protocol_version":5,"shim_version":5,"platform":"windows-x64","target":"x86_64-pc-windows-msvc","architecture":"x86_64","backend":"cpu","configuration":"Release","native_build":{"MTMD_VIDEO":"OFF"},"native_archives":NATIVE_ARCHIVES.iter().map(|name|json!({"name":name,"sha256":"b".repeat(64),"size_bytes":128})).collect::<Vec<_>>(),"files":entries,"dependencies":{"ai-runtime.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]},"ai-runtime-worker.exe":{"imports":[{"name":"KERNEL32.dll","kind":"os"}]}}});
         fs::write(
             temp.path().join("manifest.json"),
             serde_json::to_vec(&manifest).unwrap(),

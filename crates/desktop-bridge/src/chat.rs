@@ -211,7 +211,11 @@ impl DesktopBridge {
         {
             return Err(BridgeError::new("invalid_request"));
         }
-        let history: usize = request.messages.iter().map(|m| m.content.len()).sum();
+        let history: usize = request
+            .messages
+            .iter()
+            .map(|m| m.content.as_ref().map_or(0, String::len))
+            .sum();
         if history >= HISTORY_BYTES
             || request.messages.len() >= 128
             || serde_json::to_vec(&request)

@@ -1,8 +1,10 @@
 #include "air_llama.h"
 #include "chat.h"
 #include "log.h"
+#include "../src/tool_template.h"
 
 #include <cassert>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -37,7 +39,52 @@ static std::string read_file(const char *path) {
   assert(file.good());
   return std::string(std::istreambuf_iterator<char>(file), {});
 }
+static void tagged_template_probe() {
+  const auto *override_path = std::getenv("NEXA_TEST_TOOL_TEMPLATE");
+  const auto source = read_file(override_path ? override_path : AIR_TOOL_TAGGED_TEMPLATE);
+  auto templates = common_chat_templates_init(nullptr, source, "<|endoftext|>", "<|im_end|>");
+  common_chat_templates_inputs input;
+  input.messages = {{"user", "Look up B7"}};
+  input.tools = {{"lookup_test_color", "A test lookup", R"({"type":"object","properties":{"code":{"type":"string"}},"required":["code"]})"}};
+  input.enable_thinking = false;
+  input.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+  input.chat_template_kwargs["enable_thinking"] = "false";
+  const auto calls = common_chat_templates_apply(templates.get(), input);
+  input.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+  const auto text = common_chat_templates_apply(templates.get(), input);
+  common_chat_template tmpl(source, "<|endoftext|>", "<|im_end|>");
+  air_tool_parser parser(tmpl, calls, text);
+  const std::string valid = "<tool_call>\n<function=lookup_test_color>\n<parameter=code>\nB7\n</parameter>\n</function>\n</tool_call>";
+  const auto parsed = parser.parse(valid);
+  assert(parsed.tool_calls.size() == 1);
+  assert(parsed.tool_calls[0].name == "lookup_test_color");
+  assert(common_json::parse(parsed.tool_calls[0].arguments) == common_json({{"code", "B7"}}));
+  assert(parser.parse("Hello, 蓝色 🌈").content == "Hello, 蓝色 🌈");
+  // Typed AST conversion must retain original JSON values and literal strings.
+  input.tools = {{"write_test", "Synthetic typed values", R"({"type":"object","properties":{"text":{"type":"string"},"data":{"type":"object"},"count":{"type":"integer"}},"required":["text","data","count"]})"}};
+  input.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+  const auto typed_calls = common_chat_templates_apply(templates.get(), input);
+  input.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+  const auto typed_text = common_chat_templates_apply(templates.get(), input);
+  air_tool_parser typed(tmpl, typed_calls, typed_text);
+  const std::string typed_raw = "<tool_call>\n<function=write_test>\n<parameter=text>\nline \"one\"\n蓝色\n</parameter>\n<parameter=data>\n{\"nested\":[true,null,3]}\n</parameter>\n<parameter=count>\n2\n</parameter>\n</function>\n</tool_call>";
+  const auto typed_result = typed.parse(typed_raw);
+  assert(typed_result.tool_calls.size() == 1);
+  const auto typed_args = common_json::parse(typed_result.tool_calls[0].arguments);
+  assert(typed_args.at("text") == "line \"one\"\n蓝色");
+  assert(typed_args.at("data") == common_json::parse(R"({"nested":[true,null,3]})"));
+  assert(typed_args.at("count") == 2);
+
+  for (const auto &bad : {valid.substr(0, valid.find("</parameter>")),
+                          valid.substr(0, valid.find("</tool_call>")),
+                          valid + "\n<tool_call>", std::string("Hello <tool_")}) {
+    bool rejected = false;
+    try { (void)parser.parse(bad); } catch (const failure &) { rejected = true; }
+    assert(rejected);
+  }
+}
 static void run() {
+  tagged_template_probe();
   const auto fixture = common_json::parse(read_file(AIR_TOOL_FIXTURE));
   assert(fixture.at("origin") == "synthetic-design");
   const auto source = read_file(AIR_TOOL_TEMPLATE);
@@ -48,6 +95,17 @@ static void run() {
   input.enable_thinking = false;
   input.reasoning_format = COMMON_REASONING_FORMAT_NONE;
   input.chat_template_kwargs["enable_thinking"] = "false";
+  // The production candidate extracts empty prefills through upstream reasoning tags.
+  auto strict_input = input;
+  strict_input.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+  const auto strict_calls = common_chat_templates_apply(templates.get(), strict_input);
+  strict_input.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+  const auto strict_text = common_chat_templates_apply(templates.get(), strict_input);
+  common_chat_template strict_template(source, "<|endoftext|>", "<|im_end|>");
+  air_tool_parser strict_parser(strict_template, strict_calls, strict_text);
+  auto normal = strict_parser.parse("Hello, 蓝色 🌈");
+  assert(normal.content == "Hello, 蓝色 🌈" && normal.tool_calls.empty());
+  assert(normal.reasoning_content.empty());
   const auto applied = common_chat_templates_apply(templates.get(), input);
   assert(!applied.parser.empty());
   assert(applied.format != COMMON_CHAT_FORMAT_CONTENT_ONLY);
@@ -57,6 +115,15 @@ static void run() {
   common_chat_parser_params params(applied);
   assert(params.parser.empty());
   const std::string valid = "<tool_call>\n{\"name\":\"lookup_test_color\",\"arguments\":{\"code\":\"B7\"}}\n</tool_call>";
+  const auto strict_valid = strict_parser.parse(valid);
+  assert(strict_valid.tool_calls.size() == 1 && strict_valid.content.empty());
+  assert(strict_valid.tool_calls[0].arguments == "{\"code\":\"B7\"}");
+  for (const auto &bad : {valid.substr(0, valid.find("</tool_call>")),
+                          valid + "\n<tool_call>", std::string("Hello <tool_")}) {
+    bool rejected = false;
+    try { (void)strict_parser.parse(bad); } catch (const failure &) { rejected = true; }
+    assert(rejected);
+  }
   // An uninitialised parser silently maps tool syntax to ordinary content.
   const auto fallback = common_chat_parse(valid, false, params);
   assert(fallback.tool_calls.empty());

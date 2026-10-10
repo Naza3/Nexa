@@ -1,5 +1,7 @@
 # Windows 工具调用纵向切片契约（生产未实现，T0合成诊断已有证据）
 
+> 2026-10-10：工具协议实现以[ADR0044](decisions/0044-openai-tool-calling-compatibility.md)和[当前兼容说明](tool-calling.md)为准。下文保留此前文本/T0设计与验证历史，不代表新切片已完成所有平台验收。
+
 日期：2026-10-03。原设计审计基线为35bfd85；本次按`93dae7e8f7168e631262f36bebc3a44fb1f0d008`及已交付43ad5c2更新现状，并新增T0无模型模板/parser诊断证据。生产tools/API/协议尚未实现；本文件后续接口与预算仍为设计，不等于完整DeepSeek Harness兼容。既有文本基线见[Harness契约](windows-harness-contract.md)和[文本验证](../examples/harness/README.md)，本轮13case与缺口见[T0记录](verification/2026-10-03-tool-parser-probe.md)。
 
 用户要求目标机内存**16GB**且广泛支持模型。当前50c9d41/43ad5c2已将loadable候选与历史validated证据分开，43ad5c2的混合目录、固定0.6B回归及WindowsCI/包交付已完成；未实测合法候选不因型号/hash未列矩阵而禁止尝试。下面的模型hash仅用于复现实验，不是产品许可名单。开放文本加载不授予工具能力；T0现已定位parser/文本分支缺口，尚不能建立所测模板的完整工具/文本接受判定，更不能授予整个模型家族支持。

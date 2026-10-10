@@ -11,6 +11,9 @@ pub use model_compatibility::ModelCompatibility;
 mod image;
 pub use image::{ImageInput, MAX_IMAGE_BYTES, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS};
 
+mod tools;
+pub use tools::*;
+
 mod scheduler;
 pub use scheduler::*;
 
@@ -30,6 +33,7 @@ pub enum Role {
     System,
     User,
     Assistant,
+    Tool,
 }
 
 impl Role {
@@ -38,6 +42,7 @@ impl Role {
             Self::System => "system",
             Self::User => "user",
             Self::Assistant => "assistant",
+            Self::Tool => "tool",
         }
     }
 }
@@ -47,7 +52,11 @@ impl Role {
 #[serde(deny_unknown_fields)]
 pub struct Message {
     pub role: Role,
-    pub content: String,
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     /// A single-page OCR input. Text conversations retain their original wire shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageInput>,
@@ -57,7 +66,9 @@ impl Message {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
         Self {
             role,
-            content: content.into(),
+            content: Some(content.into()),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
             image: None,
         }
     }
@@ -67,7 +78,10 @@ impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Message")
             .field("role", &self.role)
-            .field("content_bytes", &self.content.len())
+            .field(
+                "content_bytes",
+                &self.content.as_ref().map_or(0, String::len),
+            )
             .field("has_image", &self.image.is_some())
             .finish()
     }
@@ -170,10 +184,25 @@ pub fn validate_messages(messages: &[Message]) -> Result<(), RuntimeError> {
             "messages must contain 1..=128 entries",
         ));
     }
+    if messages.iter().any(|message| {
+        message.role == Role::Tool
+            || !message.tool_calls.is_empty()
+            || message.tool_call_id.is_some()
+    }) {
+        return tools::validate_tool_history(messages);
+    }
+    if messages.iter().any(|message| message.content.is_none()) {
+        return Err(RuntimeError::invalid("text message content is required"));
+    }
     if messages.iter().any(|message| message.image.is_some()) {
         if messages.len() != 1
             || messages[0].role != Role::User
-            || messages[0].content.trim().is_empty()
+            || messages[0]
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
         {
             return Err(RuntimeError::invalid(
                 "OCR requires one user message with an image and a nonempty prompt",
@@ -189,7 +218,7 @@ pub fn validate_messages(messages: &[Message]) -> Result<(), RuntimeError> {
     let mut total_bytes = 0usize;
     for (index, message) in messages.iter().enumerate() {
         total_bytes = total_bytes
-            .checked_add(message.content.len())
+            .checked_add(message.content.as_ref().map_or(0, String::len))
             .ok_or_else(|| RuntimeError::invalid("message content length overflow"))?;
         if total_bytes > MAX_MESSAGE_BYTES {
             return Err(RuntimeError::invalid(
@@ -241,6 +270,7 @@ impl Usage {
 pub enum FinishReason {
     Stop,
     Length,
+    ToolCalls,
 }
 
 impl FinishReason {
@@ -248,6 +278,7 @@ impl FinishReason {
         match self {
             Self::Stop => "stop",
             Self::Length => "length",
+            Self::ToolCalls => "tool_calls",
         }
     }
 }
@@ -256,6 +287,10 @@ impl FinishReason {
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     InvalidArgument,
+    UnsupportedToolCalling,
+    InvalidToolOutput,
+    ToolOutputLimitExceeded,
+    IncompleteGeneration,
     RequestCancelled,
     UnsupportedModel,
     UnsupportedChatTemplate,
@@ -304,6 +339,10 @@ impl ErrorCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InvalidArgument => "invalid_argument",
+            Self::UnsupportedToolCalling => "unsupported_tool_calling",
+            Self::InvalidToolOutput => "invalid_tool_output",
+            Self::ToolOutputLimitExceeded => "tool_output_limit_exceeded",
+            Self::IncompleteGeneration => "incomplete_generation",
             Self::RequestCancelled => "request_cancelled",
             Self::UnsupportedModel => "unsupported_model",
             Self::UnsupportedChatTemplate => "unsupported_chat_template",

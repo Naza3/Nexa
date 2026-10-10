@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-10-10",
+  "scope": "Actual Linux host: pinned PI serializer/parser -> Nexa HTTP -> worker/shim -> real GGUF -> one exact in-memory lookup -> tool-result history -> real model final answer. Not PI GUI, Windows, user device, broad quality, or exact user-file validation.",
+  "project_head": "c8cf4f751b961e02c74b285c2c3af720b8b384fe",
+  "project_worktree_uncommitted": true,
+  "client": {
+    "package": "@earendil-works/pi-ai",
+    "version": "1.0.1",
+    "pi_desktop_patch_ref": "v0.17.0",
+    "patch_sha256": "0c7a4701594d70c49699adfef275d7c1f997d1c55d103ab09f3377523d322981",
+    "node": "24.19.0",
+    "npm": "11.9.0"
+  },
+  "actual_worker_handshake": {
+    "protocol_version": 5,
+    "session_id": "00000000-0000-4000-8000-000000000099",
+    "operation_id": 0,
+    "request_id": null,
+    "seq": null,
+    "kind": "hello",
+    "payload": {
+      "protocol_version": 5,
+      "shim_version": 5,
+      "llama_commit": "2149c00f4442dc59302e134a02e4c99d5f7ed9fc"
+    }
+  },
+  "models": [
+    {
+      "label": "Qwen3-0.6B-Q8_0",
+      "canonical_catalog_fixture": true,
+      "exact_user_file_verified": false,
+      "chat_template_sha256_verified_separately": "57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b524c897e24d0361",
+      "tool_name": "lookup_test_color",
+      "arguments_verified": {
+        "code": "B7"
+      },
+      "tool_result_verified": {
+        "code": "B7",
+        "color": "蓝色",
+        "fixture_tag": "fixture-b7-v1"
+      },
+      "final_answer_anchors_all_verified": [
+        "B7",
+        "蓝色",
+        "fixture-b7-v1"
+      ],
+      "raw_lifecycle_result": {
+        "schema_version": 1,
+        "status": "pass",
+        "model_sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+        "model_size_bytes": 639446688,
+        "configuration": {
+          "context_size": 2048,
+          "threads": 2,
+          "batch_size": 128
+        },
+        "scope": "Linux/Windows host test, not PI Desktop GUI or user-device acceptance",
+        "forced_cleanup": false,
+        "steps": {},
+        "client": {
+          "schema_version": 1,
+          "status": "pass",
+          "mode": "real-nexa-model-pinned-pi-client",
+          "modelRequests": 2,
+          "toolExecutions": 1,
+          "piGuiTested": false,
+          "systemToolsExecuted": false,
+          "turns": [
+            {
+              "stopReason": "toolUse",
+              "events": [
+                "start",
+                "toolcall_start",
+                "toolcall_delta",
+                "toolcall_delta",
+                "toolcall_end",
+                "done"
+              ],
+              "usage": {
+                "input": 227,
+                "output": 22,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "reasoning": 0,
+                "totalTokens": 249,
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0
+                }
+              }
+            },
+            {
+              "stopReason": "stop",
+              "events": [
+                "start",
+                "text_start",
+                "text_delta",
+                "text_end",
+                "done"
+              ],
+              "usage": {
+                "input": 280,
+                "output": 19,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "reasoning": 0,
+                "totalTokens": 299,
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0
+                }
+              }
+            }
+          ]
+        },
+        "elapsed_ms": 30122
+      }
+    },
+    {
+      "label": "Qwen3.5-4B-Q4_K_M",
+      "canonical_catalog_fixture": true,
+      "exact_user_file_verified": false,
+      "chat_template_sha256_verified_separately": "7f0e529032c25183bcd66c7f238da2d377f43be754a94e2725a58c4e16d2ed67",
+      "tool_name": "lookup_test_color",
+      "arguments_verified": {
+        "code": "B7"
+      },
+      "tool_result_verified": {
+        "code": "B7",
+        "color": "蓝色",
+        "fixture_tag": "fixture-b7-v1"
+      },
+      "final_answer_anchors_all_verified": [
+        "B7",
+        "蓝色",
+        "fixture-b7-v1"
+      ],
+      "raw_lifecycle_result": {
+        "schema_version": 1,
+        "status": "pass",
+        "model_sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+        "model_size_bytes": 2740937888,
+        "configuration": {
+          "context_size": 2048,
+          "threads": 2,
+          "batch_size": 128
+        },
+        "scope": "Linux/Windows host test, not PI Desktop GUI or user-device acceptance",
+        "forced_cleanup": false,
+        "steps": {},
+        "client": {
+          "schema_version": 1,
+          "status": "pass",
+          "mode": "real-nexa-model-pinned-pi-client",
+          "modelRequests": 2,
+          "toolExecutions": 1,
+          "piGuiTested": false,
+          "systemToolsExecuted": false,
+          "turns": [
+            {
+              "stopReason": "toolUse",
+              "events": [
+                "start",
+                "toolcall_start",
+                "toolcall_delta",
+                "toolcall_delta",
+                "toolcall_end",
+                "done"
+              ],
+              "usage": {
+                "input": 346,
+                "output": 29,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "reasoning": 0,
+                "totalTokens": 375,
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0
+                }
+              }
+            },
+            {
+              "stopReason": "stop",
+              "events": [
+                "start",
+                "text_start",
+                "text_delta",
+                "text_end",
+                "done"
+              ],
+              "usage": {
+                "input": 411,
+                "output": 19,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "reasoning": 0,
+                "totalTokens": 430,
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0
+                }
+              }
+            }
+          ]
+        },
+        "elapsed_ms": 130263
+      }
+    }
+  ],
+  "verification_note": "No retry, fabricated model output, template replacement, arbitrary command/file/network tool, or forced cleanup. Template hashes were independently parsed from original model files; the reusable driver gained equivalent metadata evidence recording after these two runs.",
+  "post_run_observed_binaries": {
+    "ai-runtime": {
+      "sha256": "5e8a19dde847fa094dbd2d5d4d16dbbf57d36675102d2b2904fbdd1bd1fabd7d",
+      "size_bytes": 115625376,
+      "mtime_utc": "2026-10-10T00:49:55.119966+00:00"
+    },
+    "ai-runtime-worker": {
+      "sha256": "39387f7842a4972ff17d3d9878ab58f57635f501d95a1ae748c2d79727f0e8ac",
+      "size_bytes": 33331304,
+      "mtime_utc": "2026-10-10T00:49:51.140004+00:00"
+    }
+  },
+  "binary_identity_limit": "Cargo rebuilt/replaced the path binaries during the 4B test. These hashes were observed after the runs, not captured from each executed image. Test-start timestamps and actual protocol handshake were checked; no stronger binary provenance is claimed.",
+  "pre_first_run_binary_observation": {
+    "ai-runtime": {
+      "mtime_utc": "2026-10-10T00:44:06.799140254Z",
+      "size_bytes": 115625376
+    },
+    "ai-runtime-worker": {
+      "mtime_utc": "2026-10-10T00:44:11.451100470Z",
+      "size_bytes": 33331304
+    }
+  },
+  "integration_note": "The integrating agent confirmed no production-source change between these builds: only additional HTTP regression tests, independent desktop lock synchronization, documentation and validation records. This remains Linux development evidence, not a frozen release-binary provenance chain."
+}

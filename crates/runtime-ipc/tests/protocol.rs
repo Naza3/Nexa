@@ -7,6 +7,7 @@ use runtime_types::{
 use std::io::Cursor;
 fn request() -> GenerationRequest {
     GenerationRequest {
+        tools: runtime_types::ToolConfig::default(),
         request_id: RequestId::new(),
         model: ModelId::new("qa-small").unwrap(),
         messages: vec![ChatMessage::new(Role::User, "你好\n🙂")],
@@ -107,9 +108,9 @@ fn malformed_frames_fail_without_unbounded_reads_or_partial_writes() {
     let raw = String::from_utf8(encode_frame(&frame, 4096).unwrap()).unwrap();
     for invalid in [
         raw.replace("\"hello\"", "\"unknown\""),
-        raw.replacen("\"protocol_version\":4", "\"protocol_version\":1", 1),
+        raw.replacen("\"protocol_version\":5", "\"protocol_version\":1", 1),
         raw.replace(LLAMA_COMMIT, "wrong"),
-        raw.replace("\"shim_version\":4", "\"shim_version\":1"),
+        raw.replace("\"shim_version\":5", "\"shim_version\":1"),
     ] {
         assert!(read_frame(&mut Cursor::new(invalid), 4096).is_err());
     }
@@ -117,7 +118,7 @@ fn malformed_frames_fail_without_unbounded_reads_or_partial_writes() {
 #[test]
 fn escaped_input_must_fit_actual_encoded_request_and_text_has_tighter_bound() {
     let mut request = request();
-    request.messages[0].content = "\0".repeat(1024 * 1024);
+    request.messages[0].content = Some("\0".repeat(1024 * 1024));
     let frame = Frame::command(
         SessionId::new_v4(),
         1,
@@ -354,13 +355,13 @@ fn unknown_fields_and_duplicate_json_keys_are_rejected_at_each_layer() {
         hello.replacen('{', "{\"unknown\":true,", 1),
         hello.replacen("\"payload\":{", "\"payload\":{\"unknown\":true,", 1),
         hello.replacen(
-            "\"protocol_version\":4",
-            "\"protocol_version\":4,\"protocol_version\":4",
+            "\"protocol_version\":5",
+            "\"protocol_version\":5,\"protocol_version\":5",
             1,
         ),
         hello.replacen(
-            "\"shim_version\":4",
-            "\"shim_version\":4,\"shim_version\":4",
+            "\"shim_version\":5",
+            "\"shim_version\":5,\"shim_version\":5",
             1,
         ),
         hello.replacen(
@@ -628,4 +629,146 @@ fn duplicate_timing_fields_are_rejected_and_absent_measurement_is_not_zero() {
         serde_json::from_str::<ExecutorEvent>(&json).unwrap(),
         ExecutorEvent::Completed { timings: None, .. }
     ));
+}
+
+#[test]
+fn tool_events_require_credit_order_and_matching_terminal() {
+    use runtime_types::{ToolCallDelta, ToolChoice, ToolConfig, ToolDefinition};
+    let session = SessionId::new_v4();
+    let mut req = request();
+    req.tools = ToolConfig {
+        definitions: vec![ToolDefinition {
+            name: "lookup".into(),
+            description: None,
+            parameters: serde_json::json!({"type":"object"}),
+        }],
+        choice: ToolChoice::Auto,
+        parallel_tool_calls: false,
+    };
+    let id = req.request_id;
+    let mut validator = EventValidator::new(session);
+    validator
+        .accept_hello(&Frame::hello(session, Hello::expected()))
+        .unwrap();
+    validator
+        .begin(&Frame::command(
+            session,
+            1,
+            Some(id),
+            Message::Generate { request: req },
+        ))
+        .unwrap();
+    validator
+        .accept(&Frame::event(
+            session,
+            1,
+            Some(id),
+            1,
+            ExecutorEvent::Prepared { prompt_tokens: 10 },
+            None,
+        ))
+        .unwrap();
+    let start = ExecutorEvent::ToolCallDelta(ToolCallDelta::Start {
+        index: 0,
+        id: "call_a".into(),
+        name: "lookup".into(),
+    });
+    assert!(
+        validator
+            .accept(&Frame::event(session, 1, Some(id), 2, start.clone(), None))
+            .is_err()
+    );
+    validator.grant(1).unwrap();
+    validator
+        .accept(&Frame::event(session, 1, Some(id), 2, start, Some(1)))
+        .unwrap();
+    validator.grant(2).unwrap();
+    validator
+        .accept(&Frame::event(
+            session,
+            1,
+            Some(id),
+            3,
+            ExecutorEvent::ToolCallDelta(ToolCallDelta::Arguments {
+                index: 0,
+                arguments: "{}".into(),
+            }),
+            Some(2),
+        ))
+        .unwrap();
+    let completed = |reason| ExecutorEvent::Completed {
+        usage: Usage {
+            prompt_tokens: 10,
+            completion_tokens: 4,
+        },
+        finish_reason: reason,
+        timings: None,
+    };
+    assert!(
+        validator
+            .accept(&Frame::event(
+                session,
+                1,
+                Some(id),
+                4,
+                completed(FinishReason::Stop),
+                None
+            ))
+            .is_err()
+    );
+    validator
+        .accept(&Frame::event(
+            session,
+            1,
+            Some(id),
+            4,
+            completed(FinishReason::ToolCalls),
+            None,
+        ))
+        .unwrap();
+    assert!(validator.operation_complete());
+}
+
+#[test]
+fn tool_codec_roundtrip_and_piece_credit_bounds_are_enforced() {
+    use runtime_types::ToolCallDelta;
+    let delta = ToolCallDelta::Start {
+        index: 0,
+        id: "call_a".into(),
+        name: "lookup".into(),
+    };
+    let mut frame = Frame::event(
+        SessionId::new_v4(),
+        1,
+        Some(RequestId::new()),
+        2,
+        ExecutorEvent::ToolCallDelta(delta.clone()),
+        Some(1),
+    );
+    let bytes = encode_frame(&frame, MAX_EVENT_FRAME_BYTES).unwrap();
+    let decoded = read_frame(&mut Cursor::new(bytes), MAX_EVENT_FRAME_BYTES)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(decoded.message, Message::Event { event:ExecutorEvent::ToolCallDelta(found),credit_id:Some(1)} if found==delta)
+    );
+    for credit_id in [None, Some(0)] {
+        frame.message = Message::Event {
+            event: ExecutorEvent::ToolCallDelta(delta.clone()),
+            credit_id,
+        };
+        assert!(encode_frame(&frame, MAX_EVENT_FRAME_BYTES).is_err());
+    }
+    frame.message = Message::Event {
+        event: ExecutorEvent::ToolCallDelta(ToolCallDelta::Arguments {
+            index: 0,
+            arguments: "x".repeat(MAX_TEXT_BYTES + 1),
+        }),
+        credit_id: Some(2),
+    };
+    assert!(encode_frame(&frame, MAX_EVENT_FRAME_BYTES).is_err());
+    let raw = serde_json::to_vec(&frame).unwrap();
+    let mut encoded = raw;
+    encoded.push(b'\n');
+    assert!(read_frame(&mut Cursor::new(encoded), MAX_EVENT_FRAME_BYTES).is_err());
 }

@@ -18,6 +18,9 @@
 #include "stream_buffer.h"
 #include "text_template.h"
 #include "ocr_template.h"
+#include "tool_template.h"
+#include <set>
+#include <map>
 #include "gguf.h"
 #include "log.h"
 struct air_cancel {
@@ -56,6 +59,9 @@ struct air_prepared {
   uint32_t prompt_tokens = 0;
   air_generate_options options;
   std::vector<std::string> stops;
+  std::unique_ptr<air_tool_parser> tool_parser;
+  std::set<llama_token> preserved_tokens;
+  uint32_t tool_choice = 0;
 };
 static std::atomic<bool> engine_active{false};
 static bool cancelled(const air_cancel *c) {
@@ -398,6 +404,141 @@ extern "C" int32_t air_prepare(air_model *m, const air_message *messages,
     *out = p.release();
   });
 }
+extern "C" int32_t air_prepare_chat_v3(air_model *m,
+    const air_message_v3 *messages, uint64_t count,
+    const air_tool_v3 *tools, uint64_t tool_count,
+    uint32_t choice, air_string choice_name, uint32_t parallel_tool_calls,
+    air_generate_options options, const air_cancel *cancel,
+    air_prepared **out, uint32_t *prompt_tokens, air_error *error) {
+  if (out) *out = nullptr;
+  if (prompt_tokens) *prompt_tokens = 0;
+  return guarded(error, [&] {
+    owner(m);
+    if (!out || !prompt_tokens || !messages || count < 1 || count > 128 ||
+        tool_count > 64 || (tool_count && !tools) || choice > 3 || parallel_tool_calls > 1 ||
+        options.max_tokens < 1 || options.max_tokens > 4096 ||
+        !(options.temperature >= 0 && options.temperature <= 2) ||
+        !(options.top_p > 0 && options.top_p <= 1) || m->projector)
+      throw failure(1, "invalid tool generation options");
+    check_cancel(cancel);
+    const auto selected_name = string(choice_name);
+    if ((choice == 3) != !selected_name.empty()) throw failure(1, "invalid named tool choice");
+    common_chat_templates_inputs input;
+    input.enable_thinking = false;
+    input.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    input.chat_template_kwargs["enable_thinking"] = "false";
+    input.parallel_tool_calls = parallel_tool_calls != 0;
+    input.tool_choice = choice == 0 ? COMMON_CHAT_TOOL_CHOICE_NONE :
+                        choice == 1 ? COMMON_CHAT_TOOL_CHOICE_AUTO : COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    size_t bytes = 0;
+    auto bounded = [&](air_string value) {
+      auto result = string(value);
+      if (result.size() > 1048576 - bytes) throw failure(1, "tool request exceeds byte limit");
+      bytes += result.size();
+      return result;
+    };
+    std::map<std::string, std::string> history_names;
+    for (uint64_t i = 0; i < count; ++i) {
+      const auto &source = messages[i];
+      if (source.has_content > 1 || source.call_count > 16 || (source.call_count && !source.calls))
+        throw failure(1, "invalid tool history layout");
+      common_chat_msg message;
+      message.role = bounded(source.role);
+      message.content = bounded(source.content);
+      message.tool_call_id = bounded(source.tool_call_id);
+      if (message.role != "system" && message.role != "user" &&
+          message.role != "assistant" && message.role != "tool")
+        throw failure(1, "invalid chat role");
+      if (!source.has_content && (!message.content.empty() || message.role != "assistant" || !source.call_count))
+        throw failure(1, "invalid nullable content");
+      for (uint64_t j = 0; j < source.call_count; ++j) {
+        common_chat_tool_call call;
+        call.id = bounded(source.calls[j].id);
+        call.name = bounded(source.calls[j].name);
+        call.arguments = bounded(source.calls[j].arguments);
+        if (call.id.empty() || call.id.size() > 128 || call.name.empty() || call.name.size() > 64 ||
+            call.arguments.size() > 16384 || !common_json::parse_no_throw(call.arguments).is_object() ||
+            !history_names.emplace(call.id, call.name).second)
+          throw failure(1, "invalid historical tool call");
+        message.tool_calls.push_back(std::move(call));
+      }
+      if (message.role == "tool") {
+        const auto found = history_names.find(message.tool_call_id);
+        if (found == history_names.end()) throw failure(1, "tool result has no preceding call");
+        message.tool_name = found->second;
+      }
+      input.messages.push_back(std::move(message));
+    }
+    for (uint64_t i = 0; i < tool_count; ++i) {
+      common_chat_tool tool;
+      tool.name = bounded(tools[i].name);
+      tool.description = bounded(tools[i].description);
+      tool.parameters = bounded(tools[i].parameters_json);
+      if (tool.name.empty() || tool.name.size() > 64 || tool.description.size() > 16384 ||
+          tool.parameters.size() > 65536 || !common_json::parse_no_throw(tool.parameters).is_object())
+        throw failure(1, "invalid tool definition");
+      if (choice != 3 || tool.name == selected_name) input.tools.push_back(std::move(tool));
+    }
+    if (choice != 0 && input.tools.empty()) throw failure(1, "tool choice has no matching definition");
+    const auto *vocab = llama_model_get_vocab(m->model);
+    auto selected_source = llama_model_chat_template(m->model, "tool_use");
+    if (!selected_source || !*selected_source) selected_source = llama_model_chat_template(m->model, nullptr);
+    if (!selected_source || !*selected_source || std::strlen(selected_source) > 1048576 ||
+        std::strcmp(selected_source, "chatml") == 0)
+      throw failure(4, "missing embedded tool template; no fallback is provided");
+    auto prepared = std::make_unique<air_prepared>();
+    prepared->model = m;
+    prepared->options = options;
+    prepared->tool_choice = choice;
+    common_chat_params applied;
+    try {
+    auto templates = common_chat_templates_init(m->model, selected_source);
+    const auto caps = common_chat_templates_get_caps(templates.get());
+    if (!caps.at("supports_tools") || !caps.at("supports_tool_calls"))
+      throw failure(4, "embedded template does not support tool definitions and history");
+    if (!caps.at("supports_system_role") && input.messages.front().role == "system")
+      throw failure(4, "embedded template cannot preserve system role");
+    applied = common_chat_templates_apply(templates.get(), input);
+    input.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+    const auto text = common_chat_templates_apply(templates.get(), input);
+    const auto bos_id = llama_vocab_bos(vocab), eos_id = llama_vocab_eos(vocab);
+    common_chat_template template_info(selected_source,
+        bos_id == LLAMA_TOKEN_NULL ? "" : common_token_to_piece(vocab, bos_id, true),
+        eos_id == LLAMA_TOKEN_NULL ? "" : common_token_to_piece(vocab, eos_id, true));
+    prepared->tool_parser = std::make_unique<air_tool_parser>(template_info, applied, text);
+    } catch (const failure &) { throw; }
+      catch (const std::bad_alloc &) { throw; }
+      catch (...) { throw failure(4, "embedded tool template application failed"); }
+    for (const auto &stop : applied.additional_stops) {
+      if (stop.empty() || stop.size() > 1024 || prepared->stops.size() >= 32)
+        throw failure(4, "unsupported template stop boundary");
+      prepared->stops.push_back(stop);
+    }
+    for (const auto &token_text : applied.preserved_tokens) {
+      if (token_text.size() > 1024) throw failure(4, "oversized template special token");
+      auto tokens = common_tokenize(vocab, token_text, false, true);
+      for (const auto token : tokens) {
+        if (llama_vocab_get_attr(vocab, token) & LLAMA_TOKEN_ATTR_CONTROL)
+          prepared->preserved_tokens.insert(token);
+      }
+    }
+    const auto &prompt = applied.prompt;
+    if (prompt.empty() || prompt.size() > 4194304) throw failure(1, "formatted prompt too large");
+    int32_t n = llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt.size()), nullptr, 0, true, true);
+    if (n >= 0) throw failure(6, "empty prompt tokenization");
+    prepared->tokens.resize(static_cast<size_t>(-n));
+    n = llama_tokenize(vocab, prompt.data(), static_cast<int32_t>(prompt.size()), prepared->tokens.data(),
+                       static_cast<int32_t>(prepared->tokens.size()), true, true);
+    if (n <= 0) throw failure(6, "tokenization failed");
+    prepared->tokens.resize(n);
+    if (static_cast<uint64_t>(n) + options.max_tokens > m->context_limit)
+      throw failure(5, "context_length_exceeded");
+    check_cancel(cancel);
+    prepared->prompt_tokens = n;
+    *prompt_tokens = n;
+    *out = prepared.release();
+  });
+}
 extern "C" int32_t air_prepare_image(air_model *m, air_string input,
     const uint8_t *image, uint64_t image_len, uint32_t image_after_text,
     air_generate_options options, const air_string *stops, uint64_t stop_count,
@@ -477,15 +618,17 @@ extern "C" int32_t air_generate(air_prepared *raw, const air_cancel *cancel,
   return air_generate_observed(raw, cancel, callback, user, nullptr, nullptr,
                                usage, error);
 }
-extern "C" int32_t air_generate_observed(
+static int32_t generate_impl(
     air_prepared *raw, const air_cancel *cancel, air_text_callback callback,
-    void *user, air_progress_callback progress, void *progress_user,
+    air_chat_callback_v3 chat_callback, void *user,
+    air_progress_callback progress, void *progress_user,
     air_usage *usage, air_error *error) {
   std::unique_ptr<air_prepared> p(raw);
   if (usage)
     *usage = {0, 0, 3};
   int32_t status = guarded(error, [&] {
-    if (!p || !callback || !usage)
+    if (!p || !usage || (p->tool_parser ? !chat_callback : !callback) ||
+        (chat_callback && !p->tool_parser))
       throw failure(1, "invalid generation arguments");
     owner(p->model);
     auto ctx = p->model->context;
@@ -609,9 +752,20 @@ extern "C" int32_t air_generate_observed(
     }
     observe(2, usage->prompt_tokens);
     air_stream_buffer stream(p->stops);
+    std::string raw_output;
+    size_t raw_piece_bytes = 0;
+    if (p->tool_parser) {
+      raw_output.reserve(65536);
+      if (raw_output.capacity() > 65536) throw failure(11, "raw output capacity exceeds budget");
+    }
     auto emit = [&](bool final) {
       stream.flush(final, [&](const std::string &chunk) {
         check_cancel(cancel);
+        if (p->tool_parser) {
+          if (chunk.size() > 65536 - raw_output.size()) throw failure(11, "tool output byte limit exceeded");
+          raw_output += chunk;
+          return;
+        }
         air_string text{reinterpret_cast<const uint8_t *>(chunk.data()),
                         chunk.size()};
         if (callback(user, text) != 0)
@@ -627,21 +781,28 @@ extern "C" int32_t air_generate_observed(
         usage->finish_reason = 0;
         break;
       }
-      if (!air_text_output_token_supported(llama_vocab_get_attr(vocab, token)))
+      const bool preserve = p->tool_parser && p->preserved_tokens.count(token);
+      if (!preserve && !air_text_output_token_supported(llama_vocab_get_attr(vocab, token)))
         throw failure(4, "model emitted unsupported output token type");
       char small[256];
       int32_t n =
-          llama_token_to_piece(vocab, token, small, sizeof(small), 0, false);
+          llama_token_to_piece(vocab, token, small, sizeof(small), 0, preserve);
       std::string piece;
       if (n < 0) {
+        if (p->tool_parser && static_cast<uint64_t>(-static_cast<int64_t>(n)) > 65536 - raw_piece_bytes)
+          throw failure(11, "tool token exceeds remaining output budget");
         piece.resize(-n);
         n = llama_token_to_piece(vocab, token, piece.data(),
-                                 static_cast<int32_t>(piece.size()), 0, false);
+                                 static_cast<int32_t>(piece.size()), 0, preserve);
         if (n < 0)
           throw failure(6, "token decoding failed");
         piece.resize(n);
       } else
         piece.assign(small, n);
+      if (p->tool_parser) {
+        if (piece.size() > 65536 - raw_piece_bytes) throw failure(11, "tool output byte limit exceeded");
+        raw_piece_bytes += piece.size();
+      }
       stream.push(piece);
       emit(false);
       if (stream.stopped()) {
@@ -659,10 +820,66 @@ extern "C" int32_t air_generate_observed(
     }
     emit(true);
     check_cancel(cancel);
+    if (p->tool_parser) {
+      if (usage->finish_reason != 0) throw failure(10, "tool generation ended at the token limit");
+      common_chat_msg message;
+      try { message = p->tool_parser->parse(raw_output); }
+      catch (const failure &) { throw; }
+      catch (const std::bad_alloc &) { throw; }
+      catch (...) { throw failure(9, "tool output parsing failed"); }
+      if (message.content.size() > 8192 || message.tool_calls.size() > 16)
+        throw failure(11, "normalized tool output limit exceeded");
+      auto compact = [](std::string &value) { std::string(value.data(), value.size()).swap(value); };
+      compact(message.content);
+      size_t retained_capacity = message.content.capacity();
+      size_t total = message.content.size();
+      for (auto &call : message.tool_calls) {
+        // Model IDs are never published; the adapter creates stable request IDs.
+        std::string().swap(call.id);
+        compact(call.name);
+        compact(call.arguments);
+        const size_t capacity = call.name.capacity() + call.arguments.capacity() + call.id.capacity();
+        if (capacity > 65536 - retained_capacity)
+          throw failure(11, "normalized tool output capacity exceeds budget");
+        retained_capacity += capacity;
+        if (call.name.empty() || call.name.size() > 64 || call.arguments.size() > 16384 ||
+            call.name.size() + call.arguments.size() > 65536 - total)
+          throw failure(11, "normalized tool call limit exceeded");
+        total += call.name.size() + call.arguments.size();
+      }
+      if ((p->tool_choice == 0 && !message.tool_calls.empty()) ||
+          (p->tool_choice >= 2 && message.tool_calls.empty()))
+        throw failure(9, "generated result violates tool choice");
+      auto borrowed = [](const std::string &value) {
+        return air_string{reinterpret_cast<const uint8_t *>(value.data()), value.size()};
+      };
+      if (!message.content.empty() && chat_callback(user, 0, 0, {nullptr, 0}, borrowed(message.content)))
+        throw failure(8, "chat consumer stopped");
+      for (size_t i = 0; i < message.tool_calls.size(); ++i) {
+        check_cancel(cancel);
+        const auto &call = message.tool_calls[i];
+        if (chat_callback(user, 1, static_cast<uint32_t>(i), borrowed(call.name), borrowed(call.arguments)))
+          throw failure(8, "chat consumer stopped");
+      }
+      usage->finish_reason = message.tool_calls.empty() ? 0 : 4;
+      check_cancel(cancel);
+    }
   });
   if (usage && status)
     usage->finish_reason = (status == 2 || status == 8) ? 2 : 3;
   return status;
+}
+extern "C" int32_t air_generate_observed(
+    air_prepared *raw, const air_cancel *cancel, air_text_callback callback,
+    void *user, air_progress_callback progress, void *progress_user,
+    air_usage *usage, air_error *error) {
+  return generate_impl(raw, cancel, callback, nullptr, user, progress, progress_user, usage, error);
+}
+extern "C" int32_t air_generate_chat_v3(
+    air_prepared *raw, const air_cancel *cancel, air_chat_callback_v3 callback,
+    void *user, air_progress_callback progress, void *progress_user,
+    air_usage *usage, air_error *error) {
+  return generate_impl(raw, cancel, nullptr, callback, user, progress, progress_user, usage, error);
 }
 extern "C" int32_t air_cancel_create(air_cancel **out, air_error *error) {
   if (out)
@@ -685,7 +902,7 @@ extern "C" int32_t air_get_build_info(air_buffer *out, air_error *error) {
   return guarded(error, [&] {
     if (!out)
       throw failure(1, "null output");
-    *out = buffer("{\"shim_version\":4,\"backend\":\"cpu\",\"llama_commit\":"
+    *out = buffer("{\"shim_version\":5,\"backend\":\"cpu\",\"llama_commit\":"
                   "\"" AIR_LLAMA_COMMIT "\"}");
   });
 }

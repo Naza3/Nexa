@@ -1,0 +1,261 @@
+{
+  "model": "fixture",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Synthetic validation. Use the memory lookup only when requested."
+    },
+    {
+      "role": "user",
+      "content": "请查询 B7 的颜色和 fixture_tag。"
+    }
+  ],
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "store": false,
+  "max_completion_tokens": 256,
+  "temperature": 0,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "Read",
+        "description": "Synthetic validation declaration using official PI Read parameter schema. No tool execution.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Existing regular file only, never a directory; workspace-relative or explicitly approved."
+            },
+            "file_path": {
+              "type": "string",
+              "description": "Alias for `path`."
+            },
+            "offset": {
+              "type": "number",
+              "minimum": 0,
+              "description": "0-based line offset; defaults to 0."
+            },
+            "limit": {
+              "type": "number",
+              "minimum": 1,
+              "description": "Maximum lines to return; defaults to 2000."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "Glob",
+        "description": "Synthetic validation declaration using official PI Glob parameter schema. No tool execution.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Glob pattern, for example **/*.ts."
+            },
+            "query": {
+              "type": "string",
+              "description": "Alias for `pattern`."
+            },
+            "path": {
+              "type": "string",
+              "description": "Directory to search; defaults to the workspace root and accepts an absolute scratch path."
+            },
+            "limit": {
+              "type": "number",
+              "minimum": 1,
+              "description": "Maximum entries; defaults to 100."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "Grep",
+        "description": "Synthetic validation declaration using official PI Grep parameter schema. No tool execution.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Rust-compatible regex matched per line."
+            },
+            "query": {
+              "type": "string",
+              "description": "Alias for `pattern`."
+            },
+            "path": {
+              "type": "string",
+              "description": "File or directory to search; defaults to the workspace root and accepts an absolute scratch path."
+            },
+            "include": {
+              "type": "string",
+              "description": "Glob filter, for example **/*.{ts,tsx}."
+            },
+            "outputMode": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "content"
+                },
+                {
+                  "type": "string",
+                  "const": "filesWithMatches"
+                },
+                {
+                  "type": "string",
+                  "const": "count"
+                }
+              ]
+            },
+            "headLimit": {
+              "type": "number",
+              "minimum": 1,
+              "description": "Maximum matches or files; defaults to 200."
+            },
+            "caseInsensitive": {
+              "type": "boolean"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "asktool",
+        "description": "Synthetic validation declaration; no UI execution.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "questions"
+          ],
+          "properties": {
+            "questions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "question",
+                  "options"
+                ],
+                "properties": {
+                  "question": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "label"
+                          ],
+                          "properties": {
+                            "label": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "multiSelect": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "TodoWrite",
+        "description": "Write the task checklist for the current session so the user can see progress on multi-step work. Use for work that needs 3+ distinct steps or spans multiple files/subsystems; do not use for a single-step action, a question, a read, or a review. Every call replaces the full list in display order. States are pending, in_progress, completed, and cancelled; only one item may be in_progress. Keep items short and concrete, update the list as work starts and finishes, and never leave pending items when the task is done. Content longer than 500 Unicode characters is truncated by the host with a warning.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "todos"
+          ],
+          "properties": {
+            "todos": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "content",
+                  "status"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "pending"
+                      },
+                      {
+                        "type": "string",
+                        "const": "in_progress"
+                      },
+                      {
+                        "type": "string",
+                        "const": "completed"
+                      },
+                      {
+                        "type": "string",
+                        "const": "cancelled"
+                      }
+                    ]
+                  },
+                  "priority": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "high"
+                      },
+                      {
+                        "type": "string",
+                        "const": "medium"
+                      },
+                      {
+                        "type": "string",
+                        "const": "low"
+                      }
+                    ]
+                  }
+                }
+              },
+              "maxItems": 50
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -366,6 +366,7 @@ struct Active {
     begun: Instant,
     permits: BTreeMap<u64, TextPermit>,
     scratch: Option<TextPermit>,
+    tool_output: Option<TextPermit>,
 }
 struct Supervisor {
     config: ProcessHostConfig,
@@ -509,6 +510,7 @@ impl Supervisor {
             begun: Instant::now(),
             permits: BTreeMap::new(),
             scratch: None,
+            tool_output: None,
         });
         if self
             .active
@@ -571,6 +573,17 @@ impl Supervisor {
             _ => None,
         };
         if !active.sent {
+            if matches!(&active.job.command, ExecutorCommand::Generate { request } if request.uses_tools())
+                && active.tool_output.is_none()
+            {
+                active.tool_output = active
+                    .job
+                    .events
+                    .try_reserve_text(runtime_core::TOOL_OUTPUT_RESERVATION);
+                if active.tool_output.is_none() {
+                    return Ok(());
+                }
+            }
             let message = match &active.job.command {
                 ExecutorCommand::Load { model, options } => Message::Load {
                     model: model.clone(),
@@ -660,6 +673,14 @@ impl Supervisor {
             if !active.job.events.emit_reserved_text(text, permit) {
                 active.job.cancel.set();
             }
+        } else if let ExecutorEvent::ToolCallDelta(delta) = event {
+            let permit = active
+                .permits
+                .remove(&credit_id.ok_or_else(|| protocol("tool event has no credit"))?)
+                .ok_or_else(|| protocol("tool credit is not reserved"))?;
+            if !active.job.events.emit_reserved_tool(delta, permit) {
+                active.job.cancel.set();
+            }
         } else {
             let terminal = matches!(
                 event,
@@ -670,10 +691,13 @@ impl Supervisor {
                     | ExecutorEvent::Unloaded
             );
             if terminal {
-                let active = self.active.take().unwrap();
-                // Unused credit/scratch permits drop; consumed text remains
-                // charged in actor/consumer leases, not in this transport.
-                active.job.events.emit(event);
+                let mut active = self.active.take().unwrap();
+                // Transfer retained tool accounting through the terminal envelope;
+                // actor validation copies remain live until that event is handled.
+                active
+                    .job
+                    .events
+                    .emit_with_tool_reservation(event, active.tool_output.take());
             } else {
                 active.job.events.emit(event);
             }
@@ -694,7 +718,7 @@ impl Supervisor {
     }
     fn fault(&mut self, mut error: RuntimeError) -> Result<(), RuntimeError> {
         self.reap()?;
-        if let Some(active) = self.active.take() {
+        if let Some(mut active) = self.active.take() {
             // Cancellation explains an expected worker exit or control ACK,
             // never malformed IPC or a real executor/native failure. Cleanup
             // has already been confirmed above; unconfirmed cleanup is separate.
@@ -718,7 +742,10 @@ impl Supervisor {
                     );
                 }
             }
-            active.job.events.emit(ExecutorEvent::Faulted(error));
+            active.job.events.emit_with_tool_reservation(
+                ExecutorEvent::Faulted(error),
+                active.tool_output.take(),
+            );
         } else if let Some(events) = self.last_events.take() {
             events.emit(ExecutorEvent::Faulted(error));
         }
@@ -728,11 +755,11 @@ impl Supervisor {
     fn cleanup_unconfirmed(&mut self, error: RuntimeError) -> Result<(), RuntimeError> {
         let error = RuntimeError::new(ErrorCode::ExecutorCleanupUnconfirmed, error.message);
         self.stopping.store(true, Ordering::Release);
-        if let Some(active) = self.active.take() {
-            active
-                .job
-                .events
-                .emit(ExecutorEvent::CleanupUnconfirmed(error.clone()));
+        if let Some(mut active) = self.active.take() {
+            active.job.events.emit_with_tool_reservation(
+                ExecutorEvent::CleanupUnconfirmed(error.clone()),
+                active.tool_output.take(),
+            );
         } else if let Some(events) = self.last_events.take() {
             events.emit(ExecutorEvent::CleanupUnconfirmed(error.clone()));
         }
@@ -759,14 +786,14 @@ impl Supervisor {
         if let Err(error) = self.reap() {
             return self.cleanup_unconfirmed(error);
         }
-        if let Some(active) = self.active.take() {
-            active
-                .job
-                .events
-                .emit(ExecutorEvent::Faulted(RuntimeError::new(
+        if let Some(mut active) = self.active.take() {
+            active.job.events.emit_with_tool_reservation(
+                ExecutorEvent::Faulted(RuntimeError::new(
                     ErrorCode::RuntimeShutdown,
                     "process executor shut down",
-                )));
+                )),
+                active.tool_output.take(),
+            );
         }
         Ok(())
     }

@@ -6,7 +6,7 @@
 //! The scheduler's shared byte budget is the sole pending-text buffer.
 
 use llama_adapter::{
-    CancelHandle, Engine, GenerationPhase, GenerationProgress, Model, StreamControl,
+    CancelHandle, Engine, GeneratedDelta, GenerationPhase, GenerationProgress, Model, StreamControl,
 };
 use runtime_core::{CancellationHandle, ExecutionEvents, Executor, ExecutorCommand, ExecutorEvent};
 use runtime_types::{ErrorCode, GenerationRequest, InferenceTimings, RuntimeError, Usage};
@@ -266,7 +266,21 @@ fn generate(
     reports: &SyncSender<ExecutionReport>,
 ) {
     let started = Instant::now();
-    let prepared = match model.prepare(&request.messages, &request.options, cancel) {
+    let mut tool_output_reservation = if request.uses_tools() {
+        match events.reserve_tool_output() {
+            Ok(permit) => permit,
+            Err(error) => {
+                events.emit(ExecutorEvent::GenerationFailed {
+                    error,
+                    usage: Usage::default(),
+                });
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let prepared = match model.prepare_request(&request, cancel) {
         Ok(prepared) => prepared,
         Err(error) => {
             send_report(
@@ -279,10 +293,13 @@ fn generate(
                 Usage::default(),
                 Some(error.code),
             );
-            events.emit(ExecutorEvent::GenerationFailed {
-                error,
-                usage: Usage::default(),
-            });
+            events.emit_with_tool_reservation(
+                ExecutorEvent::GenerationFailed {
+                    error,
+                    usage: Usage::default(),
+                },
+                tool_output_reservation.take(),
+            );
             return;
         }
     };
@@ -292,25 +309,31 @@ fn generate(
     // the scheduler publishes Started before any TextDelta can be observed.
     if !events.emit(ExecutorEvent::Prepared { prompt_tokens }) {
         drop(prepared);
-        events.emit(ExecutorEvent::GenerationFailed {
-            error: RuntimeError::new(
-                ErrorCode::ConsumerStopped,
-                "generation consumer stopped during preparation",
-            ),
-            usage: Usage {
-                prompt_tokens,
-                completion_tokens: 0,
+        events.emit_with_tool_reservation(
+            ExecutorEvent::GenerationFailed {
+                error: RuntimeError::new(
+                    ErrorCode::ConsumerStopped,
+                    "generation consumer stopped during preparation",
+                ),
+                usage: Usage {
+                    prompt_tokens,
+                    completion_tokens: 0,
+                },
             },
-        });
+            tool_output_reservation.take(),
+        );
         return;
     }
     let mut phases = PhaseTimer::new(prompt_tokens);
     let mut output_callback = Duration::ZERO;
-    let result = prepared.generate_observed(
+    let result = prepared.generate_chat_observed(
         cancel,
-        |text| {
+        |delta| {
             let started = Instant::now();
-            let delivered = events.text_delta(text);
+            let delivered = match delta {
+                GeneratedDelta::Text(text) => events.text_delta(text),
+                GeneratedDelta::ToolCall(delta) => events.tool_call_delta(delta),
+            };
             output_callback = output_callback.saturating_add(started.elapsed());
             if delivered {
                 StreamControl::Continue
@@ -355,11 +378,14 @@ fn generate(
                 result.usage,
                 None,
             );
-            events.emit(ExecutorEvent::Completed {
-                usage: result.usage,
-                finish_reason: result.finish_reason,
-                timings,
-            });
+            events.emit_with_tool_reservation(
+                ExecutorEvent::Completed {
+                    usage: result.usage,
+                    finish_reason: result.finish_reason,
+                    timings,
+                },
+                tool_output_reservation.take(),
+            );
         }
         Err(failure) => {
             send_report(
@@ -372,10 +398,13 @@ fn generate(
                 failure.usage,
                 Some(failure.error.code),
             );
-            events.emit(ExecutorEvent::GenerationFailed {
-                error: failure.error,
-                usage: failure.usage,
-            });
+            events.emit_with_tool_reservation(
+                ExecutorEvent::GenerationFailed {
+                    error: failure.error,
+                    usage: failure.usage,
+                },
+                tool_output_reservation.take(),
+            );
         }
     }
 }

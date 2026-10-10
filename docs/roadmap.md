@@ -1,5 +1,7 @@
 # Nexa Windows 后续开发路线
 
+2026-10-10：用户因PI Desktop tools 400明确要求补齐通用工具兼容，恢复W04工具纵向实现优先级；此前10-03“暂缓”仅为历史排序。当前按[ADR0044](decisions/0044-openai-tool-calling-compatibility.md)执行，具体完成/待验证以PROJECT_STATE为准，真实PI Electron/Windows与模型能力分别留证。
+
 日期：2026-10-03。范围由 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md) 确定；动态进度只在 [PROJECT_STATE.md](../PROJECT_STATE.md) 维护。本路线是计划，不代表新功能已经实现或新硬件已通过验收。
 
 ## 1. 产品与依赖

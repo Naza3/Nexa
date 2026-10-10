@@ -493,6 +493,7 @@ async fn current_model_submission_never_prepares_an_external_registration() {
     // unavailable external source must fail before any request is accepted.
     std::fs::remove_file(file).unwrap();
     let request = GenerationRequest {
+        tools: Default::default(),
         request_id: RequestId::new(),
         model: model.clone(),
         messages: vec![Message::new(Role::User, "synthetic")],

@@ -99,10 +99,15 @@ pub struct GenerationRequest {
     pub model: ModelId,
     pub messages: Vec<Message>,
     pub options: GenerationOptions,
+    #[serde(default)]
+    pub tools: crate::ToolConfig,
 }
 impl GenerationRequest {
+    pub fn uses_tools(&self) -> bool {
+        self.tools.is_active(&self.messages)
+    }
     pub fn validate(&self) -> Result<(), RuntimeError> {
-        crate::validate_messages(&self.messages)?;
+        self.tools.validate_input(&self.messages)?;
         self.options.validate()
     }
 }
@@ -229,6 +234,7 @@ pub enum RequestEventKind {
         prompt_tokens: u32,
     },
     TextDelta(String),
+    ToolCallDelta(crate::ToolCallDelta),
     Completed {
         usage: Usage,
         finish_reason: FinishReason,

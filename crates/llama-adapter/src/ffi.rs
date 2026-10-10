@@ -1,4 +1,4 @@
-//! Private ABI v2 bindings. Keep layout synchronized with air_llama.h.
+//! Private ABI v2 and additive v3 chat bindings; synchronized with air_llama.h.
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -78,6 +78,29 @@ pub struct AirUsage {
     pub finish_reason: i32,
 }
 
+#[repr(C)]
+pub struct AirToolV3 {
+    pub name: AirString,
+    pub description: AirString,
+    pub parameters_json: AirString,
+}
+#[repr(C)]
+pub struct AirToolCallV3 {
+    pub id: AirString,
+    pub name: AirString,
+    pub arguments: AirString,
+}
+#[repr(C)]
+pub struct AirMessageV3 {
+    pub role: AirString,
+    pub has_content: u32,
+    pub content: AirString,
+    pub calls: *const AirToolCallV3,
+    pub call_count: u64,
+    pub tool_call_id: AirString,
+}
+pub type ChatCallbackV3 = unsafe extern "C" fn(*mut c_void, u32, u32, AirString, AirString) -> i32;
+
 pub type ProgressCallback = unsafe extern "C" fn(*mut c_void, u32, u32, u32) -> i32;
 
 pub type TextCallback = unsafe extern "C" fn(*mut c_void, AirString) -> i32;
@@ -134,6 +157,31 @@ unsafe extern "C" {
         prepared: *mut AirPrepared,
         cancel: *const AirCancel,
         callback: TextCallback,
+        user: *mut c_void,
+        progress: ProgressCallback,
+        progress_user: *mut c_void,
+        usage: *mut AirUsage,
+        error: *mut AirError,
+    ) -> i32;
+    pub fn air_prepare_chat_v3(
+        model: *mut AirModel,
+        messages: *const AirMessageV3,
+        count: u64,
+        tools: *const AirToolV3,
+        tool_count: u64,
+        choice: u32,
+        choice_name: AirString,
+        parallel_tool_calls: u32,
+        options: AirGenerateOptions,
+        cancel: *const AirCancel,
+        out: *mut *mut AirPrepared,
+        prompt_tokens: *mut u32,
+        error: *mut AirError,
+    ) -> i32;
+    pub fn air_generate_chat_v3(
+        prepared: *mut AirPrepared,
+        cancel: *const AirCancel,
+        callback: ChatCallbackV3,
         user: *mut c_void,
         progress: ProgressCallback,
         progress_user: *mut c_void,

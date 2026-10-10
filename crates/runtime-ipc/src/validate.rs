@@ -19,6 +19,7 @@ struct Active {
     max_tokens: u32,
     terminal: bool,
     credits: BTreeSet<u64>,
+    tools: Option<runtime_core::ToolStreamValidator>,
 }
 /// Receiver-side validation. Keep it with the reader so no uncredited text can
 /// enter another queue. begin/grant must be called before the corresponding write.
@@ -88,6 +89,12 @@ impl EventValidator {
             },
             terminal: false,
             credits: BTreeSet::new(),
+            tools: match &frame.message {
+                Message::Generate { request } => {
+                    Some(runtime_core::ToolStreamValidator::new(request))
+                }
+                _ => None,
+            },
         });
         Ok(())
     }
@@ -171,7 +178,8 @@ impl EventValidator {
             (OperationKind::Generate, ExecutorEvent::TextDelta(text))
                 if active.prepared.is_some() =>
             {
-                if text.is_empty()
+                if active.tools.as_mut().is_none_or(|v| v.text(text).is_err())
+                    || text.is_empty()
                     || text.len() > MAX_TEXT_BYTES
                     || !credit_id.is_some_and(|id| active.credits.remove(&id))
                 {
@@ -179,19 +187,48 @@ impl EventValidator {
                 }
                 false
             }
-            (OperationKind::Generate, ExecutorEvent::Completed { .. })
+            (OperationKind::Generate, ExecutorEvent::ToolCallDelta(delta))
                 if active.prepared.is_some() =>
             {
+                if !credit_id.is_some_and(|id| active.credits.remove(&id))
+                    || active
+                        .tools
+                        .as_mut()
+                        .is_none_or(|v| v.delta(delta).is_err())
+                {
+                    return Err(protocol_error(
+                        "tool payload without valid sequence or once-only credit",
+                    ));
+                }
+                false
+            }
+            (OperationKind::Generate, ExecutorEvent::Completed { finish_reason, .. })
+                if active.prepared.is_some() =>
+            {
+                if active
+                    .tools
+                    .as_ref()
+                    .is_none_or(|v| v.complete(*finish_reason).is_err())
+                {
+                    return Err(protocol_error(
+                        "tool payload disagrees with terminal outcome",
+                    ));
+                }
                 true
             }
             (OperationKind::Generate, ExecutorEvent::GenerationFailed { .. }) => true,
             _ => return Err(protocol_error("event invalid for operation or phase")),
         };
-        if !matches!(event, ExecutorEvent::TextDelta(_)) && credit_id.is_some() {
-            return Err(protocol_error("non-text event carries credit"));
+        if !matches!(
+            event,
+            ExecutorEvent::TextDelta(_) | ExecutorEvent::ToolCallDelta(_)
+        ) && credit_id.is_some()
+        {
+            return Err(protocol_error("non-payload event carries credit"));
         }
         active.terminal = terminal;
         if terminal {
+            active.tools = None;
             active.credits.clear();
         }
         self.last_seq = frame.seq.unwrap();

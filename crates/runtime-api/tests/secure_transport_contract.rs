@@ -26,6 +26,10 @@ use tokio::{
 #[derive(Clone, Copy, Debug)]
 enum Mode {
     Success,
+    Tools,
+    ToolsText,
+    ToolFailure,
+    ToolEscapingOverflow,
     Length,
     BeforeError,
     AfterError,
@@ -126,6 +130,10 @@ impl Executor for ProtocolExecutor {
                     events.emit(ExecutorEvent::Unloaded);
                 }
                 ExecutorCommand::Generate { request } => {
+                    let tool_result = request
+                        .messages
+                        .last()
+                        .is_some_and(|message| message.role == runtime_types::Role::Tool);
                     *observed.request.lock().unwrap() = Some(request);
                     *observed.events.lock().unwrap() = Some(events.clone());
                     let scratch = events.try_reserve_text(16 * 1024).unwrap();
@@ -146,6 +154,138 @@ impl Executor for ProtocolExecutor {
                     }
                     events.emit(ExecutorEvent::Prepared { prompt_tokens: 3 });
                     observed.phase.store(3, Ordering::SeqCst);
+                    if matches!(mode, Mode::ToolFailure) {
+                        events.emit(ExecutorEvent::GenerationFailed {
+                            error: RuntimeError::new(
+                                ErrorCode::InvalidToolOutput,
+                                "private-model-tool-json-canary",
+                            ),
+                            usage: Usage {
+                                prompt_tokens: 3,
+                                completion_tokens: 1,
+                            },
+                        });
+                        return;
+                    }
+                    if matches!(mode, Mode::ToolEscapingOverflow) {
+                        let retained = events.reserve_tool_output().unwrap();
+                        let arguments = json!({"path":"\\".repeat(7000)}).to_string();
+                        assert!(arguments.len() < runtime_types::MAX_TOOL_ARGUMENT_BYTES);
+                        assert!(4 * (arguments.len() + 80) < runtime_types::MAX_TOOL_OUTPUT_BYTES);
+                        // The decoded arguments are valid and fit the native cap,
+                        // while their JSON-string wire representation exceeds 96 KiB.
+                        assert!(4 * serde_json::to_string(&arguments).unwrap().len() > 96 * 1024);
+                        let mut stopped = false;
+                        'calls: for index in 0..4 {
+                            let header = runtime_types::ToolCallDelta::Start {
+                                index,
+                                id: format!("call_large_{index}"),
+                                name: "Read".into(),
+                            };
+                            let parts = arguments.as_bytes().chunks(4096).map(|part| {
+                                runtime_types::ToolCallDelta::Arguments {
+                                    index,
+                                    arguments: std::str::from_utf8(part).unwrap().into(),
+                                }
+                            });
+                            for delta in std::iter::once(header).chain(parts) {
+                                let permit = loop {
+                                    if let Some(permit) = events.try_reserve_text(120 * 1024) {
+                                        break permit;
+                                    }
+                                    if cancelled.load(Ordering::SeqCst)
+                                        || events.cancellation_reason().is_some()
+                                    {
+                                        stopped = true;
+                                        break 'calls;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(1));
+                                };
+                                observed
+                                    .peak
+                                    .fetch_max(events.buffered_bytes(), Ordering::SeqCst);
+                                if !events.emit_reserved_tool(delta, permit) {
+                                    stopped = true;
+                                    break 'calls;
+                                }
+                            }
+                        }
+                        let usage = Usage {
+                            prompt_tokens: 3,
+                            completion_tokens: 8,
+                        };
+                        if stopped {
+                            observed.cancelled.store(true, Ordering::SeqCst);
+                            events.emit_with_tool_reservation(
+                                ExecutorEvent::GenerationFailed {
+                                    error: RuntimeError::new(
+                                        ErrorCode::RequestCancelled,
+                                        "cancelled",
+                                    ),
+                                    usage,
+                                },
+                                retained,
+                            );
+                        } else {
+                            events.emit_with_tool_reservation(
+                                ExecutorEvent::Completed {
+                                    timings: None,
+                                    usage,
+                                    finish_reason: FinishReason::ToolCalls,
+                                },
+                                retained,
+                            );
+                        }
+                        return;
+                    }
+                    if matches!(mode, Mode::Tools | Mode::ToolsText) && !tool_result {
+                        if matches!(mode, Mode::ToolsText) {
+                            let permit = events.try_reserve_text(120 * 1024).unwrap();
+                            assert!(events.emit_reserved_text("先检查🙂".into(), permit));
+                        }
+                        for index in 0..2 {
+                            let deltas = [
+                                runtime_types::ToolCallDelta::Start {
+                                    index,
+                                    id: format!("call_fixture_{index}"),
+                                    name: "Read".into(),
+                                },
+                                runtime_types::ToolCallDelta::Arguments {
+                                    index,
+                                    arguments: "{\"path\":\"".into(),
+                                },
+                                runtime_types::ToolCallDelta::Arguments {
+                                    index,
+                                    arguments: format!("目录🙂/{index}\\n\"}}"),
+                                },
+                            ];
+                            for delta in deltas {
+                                let permit = loop {
+                                    if let Some(permit) = events.try_reserve_text(120 * 1024) {
+                                        break permit;
+                                    }
+                                    if cancelled.load(Ordering::SeqCst)
+                                        || events.cancellation_reason().is_some()
+                                    {
+                                        return;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(1));
+                                };
+                                if !events.emit_reserved_tool(delta, permit) {
+                                    return;
+                                }
+                            }
+                        }
+                        events.emit(ExecutorEvent::Completed {
+                            timings: None,
+                            usage: Usage {
+                                prompt_tokens: 3,
+                                completion_tokens: 8,
+                            },
+                            finish_reason: FinishReason::ToolCalls,
+                        });
+                        return;
+                    }
                     let count = match mode {
                         Mode::Long => 20,
                         Mode::Overflow => 40,
@@ -594,7 +734,10 @@ async fn local_image_reaches_actor_unchanged_with_existing_json_and_sse_contract
         assert_eq!(status, 200, "{body}");
         assert_eq!(body.contains("data: [DONE]"), stream);
         let request = h.observed.request.lock().unwrap().clone().unwrap();
-        assert_eq!(request.messages[0].content, "Text Recognition:");
+        assert_eq!(
+            request.messages[0].content.as_deref(),
+            Some("Text Recognition:")
+        );
         assert_eq!(
             request.messages[0].image.as_ref().unwrap().data_url(),
             OCR_PIXEL
@@ -789,20 +932,14 @@ async fn harness_text_wire_auth_model_and_unsupported_fields_fail_before_inferen
             "model_not_found",
             "model",
         ),
-        (
-            "/store",
-            json!(false),
-            400,
-            "unsupported_parameter",
-            "store",
-        ),
-        ("/tools", json!([]), 400, "unsupported_parameter", "tools"),
+        ("/store", json!(true), 400, "unsupported_parameter", "store"),
+        ("/tools", json!({}), 400, "invalid_request", "tools"),
         (
             "/tools",
-            json!([{"type":"function","function":{"name":"noop","parameters":{"type":"object"}}}]),
+            json!([{"type":"function","function":{"name":"noop","parameters":{"type":"object"},"strict":true}}]),
             400,
             "unsupported_parameter",
-            "tools",
+            "tools.0.function.strict",
         ),
         (
             "/messages/1/content",
@@ -1846,5 +1983,179 @@ async fn current_model_wire_disconnect_cancels_active_work_without_loading() {
             assert_eq!(h.observed.loads.load(Ordering::SeqCst), 1);
             h.close().await;
         }
+    }
+}
+
+fn tool_request(stream: bool) -> Value {
+    let mut value = json!({"model":"fixture","messages":[{"role":"user","content":"read both"}],"stream":stream,"max_tokens":128,"store":false,
+        "tools":[{"type":"function","function":{"name":"Read","description":"Read a synthetic value","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},"strict":false}}]});
+    if stream {
+        value["stream_options"] = json!({"include_usage":true});
+    }
+    value
+}
+#[tokio::test]
+async fn structured_tools_have_complete_json_and_sse_and_round_trip_history() {
+    for mode in [Mode::Tools, Mode::ToolsText] {
+        let h = Harness::new(mode).await;
+        let (status, _, body) = h
+            .reply_body(
+                &tool_request(false).to_string(),
+                Some(h.bearer.to_str().unwrap()),
+            )
+            .await;
+        assert_eq!(status, 200, "{body}");
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let message = &response["choices"][0]["message"];
+        assert_eq!(response["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(message["tool_calls"].as_array().unwrap().len(), 2);
+        if matches!(mode, Mode::Tools) {
+            assert!(message["content"].is_null());
+        } else {
+            assert_eq!(message["content"], "先检查🙂");
+        }
+        for index in 0..2 {
+            assert_eq!(
+                message["tool_calls"][index]["id"],
+                format!("call_fixture_{index}")
+            );
+            let arguments: Value = serde_json::from_str(
+                message["tool_calls"][index]["function"]["arguments"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(arguments["path"], format!("目录🙂/{index}\n"));
+        }
+        h.clean().await;
+        let mut followup = tool_request(false);
+        followup["tools"] = json!([]);
+        followup["messages"]
+            .as_array_mut()
+            .unwrap()
+            .push(message.clone());
+        for index in [1, 0] {
+            followup["messages"].as_array_mut().unwrap().push(json!({"role":"tool","tool_call_id":format!("call_fixture_{index}"),"content":"synthetic result"}));
+        }
+        let (status, _, body) = h
+            .reply_body(&followup.to_string(), Some(h.bearer.to_str().unwrap()))
+            .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["choices"][0]["finish_reason"],
+            "stop"
+        );
+        h.clean().await;
+        let mut current_request = tool_request(true);
+        current_request.as_object_mut().unwrap().remove("model");
+        let (status, _, body) = h
+            .reply_body(
+                &current_request.to_string(),
+                Some(h.bearer.to_str().unwrap()),
+            )
+            .await;
+        assert_eq!(status, 200, "{body}");
+        let frames: Vec<Value> = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter(|line| *line != "[DONE]")
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let mut arguments = [String::new(), String::new()];
+        let mut headers = 0;
+        for frame in &frames {
+            if let Some(calls) = frame["choices"][0]["delta"]["tool_calls"].as_array() {
+                for call in calls {
+                    let index = call["index"].as_u64().unwrap() as usize;
+                    if call.get("id").is_some() {
+                        headers += 1;
+                        assert_eq!(call["function"]["name"], "Read");
+                    } else {
+                        assert!(call.get("type").is_none());
+                        assert!(call["function"].get("name").is_none());
+                    }
+                    arguments[index].push_str(call["function"]["arguments"].as_str().unwrap());
+                }
+            }
+        }
+        assert_eq!(headers, 2);
+        for value in arguments {
+            assert!(serde_json::from_str::<Value>(&value).unwrap().is_object());
+        }
+        assert_eq!(
+            frames[frames.len() - 2]["choices"][0]["finish_reason"],
+            "tool_calls"
+        );
+        assert_eq!(frames.last().unwrap()["usage"]["completion_tokens"], 8);
+        assert_eq!(body.matches("data: [DONE]").count(), 1);
+        h.clean().await;
+        h.close().await;
+    }
+}
+
+#[tokio::test]
+async fn failed_tool_generation_never_publishes_calls_or_a_success_tail() {
+    let h = Harness::new(Mode::ToolFailure).await;
+    for stream in [false, true] {
+        let (status, _, body) = h
+            .reply_body(
+                &tool_request(stream).to_string(),
+                Some(h.bearer.to_str().unwrap()),
+            )
+            .await;
+        assert_eq!(status, if stream { 200 } else { 500 }, "{body}");
+        assert!(body.contains("invalid_tool_output"));
+        assert!(!body.contains("private-model-tool-json-canary"));
+        assert!(!body.contains("\"tool_calls\""));
+        assert!(!body.contains("[DONE]"));
+        assert!(!body.contains("\"finish_reason\":\""));
+        h.clean().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test]
+async fn tool_nonstream_escape_expansion_fails_without_truncation_but_sse_succeeds() {
+    for stream in [false, true] {
+        let h = Harness::new(Mode::ToolEscapingOverflow).await;
+        let (status, _, body) = h
+            .reply_body(
+                &tool_request(stream).to_string(),
+                Some(h.bearer.to_str().unwrap()),
+            )
+            .await;
+        if !stream {
+            assert_eq!(status, 400, "{body}");
+            let error: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(error["error"]["code"], "response_too_large");
+            assert_eq!(error["error"]["param"], "stream");
+            assert!(error.get("choices").is_none());
+            assert!(!body.contains("tool_calls"));
+            assert!(!body.contains("[DONE]"));
+        } else {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body.matches("data: [DONE]").count(), 1);
+            let mut arguments = [String::new(), String::new(), String::new(), String::new()];
+            for line in body
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .filter(|line| *line != "[DONE]")
+            {
+                let frame: Value = serde_json::from_str(line).unwrap();
+                if let Some(calls) = frame["choices"][0]["delta"]["tool_calls"].as_array() {
+                    for call in calls {
+                        arguments[call["index"].as_u64().unwrap() as usize]
+                            .push_str(call["function"]["arguments"].as_str().unwrap());
+                    }
+                }
+            }
+            for argument in arguments {
+                let decoded: Value = serde_json::from_str(&argument).unwrap();
+                assert_eq!(decoded["path"], "\\".repeat(7000));
+            }
+        }
+        assert!(h.observed.peak.load(Ordering::SeqCst) <= runtime_core::MAX_BUFFERED_TOOL_BYTES);
+        h.clean().await;
+        h.close().await;
     }
 }

@@ -4,7 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* ABI v2 layouts are unchanged; build_info behavior identity is shim_version 4.
+/* ABI v2 layouts are unchanged; build_info behavior identity is shim_version 5.
  * v1 entry points and layouts remain compatible. All strings are pointer + UTF-8 byte length, never NUL-terminated.
  * Borrowed inputs must remain alive for the call. Output buffers belong to
  * shim; release with air_buffer_free. Error outputs are reset on every fallible
@@ -100,6 +100,47 @@ int32_t air_generate_observed(air_prepared *prepared, const air_cancel *cancel,
                               air_text_callback callback, void *user,
                               air_progress_callback progress, void *progress_user,
                               air_usage *usage, air_error *error);
+/* Additive v3 chat entry points. Existing layouts and text-only entries stay
+ * unchanged. Choice: 0 none, 1 auto, 2 required, 3 named function. New finish
+ * value 4 means tool_calls, and is never returned by older entry points.
+ * Chat output is buffered until the complete native structure is validated.
+ * The caller must validate the entire result before publishing any events.
+ * callback kind: 0 complete text, 1 complete call; index is stable and zero based.
+ * Strings are borrowed during callbacks; name is empty for text. No IDs are
+ * generated here. Raw and normalized output are each bounded to 65536 bytes,
+ * each arguments string to 16384 bytes and the call count to 16.
+ * Errors 9 invalid tool output, 10 incomplete generation, 11 output limit.
+ */
+typedef struct {
+  air_string name;
+  air_string description;
+  air_string parameters_json;
+} air_tool_v3;
+typedef struct {
+  air_string id;
+  air_string name;
+  air_string arguments;
+} air_tool_call_v3;
+typedef struct {
+  air_string role;
+  uint32_t has_content;
+  air_string content;
+  const air_tool_call_v3 *calls;
+  uint64_t call_count;
+  air_string tool_call_id;
+} air_message_v3;
+typedef int32_t (*air_chat_callback_v3)(void *user, uint32_t kind,
+    uint32_t index, air_string name, air_string payload);
+int32_t air_prepare_chat_v3(air_model *model,
+    const air_message_v3 *messages, uint64_t count,
+    const air_tool_v3 *tools, uint64_t tool_count,
+    uint32_t choice, air_string choice_name, uint32_t parallel_tool_calls,
+    air_generate_options options, const air_cancel *cancel,
+    air_prepared **out, uint32_t *prompt_tokens, air_error *error);
+int32_t air_generate_chat_v3(air_prepared *prepared, const air_cancel *cancel,
+    air_chat_callback_v3 callback, void *user,
+    air_progress_callback progress, void *progress_user,
+    air_usage *usage, air_error *error);
 int32_t air_cancel_create(air_cancel **out, air_error *error);
 void air_cancel_set(air_cancel *cancel);
 void air_cancel_destroy(air_cancel *cancel);

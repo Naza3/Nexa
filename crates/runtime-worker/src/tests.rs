@@ -22,6 +22,7 @@ fn generation(shared: &Shared, session: SessionId, operation: u64) -> Scope {
     let model = ModelId::new("qwen").unwrap();
     shared.state.lock().unwrap().model = Some(model.clone());
     let request = GenerationRequest {
+        tools: runtime_types::ToolConfig::default(),
         request_id: RequestId::new(),
         model,
         messages: vec![ChatMessage::new(Role::User, "测试")],

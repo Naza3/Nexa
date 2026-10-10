@@ -25,6 +25,7 @@ fn model() -> ModelId {
 }
 fn request() -> GenerationRequest {
     GenerationRequest {
+        tools: runtime_types::ToolConfig::default(),
         request_id: RequestId::new(),
         model: model(),
         messages: vec![Message::new(Role::User, "fixture input")],
@@ -279,7 +280,7 @@ fn blocked_stdin_cannot_block_actor_or_cancel_caller() {
     let s = setup("block_stdin");
     s.handle.load(model(), options()).unwrap();
     let mut request = request();
-    request.messages[0].content = "x".repeat(900_000);
+    request.messages[0].content = Some("x".repeat(900_000));
     let id = request.request_id;
     let events = s.handle.submit(request).unwrap();
     thread::sleep(Duration::from_millis(50));
@@ -403,7 +404,7 @@ fn encoded_request_bound_is_checked_before_any_write() {
     let s = setup("normal");
     s.handle.load(model(), options()).unwrap();
     let mut request = request();
-    request.messages[0].content = "\0".repeat(500_000);
+    request.messages[0].content = Some("\0".repeat(500_000));
     let events = s.handle.submit(request).unwrap();
     let output = collect(&events);
     assert!(

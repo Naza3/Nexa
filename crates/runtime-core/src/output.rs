@@ -10,11 +10,15 @@ use std::{
 };
 
 pub const MAX_BUFFERED_TEXT_BYTES: usize = 256 * 1024;
+pub const MAX_BUFFERED_TOOL_BYTES: usize = 768 * 1024;
+/// Retained raw/normalized tool output and validation copies, not model/parser RSS.
+pub const TOOL_OUTPUT_RESERVATION: usize = 384 * 1024;
 pub const MAX_DELTA_BYTES: usize = 4096;
 const MIN_EVENT_CHARGE: usize = 256;
 /// The ledger is separate from Output. Its permits never own the queue that
 /// contains them, so retaining or dropping an unread stream cannot form a cycle.
 struct Budget {
+    limit: usize,
     state: Mutex<BudgetState>,
     changed: Condvar,
     timeout: Duration,
@@ -136,7 +140,7 @@ impl Budget {
         blocking: bool,
     ) -> Option<TextPermit> {
         let charge = bytes.max(MIN_EVENT_CHARGE);
-        if charge > MAX_BUFFERED_TEXT_BYTES {
+        if charge > self.limit {
             return None;
         }
         let mut s = self.state.lock().unwrap();
@@ -144,7 +148,7 @@ impl Budget {
             if s.closed || s.disconnected || s.cancel.is_some() {
                 return None;
             }
-            if s.reserved <= MAX_BUFFERED_TEXT_BYTES - charge {
+            if s.reserved <= self.limit - charge {
                 if s.reserved == 0 {
                     s.last_progress = Instant::now();
                 }
@@ -174,6 +178,9 @@ impl Budget {
 }
 impl Output {
     pub(crate) fn new(timeout: Duration) -> Arc<Self> {
+        Self::with_limit(timeout, MAX_BUFFERED_TEXT_BYTES)
+    }
+    pub(crate) fn with_limit(timeout: Duration, limit: usize) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(State {
                 events: VecDeque::new(),
@@ -182,6 +189,7 @@ impl Output {
             }),
             changed: Condvar::new(),
             budget: Arc::new(Budget {
+                limit,
                 state: Mutex::new(BudgetState {
                     reserved: 0,
                     last_progress: Instant::now(),
@@ -317,6 +325,30 @@ impl ExecutionEvents {
         self.output()
             .map(|o| o.budget.state.lock().unwrap().last_progress)
     }
+    /// Direct in-process executors reserve retained tool output here. A wire
+    /// sink uses the reservation already owned by its supervising process.
+    pub fn reserve_tool_output(&self) -> Result<Option<TextPermit>, runtime_types::RuntimeError> {
+        match &self.destination {
+            EventDestination::Sink(_) => Ok(None),
+            EventDestination::Actor {
+                output: Some(output),
+                ..
+            } => output
+                .budget
+                .reserve(TOOL_OUTPUT_RESERVATION, self.operation, true)
+                .map(Some)
+                .ok_or_else(|| {
+                    runtime_types::RuntimeError::new(
+                        output.reason().unwrap_or(ErrorCode::ConsumerStopped),
+                        "tool output reservation unavailable",
+                    )
+                }),
+            EventDestination::Actor { output: None, .. } => Err(runtime_types::RuntimeError::new(
+                ErrorCode::NativeProtocol,
+                "tool generation requires output ledger",
+            )),
+        }
+    }
     pub fn try_reserve_text(&self, accounting_bytes: usize) -> Option<TextPermit> {
         self.output()?
             .budget
@@ -337,11 +369,79 @@ impl ExecutionEvents {
         }
         self.send(ExecutorEvent::TextDelta(text), Some(permit))
     }
+    /// Carry retained native/validator output accounting until the actor has
+    /// consumed the terminal and destroyed its validator copies.
+    pub fn emit_with_tool_reservation(
+        &self,
+        event: ExecutorEvent,
+        permit: Option<TextPermit>,
+    ) -> bool {
+        let Some(permit) = permit else {
+            return self.emit(event);
+        };
+        let Some(output) = self.output() else {
+            return false;
+        };
+        if permit.operation != self.operation
+            || !Arc::ptr_eq(&permit.budget, &output.budget)
+            || !matches!(
+                event,
+                ExecutorEvent::Completed { .. }
+                    | ExecutorEvent::GenerationFailed { .. }
+                    | ExecutorEvent::Failed(_)
+                    | ExecutorEvent::Faulted(_)
+                    | ExecutorEvent::CleanupUnconfirmed(_)
+            )
+        {
+            return false;
+        }
+        self.send(event, Some(permit))
+    }
+    pub fn emit_reserved_tool(
+        &self,
+        delta: runtime_types::ToolCallDelta,
+        permit: TextPermit,
+    ) -> bool {
+        let Some(output) = self.output() else {
+            return false;
+        };
+        if !valid_tool_piece(&delta)
+            || tool_piece_bytes(&delta) > permit.charge
+            || permit.operation != self.operation
+            || !Arc::ptr_eq(&permit.budget, &output.budget)
+            || output.reason().is_some()
+        {
+            return false;
+        }
+        self.send(ExecutorEvent::ToolCallDelta(delta), Some(permit))
+    }
     pub(crate) fn emit_inner(&self, event: ExecutorEvent) -> bool {
-        if let ExecutorEvent::TextDelta(text) = event {
-            self.emit_text(&text)
-        } else {
-            self.send(event, None)
+        match event {
+            ExecutorEvent::TextDelta(text) => self.emit_text(&text),
+            ExecutorEvent::ToolCallDelta(delta) => {
+                if !valid_tool_piece(&delta) {
+                    return false;
+                }
+                let permit = match &self.destination {
+                    EventDestination::Actor {
+                        output: Some(output),
+                        ..
+                    } => {
+                        let Some(permit) =
+                            output
+                                .budget
+                                .reserve(tool_piece_bytes(&delta), self.operation, true)
+                        else {
+                            return false;
+                        };
+                        Some(permit)
+                    }
+                    EventDestination::Actor { output: None, .. } => return false,
+                    EventDestination::Sink(_) => None,
+                };
+                self.send(ExecutorEvent::ToolCallDelta(delta), permit)
+            }
+            event => self.send(event, None),
         }
     }
     pub(crate) fn emit_text(&self, text: &str) -> bool {
@@ -392,8 +492,10 @@ impl ExecutionEvents {
                 Err(TrySendError::Disconnected(_)) => return false,
                 Err(TrySendError::Full(value)) => {
                     envelope = value;
-                    if envelope.permit.is_some()
-                        && output.as_ref().is_some_and(|o| o.reason().is_some())
+                    if matches!(
+                        &envelope.event,
+                        ExecutorEvent::TextDelta(_) | ExecutorEvent::ToolCallDelta(_)
+                    ) && output.as_ref().is_some_and(|o| o.reason().is_some())
                     {
                         return false;
                     }
@@ -402,6 +504,14 @@ impl ExecutionEvents {
             }
         }
     }
+}
+
+/// The same small piece bounds apply before any queue or pipe allocation.
+pub fn tool_piece_bytes(delta: &runtime_types::ToolCallDelta) -> usize {
+    delta.payload_bytes() + 32
+}
+pub fn valid_tool_piece(delta: &runtime_types::ToolCallDelta) -> bool {
+    delta.validate_piece().is_ok()
 }
 
 #[cfg(test)]
@@ -430,6 +540,64 @@ mod tests {
             },
             envelope.permit,
         );
+    }
+    #[test]
+    fn cancelled_full_queue_still_delivers_terminal_with_tool_reservation() {
+        let output = Output::with_limit(Duration::from_secs(1), MAX_BUFFERED_TOOL_BYTES);
+        let (sender, receiver) = mpsc::sync_channel(0);
+        let events = ExecutionEvents::for_actor(1, sender, Some(output.clone()));
+        let permit = events.reserve_tool_output().unwrap();
+        output.cancel(ErrorCode::RequestCancelled);
+        let (done_tx, done_rx) = mpsc::channel();
+        let join = std::thread::spawn(move || {
+            done_tx
+                .send(events.emit_with_tool_reservation(
+                    ExecutorEvent::GenerationFailed {
+                        error: runtime_types::RuntimeError::new(
+                            ErrorCode::RequestCancelled,
+                            "cancelled",
+                        ),
+                        usage: runtime_types::Usage::default(),
+                    },
+                    permit,
+                ))
+                .unwrap();
+        });
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(20)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        let envelope = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            envelope.event,
+            ExecutorEvent::GenerationFailed { .. }
+        ));
+        assert_eq!(
+            envelope.permit.as_ref().unwrap().charged_bytes(),
+            TOOL_OUTPUT_RESERVATION
+        );
+        drop(envelope);
+        assert!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        join.join().unwrap();
+        assert_eq!(output.budget.state.lock().unwrap().reserved, 0);
+    }
+    #[test]
+    fn tool_retention_transit_and_nonstream_fit_same_ledger_and_cancel_releases() {
+        let output = Output::with_limit(Duration::from_millis(15), MAX_BUFFERED_TOOL_BYTES);
+        let retained = output
+            .budget
+            .reserve(TOOL_OUTPUT_RESERVATION, 1, false)
+            .unwrap();
+        let credit1 = output.budget.reserve(120 * 1024, 1, false).unwrap();
+        let credit2 = output.budget.reserve(120 * 1024, 1, false).unwrap();
+        let scratch = output.budget.reserve(16 * 1024, 1, false).unwrap();
+        let aggregate = output.budget.reserve(96 * 1024, 1, false).unwrap();
+        assert_eq!(output.budget.state.lock().unwrap().reserved, 736 * 1024);
+        assert!(output.budget.reserve(33 * 1024, 1, false).is_none());
+        output.cancel(ErrorCode::RequestCancelled);
+        assert!(output.budget.reserve(1, 1, false).is_none());
+        drop((retained, credit1, credit2, scratch, aggregate));
+        assert_eq!(output.budget.state.lock().unwrap().reserved, 0);
     }
     #[test]
     fn lease_keeps_charge_until_consumed_or_dropped() {

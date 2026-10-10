@@ -69,6 +69,7 @@ enum Command {
         RequestId,
         Vec<Message>,
         GenerationOptions,
+        ToolConfig,
         Reply<(ModelId, EventReceiver)>,
     ),
     Load(ModelId, LoadOptions, Reply<()>),
@@ -171,9 +172,19 @@ impl RuntimeHandle {
         messages: Vec<Message>,
         options: GenerationOptions,
     ) -> Result<(ModelId, EventReceiver), RuntimeError> {
+        self.submit_current_chat(request_id, messages, options, ToolConfig::default())
+    }
+    pub fn submit_current_chat(
+        &self,
+        request_id: RequestId,
+        messages: Vec<Message>,
+        options: GenerationOptions,
+        tools: ToolConfig,
+    ) -> Result<(ModelId, EventReceiver), RuntimeError> {
         validate_messages(&messages)?;
         options.validate()?;
-        self.ask(|reply| Command::SubmitCurrent(request_id, messages, options, reply))
+        tools.validate_input(&messages)?;
+        self.ask(|reply| Command::SubmitCurrent(request_id, messages, options, tools, reply))
     }
     pub fn load(&self, model: ModelId, options: LoadOptions) -> Result<(), RuntimeError> {
         options.validate()?;
@@ -271,6 +282,7 @@ fn is_control_termination(code: ErrorCode) -> bool {
 }
 struct Job {
     request: GenerationRequest,
+    tool_stream: crate::ToolStreamValidator,
     output: Arc<Output>,
     seq: u64,
     enqueued: Instant,
@@ -594,7 +606,7 @@ impl Actor {
                 };
                 let _ = reply.send(result);
             }
-            Command::SubmitCurrent(request_id, messages, options, reply) => {
+            Command::SubmitCurrent(request_id, messages, options, tools, reply) => {
                 let result = if matches!(self.state, ModelState::Ready | ModelState::Generating)
                     && let Some(model) = self.selected.as_ref().map(|model| model.id.clone())
                 {
@@ -603,6 +615,7 @@ impl Actor {
                         model: model.clone(),
                         messages,
                         options,
+                        tools,
                     })
                     .map(|events| (model, events))
                 } else {
@@ -755,7 +768,14 @@ impl Actor {
             self.selected = Some(model);
             self.options = Some(options);
         }
-        let output = Output::new(self.config.slow_consumer_timeout);
+        let output = if request.uses_tools() {
+            Output::with_limit(
+                self.config.slow_consumer_timeout,
+                crate::MAX_BUFFERED_TOOL_BYTES,
+            )
+        } else {
+            Output::new(self.config.slow_consumer_timeout)
+        };
         let mut job = Job {
             accepted_at_unix_ms: millis(
                 std::time::SystemTime::now()
@@ -771,6 +791,7 @@ impl Actor {
             } else {
                 PerformanceModality::Text
             },
+            tool_stream: crate::ToolStreamValidator::new(&request),
             request,
             output: output.clone(),
             seq: 0,
@@ -1148,12 +1169,26 @@ impl Actor {
             }
             ExecutorEvent::TextDelta(text) => {
                 if let Some(job) = &mut self.active {
-                    if !job.started {
+                    if !job.started || job.tool_stream.text(&text).is_err() {
                         self.protocol_fault();
                         return;
                     }
                     if job.output.reason().is_none() {
                         job.event(RequestEventKind::TextDelta(text), envelope.permit.take());
+                    }
+                }
+            }
+            ExecutorEvent::ToolCallDelta(delta) => {
+                if let Some(job) = &mut self.active {
+                    if !job.started || job.tool_stream.delta(&delta).is_err() {
+                        self.protocol_fault();
+                        return;
+                    }
+                    if job.output.reason().is_none() {
+                        job.event(
+                            RequestEventKind::ToolCallDelta(delta),
+                            envelope.permit.take(),
+                        );
                     }
                 }
             }
@@ -1165,6 +1200,7 @@ impl Actor {
                 if !matches!(self.operation, Some(Operation::Generate { .. }))
                     || self.active.as_ref().is_none_or(|j| {
                         !j.started
+                            || j.tool_stream.complete(finish_reason).is_err()
                             || usage.prompt_tokens != j.usage.prompt_tokens
                             || usage.completion_tokens > j.request.options.max_tokens
                     })
@@ -1675,9 +1711,11 @@ mod ledger_tests {
                     output: output.clone(),
                 };
                 let mut job = Job {
+                    tool_stream: crate::ToolStreamValidator::default(),
                     accepted_at_unix_ms: 0,
                     modality: PerformanceModality::Text,
                     request: GenerationRequest {
+                        tools: runtime_types::ToolConfig::default(),
                         request_id: RequestId::new(),
                         model: ModelId::new("qa-small").unwrap(),
                         messages: vec![Message::new(Role::User, "synthetic")],
@@ -1808,6 +1846,7 @@ mod ledger_tests {
             event_receiver,
         );
         let request = || GenerationRequest {
+            tools: runtime_types::ToolConfig::default(),
             request_id: RequestId::new(),
             model: ModelId::new("qa-small").unwrap(),
             messages: vec![Message::new(Role::User, "synthetic")],
@@ -1883,6 +1922,7 @@ mod ledger_tests {
         );
         let id = ModelId::new("a").unwrap();
         let request = |id: ModelId| GenerationRequest {
+            tools: runtime_types::ToolConfig::default(),
             request_id: RequestId::new(),
             model: id,
             messages: vec![Message::new(Role::User, "test")],
