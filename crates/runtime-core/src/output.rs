@@ -12,6 +12,8 @@ use std::{
 pub const MAX_BUFFERED_TEXT_BYTES: usize = 256 * 1024;
 pub const MAX_BUFFERED_TOOL_BYTES: usize = 768 * 1024;
 /// Retained raw/normalized tool output and validation copies, not model/parser RSS.
+/// Includes native string rounding/terminators (raw 65_568, normalized 67_104)
+/// and native metadata <= 4_096 within the existing 64 KiB metadata headroom.
 pub const TOOL_OUTPUT_RESERVATION: usize = 384 * 1024;
 pub const MAX_DELTA_BYTES: usize = 4096;
 const MIN_EVENT_CHARGE: usize = 256;

@@ -167,6 +167,17 @@ set_tests_properties(air-tool-parser-test PROPERTIES
   FAIL_REGULAR_EXPRESSION "NEXA_TOOL_PRIVATE_CANARY_26f074"
   TIMEOUT 30)
 
+# Exercise actual STL allocation capacities on every host, including MSVC.
+# No model weights are needed for exact payload and retained-storage boundaries.
+add_executable(air-tool-output-test tests/tool_output_test.cpp)
+target_link_libraries(air-tool-output-test PRIVATE air_llama llama-common llama)
+if(MSVC)
+  target_compile_options(air-tool-output-test PRIVATE /UNDEBUG)
+else()
+  target_compile_options(air-tool-output-test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME air-tool-output-test COMMAND air-tool-output-test)
+
 add_executable(air-ocr-template-test tests/ocr_template_test.cpp)
 target_include_directories(air-ocr-template-test PRIVATE src)
 target_link_libraries(air-ocr-template-test PRIVATE air_llama)

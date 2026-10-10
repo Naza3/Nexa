@@ -19,6 +19,7 @@
 #include "text_template.h"
 #include "ocr_template.h"
 #include "tool_template.h"
+#include "tool_output.h"
 #include <set>
 #include <map>
 #include "gguf.h"
@@ -751,19 +752,18 @@ static int32_t generate_impl(
       }
     }
     observe(2, usage->prompt_tokens);
-    air_stream_buffer stream(p->stops);
+    air_stream_buffer stream(p->stops, p->tool_parser ? air_tool_output_bytes : 0,
+                             p->tool_parser ? air_tool_raw_storage : 0);
     std::string raw_output;
     size_t raw_piece_bytes = 0;
     if (p->tool_parser) {
-      raw_output.reserve(65536);
-      if (raw_output.capacity() > 65536) throw failure(11, "raw output capacity exceeds budget");
+      air_reserve_tool_output(raw_output);
     }
     auto emit = [&](bool final) {
       stream.flush(final, [&](const std::string &chunk) {
         check_cancel(cancel);
         if (p->tool_parser) {
-          if (chunk.size() > 65536 - raw_output.size()) throw failure(11, "tool output byte limit exceeded");
-          raw_output += chunk;
+          air_append_tool_output(raw_output, chunk);
           return;
         }
         air_string text{reinterpret_cast<const uint8_t *>(chunk.data()),
@@ -789,7 +789,7 @@ static int32_t generate_impl(
           llama_token_to_piece(vocab, token, small, sizeof(small), 0, preserve);
       std::string piece;
       if (n < 0) {
-        if (p->tool_parser && static_cast<uint64_t>(-static_cast<int64_t>(n)) > 65536 - raw_piece_bytes)
+        if (p->tool_parser && static_cast<uint64_t>(-static_cast<int64_t>(n)) > air_tool_output_bytes - raw_piece_bytes)
           throw failure(11, "tool token exceeds remaining output budget");
         piece.resize(-n);
         n = llama_token_to_piece(vocab, token, piece.data(),
@@ -800,7 +800,8 @@ static int32_t generate_impl(
       } else
         piece.assign(small, n);
       if (p->tool_parser) {
-        if (piece.size() > 65536 - raw_piece_bytes) throw failure(11, "tool output byte limit exceeded");
+        if (piece.size() > air_tool_output_bytes - raw_piece_bytes) throw failure(11, "tool output byte limit exceeded");
+        air_check_tool_string_capacity(piece, air_tool_output_bytes);
         raw_piece_bytes += piece.size();
       }
       stream.push(piece);
@@ -819,34 +820,17 @@ static int32_t generate_impl(
       }
     }
     emit(true);
+    // pending may retain a full token's capacity after erase(). Drop it before
+    // parsing/publishing, when normalized and downstream output copies coexist.
+    stream.release();
     check_cancel(cancel);
     if (p->tool_parser) {
       if (usage->finish_reason != 0) throw failure(10, "tool generation ended at the token limit");
-      common_chat_msg message;
-      try { message = p->tool_parser->parse(raw_output); }
+      air_tool_output message;
+      try { message = air_normalize_tool_output(p->tool_parser->parse(raw_output)); }
       catch (const failure &) { throw; }
       catch (const std::bad_alloc &) { throw; }
       catch (...) { throw failure(9, "tool output parsing failed"); }
-      if (message.content.size() > 8192 || message.tool_calls.size() > 16)
-        throw failure(11, "normalized tool output limit exceeded");
-      auto compact = [](std::string &value) { std::string(value.data(), value.size()).swap(value); };
-      compact(message.content);
-      size_t retained_capacity = message.content.capacity();
-      size_t total = message.content.size();
-      for (auto &call : message.tool_calls) {
-        // Model IDs are never published; the adapter creates stable request IDs.
-        std::string().swap(call.id);
-        compact(call.name);
-        compact(call.arguments);
-        const size_t capacity = call.name.capacity() + call.arguments.capacity() + call.id.capacity();
-        if (capacity > 65536 - retained_capacity)
-          throw failure(11, "normalized tool output capacity exceeds budget");
-        retained_capacity += capacity;
-        if (call.name.empty() || call.name.size() > 64 || call.arguments.size() > 16384 ||
-            call.name.size() + call.arguments.size() > 65536 - total)
-          throw failure(11, "normalized tool call limit exceeded");
-        total += call.name.size() + call.arguments.size();
-      }
       if ((p->tool_choice == 0 && !message.tool_calls.empty()) ||
           (p->tool_choice >= 2 && message.tool_calls.empty()))
         throw failure(9, "generated result violates tool choice");

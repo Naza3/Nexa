@@ -62,3 +62,12 @@ Windows 完整交叉门槛、原生 Windows CI、安装包、用户 Win10/i5 与
 2026-10-10 用户确认按 Windows 交叉构建→推送 codex/dev→GitHub 原生构建顺序继续。新增原生 CI 显式运行 `llama-adapter --test tool_model -- --ignored`，使用既有固定 Qwen3-0.6B 基准文件，不额外下载或执行系统工具。失败保留 windows-real-tools.log；现有原生与安装门槛不减少。
 
 前端从锁文件 `npm ci --ignore-scripts` 重建，1006 测试及 lint/typecheck/生产构建通过，保留 Vite 大 chunk 提醒。actionlint 1.7.12 校验修改后的 workflow 通过，严格 Python 全量仍367通过/5skip。独立交叉工具链正在恢复，以下步骤未执行完前不推送。源码/Windows实际结果将在后续记录补齐，不能将本节准备检查视为交叉门槛已通过。
+
+
+### Windows 容量取整问题修复
+
+推送前只读审查并以已恢复的 MSVC14.44 原始 xstring 头核对：std::string reserve(65536) 实际容量为65551，先前把主体长度上限误用为精确容量上限，Windows工具生成会直接失败。修复保留合法64KiB主体上限，单列每串32字节取整/SSO/终止符余量并验证实际capacity+1；raw上限65568、normalized最多49串合计67104、容器/结构体4096。均落在现有384KiB reservation中，不关闭容量检查或扩大公开输出上限。发布前释放pending，归一化结构仅保留真正发布的content/calls。
+
+新增无模型 CTest 覆盖真实标准库满容量、多调用取整、超限、恶意大capacity和未发布字段释放。工具真实模型测试改为遵循NEXA_TEST_THREADS或min(4,available)，记录实际线程与oversubscription，Rust test-threads不再被误当推理线程预算。最终验证结果见随后的交叉记录。
+
+容量修复后 native 构建、CTest 6/6、Qwen3-0.6B 两轮及线程配置2/2、adapter13单测/strict Clippy通过；新容量测试ASan/UBSan通过，LeakSanitizer因宿主ptrace限制未完成，不扩大为上游全量插桩或泄漏验证。原生CI显式构建清单同步新air-tool-output-test，并新增所有CTest可执行目标必须纳入清单的回归，严格Python373项中368通过/5skip。二次只读复审确认MSVC取整与输出副本预算闭合。

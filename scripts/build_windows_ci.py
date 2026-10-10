@@ -27,7 +27,7 @@ BUILD_ENVIRONMENT = (
     "VSCMD_ARG_HOST_ARCH", "VSCMD_ARG_TGT_ARCH", "NEXA_CMAKE_BIN",
 )
 NATIVE_TARGETS = ("air_llama", "air-stream-test", "air-template-test",
-                  "air-tool-parser-test", "air-ocr-template-test", "llama-completion", "llama-bench")
+                  "air-tool-parser-test", "air-tool-output-test", "air-ocr-template-test", "llama-completion", "llama-bench")
 # Keep cache partitioning independent of credentials, the event commit and
 # unrelated runner variables. Cargo locks/source inputs are added by the caller.
 CACHE_IDENTITY_ENVIRONMENT = (

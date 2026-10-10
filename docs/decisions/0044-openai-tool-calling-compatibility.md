@@ -18,7 +18,7 @@
 
 ## 有界输出与生命周期
 
-原文本输出账本保持256KiB。工具请求另设768KiB同一affine账本，保留384KiB用于原生raw/normalized、Rust适配层、IPC/actor参数校验等并存的有界输出副本；每份数据主体上限64KiB，剩余空间覆盖ID/名称与容器元数据。字符串必须精确扩容/收缩并验证实际capacity，不能以len代替长期保留容量。
+原文本输出账本保持256KiB。工具请求另设768KiB同一affine账本，保留384KiB用于原生raw/normalized、Rust适配层、IPC/actor参数校验等并存的有界输出副本；每份数据主体上限64KiB。C++字符串另计每串32字节的SSO/分配取整/终止符余量：raw实际capacity+1至多65568，normalized至多49串、合计67104字节，实际容器/结构体至多4096字节；这些开销从原有64KiB元数据余量支付，不增加384KiB保留总量。Rust使用精确扩容，C++压紧后显式验证实际capacity，不能假定std::string reserve等于请求长度。生成阶段pending/token片段单独有界，发布前释放pending和上游未发布字段，避免与下游副本同时保留。
 
 信用与普通文本统一：最多2份120KiB transit、16KiB scratch、96KiB非流式最终编码缓冲，加384KiB保留共736KiB。工具header和arguments都需要同一类一次性信用，不产生免费事件通道。取消、输出队列满、worker崩溃和关闭仍保证一次终态；携带保留permit的终态不能因取消而被当普通payload丢弃。保留permit转移至actor终态envelope，直到处理并销毁校验副本。
 

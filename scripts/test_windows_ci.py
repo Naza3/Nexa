@@ -13,6 +13,14 @@ import build_windows_ci as ci
 
 
 class WindowsCiTests(unittest.TestCase):
+    def test_every_native_ctest_executable_is_built_on_clean_runner(self):
+        cmake = (ci.base.ROOT / "native/llama-shim/CMakeLists.txt").read_text(encoding="utf-8")
+        executables = set(re.findall(r"add_executable\((air-[\w-]+)", cmake))
+        commands = set(re.findall(r"add_test\(NAME\s+[^\s]+\s+COMMAND\s+(air-[\w-]+)", cmake))
+        self.assertTrue(commands)
+        self.assertTrue(commands <= executables)
+        self.assertTrue(commands <= set(ci.NATIVE_TARGETS), commands - set(ci.NATIVE_TARGETS))
+
     def test_actual_rust_release_and_host_are_checked_not_the_alias(self):
         for rust, good in (("rustc 1.98.1\nrelease: 1.98.1\nhost: x86_64-pc-windows-msvc", True),
                            ("release: 1.98.0\nhost: x86_64-pc-windows-msvc", False),

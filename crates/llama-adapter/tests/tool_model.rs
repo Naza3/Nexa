@@ -7,6 +7,57 @@ use runtime_types::{
 };
 use serde_json::json;
 
+fn select_test_threads(
+    raw: Option<&std::ffi::OsStr>,
+    available: usize,
+) -> Result<u32, &'static str> {
+    let threads = match raw {
+        Some(value) => value
+            .to_str()
+            .ok_or("NEXA_TEST_THREADS must be UTF-8")?
+            .parse::<u32>()
+            .map_err(|_| "NEXA_TEST_THREADS must be an integer in 1..=256")?,
+        None => available.clamp(1, 4) as u32,
+    };
+    if !(1..=256).contains(&threads) {
+        return Err("NEXA_TEST_THREADS must be in 1..=256");
+    }
+    Ok(threads)
+}
+
+fn test_threads(test: &str) -> u32 {
+    let available = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let raw = std::env::var_os("NEXA_TEST_THREADS");
+    let threads = select_test_threads(raw.as_deref(), available)
+        .expect("invalid inference thread configuration");
+    eprintln!(
+        "{}",
+        serde_json::json!({"test":test,"inference_threads":threads,
+        "available_parallelism":available,"oversubscribed":threads as usize > available,
+        "source":if raw.is_some() { "NEXA_TEST_THREADS" } else { "available_parallelism" }})
+    );
+    threads
+}
+
+#[test]
+fn test_thread_configuration_is_bounded_and_explicit() {
+    use std::ffi::OsStr;
+    for (available, expected) in [(0, 1), (1, 1), (2, 2), (3, 3), (4, 4), (64, 4)] {
+        assert_eq!(select_test_threads(None, available).unwrap(), expected);
+    }
+    for threads in [1, 2, 4, 256] {
+        assert_eq!(
+            select_test_threads(Some(OsStr::new(&threads.to_string())), 2).unwrap(),
+            threads
+        );
+    }
+    for raw in ["0", "257", "-1", "1.5", "abc", "", "4294967296"] {
+        assert!(select_test_threads(Some(OsStr::new(raw)), 2).is_err());
+    }
+}
+
 #[test]
 #[ignore = "requires NEXA_TEST_MODEL with real tool-capable GGUF"]
 fn actual_model_two_round_tool_cycle() {
@@ -18,7 +69,7 @@ fn actual_model_two_round_tool_cycle() {
             path,
             LoadOptions {
                 context_size: 4096,
-                threads: 4,
+                threads: test_threads("actual_model_two_round_tool_cycle"),
                 batch_size: 256,
             },
             &cancel,
