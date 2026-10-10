@@ -1,5 +1,13 @@
 # Nexa 当前状态
 
+## 2026-10-10 工具兼容与Rust错误规范（已推送，Windows原生与安装包验收通过）
+
+精确源码e3f2acdb5bb703dfe0e44a5f1a6369007df6a355先通过完整Windows交叉门槛，再更新codex/dev。[Actions38019983165](https://github.com/Naza3/Nexa/actions/runs/38019983165)五个构建/验证job成功：根Rust702通过/11忽略、桌面34、前端1006、Python376通过/2skip、CTest6/6，真实两轮工具、HTTP/CLI和50次断连恢复全部通过。MSI/NSIS17项安装生命周期及69事件诊断成功，两格式安装后的源码/hash/package_verified/dirty身份一致。
+
+前轮原生CI因旧验收仍把合法tools:[]判为不支持而失败；已改为加载后200正例，保留真正不支持字段/strict:true负例，并补契约漂移测试与受审查日志。先前MSVC字符串capacity取整问题也已修复并通过Windows边界测试，公开输出上限保持。
+
+[便携版、MSI、EXE测试包](https://github.com/Naza3/Nexa/actions/runs/38019983165/artifacts/11658547928)已独立核对完整6文件发行库存、源码/hash/大小/许可闭包及三份证据63文件。版本仍0.3.0，未签名，artifact有效至2026-10-17 03:51:35 UTC；main/tag/正式Release未变。用户Win10、PI原生GUI与离线目标机仍独立待验；见[最终验证记录](docs/verification/2026-10-10-tools-windows.md)。下方“Linux验证完成/未推送”段落为当时历史快照。
+
 ## 2026-10-10 通用工具调用兼容层（Linux真实闭环验证完成）
 
 任务 W04-TOOLS-1：按用户“补齐Nexa的功能”和通用兼容模式要求，接入 OpenAI tools/tool_calls/tool 结果历史、流式/非流式、模型原始模板严格解析、输出信用及完整 prompt 预算。无需 PI 专用开关，不按型号白名单授予工具能力，Nexa 不执行客户端工具。目标口述模型已更正为 Qwen3.5-4B-Q4；样例使用固定 Q4_K_M，用户文件身份尚未确认。

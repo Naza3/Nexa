@@ -28,3 +28,22 @@ xtask两个bin共59通过/1既有忽略，strict Clippy、fmt及diff退出0。�
 实际构建CLI、worker、xtask后运行 `scripts/run_api_smoke.py`，固定Qwen3-0.6B-Q8_0、50次断连循环，退出0；报告91通过、9显式skip、0失败，正常停止无强制清理。日志与报告保存在 `/workspace/shared/nexa-rust-tooling/tool-smoke-fix-real/`。这证明修复后的真实HTTP/CLI流程在Linux通过，不替代下一轮Windows原生执行。
 
 下一步：冻结修复提交，按相同顺序完成Windows交叉门槛、推送与新原生CI。此记录不把待运行步骤标成成功，main/tag/正式Release未变。
+
+
+## 最终成功与交付
+
+修复后的精确源码 `e3f2acdb5bb703dfe0e44a5f1a6369007df6a355`（tree `850a7abfba572601d39b1ef6caa503027af90ca0`）先通过完整增量Windows交叉门槛，再非强制更新codex/dev。[Actions38019983165](https://github.com/Naza3/Nexa/actions/runs/38019983165)于2026-10-10 03:51:44 UTC成功：5个构建/验证job通过，分支release正确跳过。
+
+- Windows根Rust702通过/11既有忽略；桌面34项；两strict Clippy通过。
+- 前端1006项；Python378项中376通过/2平台skip；CTest6/6。
+- 真实HTTP/CLI91通过/9显式skip/0失败，新增strict负例及加载后空tools正例通过；50/50断连恢复，正常退出，无强制清理。
+- 真实两轮工具1项6.26秒通过，新增受审查的windows-real-tools.log已归档。
+- MSI/NSIS完整17项生命周期全部通过，69事件安装诊断status=pass；两格式安装后package_verified=true、dirty=false，source精确绑定e3f2acdb。
+
+独立下载复核[完整三格式包](https://github.com/Naza3/Nexa/actions/runs/38019983165/artifacts/11658547928)的ZIP摘要、6文件发行库存、便携包28文件、许可与aria2对应源码闭包、安装器身份，以及三份证据内部63文件的hash/大小全部通过；生产 `release_windows.py verify --directory <release> --commit e3f2acdb5bb703dfe0e44a5f1a6369007df6a355 --version 0.3.0` 退出0。
+
+证据：[Runtime](https://github.com/Naza3/Nexa/actions/runs/38019983165/artifacts/11658762058)、[Desktop](https://github.com/Naza3/Nexa/actions/runs/38019983165/artifacts/11658270742)、[Native](https://github.com/Naza3/Nexa/actions/runs/38019983165/artifacts/11658437946)、[安装诊断](https://github.com/Naza3/Nexa/actions/runs/38019983165/artifacts/11658842715)。本地完整归档在 `/workspace/shared/nexa-ci-monitor-38019983165/`；最终精确提交交叉证据在 `/workspace/shared/nexa-windows-cross/runs/20261010T031538Z-e3f2acdb5bb7/`。
+
+本次未签名0.3.0开发测试包已交付，完整artifact55,774,845字节，2026-10-17 03:51:35 UTC过期。MSI SHA256为`8c8243dc40dff8272646e75af1e68a10892da65f348fd4e0cdf2f4022f54dfa5`；NSIS EXE为`1f8017ecca1a736affb75e42d3dc1ac367c75c73ad7baf9a1b02c45b1c6a8af9`；portable ZIP为`574b6769d75c6aa1be88724867bf14e5988baeee92c2d3871bc070fa93c95812`。
+
+未创建tag、发布正式Release或合并main。Windows Server 2022原生CI通过，不替代用户Win10/i5、实际PI Electron GUI或干净离线机器验收。随后仅补记证据的文档提交不冒充这批二进制的源码身份。
