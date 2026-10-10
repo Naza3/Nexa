@@ -281,6 +281,13 @@ jobs:
           $env:NEXA_TEST_MODEL = Join-Path $PWD 'models/qa-small.gguf'
           cargo test --locked -p llama-adapter --test real_model -- --ignored --test-threads=1 --nocapture 2>&1 | Tee-Object -FilePath artifacts/verification/windows-real-model.log
           if ($LASTEXITCODE -ne 0) { throw 'Real-model recovery tests failed' }
+      - name: Verify real-model two-round tool calling
+        if: ${{ !cancelled() && steps.model_identity.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          $env:NEXA_TEST_MODEL = Join-Path $PWD 'models/qa-small.gguf'
+          cargo test --locked -p llama-adapter --test tool_model -- --ignored --test-threads=1 --nocapture 2>&1 | Tee-Object -FilePath artifacts/verification/windows-real-tools.log
+          if ($LASTEXITCODE -ne 0) { throw 'Real-model tool calling tests failed' }
       - name: Verify real model-store and runtime scheduling
         if: ${{ !cancelled() && steps.model_identity.outcome == 'success' }}
         timeout-minutes: 10

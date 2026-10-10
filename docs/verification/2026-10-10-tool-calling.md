@@ -56,3 +56,9 @@ Linux 云端，Rust 1.98.1、CMake 4.4.4、Ninja 1.13.2；llama.cpp 固定 2149c
 上述 Linux 开发验证已完成，最终全 workspace 聚合回归689通过/11既有ignored、strict Clippy/fmt退出0。固定模型与真实客户端库的两轮工具链路通过，不意味着全部模型、工具或应用版本均通过。两个模型顺序加载；仅测试固定内存查表，没有执行任何用户文件、命令或外部业务操作。
 
 Windows 完整交叉门槛、原生 Windows CI、安装包、用户 Win10/i5 与 PI Electron GUI 均未在本轮执行。按项目规则，推送触发 CI 前仍须完成 Windows 交叉构建；本轮不借用此前 9b18f41 的二进制验证。
+
+## 用户授权后的 Windows 构建跟进
+
+2026-10-10 用户确认按 Windows 交叉构建→推送 codex/dev→GitHub 原生构建顺序继续。新增原生 CI 显式运行 `llama-adapter --test tool_model -- --ignored`，使用既有固定 Qwen3-0.6B 基准文件，不额外下载或执行系统工具。失败保留 windows-real-tools.log；现有原生与安装门槛不减少。
+
+前端从锁文件 `npm ci --ignore-scripts` 重建，1006 测试及 lint/typecheck/生产构建通过，保留 Vite 大 chunk 提醒。actionlint 1.7.12 校验修改后的 workflow 通过，严格 Python 全量仍367通过/5skip。独立交叉工具链正在恢复，以下步骤未执行完前不推送。源码/Windows实际结果将在后续记录补齐，不能将本节准备检查视为交叉门槛已通过。
