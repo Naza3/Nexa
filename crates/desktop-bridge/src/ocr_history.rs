@@ -254,13 +254,17 @@ fn write(root: &Path, store: &Store) -> Result<()> {
         }));
     }
     let bytes = encoded.bytes;
-    token::atomic_replace_private(&root.join(FILE_NAME), &bytes).map_err(|e| {
-        if e.to_string() == "configuration_durability_unconfirmed" {
-            error("ocr_history_durability_unconfirmed")
-        } else {
-            io_error(e)
-        }
-    })
+    token::atomic_replace_private(&root.join(FILE_NAME), &bytes).map_err(publication_error)
+}
+fn publication_error(source: io::Error) -> BridgeError {
+    if matches!(
+        token::PrivateFileError::from_io(&source),
+        Some(token::PrivateFileError::PublishedDurabilityUnconfirmed { .. })
+    ) {
+        error("ocr_history_durability_unconfirmed")
+    } else {
+        io_error(source)
+    }
 }
 impl Store {
     fn list(&self) -> OcrHistoryList {
@@ -413,6 +417,19 @@ mod tests {
     use runtime_types::{
         ErrorCode, InferenceTimings, LoadOptions, RequestPerformance, RequestTimings, Usage,
     };
+
+    #[test]
+    fn publication_state_requires_typed_error_not_display_text() {
+        let published = publication_error(io::Error::other(
+            token::PrivateFileError::PublishedDurabilityUnconfirmed {
+                source: io::Error::other("private_sentinel_path"),
+            },
+        ));
+        assert_eq!(published.code, "ocr_history_durability_unconfirmed");
+        assert!(!format!("{published:?} {published}").contains("private_sentinel"));
+        let spoof = publication_error(io::Error::other("configuration_durability_unconfirmed"));
+        assert_eq!(spoof.code, "ocr_history_io");
+    }
     fn request() -> OcrHistorySaveRequest {
         OcrHistorySaveRequest {
             mode: OcrHistorySaveMode::Create,

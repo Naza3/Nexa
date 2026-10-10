@@ -249,22 +249,39 @@ fn save(
     if bytes.len() > MAX_FILE_BYTES {
         return Err(error("workbench_limit"));
     }
-    token::atomic_replace_private(&root.join(FILE_NAME), &bytes).map_err(|e| {
-        if e.to_string() == "configuration_durability_unconfirmed" {
-            error("workbench_durability_unconfirmed")
-        } else {
-            io_error(e)
-        }
-    })?;
+    token::atomic_replace_private(&root.join(FILE_NAME), &bytes).map_err(publication_error)?;
     Ok(WorkbenchPreferencesSnapshot {
         revision: revision(&bytes),
         preferences: request.preferences,
     })
 }
 
+fn publication_error(source: io::Error) -> BridgeError {
+    if matches!(
+        token::PrivateFileError::from_io(&source),
+        Some(token::PrivateFileError::PublishedDurabilityUnconfirmed { .. })
+    ) {
+        error("workbench_durability_unconfirmed")
+    } else {
+        io_error(source)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn publication_state_requires_typed_error_not_display_text() {
+        let published = publication_error(io::Error::other(
+            token::PrivateFileError::PublishedDurabilityUnconfirmed {
+                source: io::Error::other("private_sentinel_path"),
+            },
+        ));
+        assert_eq!(published.code, "workbench_durability_unconfirmed");
+        assert!(!format!("{published:?} {published}").contains("private_sentinel"));
+        let spoof = publication_error(io::Error::other("configuration_durability_unconfirmed"));
+        assert_eq!(spoof.code, "workbench_io");
+    }
     fn bridge(root: &Path) -> DesktopBridge {
         DesktopBridge::new(
             root.to_path_buf(),

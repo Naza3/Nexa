@@ -73,6 +73,52 @@ fn competing_instance_lock_reports_busy_without_bypassing_ownership() {
 }
 
 #[test]
+fn missing_or_nonregular_worker_keeps_fixed_report_and_cli_message() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    runtime_api::configuration::initialize(&root).unwrap();
+    let package = temp.path().join("package");
+    fs::create_dir(&package).unwrap();
+    let executable = package.join(if cfg!(windows) {
+        "ai-runtime.exe"
+    } else {
+        "ai-runtime"
+    });
+    fs::copy(env!("CARGO_BIN_EXE_ai-runtime"), &executable).unwrap();
+    let worker = package.join(if cfg!(windows) {
+        "ai-runtime-worker.exe"
+    } else {
+        "ai-runtime-worker"
+    });
+    for nonregular in [false, true] {
+        if nonregular {
+            fs::create_dir(&worker).unwrap();
+        }
+        let observed = Command::new(&executable)
+            .arg("--data-dir")
+            .arg(&root)
+            .arg("serve")
+            .env(DESKTOP_STARTUP_REPORT_ENV, "1")
+            .output()
+            .unwrap();
+        assert_eq!(observed.status.code(), Some(1));
+        assert_eq!(
+            observed.stdout,
+            b"nexa-startup-v1:packaged_runtime_missing\n"
+        );
+        assert_eq!(
+            observed.stderr,
+            if nonregular {
+                b"ai-runtime: packaged worker must be a regular file beside ai-runtime\n".as_slice()
+            } else {
+                b"ai-runtime: packaged worker is missing beside ai-runtime\n".as_slice()
+            }
+        );
+        assert!(Discovery::read(&root).is_err());
+    }
+}
+
+#[test]
 fn closed_reader_does_not_change_cli_failure_exit() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("data");

@@ -474,11 +474,12 @@ fn caused(code: &'static str, reason: ConfigurationFailureReason) -> Configurati
     }
 }
 fn storage_error(code: &'static str, source: io::Error) -> ConfigurationError {
-    // token's protection checks deliberately share one fixed, content-free marker.
+    // token's protection checks deliberately share one typed, content-free marker.
     // OS permission errors must remain distinct from those local safety checks.
-    let path_security = source.raw_os_error().is_none()
-        && source.kind() == io::ErrorKind::PermissionDenied
-        && source.to_string() == "credential path, permissions, or format is invalid";
+    let path_security = matches!(
+        token::PrivateFileError::from_io(&source),
+        Some(token::PrivateFileError::PathSecurity)
+    );
     #[cfg(unix)]
     let path_security =
         path_security || matches!(source.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR));
@@ -970,13 +971,19 @@ fn encode(c: &Config) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 fn publish_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    token::atomic_replace_private(path, bytes).map_err(|e| {
-        error(if e.to_string() == "configuration_durability_unconfirmed" {
+    token::atomic_replace_private(path, bytes).map_err(publication_error)
+}
+fn publication_error(source: io::Error) -> ConfigurationError {
+    error(
+        if matches!(
+            token::PrivateFileError::from_io(&source),
+            Some(token::PrivateFileError::PublishedDurabilityUnconfirmed { .. })
+        ) {
             "configuration_durability_unconfirmed"
         } else {
             "configuration_write_failed"
-        })
-    })
+        },
+    )
 }
 fn publish(root: &Path, config: Config) -> Result<Document> {
     let bytes = encode(&config)?;
@@ -1226,6 +1233,37 @@ pub fn legacy_update(root: &Path, update: impl FnOnce(&mut Config)) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn storage_semantics_require_typed_errors_not_display_text() {
+        let security = storage_error(
+            "configuration_unavailable",
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                token::PrivateFileError::PathSecurity,
+            ),
+        );
+        assert_eq!(
+            security.reason,
+            Some(ConfigurationFailureReason::PathSecurity)
+        );
+        let spoof = storage_error(
+            "configuration_unavailable",
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "credential path, permissions, or format is invalid",
+            ),
+        );
+        assert_eq!(spoof.reason, Some(ConfigurationFailureReason::AccessDenied));
+        let published = publication_error(io::Error::other(
+            token::PrivateFileError::PublishedDurabilityUnconfirmed {
+                source: io::Error::other("private_sentinel_path"),
+            },
+        ));
+        assert_eq!(published.code, "configuration_durability_unconfirmed");
+        assert!(!format!("{published:?} {published}").contains("private_sentinel"));
+        let spoof = publication_error(io::Error::other("configuration_durability_unconfirmed"));
+        assert_eq!(spoof.code, "configuration_write_failed");
+    }
     struct Root {
         _temp: tempfile::TempDir,
         path: std::path::PathBuf,

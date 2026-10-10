@@ -13,3 +13,6 @@ llama-adapter = { path = "../llama-adapter" }
 model-store = { path = "../model-store" }
 serde_json = "1.0"
 sha2 = "0.10"
+
+[lints]
+workspace = true

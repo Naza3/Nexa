@@ -1,4 +1,4 @@
-use super::invalid;
+use super::{PrivateFileError, invalid};
 use std::{
     ffi::CString,
     fs::File,
@@ -162,6 +162,14 @@ pub fn open_regular_file(path: &Path) -> io::Result<File> {
 }
 
 pub fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_replace_with_sync(path, bytes, File::sync_all)
+}
+
+fn atomic_replace_with_sync(
+    path: &Path,
+    bytes: &[u8],
+    sync_parent: impl FnOnce(&File) -> io::Result<()>,
+) -> io::Result<()> {
     let parent = open_dir(path.parent().ok_or_else(invalid)?, false)?;
     let target = name(path.file_name().ok_or_else(invalid)?)?;
     // Validation is descriptor based. The private parent remains pinned through
@@ -199,9 +207,9 @@ pub fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
         {
             return Err(io::Error::last_os_error());
         }
-        parent
-            .sync_all()
-            .map_err(|_| io::Error::other("configuration_durability_unconfirmed"))
+        sync_parent(&parent).map_err(|source| {
+            io::Error::other(PrivateFileError::PublishedDurabilityUnconfirmed { source })
+        })
     })();
     if result.is_err() {
         unsafe {
@@ -209,4 +217,62 @@ pub fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{error::Error, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn parent_sync_failure_keeps_published_file_and_underlying_os_cause() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        create_private_dir(&root).unwrap();
+        let path = root.join("config.toml");
+        atomic_replace(&path, b"before").unwrap();
+        let error = atomic_replace_with_sync(&path, b"after", |_| {
+            Err(io::Error::from_raw_os_error(libc::EIO))
+        })
+        .unwrap_err();
+        let typed = PrivateFileError::from_io(&error).unwrap();
+        assert!(matches!(
+            typed,
+            PrivateFileError::PublishedDurabilityUnconfirmed { .. }
+        ));
+        assert_eq!(
+            typed
+                .source()
+                .unwrap()
+                .downcast_ref::<io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(libc::EIO)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"after");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn prepublication_failure_never_reports_published_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("private");
+        create_private_dir(&root).unwrap();
+        let path = root.join("directory");
+        create_private_dir(&path).unwrap();
+        let error = atomic_replace_with_sync(&path, b"after", |_| {
+            panic!("a rejected target must not reach publication or parent sync")
+        })
+        .unwrap_err();
+        assert!(matches!(
+            PrivateFileError::from_io(&error),
+            Some(PrivateFileError::PathSecurity)
+        ));
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
 }

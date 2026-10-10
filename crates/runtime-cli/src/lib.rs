@@ -2,6 +2,7 @@
 pub mod client;
 pub mod command;
 pub mod instance;
+mod startup_error;
 
 /// Private desktop launch hint. It enables only a bounded diagnostic on stdout;
 /// it changes no authentication, process containment, or service permissions.
@@ -11,52 +12,10 @@ pub const DESKTOP_STARTUP_REPORT_ENV: &str = "NEXA_DESKTOP_STARTUP_REPORT";
 /// channel. stderr remains null, including stderr inherited by native workers.
 /// A closed desktop/pipe is harmless: reporting cannot panic or change cleanup.
 pub fn report_desktop_startup_error(
-    error: &(dyn std::error::Error + Send + Sync),
+    error: &(dyn std::error::Error + Send + Sync + 'static),
     mut output: impl std::io::Write,
 ) {
-    struct Text {
-        bytes: [u8; 256],
-        length: usize,
-    }
-    impl std::fmt::Write for Text {
-        fn write_str(&mut self, value: &str) -> std::fmt::Result {
-            let end = self
-                .length
-                .checked_add(value.len())
-                .ok_or(std::fmt::Error)?;
-            if end > self.bytes.len() {
-                return Err(std::fmt::Error);
-            }
-            self.bytes[self.length..end].copy_from_slice(value.as_bytes());
-            self.length = end;
-            Ok(())
-        }
-    }
-    let mut text = Text {
-        bytes: [0; 256],
-        length: 0,
-    };
-    let valid = std::fmt::write(&mut text, format_args!("{error}")).is_ok();
-    let line: &[u8] = match valid.then_some(&text.bytes[..text.length]) {
-        Some(b"cannot bind configured loopback endpoint") => {
-            b"nexa-startup-v1:runtime_loopback_bind_failed\n"
-        }
-        Some(b"configuration_unavailable") => b"nexa-startup-v1:configuration_unavailable\n",
-        Some(b"configuration_invalid") => b"nexa-startup-v1:configuration_invalid\n",
-        Some(b"another instance owns this data directory") => {
-            b"nexa-startup-v1:runtime_instance_busy\n"
-        }
-        Some(b"configuration_busy") => b"nexa-startup-v1:configuration_busy\n",
-        Some(
-            b"packaged worker is missing beside ai-runtime"
-            | b"packaged worker must be a regular file beside ai-runtime",
-        ) => b"nexa-startup-v1:packaged_runtime_missing\n",
-        Some(
-            b"invalid server security configuration"
-            | b"LAN and management credentials must be independent",
-        ) => b"nexa-startup-v1:runtime_security_invalid\n",
-        _ => b"nexa-startup-v1:runtime_start_failed\n",
-    };
+    let line = startup_error::report_line(error);
     let _ = output.write_all(line);
 }
 
@@ -71,7 +30,7 @@ mod startup_report_tests {
             report_desktop_startup_error(&error, &mut output);
             assert_eq!(output, b"nexa-startup-v1:runtime_start_failed\n");
         }
-        let error = std::io::Error::other("cannot bind configured loopback endpoint");
+        let error = startup_error::StartupError::LoopbackBind(std::io::ErrorKind::AddrInUse.into());
         let mut output = Vec::new();
         report_desktop_startup_error(&error, &mut output);
         assert_eq!(output, b"nexa-startup-v1:runtime_loopback_bind_failed\n");

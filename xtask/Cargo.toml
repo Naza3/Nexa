@@ -22,3 +22,6 @@ http-body-util.workspace = true
 bytes.workspace = true
 uuid.workspace = true
 tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -120,19 +120,38 @@ pub(crate) fn atomic_replace(target: &Path, bytes: &[u8]) -> Result<()> {
             .ok_or_else(|| BridgeError::new("unsafe_file"))?,
     )
     .map_err(|_| BridgeError::new("unsafe_file"))?;
-    runtime_api::token::atomic_replace_private(target, bytes).map_err(|e| {
-        BridgeError::new(if e.to_string() == "configuration_durability_unconfirmed" {
+    runtime_api::token::atomic_replace_private(target, bytes).map_err(publication_error)
+}
+fn publication_error(source: io::Error) -> BridgeError {
+    use runtime_api::token::PrivateFileError;
+    BridgeError::new(
+        if matches!(
+            PrivateFileError::from_io(&source),
+            Some(PrivateFileError::PublishedDurabilityUnconfirmed { .. })
+        ) {
             "settings_durability_unconfirmed"
         } else {
             "settings_write_failed"
-        })
-    })
+        },
+    )
 }
 
 #[cfg(test)]
 mod policy_tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn publication_state_requires_typed_error_not_display_text() {
+        let published = publication_error(io::Error::other(
+            runtime_api::token::PrivateFileError::PublishedDurabilityUnconfirmed {
+                source: io::Error::other("private_sentinel_path"),
+            },
+        ));
+        assert_eq!(published.code, "settings_durability_unconfirmed");
+        assert!(!format!("{published:?} {published}").contains("private_sentinel"));
+        let spoof = publication_error(io::Error::other("configuration_durability_unconfirmed"));
+        assert_eq!(spoof.code, "settings_write_failed");
+    }
     fn string(bytes: &mut Vec<u8>, value: &str) {
         bytes.extend((value.len() as u64).to_le_bytes());
         bytes.extend(value.as_bytes());

@@ -1,6 +1,7 @@
 use crate::{
     client::VerifiedConnection,
     instance::{Discovery, InstanceLock, wait_stopped},
+    startup_error::StartupError,
 };
 use hyper::Method;
 use model_store::{ImportCancellation, ImportRequest, ModelSource, ModelStore};
@@ -400,7 +401,7 @@ where
     config.validate()?;
     let local = bind(config.api.listen)
         .await
-        .map_err(|_| "cannot bind configured loopback endpoint")?;
+        .map_err(StartupError::LoopbackBind)?;
     let mut lan_startup_error = None;
     let lan = if config.lan_api.enabled {
         let address = config
@@ -425,8 +426,7 @@ where
 }
 async fn serve(root: &Path) -> Result<()> {
     let _ = require_initialized(root)?;
-    let lock =
-        InstanceLock::try_acquire(root)?.ok_or("another instance owns this data directory")?;
+    let lock = InstanceLock::try_acquire(root)?.ok_or(StartupError::InstanceBusy)?;
     // A settings writer may have changed LAN enablement before lock acquisition.
     // Only this lock-protected snapshot may authorize any network binding.
     let config = require_initialized(root)?;
@@ -441,11 +441,11 @@ async fn serve(root: &Path) -> Result<()> {
             "ai-runtime-worker"
         });
     if !fs::symlink_metadata(&worker)
-        .map_err(|_| "packaged worker is missing beside ai-runtime")?
+        .map_err(StartupError::WorkerMissing)?
         .file_type()
         .is_file()
     {
-        return Err("packaged worker must be a regular file beside ai-runtime".into());
+        return Err(StartupError::WorkerNotRegular.into());
     }
     let BoundApiListeners {
         local: listener,
@@ -460,7 +460,7 @@ async fn serve(root: &Path) -> Result<()> {
     let lan = if let Some(listener) = lan_listener {
         let lan_token = init_private_lan_token(root)?;
         if lan_token.matches_authorization(token.bearer_header_value().as_bytes()) {
-            return Err("LAN and management credentials must be independent".into());
+            return Err(StartupError::CredentialsNotIndependent.into());
         }
         let security = Arc::new(LanSecurityContext::new(lan_token, &config.lan_api)?);
         Some((listener, security, config.lan_api.clone()))
@@ -475,7 +475,7 @@ async fn serve(root: &Path) -> Result<()> {
             listen,
             config.api.trusted_origins.clone(),
         )
-        .map_err(|_| "invalid server security configuration")?,
+        .map_err(StartupError::SecurityConfiguration)?,
     );
     // Install Ctrl+C before potentially long startup hashing. If interrupted,
     // finish the owned startup I/O before releasing the instance lock.
@@ -664,15 +664,22 @@ mod lan_start_tests {
         );
         config.lan_api.enabled = false;
         let mut calls = 0;
-        assert!(
-            bind_api_listeners(&config, |_| {
-                calls += 1;
-                async { Err(io::Error::from(io::ErrorKind::AddrInUse)) }
-            })
-            .await
-            .is_err()
-        );
+        let error = bind_api_listeners(&config, |_| {
+            calls += 1;
+            async { Err(io::Error::from(io::ErrorKind::AddrInUse)) }
+        })
+        .await
+        .err()
+        .expect("loopback binding must fail closed");
         assert_eq!(calls, 1);
+        assert!(matches!(
+            error.downcast_ref::<StartupError>(),
+            Some(StartupError::LoopbackBind(source)) if source.kind() == io::ErrorKind::AddrInUse
+        ));
+        assert_eq!(
+            crate::startup_error::report_line(error.as_ref()),
+            b"nexa-startup-v1:runtime_loopback_bind_failed\n"
+        );
     }
     #[tokio::test]
     async fn second_bind_failure_keeps_local_and_disabled_lan_never_calls_second_binder() {

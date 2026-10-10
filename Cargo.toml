@@ -28,3 +28,10 @@ hmac = "0.12"
 subtle = "2"
 getrandom = "0.4"
 toml = "0.9"
+
+# 所有项目 crate 显式继承；错误结果必须处理，诊断不得遗留 dbg!。
+[workspace.lints.rust]
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"

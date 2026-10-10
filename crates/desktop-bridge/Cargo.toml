@@ -35,3 +35,6 @@ path = "src/bin/harness.rs"
 [[bin]]
 name = "nexa-catalog-download-verify"
 path = "src/bin/catalog_download_verify.rs"
+
+[lints]
+workspace = true

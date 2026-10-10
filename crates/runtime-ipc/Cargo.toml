@@ -10,3 +10,6 @@ runtime-core = { path = "../runtime-core" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+[lints]
+workspace = true

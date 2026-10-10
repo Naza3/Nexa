@@ -33,3 +33,10 @@ tempfile = "=3.27.0"
 strip = "debuginfo"
 lto = "thin"
 codegen-units = 1
+
+# 桌面壳是独立 workspace，保持与根 workspace 一致。
+[lints.rust]
+unused_must_use = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"

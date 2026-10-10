@@ -1,5 +1,13 @@
 # Nexa 当前状态
 
+## 2026-10-10 Rust 错误规范（本地主机验证完成）
+
+任务 W05-RUST-ERROR-1：在 codex/dev 9b18f41 基线上新增[全项目规范](docs/rust-error-handling.md)，类型化启动与私有文件错误，取消按 Display 字符串分类，保留安全公开诊断与底层 source；统一两个 workspace 的错误结果/调试宏 lint。本轮本地中文提交，未推送。
+
+用户批准后已在隔离云端目录恢复官方Rust1.98.1。根native-free范围631测试通过/4既有忽略、Linux桌面壳33测试通过、两范围strict Clippy/fmt、Python367通过/5平台skip和diff空白检查通过。首次Python因缺子模块许可文件失败，恢复锁定源码后重跑通过。两Cargo.lock不变。Windows与原生推理三个crate本轮未验证，不声称全平台或全项目所有历史错误均完成迁移。详见[验证记录](docs/verification/2026-10-10-rust-error-conventions.md)。
+
+此前9b18f41的原生验证已成功并交付开发测试包（[Actions37931429259](https://github.com/Naza3/Nexa/actions/runs/37931429259)）；下方“原生安装验收启动竞态修复（验证中）”是旧提交内的历史快照，不是仍待排障。本轮改动不能继承该批二进制验证。版本仍0.3.0，main和正式Release未变。
+
 ## 2026-10-09 原生安装验收启动竞态修复（验证中）
 
 错误处理与模型显示名已获授权提交并推送至`codex/dev`：`085cf4024ec5f742e8b46e91210dd3511de01f8c`。原生CI [37926350189](https://github.com/Naza3/Nexa/actions/runs/37926350189) 的构建/单测通过，但安装生命周期在NSIS重复安装后的runtime启动阶段失败；安装包仍为UNVERIFIED，不交付为已验证包。Windows根Rust655通过/10忽略、桌面34通过、Python366项（364通过/2skip）、CTest5项已独立核对证据。
