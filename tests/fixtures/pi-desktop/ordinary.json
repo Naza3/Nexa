@@ -1,0 +1,20 @@
+{
+  "model": "fixture",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Synthetic validation. Use the memory lookup only when requested."
+    },
+    {
+      "role": "user",
+      "content": "请查询 B7 的颜色和 fixture_tag。"
+    }
+  ],
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "store": false,
+  "max_completion_tokens": 256,
+  "temperature": 0
+}

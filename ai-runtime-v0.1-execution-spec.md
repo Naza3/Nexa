@@ -1,5 +1,13 @@
 # Nexa Runtime v0.1 开发执行文档
 
+## 2026-10-10 工具兼容增量
+
+[ADR0044](docs/decisions/0044-openai-tool-calling-compatibility.md)统一新增工具协议：原API/原生线程隔离不变，Message增加nullable content、tool_calls/tool_call_id及Tool角色，GenerationRequest带ToolConfig；工具增量共用一次性信用，ToolCalls结束原因。工具模式支持标准流式与非流式，完整校验后分片；普通文本保持实时输出。工具输出账本768KiB（保留384KiB），文本账本仍256KiB，原生解析临时工作区与模型内存单列。私有IPC/shim行为身份迁移5，C ABI新增v3入口而旧布局不变。旧正文的纯文本/三角色限制是该增量之前的基线，不能据此拒绝本次已实现工具字段；未实现项和验证范围按ADR与本轮证据，不扩大为所有模型/平台已验。
+
+> 2026-10-09：启动私有诊断、配置附加固定reason、结果不确定与UI安全呈现遵循[错误恢复契约](docs/error-handling-and-recovery.md)；公共主错误码/HTTP状态、锁/CAS与不自动重放边界保持。
+
+> 2026-10-09：按 [ADR0042](docs/decisions/0042-lan-bind-startup-recovery.md)，可选 LAN 的 OS bind 失败保留认证回环管理，`lan_api.startup_error` 报告有界原因且 `running=false`；配置/安全校验及本机绑定失败仍失败关闭，修正设置须显式停服。
+
 - 版本：2.2（本机单图 OCR 开发契约）
 - 日期：2026-10-07
 - 项目名：Nexa；命令与原生符号沿用 `ai-runtime` / `ai-runtime-worker` / `air_*`
@@ -250,6 +258,8 @@ gpu_layers = 0
 
 按[ADR0023](docs/decisions/0023-model-verification-and-idle-policy.md)，文件校验超时范围30..7200秒，整次校验共用预算，不改变下载传输、原生加载或短文本计时；缺省300秒。`idle_unload_enabled=false`明确关闭空闲卸载，保留等待秒数（桌面新保存1..86400秒，旧手工长TTL读取保持兼容），显式卸载/切换/关停继续有效。旧配置缺少字段按true/300秒读取；新字段不保证旧版程序可读。运行策略须停服持锁保存，新操作/下次启动生效。
 
+按[ADR0034](docs/decisions/0034-configurable-execution-timeout.md)，统一设置暴露既有 `runtime.execution_timeout_seconds`：默认300秒，新保存1..86400秒，完整runtime更新必填；旧TOML缺省300、合法超大正数读取兼容。仅停服持锁CAS保存，重启服务后生效。执行预算覆盖prepare、图像编码、prefill和decode，排队、加载及文件校验继续分别计时。
+
 ### 5.3 CPU设备与资源
 
 当前仅CPU，显式请求其他backend或gpu_layers非零必须拒绝，不假装回退成功。status/devices区分配置与实际观察；未知指标保持null/unavailable。构建关闭GGML_NATIVE但仍有实际指令集要求，见[构建锁](docs/build-lock.md)，不能宣称任意x64兼容。
@@ -330,7 +340,7 @@ shutdown始终等待安全边界并调用close。关闭进行中新发生且未�
 
 - 每帧带 protocol_version、session_id（每次spawn的新UUID）、operation_id、request_id、kind、payload及seq。Hello和命令的seq为null；worker事件seq从1开始，在同session内严格递增，不重置为公共seq
 - 图片请求帧上限8 MiB，纯文本Generate仍上限2 MiB，事件帧上限64 KiB，均包含最后LF。完整编码必须在首次写出前检查；读取在累积前检查上限，拒绝残缺EOF、非法UTF-8、未知字段/kind、重复字段、版本或身份不符
-- 父端先发送Hello并指定session；worker读取实际build_info，当前双方严格核对私有protocol=3、shim=4（公共HTTP/proof仍1）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
+- 父端先发送Hello并指定session；worker读取实际build_info，当前双方严格核对私有protocol=4、shim=4（公共HTTP/proof仍1）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc`。Hello的operation_id=0、request_id=null；握手前不能执行操作
 - 命令为Load、Generate、Unload、Cancel、Credit、Shutdown。普通操作operation_id非零递增，Generate的request_id须与payload相同；Cancel/Credit只作用于绑定的session/operation/request。Shutdown为session控制帧，operation_id=0、request_id=null
 - 事件为原始ExecutorEvent，包括Prepared、TextDelta和清理后的终态；Loaded/Unloaded对应各自操作。Prepared只能一次，TextDelta/Completed不能抢在它前面，usage须匹配Prepared及请求max_tokens；每操作仅一次终态
 - 父端是唯一输出预算账本。每Generate预留16 KiB暂存和最多两个120 KiB信用，合计≤256 KiB。信用ID在session内非零严格递增，每个信用只准一次≤4 KiB UTF-8 delta，其完整编码≤25 KiB（最坏24 KiB转义正文+1 KiB封套）
@@ -358,6 +368,7 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 | `GET /runtime/models` | 鉴权安全管理摘要，包含未验证模型；有界 limit/after 分页 |
 | `POST /v1/chat/completions` | 文本 messages 或本机单 user 的一个内联 PNG/JPEG image_url 与 text，流式或非流式；LAN仅文本 |
 | `GET /runtime/status` | 模型状态、队列数、活动 ID、后端、错误与内存指标 |
+| `GET /runtime/performance` | 仅本机鉴权：真实instance UUID、capacity和最近200条推理终态，最新优先；字段与计时口径见ADR0035 |
 | `GET /runtime/devices` | 本构建后端与设备探测结果 |
 | `POST /runtime/models/import` | 当前用户本地文件导入；只供受信任本机管理客户端 |
 | `POST /runtime/load` | 显式加载/切换，完成后返回 200；受 load_timeout 约束 |
@@ -371,6 +382,8 @@ Windows进程containment、各阶段超时与验证范围见 [T03决策](docs/de
 ADR0027增量：桌面可停止自己的文件准备/hash、显式切换/加载及同操作私有短测。取消直接作用于操作令牌，不排在Load后；显式加载独占期间不接受其他客户端排队；取消Loaded竞态需再卸载并等ACK。不合作worker沿用5秒宽限/强制终止/确认回收；清理未确认是永久故障，不能返回cancelled/unloaded。加载已结束后的Stop只取消私有probe，可能保留驻留模型；不取消别人的生成，不保存取消为失败模型证明，不用shutdown替代。完整身份/回执恢复/自动流程边界见[ADR0027](docs/decisions/0027-owned-model-load-cancellation.md)。
 
 T04 增补：两种 models 列表均支持 limit（默认64、1–128）和 after ModelId，ID升序；next_after 为下一页 ModelId，末页null。管理摘要不包含完整manifest/source/path/extra，chat/load仍只接受注册ID。35bfd85基线`/v1/models`仅列旧准入模型；ADR0015增量改按当前available/loadable筛选，未有历史validated的合法候选也可列出，列表不承诺实际load必成功；现有注册表无可靠创建时间，省略created，不虚构0。客户端应遍历分页，此为首版兼容边界。
+
+2026-10-09名称增量：本机与LAN的`/v1/models`每条记录新增`display_name`，复用已登记的显示名；`id/object/owned_by`及原请求中的ModelId保持。显示名允许重复，不用于匹配、加载或改变准入；不重新生成ID、不迁移旧索引、不覆盖自定义名称。LAN仍只列当前驻留模型，注册表名称暂不可得时以该ID作显示名。客户端是否展示此字段取决于实际实现；PI Desktop v0.17.0的添加模型列表读取该字段，聊天选择器仍使用用户别名或ID。见[兼容说明](docs/model-display-names.md)。
 
 所有 `/v1/*` 和 `/runtime/*` 使用 `Authorization: Bearer <token>`。本机管理监听只接受回环连接，不提供 `0.0.0.0` 监听开关；用户显式启用的独立LAN推理监听遵循ADR0020，不放宽本段管理接口约束。令牌由 init 生成，日志不得输出，读取权限限当前用户。
 
@@ -461,6 +474,8 @@ data: [DONE]
 正常结束 reason 为 stop 或 length。请求 include_usage=true 时，在 finish chunk 与 [DONE] 之间发送 choices=[] 的 usage chunk；统计字段与非流式一致。
 
 发出 SSE 响应前完成排队、加载、模板和上下文预算检查，错误可使用对应 HTTP 状态。等待期间客户端 read timeout 应覆盖排队、加载和首 token 处理，不以服务暂未返回正文判定卡死。
+
+桌面文本聊天与图片OCR在同一已证明身份的管理连接上先GET `/runtime/configuration`，再POST聊天请求；使用 `runtime_effective.chat_response_timeout_seconds` 等待响应，其值为实际active文件校验+排队+加载+执行+30秒（u64逐项饱和加法）。收到响应后的stream使用同一快照的执行超时+30秒，不读取pending磁盘值。这两个聊天路径移除固定750秒兜底；缺失/无效effective预算或无法构造截止点返回 `response_invalid`，不静默退回固定值。其他管理路径的预算不变；SSE事件/正文和输出上限、取消及断流清理、不自动重放规则保持。
 
 SSE 已开始后出错，发送一个 `data: {"error":{...}}` 事件后关闭连接，不发送成功 finish 或 [DONE]。这是本产品的错误扩展，客户端必须处理。显式取消也按此路径返回 `request_cancelled`；客户端断开时无需向断开的连接发送终态。
 
@@ -782,3 +797,7 @@ llama基线核对日期：2026-09-29；当前Windows范围收敛：2026-10-03。
 - [S10 — llama-bench](https://github.com/ggml-org/llama.cpp/blob/master/tools/llama-bench/README.md)：输入处理与生成基准；参数在 T00 对照锁定版本验证。
 
 实施时发现上游行为与本规格冲突，应以可复现结果记录问题，修改适配层或显式更新本规格。不要仅为保留设计描述而掩盖失败、伪造支持或跳过验收。
+
+## 统一推理性能（ADR0035）
+
+按 [ADR0035](docs/decisions/0035-unified-inference-performance.md)，engine阶段计时由可靠Completed载荷经IPC4传递，actor保留最多200条内存终态。涵盖已接收的文本/OCR/本机API/LAN及私有生成短测；准入前拒绝不计入。成功完整测量带实际load_options和prepare/prefill/decode/output_callback微秒；失败、取消、超时不带成功指标。prefill包含视觉编码，decode扣同步回调仍含采样与清理。速度使用原生usage，零分母不可用。历史不存正文、图片、路径或错误全文，服务退出清空。record key为instance UUID加sequence，不能只用可重用的request_id。公共HTTP/proof仍1，shim4/ABI布局v2保持，SSE/非流式响应形状保持。

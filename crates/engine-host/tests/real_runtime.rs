@@ -25,6 +25,7 @@ impl Drop for TestDirectory {
 }
 fn request(model: &ModelId, text: &str, max_tokens: u32) -> GenerationRequest {
     GenerationRequest {
+        tools: Default::default(),
         request_id: RequestId::new(),
         model: model.clone(),
         messages: vec![Message::new(Role::User, text)],
@@ -74,11 +75,19 @@ fn assert_completed(events: &[RequestEvent]) -> String {
             text.push_str(piece);
         }
     }
-    match events.last().unwrap().kind {
-        RequestEventKind::Completed { usage, .. } => {
-            assert!(usage.prompt_tokens > 0 && usage.completion_tokens > 0)
+    match &events.last().unwrap().kind {
+        RequestEventKind::Completed {
+            usage, performance, ..
+        } => {
+            assert!(usage.prompt_tokens > 0 && usage.completion_tokens > 0);
+            let performance = performance
+                .as_deref()
+                .expect("real engine phase measurements");
+            assert!(performance.timings.is_valid());
+            assert!(performance.timings.prefill_us > 0 && performance.timings.decode_us > 0);
+            assert!(performance.load_options.threads > 0);
         }
-        ref terminal => panic!("expected real completion, got {terminal:?}"),
+        terminal => panic!("expected real completion, got {terminal:?}"),
     }
     assert!(!text.is_empty());
     assert!(!text.contains("<think>") && !text.contains("</think>"));

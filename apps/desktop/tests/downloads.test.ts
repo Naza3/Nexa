@@ -121,7 +121,7 @@ describe("download ownership and directory discovery", () => {
     await controller.startDownload(entry.catalog_id); await vi.advanceTimersByTimeAsync(5001);
     expect(controller.getSnapshot().download_phase).toBe("idle");
     expect(controller.getSnapshot().download).toMatchObject({ attempt: 3, status: "failed", downloaded_bytes: 0 });
-    expect(controller.getSnapshot().error).toEqual(failure);
+    expect(controller.getSnapshot().error).toMatchObject({ code: failure.code, message: expect.stringContaining("当前下载源") });
     expect(api.downloadStart).toHaveBeenCalledTimes(1);
     expect(api.downloadNext).toHaveBeenCalledTimes(2);
     expect(api.scanModels).not.toHaveBeenCalled();

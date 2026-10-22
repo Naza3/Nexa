@@ -13,6 +13,8 @@ pub struct ErrorDetail {
     pub kind: String,
     pub param: Option<String>,
     pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ApiError {
@@ -39,6 +41,7 @@ impl ApiError {
                 .into(),
                 param: param.map(str::to_owned),
                 code: code.into(),
+                reason: None,
             },
         }
     }
@@ -54,7 +57,7 @@ impl ApiError {
         Self::new(
             StatusCode::BAD_REQUEST,
             "unsupported_parameter",
-            "This parameter or value is not supported by the text-only API.",
+            "This parameter or value is not supported by this API.",
             Some(param),
         )
     }
@@ -93,6 +96,30 @@ impl From<RuntimeError> for ApiError {
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "The request or model registration is invalid.",
+                None,
+            ),
+            UnsupportedToolCalling => (
+                StatusCode::BAD_REQUEST,
+                "unsupported_tool_calling",
+                "The selected model template cannot safely represent this tool request.",
+                Some("tools"),
+            ),
+            InvalidToolOutput => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_tool_output",
+                "The model returned an invalid tool call.",
+                None,
+            ),
+            ToolOutputLimitExceeded => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "tool_output_limit_exceeded",
+                "The generated tool output exceeded the configured bound.",
+                None,
+            ),
+            IncompleteGeneration => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "incomplete_generation",
+                "The generated tool message was incomplete.",
                 None,
             ),
             UnsupportedModel => (
@@ -243,3 +270,24 @@ impl std::fmt::Display for ApiError {
     }
 }
 impl std::error::Error for ApiError {}
+
+#[cfg(test)]
+mod tool_error_tests {
+    use super::*;
+    #[test]
+    fn tool_errors_have_fixed_codes_without_raw_native_diagnostics() {
+        for code in [
+            ErrorCode::UnsupportedToolCalling,
+            ErrorCode::InvalidToolOutput,
+            ErrorCode::ToolOutputLimitExceeded,
+            ErrorCode::IncompleteGeneration,
+        ] {
+            let error = ApiError::from_generation(RuntimeError::new(
+                code,
+                "private tool arguments / private path canary",
+            ));
+            assert_eq!(error.error.code, code.as_str());
+            assert!(!serde_json::to_string(&error).unwrap().contains("private"));
+        }
+    }
+}

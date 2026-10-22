@@ -44,7 +44,9 @@
 //! require_sync::<Prepared<'static>>();
 //! ```
 
+mod chat;
 mod ffi;
+pub use chat::GeneratedDelta;
 
 use runtime_types::{
     ErrorCode, FinishReason, GenerationOptions, LoadOptions, Message, RuntimeError, Usage,
@@ -59,7 +61,10 @@ use std::{
     path::Path,
     ptr::NonNull,
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// A native engine. At most one engine may be alive in a process.
@@ -222,7 +227,7 @@ impl Model<'_> {
             .iter()
             .map(|message| ffi::AirMessage {
                 role: ffi::AirString::borrowed(message.role.as_str()),
-                content: ffi::AirString::borrowed(&message.content),
+                content: ffi::AirString::borrowed(message.content.as_deref().unwrap_or_default()),
             })
             .collect();
         let stops: Vec<_> = options
@@ -276,6 +281,7 @@ impl Model<'_> {
         Ok(Prepared {
             raw: Some(nonnull(raw)?),
             prompt_tokens,
+            chat: None,
             _model: PhantomData,
             _thread: PhantomData,
         })
@@ -293,6 +299,7 @@ impl Drop for Model<'_> {
 pub struct Prepared<'model> {
     raw: Option<NonNull<ffi::AirPrepared>>,
     prompt_tokens: u32,
+    chat: Option<chat::ChatContext>,
     _model: PhantomData<&'model mut ffi::AirModel>,
     _thread: PhantomData<Rc<()>>,
 }
@@ -465,7 +472,10 @@ impl std::error::Error for GenerationError {
 /// A new request requires a new handle. Dropping a clone does not cancel work.
 #[derive(Clone)]
 pub struct CancelHandle(Arc<CancelInner>);
-struct CancelInner(NonNull<ffi::AirCancel>);
+struct CancelInner {
+    raw: NonNull<ffi::AirCancel>,
+    cancelled: AtomicBool,
+}
 // SAFETY: The ABI promises this isolated object is an atomic cancellation flag.
 // All operations are concurrent sets; Arc postpones its destroy until no Rust
 // references or native calls using those references remain. No model is shared.
@@ -479,20 +489,27 @@ impl CancelHandle {
         // SAFETY: Valid output slots; no native model state is involved.
         let status = unsafe { ffi::air_cancel_create(&mut raw, &mut error) };
         check_status(status, error)?;
-        Ok(Self(Arc::new(CancelInner(nonnull(raw)?))))
+        Ok(Self(Arc::new(CancelInner {
+            raw: nonnull(raw)?,
+            cancelled: AtomicBool::new(false),
+        })))
     }
     pub fn cancel(&self) {
+        self.0.cancelled.store(true, Ordering::Release);
         // SAFETY: Arc keeps the thread-safe native flag alive for this call.
         unsafe { ffi::air_cancel_set(self.raw()) };
     }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.cancelled.load(Ordering::Acquire)
+    }
     fn raw(&self) -> *mut ffi::AirCancel {
-        self.0.0.as_ptr()
+        self.0.raw.as_ptr()
     }
 }
 impl Drop for CancelInner {
     fn drop(&mut self) {
         // SAFETY: Arc has no remaining users, including in-flight native calls.
-        unsafe { ffi::air_cancel_destroy(self.0.as_ptr()) };
+        unsafe { ffi::air_cancel_destroy(self.raw.as_ptr()) };
     }
 }
 
@@ -508,7 +525,7 @@ pub fn build_info() -> Result<String, RuntimeError> {
 }
 
 const EXPECTED_BUILD_INFO: &str = concat!(
-    "{\"shim_version\":4,\"backend\":\"cpu\",\"llama_commit\":\"",
+    "{\"shim_version\":5,\"backend\":\"cpu\",\"llama_commit\":\"",
     "2149c00f4442dc59302e134a02e4c99d5f7ed9fc\"}"
 );
 fn verify_build_identity(info: &str) -> Result<(), RuntimeError> {
@@ -572,6 +589,9 @@ fn check_status(status: i32, error: ffi::AirError) -> Result<(), RuntimeError> {
         6 => ErrorCode::NativeFailure,
         7 => ErrorCode::WrongThread,
         8 => ErrorCode::ConsumerStopped,
+        9 => ErrorCode::InvalidToolOutput,
+        10 => ErrorCode::IncompleteGeneration,
+        11 => ErrorCode::ToolOutputLimitExceeded,
         _ => ErrorCode::NativeProtocol,
     };
     let message = buffer.to_string()?;
@@ -817,7 +837,7 @@ mod tests {
     #[test]
     fn native_build_reports_pinned_abi() {
         let info = build_info().unwrap();
-        assert!(info.contains("\"shim_version\":4"));
+        assert!(info.contains("\"shim_version\":5"));
         assert!(info.contains("\"backend\":\"cpu\""));
         assert!(info.contains("2149c00f4442dc59302e134a02e4c99d5f7ed9fc"));
     }
@@ -849,10 +869,11 @@ mod behavior_identity_tests {
     fn product_entry_identity_rejects_previous_and_forged_shims() {
         assert!(verify_build_identity(EXPECTED_BUILD_INFO).is_ok());
         for invalid in [
-            EXPECTED_BUILD_INFO.replace("\"shim_version\":4", "\"shim_version\":3"),
+            EXPECTED_BUILD_INFO.replace("\"shim_version\":5", "\"shim_version\":4"),
+            EXPECTED_BUILD_INFO.replace("\"shim_version\":5", "\"shim_version\":3"),
             EXPECTED_BUILD_INFO.replace(
-                "\"shim_version\":4",
-                "\"shim_version\":3,\"shim_version\":4",
+                "\"shim_version\":5",
+                "\"shim_version\":3,\"shim_version\":5",
             ),
             EXPECTED_BUILD_INFO.replace("cpu", "gpu"),
             EXPECTED_BUILD_INFO.replace("2149c00", "0000000"),

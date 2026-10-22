@@ -103,8 +103,8 @@ pub fn preflight_directory(path: &Path, package_root: &Path) -> Result<(), &'sta
             .parent()
             .is_some_and(|parent| same_path(parent, &root))
     {
-        // Reuse package verification, not catalog scanning: GGUF inputs receive
-        // only the existing four-byte header check, never a whole-model hash.
+        // Recheck declared package integrity without enumerating user inputs.
+        // Model discovery and admission retain their own validation.
         crate::layout::validate(&root.join("nexa-desktop.exe"))?;
     }
     Ok(())
@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn in_package_apply_and_rescan_reject_files_added_after_selection() {
+    fn in_package_apply_and_rescan_allow_extra_files_but_check_declared_payload() {
         let temp = tempfile::tempdir().unwrap();
         crate::layout::tests::complete_fixture(temp.path());
         for name in ["model", "models"] {
@@ -342,8 +342,13 @@ mod tests {
             fs::create_dir(&directory).unwrap();
             let (selected, dto) = DirectorySelection::new(&directory, temp.path()).unwrap();
             let mut slot = Some(selected);
-            let dll = directory.join("added-after-window-open.dll");
-            fs::write(&dll, "synthetic").unwrap();
+            fs::write(directory.join("added-after-window-open.dll"), "synthetic").unwrap();
+            fs::create_dir(directory.join("empty-nested")).unwrap();
+            assert!(preflight_directory(&directory, temp.path()).is_ok());
+            assert!(DirectorySelection::new(&directory, temp.path()).is_ok());
+            let runtime = temp.path().join("runtime/ai-runtime.exe");
+            let original = fs::read(&runtime).unwrap();
+            fs::write(&runtime, "tampered").unwrap();
             assert_eq!(
                 DirectorySelection::admit(
                     &mut slot,
@@ -351,22 +356,14 @@ mod tests {
                     temp.path(),
                     |_| -> Result<(), ()> { panic!("must not admit") }
                 ),
-                Err(AdmissionError::Selection("package_unlisted_file"))
+                Err(AdmissionError::Selection("package_file_hash_mismatch"))
             );
             assert_eq!(
                 preflight_directory(&directory, temp.path()),
-                Err("package_unlisted_file")
+                Err("package_file_hash_mismatch")
             );
             assert!(slot.is_some());
-            fs::remove_file(dll).unwrap();
-            let nested = directory.join("empty-nested");
-            fs::create_dir(&nested).unwrap();
-            assert_eq!(
-                preflight_directory(&directory, temp.path()),
-                Err("package_unlisted_file")
-            );
-            assert!(DirectorySelection::new(&directory, temp.path()).is_err());
-            fs::remove_dir(nested).unwrap();
+            fs::write(runtime, original).unwrap();
             assert!(
                 DirectorySelection::admit(
                     &mut slot,

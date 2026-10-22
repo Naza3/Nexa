@@ -211,6 +211,7 @@ impl ApiState {
             .await
             .map_err(|_| ApiError::internal())?;
         let request = GenerationRequest {
+            tools: Default::default(),
             request_id: RequestId::new(),
             model,
             messages: vec![Message::new(Role::User, "Reply with one short greeting.")],
@@ -468,6 +469,7 @@ mod tests {
                         }
                         _ => {
                             events.emit(ExecutorEvent::Completed {
+                                timings: None,
                                 usage: Usage {
                                     prompt_tokens: 8,
                                     completion_tokens: if matches!(self.0, Mode::BadUsage) {
@@ -508,6 +510,7 @@ mod tests {
             .handle()
             .submit_if_idle(
                 GenerationRequest {
+                    tools: Default::default(),
                     request_id: RequestId::new(),
                     model,
                     messages: vec![Message::new(Role::User, "private-prompt-body-canary")],

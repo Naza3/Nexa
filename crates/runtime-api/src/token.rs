@@ -14,6 +14,47 @@ mod platform;
 #[path = "token/windows.rs"]
 mod platform;
 
+/// Typed private-storage failures carried inside the existing `io::Error` API.
+/// Publication is reported only after the replacement has become visible; its
+/// underlying sync failure is available through `Error::source`, never Display.
+pub enum PrivateFileError {
+    PathSecurity,
+    PublishedDurabilityUnconfirmed { source: io::Error },
+}
+impl PrivateFileError {
+    /// Inspect the immediate typed payload, not a rendered message or an
+    /// unrelated failure whose source happens to mention private storage.
+    pub fn from_io(error: &io::Error) -> Option<&Self> {
+        error.get_ref()?.downcast_ref()
+    }
+}
+impl fmt::Display for PrivateFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::PathSecurity => "credential path, permissions, or format is invalid",
+            Self::PublishedDurabilityUnconfirmed { .. } => "configuration_durability_unconfirmed",
+        })
+    }
+}
+impl fmt::Debug for PrivateFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::PathSecurity => "PrivateFileError::PathSecurity",
+            Self::PublishedDurabilityUnconfirmed { .. } => {
+                "PrivateFileError::PublishedDurabilityUnconfirmed"
+            }
+        })
+    }
+}
+impl std::error::Error for PrivateFileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PathSecurity => None,
+            Self::PublishedDurabilityUnconfirmed { source } => Some(source),
+        }
+    }
+}
+
 pub struct SecretToken([u8; 64]);
 impl fmt::Debug for SecretToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -67,7 +108,7 @@ impl SecretToken {
 fn invalid() -> io::Error {
     io::Error::new(
         io::ErrorKind::PermissionDenied,
-        "credential path, permissions, or format is invalid",
+        PrivateFileError::PathSecurity,
     )
 }
 /// Every newly created directory is private from its first observable instant.
@@ -117,6 +158,45 @@ fn load_named_token(root: &Path, name: &str) -> io::Result<SecretToken> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn private_file_failures_are_typed_and_keep_safe_formatting() {
+        use std::error::Error;
+        let security = invalid();
+        assert_eq!(security.kind(), io::ErrorKind::PermissionDenied);
+        assert!(matches!(
+            PrivateFileError::from_io(&security),
+            Some(PrivateFileError::PathSecurity)
+        ));
+        assert!(
+            PrivateFileError::from_io(&security)
+                .unwrap()
+                .source()
+                .is_none()
+        );
+        let published = io::Error::other(PrivateFileError::PublishedDurabilityUnconfirmed {
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "private_sentinel_path"),
+        });
+        assert_eq!(published.kind(), io::ErrorKind::Other);
+        assert_eq!(
+            published.to_string(),
+            "configuration_durability_unconfirmed"
+        );
+        let typed = PrivateFileError::from_io(&published).unwrap();
+        assert!(matches!(
+            typed,
+            PrivateFileError::PublishedDurabilityUnconfirmed { .. }
+        ));
+        let source = typed.source().unwrap().downcast_ref::<io::Error>().unwrap();
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(source.to_string(), "private_sentinel_path");
+        assert!(!format!("{published:?} {published} {typed:?}").contains("private_sentinel"));
+        for spoof in [
+            io::Error::other("configuration_durability_unconfirmed"),
+            io::Error::new(io::ErrorKind::PermissionDenied, security.to_string()),
+        ] {
+            assert!(PrivateFileError::from_io(&spoof).is_none());
+        }
+    }
     #[test]
     fn temporary_init_preserves_secret_and_redacts_it() {
         let temp = tempfile::tempdir().unwrap();
@@ -258,6 +338,9 @@ pub fn open_regular_file(path: &Path) -> io::Result<std::fs::File> {
 pub fn open_private_file(path: &Path) -> io::Result<std::fs::File> {
     platform::open_private_file(path)
 }
+/// Atomically replace a private file. A `PublishedDurabilityUnconfirmed` payload
+/// means the new contents are visible but parent-directory sync failed; callers
+/// must read back before deciding whether to write again.
 pub fn atomic_replace_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     platform::atomic_replace(path, bytes)
 }

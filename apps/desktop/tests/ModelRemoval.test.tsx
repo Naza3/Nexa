@@ -177,7 +177,7 @@ describe("model library remove interaction (mock DOM, not native GUI)", () => {
     const dialog = await openRemove(user); await user.click(within(dialog).getByRole("button", { name: "确认移除" }));
     await waitFor(() => expect(controller.getSnapshot().operation).toBeNull());
     expect(screen.getByRole("article", { name: model.display_name })).toBeInTheDocument();
-    expect(screen.getByText("另一个客户端开始工作，请稍后重试。")).toBeInTheDocument();
+    expect(screen.getByText(/当前任务或队列繁忙/)).toBeInTheDocument();
     expect(screen.queryByText(/已从模型库移除/)).not.toBeInTheDocument();
   });
   it("retains an unsaved model profile draft for explicit reimport", async () => {

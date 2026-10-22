@@ -1,5 +1,21 @@
 # Nexa Windows 总体方案与架构
 
+## 2026-10-10 工具兼容增量
+
+[ADR0044](decisions/0044-openai-tool-calling-compatibility.md)统一新增工具协议：原API/原生线程隔离不变，Message增加nullable content、tool_calls/tool_call_id及Tool角色，GenerationRequest带ToolConfig；工具增量共用一次性信用，ToolCalls结束原因。工具模式支持标准流式与非流式，完整校验后分片；普通文本保持实时输出。工具输出账本768KiB（保留384KiB），文本账本仍256KiB，原生解析临时工作区与模型内存单列。私有IPC/shim行为身份迁移5，C ABI新增v3入口而旧布局不变。旧正文的纯文本/三角色限制是该增量之前的基线，不能据此拒绝本次已实现工具字段；未实现项和验证范围按ADR与本轮证据，不扩大为所有模型/平台已验。
+
+> 2026-10-09：启动私有诊断、配置附加固定reason、结果不确定与UI安全呈现遵循[错误恢复契约](error-handling-and-recovery.md)；公共主错误码/HTTP状态、锁/CAS与不自动重放边界保持。
+
+> 2026-10-09：按 [ADR0042](decisions/0042-lan-bind-startup-recovery.md)，可选 LAN 的 OS bind 失败保留认证回环管理，`lan_api.startup_error` 报告有界原因且 `running=false`；配置/安全校验及本机绑定失败仍失败关闭，修正设置须显式停服。
+
+> 2026-10-08 PI Desktop 调用插件按 [ADR0038](decisions/0038-pi-desktop-ocr-plugin.md)：独立 `.piplug` 提供图片队列、Markdown、性能和 TOML 历史；通过带本机身份验证的既有接口加载与识别，Nexa 公共协议和模型/服务归属不变。
+
+> 2026-10-08 桌面持久化按 [ADR0036](decisions/0036-desktop-results-and-preferences.md)：输出下方的性能摘要、桌面最近100条OCR结果归档、TOML工作区设置与关闭前保存。OCR归档由调用层持有，不改变runtime数据归属。
+
+> 2026-10-08 顺序OCR按 [ADR0037](decisions/0037-sequential-image-ocr-queue.md)：桌面按导入顺序逐张调用既有单图接口，最多20张，逐图准备/保存，整批保留本窗口互斥；公共API不接收多图请求。
+
+> 2026-10-08 性能增量按 [ADR0035](decisions/0035-unified-inference-performance.md)：原生阶段计时随可靠终态经 IPC 到 actor，actor 独占最近 200 条推理历史，本机鉴权查询、桌面统一性能页；覆盖文本/OCR/各调用端，runtime不持久化正文或图片，不改变 SSE 响应。
+
 日期：2026-10-03。当前范围见 [ADR0014](decisions/0014-windows-desktop-cpu-runtime.md)，具体协议见 [执行规格](../ai-runtime-v0.1-execution-spec.md)，完成事实见 [当前状态](../PROJECT_STATE.md)。源码与文档清理边界见 [ADR0029](decisions/0029-desktop-only-source-tree.md)，旧版由 Git 追溯。
 
 > 2026-10-04 增量：[ADR0020](decisions/0020-opt-in-lan-inference-api.md)定义用户显式启用的独立局域网推理监听，仅对已加载模型开放 models/chat；原回环管理与服务端证明不变。实施/目标机验证状态见 PROJECT_STATE。本文早期“本机API”不禁止该受限显式增量，公网服务仍非目标。
@@ -58,7 +74,7 @@ Executor、ModelResolver、DTO/IPC边界已有Windows进程隔离、测试和解
 3. worker经控制线程及时处理取消，在专用推理线程创建/释放engine/model/context/sampler
 4. 正常退出或空闲卸载回收worker；worker崩溃时API保持可用，受影响运行/排队请求终结，显式load恢复
 5. 不能确认OS回收时fail-closed，保留Faulted与清理错误，不能创建第二个worker或冒充已停止
-6. 正常关闭UI默认只取消本窗口请求并保留runtime，显式同时退出影响全部客户端。托盘仅为计划中的管理入口，不改变安全关停所有权
+6. 正常关闭UI默认只取消本窗口请求并保留runtime，显式同时退出影响全部客户端。可选关闭到托盘只隐藏窗口，托盘退出仍走既有保存/关停握手；独立开机启动仅登记当前用户登录启动项，不改变模型加载和安全关停所有权（ADR0040）
 
 ```text
 结构校验 → 有界排队 → 获得槽位 → 必要时加载
@@ -120,6 +136,10 @@ aria2仅从核验过的`download/nexa-aria2.exe`启动，组件来源锁/字节/
 Jinja目前没有循环、操作数或中间分配预算；4MiB限制在render完成后才检查，构造期的模板能力探针同样没有内部执行预算。因此不能把输出大小上限称为模板执行时间或峰值内存上限。
 
 Windows产品worker由父进程独立计时：加载使用load_timeout，prepare属于Generate的execution_timeout，默认各300秒；超时发取消，5秒宽限后可调用TerminateJobObject，再至多等待5秒确认并有界清理。取消标志不能保证中断正在执行的Jinja；未确认回收则fail-closed，不宣称已停止或另起worker。该机制避免父端无界等待，不构成Job RAM硬限制，超时前仍可能OOM或拖慢16GB系统；直接进程内使用adapter没有这层父进程强杀保护。
+
+按[ADR0034](decisions/0034-configurable-execution-timeout.md)，既有execution_timeout统一暴露为“推理执行超时”，默认300秒，UI/API新保存1..86400秒。runtime整组更新必填、停服CAS保存、重启生效；旧TOML缺省300，合法超大正数继续可读。设置只改变同一调度执行预算，不创建OCR专属计时器。
+
+桌面文本聊天和单图OCR使用同一已证明身份的Connection先GET配置再POST请求；只读 `runtime_effective.chat_response_timeout_seconds` 来自实际active文件校验+排队+加载+执行+30秒的饱和和，stream使用同一effective执行秒数+30秒。pending磁盘值不参与预算，巨大旧配置不会让GET溢出；桌面无法构造单调截止点时报 `response_invalid`。这两个聊天路径取消固定750秒兜底，使SSE响应头前的prepare与响应头后的stream均跟随实际执行预算；其他管理路径预算、SSE正文/输出上限、取消清理与不自动重放保持。
 
 复杂模板的执行/分配预算属于后续待办，不扩入本切片；当前不作全部模板安全或全进程内存安全承诺。
 

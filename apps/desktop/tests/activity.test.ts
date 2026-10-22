@@ -21,3 +21,10 @@ describe("bounded activity summaries", () => {
   it.each(["invalid", "[{}]", "[null]", "x".repeat(32769)])("ignores malformed or oversized history", (text) => { localStorage.setItem(ACTIVITY_STORAGE_KEY, text); expect(readActivitySummaries()).toEqual([]); });
   it("handles unavailable storage without breaking in-memory results", () => { const set = localStorage.setItem; Object.defineProperty(localStorage, "setItem", { value: () => { throw new Error("blocked"); }, configurable: true }); expect(() => persistActivitySummaries([item(1)])).not.toThrow(); Object.defineProperty(localStorage, "setItem", { value: set, configurable: true }); });
 });
+
+it("normalizes native activity errors before any workspace renders them", () => {
+  const [value] = recordActivity([], item(1, "failed"));
+  expect(value.error?.code).toBe("worker_failed");
+  expect(value.error?.message).toContain("推理进程异常");
+  expect(value.error?.message).not.toContain("secret");
+});

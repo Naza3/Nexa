@@ -374,10 +374,11 @@ class ReleaseTests(unittest.TestCase):
         import re
         for action in re.findall(r"uses: ([^\s]+)", text):
             self.assertRegex(action, r"^[A-Za-z0-9_./-]+@[0-9a-f]{40}$")
-        self.assertIn("branches: ['codex/dev']", text)
+        self.assertIn("branches: ['codex/dev', 'main']", text)
         self.assertIn("tags: ['v*']", text)
         self.assertEqual(text.count("contents: write"), 1)
         self.assertNotIn("pull_request_target", text)
         self.assertIn("needs: [release-identity, download-component, native]", text)
         self.assertIn("github.event_name == 'push' && github.ref_type == 'tag'", text)
-        self.assertIn("scripts/test_windows_msi_lifecycle.py", text)
+        self.assertIn("scripts/test_tauri_windows_lifecycle.py", text)
+        self.assertIn("scripts/package_tauri_windows.py --payload", text)

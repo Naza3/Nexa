@@ -1,0 +1,20 @@
+{
+  "name": "nexa-pi-desktop-ocr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PI Desktop OCR workbench for the local Nexa runtime",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/upstream.mjs check",
+    "pack": "npm run build && node scripts/upstream.mjs pack"
+  },
+  "dependencies": {
+    "dompurify": "3.4.16",
+    "marked": "18.1.0",
+    "smol-toml": "1.9.0"
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

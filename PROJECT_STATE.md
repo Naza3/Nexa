@@ -1,5 +1,141 @@
 # Nexa 当前状态
 
+## 2026-10-10 工具兼容与Rust错误规范（已推送，Windows原生与安装包验收通过）
+
+精确源码e3f2acdb5bb703dfe0e44a5f1a6369007df6a355先通过完整Windows交叉门槛，再更新codex/dev。[Actions38019983165](https://github.com/Naza3/Nexa/actions/runs/38019983165)五个构建/验证job成功：根Rust702通过/11忽略、桌面34、前端1006、Python376通过/2skip、CTest6/6，真实两轮工具、HTTP/CLI和50次断连恢复全部通过。MSI/NSIS17项安装生命周期及69事件诊断成功，两格式安装后的源码/hash/package_verified/dirty身份一致。
+
+前轮原生CI因旧验收仍把合法tools:[]判为不支持而失败；已改为加载后200正例，保留真正不支持字段/strict:true负例，并补契约漂移测试与受审查日志。先前MSVC字符串capacity取整问题也已修复并通过Windows边界测试，公开输出上限保持。
+
+[便携版、MSI、EXE测试包](https://github.com/Naza3/Nexa/actions/runs/38019983165/artifacts/11658547928)已独立核对完整6文件发行库存、源码/hash/大小/许可闭包及三份证据63文件。版本仍0.3.0，未签名，artifact有效至2026-10-17 03:51:35 UTC；main/tag/正式Release未变。用户Win10、PI原生GUI与离线目标机仍独立待验；见[最终验证记录](docs/verification/2026-10-10-tools-windows.md)。下方“Linux验证完成/未推送”段落为当时历史快照。
+
+## 2026-10-10 通用工具调用兼容层（Linux真实闭环验证完成）
+
+任务 W04-TOOLS-1：按用户“补齐Nexa的功能”和通用兼容模式要求，接入 OpenAI tools/tool_calls/tool 结果历史、流式/非流式、模型原始模板严格解析、输出信用及完整 prompt 预算。无需 PI 专用开关，不按型号白名单授予工具能力，Nexa 不执行客户端工具。目标口述模型已更正为 Qwen3.5-4B-Q4；样例使用固定 Q4_K_M，用户文件身份尚未确认。
+
+根 Linux 全 workspace 689 通过/11 既有忽略、strict Clippy/fmt、桌面壳33项、Python 367 通过/5 平台 skip、CTest 5/5；固定 PI 客户端实际 serializer/parser 通过 Nexa HTTP/worker 的真实0.6B与Qwen3.5-4B-Q4_K_M两轮工具闭环均通过，分别30.1/130.3秒、无重试，各仅执行一次内存查表。私有 IPC/shim 升至 5，公共版本仍 0.3.0。本轮未推送、未发布新包，Windows 各层独立待验。见[使用说明](docs/tool-calling.md)、[ADR0044](docs/decisions/0044-openai-tool-calling-compatibility.md)和[本轮验证](docs/verification/2026-10-10-tool-calling.md)。
+
+## 2026-10-10 Rust 错误规范（本地主机验证完成）
+
+任务 W05-RUST-ERROR-1：在 codex/dev 9b18f41 基线上新增[全项目规范](docs/rust-error-handling.md)，类型化启动与私有文件错误，取消按 Display 字符串分类，保留安全公开诊断与底层 source；统一两个 workspace 的错误结果/调试宏 lint。本轮本地中文提交，未推送。
+
+用户批准后已在隔离云端目录恢复官方Rust1.98.1。根native-free范围631测试通过/4既有忽略、Linux桌面壳33测试通过、两范围strict Clippy/fmt、Python367通过/5平台skip和diff空白检查通过。首次Python因缺子模块许可文件失败，恢复锁定源码后重跑通过。两Cargo.lock不变。Windows与原生推理三个crate本轮未验证，不声称全平台或全项目所有历史错误均完成迁移。详见[验证记录](docs/verification/2026-10-10-rust-error-conventions.md)。
+
+此前9b18f41的原生验证已成功并交付开发测试包（[Actions37931429259](https://github.com/Naza3/Nexa/actions/runs/37931429259)）；下方“原生安装验收启动竞态修复（验证中）”是旧提交内的历史快照，不是仍待排障。本轮改动不能继承该批二进制验证。版本仍0.3.0，main和正式Release未变。
+
+## 2026-10-09 原生安装验收启动竞态修复（验证中）
+
+错误处理与模型显示名已获授权提交并推送至`codex/dev`：`085cf4024ec5f742e8b46e91210dd3511de01f8c`。原生CI [37926350189](https://github.com/Naza3/Nexa/actions/runs/37926350189) 的构建/单测通过，但安装生命周期在NSIS重复安装后的runtime启动阶段失败；安装包仍为UNVERIFIED，不交付为已验证包。Windows根Rust655通过/10忽略、桌面34通过、Python366项（364通过/2skip）、CTest5项已独立核对证据。
+
+受控宿主复现确认验收脚本立即调用status存在抢占serve实例锁的窗口，但原失败未保留原因，不能断言该次必由锁竞态造成。修复验收为全新数据目录、无旧discovery，等待新进程发布discovery后才执行原认证status；保持30秒期限、存活检查、全部安装门槛与原停止确认。增加固定`runtime_instance_busy`启动码及有界白名单诊断/退出码，产品锁不绕过、serve不重试。修复后正在重新执行本地门槛和原生CI，结果见[验收记录](docs/verification/2026-10-09-installer-startup-order.md)。
+
+以下两节为推送前验证快照；当前发布状态以上节为准。
+
+## 2026-10-09 模型发现显示名（与错误处理联合门槛通过）
+
+任务W05-MODEL-NAME-1。按用户确认，仅为本机/LAN `/v1/models`兼容增加已有`display_name`，稳定ID、分页、模型调用/历史与LAN仅驻留范围保持；缺少名称元数据时回退ID，不改索引或客户端。
+
+官方PI Desktop v0.17.0实际源码解析/设置搜索/名称JSX隔离测试通过；发现列表可读取显示名，但聊天选择器仍按用户别名或完整ID显示，需要在客户端“高级→别名”设置，不能声称本修复自动改变聊天标签。当前安装版本/原生GUI未验证。
+
+最终组合源码重新通过根Rust653项/10既有忽略、Linux桌面壳33、前端49文件1006、严格Python366项（361通过/5平台skip）与native身份5项；两host strict Clippy/fmt/typecheck/lint/build均退出0。两workspace Windows Release strict Clippy、10份native静态库、四EXE实际交叉链接与AMD64 PE/import复核全部通过，442个非Markdown代码文件前后hash一致。保留既有clang-cl探测、SDK缺PDB调试信息及前端大chunk warning，未关闭检查。
+
+结果仍为基线2a56b396上的未提交dirty工作树；未推送、未tag/Release、未生成新安装包，版本0.3.0保持。完整Windows原生CI/安装器生命周期、目标Win10、真实模型与PI Desktop GUI待后续独立验证。前轮三份旧验证文档保持，不把旧CI授予本轮代码。见[ADR0043](docs/decisions/0043-model-discovery-display-name.md)、[名称说明](docs/model-display-names.md)、[本轮联合记录](docs/verification/2026-10-09-model-display-names.md)。
+
+## 2026-10-09 全项目错误处理与LAN启动恢复（本地联合及Windows交叉验证通过）
+
+任务W05-ERROR-1 / W05-LAN-RECOVERY-1。实现覆盖启动诊断、配置固定原因、模型/推理错误展示、下载清理及不确定结果、安装预检说明；不声称穷尽所有错误。可选LAN仅OS绑定失败保留认证本机管理，明确未运行原因，原配置/密钥/安全边界不变；修正须显式停服。启动私有stdout只传固定码，默认stderr仍null；前端统一有界脱敏，活动不把未确认读回写成完成，业务请求不自动重放。
+
+冻结工作树通过根Rust652项/10既有忽略、Linux桌面壳33、前端49文件1006、严格Python366项（361通过/5平台skip）、native身份5项；fmt、两host strict Clippy、前端typecheck/lint/build全部退出0。联合门槛发现并最小修复xtask测试漏reason字段和安装Python夹具漏encoding，再完整重跑通过。
+
+复用已核验缓存完成两workspace Windows Release strict Clippy、10份native静态库身份及Runtime/worker/acceptance/desktop四EXE实际交叉链接和AMD64 PE/import复核；442份非Markdown源码构建前后hash一致。另复核三安装helper实际交叉链接及PE，未生成本轮发行包。保留clang-cl探测、SDK缺PDB调试信息与前端大chunk warning；没有关闭检查。
+
+本轮仍为基线2a56b396上的未提交dirty工作树，未推送、未tag/Release、版本仍0.3.0；不把旧CI赋予新代码。目标Windows GUI、真实局域网、新安装器原生生命周期、关闭桌面保留服务后的真实调用仍待独立验收。模型显示名是后续独立事项，未混入本次。见[错误恢复契约](docs/error-handling-and-recovery.md)、[ADR0042](docs/decisions/0042-lan-bind-startup-recovery.md)与[联合验证](docs/verification/2026-10-09-error-handling.md)。
+
+## 2026-10-09 移除启动未声明文件检验（原生验证与产物复核通过）
+
+任务W05-LAYOUT-1。按用户要求，启动layout不再扫描或拒绝未声明文件/目录，NSIS生成的uninstall.exe不再触发该拦截。声明文件hash、来源/校验表、必需EXE清单成员及路径防护保持，模型准入、ACL/token与数据配置未改。
+
+用户批准推送后，精确源码 `2a56b39602806fbaf3c74841a5a8b0d1534bcf77`（tree `3a3db727e5b78b1bf353319f06c72e3dd6d9e2a7`）先通过干净提交的完整本地Windows交叉门槛，再正常更新codex/dev。[Actions37910225699](https://github.com/Naza3/Nexa/actions/runs/37910225699)于2026-10-09 09:55:05 UTC成功，五个构建/验证job通过，分支release job正确跳过。
+
+Windows根Rust627通过/10忽略、桌面34、前端970、Python364项（362通过/2skip）、CTest5/5，真实模型/HTTP/CLI/bridge与17项安装生命周期通过。已安装MSI/NSIS的两个EXE诊断均package_verified=true、dirty=false、精确source一致；真实额外DLL正例和manifest篡改负例也通过。独立复核完整六文件发行库存、源码/hash/大小/安装证明及三份证据归档的62个文件通过，69事件安装诊断status=pass。
+
+[本次三格式测试包](https://github.com/Naza3/Nexa/actions/runs/37910225699/artifacts/11608851406)有效至2026-10-16 09:54:57 UTC。版本仍0.3.0，未创建tag/Release或合并main，旧正式Release保持。本次交付未签名；Windows Server 2022的安装包诊断不能代替用户Win10原生GUI/配置验收，MSI独立configuration_unavailable仍未由此证明解决。随后仅补记证据的文档提交不冒充此批二进制来源。详见[ADR0041](docs/decisions/0041-declared-payload-startup-validation.md)及[完整验证](docs/verification/2026-10-09-declared-payload-validation.md)。
+
+## 2026-10-08 版本0.3.0、推送与tag（已完成；标签发行构建进行中）
+
+用户明确授权统一版本至0.3.0、推送GitHub并创建v0.3.0。已fetch确认main 1c3650c为当前开发分支祖先；远端codex/dev a18e9a1为本地祖先，v0.3.0尚不存在。一键工具同步七版本文件，重复执行零修改；两Cargo锁及npm锁第三方依赖不变，锁定离线metadata和严格Python检查通过。
+
+本轮包含前轮Tauri MSI/NSIS、托盘和开机启动。修复Windows测试短路径比较和Tauri私有安装夹具跨盘资源读取后，干净a7db515先通过完整本地Windows交叉门槛，再推送codex/dev。[Actions37758119918](https://github.com/Naza3/Nexa/actions/runs/37758119918)五个构建/验证job全部成功，17项实际安装生命周期门槛全部通过；下载六个发行文件并复验清单、哈希与来源一致。
+
+附注v0.3.0已创建并推送，远端确认指向a7db515f649f8ba05f3837c050b6ed56b920968c；main未自动合并。[标签发行Actions37762270527](https://github.com/Naza3/Nexa/actions/runs/37762270527)已启动，正式Release公开和附件上传仍以该流水线最终结果为准。源码/版本/tag交付完成，用户Windows10/i5的原生窗口与登录启动实际体验仍独立待验。命令、结果及限制见[0.3.0验证记录](docs/verification/2026-10-08-release-0.3.0.md)。
+
+## 2026-10-08 Tauri 安装器、托盘与开机启动（本地检查与Windows交叉构建完成）
+
+按用户选择，将自研 Setup/WiX 打包迁移为锁定 Tauri CLI 2.12.1 的 WiX MSI + NSIS EXE，保持每用户固定目录和完整数据保留，支持同格式同版本替换。旧 Setup 内含 MSI，应使用新 MSI 原位更新；跨格式直接覆盖拒绝，切换需先卸载程序。NSIS 替换不承诺事务回滚。生产 CI 接入新的17项原生生命周期门槛；本轮未推送、未创建tag，版本仍0.2.3。
+
+新增独立、默认关闭的“关闭到托盘”和“开机启动”。关闭到托盘保存在既有 TOML，仅隐藏并保留任务/服务/模型；托盘显示/退出复用安全保存与关停。开机启动以当前用户 Windows Run 登记为真实持久化来源，带引号无参数、260字符限制、写后回读；正常卸载只清理属于本安装目录的项，升级保留选择。
+
+前端970项、Linux壳42项、workbench11项、严格Python359项（354通过/5跳过）、fmt/typecheck/lint/build/actionlint通过。最新原生安装helper实际交叉链接和导入检查通过；完整Tauri→NSIS探测使用旧0ecddad载荷，解包28文件逐一一致，未冒充新功能发行包。干净源码f0a7183通过完整Windows Release交叉门槛，两workspace strict Clippy、四EXE实际链接和源码/PE核对全通过，证据20261008T081623Z。20份原始许可模拟Windows换行转换后字节一致；真实Windows安装/托盘/登录启动仍待验。见[ADR0039](docs/decisions/0039-tauri-windows-installers.md)、[ADR0040](docs/decisions/0040-desktop-tray-and-autostart.md)、[操作说明](docs/desktop-startup.md)和[本轮验证](docs/verification/2026-10-08-tauri-installers-and-startup.md)。
+
+## 2026-10-08 PI Desktop OCR 插件下载发布（已完成）
+
+用户明确同意公开发布后，插件 `pi-ocr-v0.1.0` 已发布为独立预发布，标签固定源码 `93cdf6d`，Nexa主程序仍0.2.3。[直接下载](https://github.com/Naza3/Nexa/releases/download/pi-ocr-v0.1.0/io.github.naza3.nexa-ocr-0.1.0.piplug) / [发布页](https://github.com/Naza3/Nexa/releases/tag/pi-ocr-v0.1.0)。安装包334150字节，实际HTTP下载200、SHA及每字节与已验本地产物一致；Windows宿主实机条件不因发布而改变。
+
+云端可写Release API但uploads域官方CLI返回401，改为独立上传工作流。先在干净 `0f0e0fb` 通过本地Windows全交叉门槛，再仅推送专用 `codex/pi-ocr-publish`；[Actions37729949673](https://github.com/Naza3/Nexa/actions/runs/37729949673)两job成功，重现完全相同包并使用GitHub自身令牌上传，随后公开发布。未更新main/codex/dev远端、未触发主程序Windows发行，未覆盖旧Release。详见[发布验证](docs/verification/2026-10-08-pi-desktop-ocr-plugin.md#github公开下载交付)。
+
+## 2026-10-08 PI Desktop 的 Nexa OCR 插件（安装包与Linux验证完成，Windows待验）
+
+任务W04-PI-OCR-1。按用户“先完成插件”新增独立0.1.0 `.piplug`，位于 `integrations/pi-desktop-ocr`：本机服务身份验证、显式令牌导入、空闲自动加载所选已登记视觉模型、顺序20图队列、Markdown/原文、正文下真实性能、最近100条非空结果和TOML参数保存。面板关闭继续后台，禁用/退出尽力取消保存；Nexa核心与公共协议、版本0.2.3保持。
+
+52项单测、官方devkit打包/检查、11项官方child契约、真实Controller/Store的Chromium联调均通过。生产main通过两图真实Nexa/GLM-OCR，顺序/各3锚点/性能/历史/重载保持，自有服务正常退出。最终包只因纠正README菜单名重打，执行文件与已验main保持一致。插件包在 `integrations/pi-desktop-ocr/dist/io.github.naza3.nexa-ocr-0.1.0.piplug`；此任务本地提交，不自动推送/tag，未修改Nexa二进制。用户Windows Electron完整安装、i5长图效果仍待验；准确步骤、产物摘要及分层证据见[插件说明](integrations/pi-desktop-ocr/README.md)、[ADR0038](docs/decisions/0038-pi-desktop-ocr-plugin.md)、[验证记录](docs/verification/2026-10-08-pi-desktop-ocr-plugin.md)。环境依赖刷新与保存草稿完成，未代用户发布环境快照。
+
+## 2026-10-08 Windows 桌面 Clippy 修复与交叉便携包（交叉编译及原生CI已完成）
+
+任务W05-CI-FIX-3 / W05-CROSS-2。[Actions37716280319](https://github.com/Naza3/Nexa/actions/runs/37716280319/job/113113404013)在Windows桌面Clippy失败：`windows.rs:1009`的`window.eval(&format!(...))`触发`needless_borrows_for_generic_args`，既有`-D warnings`将其提升为错误。该轮前端960项和Windows壳37项已通过；Runtime、下载组件与版本job成功，后续native打包跳过。按锁定Tauri接口改为直接传入`String`，关闭保存流程保持，未关闭lint。
+
+本地主机fmt/Clippy退出0，独立审查核对锁定Tauri接口与关闭流程通过。用户明确要求先完成本地Windows交叉编译，检查通过才推送；已写入AGENTS。工具链已准备并复验，正式门槛脚本退出0：前端、189项原生编译、两workspace的Windows Release strict Clippy、四EXE实际链接和源码/原生库/PE身份核对全部通过。保留已有clang-cl工具探测warning。证据`/workspace/onboarding/windows-cross/runs/20261008T024028Z`；SDK冷准备17分49秒，缓存复验约0.5秒。
+
+完成本地门槛后提交并推送`0ecddad0b837a9ea5571b01bc28eea73461357d1`。[原生Actions37719780731](https://github.com/Naza3/Nexa/actions/runs/37719780731)于03:15:07 UTC整轮成功：五个构建/验证job成功，分支Release正确跳过。Windows根Rust625通过/10既有忽略、桌面壳37、前端960、Python319项（317通过/2skip）、CTest5/5；真实模型、HTTP/CLI、桌面整包及安装器生命周期步骤通过。没有创建tag、发布Release或合并main，版本仍0.2.3。上述为原生CI构建的验证，不转授本地交叉包Windows运行结论。
+
+用户要求下载本机产物后，在干净0ecddad上复跑交叉门槛退出0，结合本次同提交aria2与验证过的官方CRT生成`dist/Nexa-0.2.3-windows-x64-cross-0ecddad.zip`，18,721,201字节，生产打包校验及独立交付复核通过。启动路径`Nexa-Windows-cross-test/desktop-windows/nexa-desktop.exe`，需已有WebView2、自备模型；本地交叉EXE未在Windows执行，用户Win10/i5实际GUI、批量OCR与性能仍待实机验证。环境复用配置已保存草稿，需在环境设置中保存并发布后供后续环境使用。下一步为用户下载试用；详情、SHA与证据见[本轮验证记录](docs/verification/2026-10-08-windows-cross-gate.md)。
+
+## 2026-10-08 按导入顺序批量OCR（源码与Linux验证完成，Windows待验证）
+
+任务W02-OCR-6。一次最多20张PNG/JPEG、每张4MiB，默认保留导入列表顺序（不按文件名排序），开始前可上移/下移/移除。逐图准备和串行请求，复用已加载模型；正文保存成功后推进，每图独立结果/性能/100条历史。失败或停止暂停，恢复原请求不重放，明确继续仅处理未开始项。controller整批占位防图间被本窗口其他操作抢占；跨页继续，关窗停止调度并保存当前部分结果。原图/待运行队列不落盘，TOML偏好保持。
+
+前端全量45文件958项通过，最后批量19项、互斥4项及旧OCR74项定向通过（子集不加总）；typecheck/lint/build与真实Chromium三尺寸模拟API检查通过。单图重跑迟到指标、外部模型变化、旧poll和正文超限边界已验证。没有Rust/协议/ACL/依赖变化，版本仍0.2.3；main已同步包含，本地提交不自动推送/tag。Windows原生文件窗口、WebView2及用户i5目标机仍待验证。见[ADR0037](docs/decisions/0037-sequential-image-ocr-queue.md)、[验证记录](docs/verification/2026-10-08-sequential-ocr.md)和[使用说明](docs/ocr-windows-cpu.md)。
+
+## 2026-10-08 输出摘要、OCR历史与TOML设置（源码与Linux验证完成，Windows待验证）
+
+任务W02-PERF-2 / W02-OCR-5 / W02-PREF-1。性能摘要放在聊天和OCR正文下方，严格匹配生成连接的真实实例与终态；最近100条非空OCR结果单独持久化，含不完整标记与可用指标，支持查看、复制、另存、删除，不保存原图。运行配置仍为config.toml，新增workbench-preferences.toml记忆OCR参数/提示词/缩放/视图及未发送聊天草稿；模型档案与本窗口草稿做基线冲突检查，不静默恢复初始默认值。
+
+正常关闭先停止并消费OCR终态、保存已有正文与设置；标题栏通过固定事件/nonce ACK进入同一流程，未响应不默默丢弃。独立文件锁、CAS、原子替换及关闭写入门槛已验证。bridge155项、最后参数范围子集9项、Linux壳38项、包装ACL17项、fmt/clippy通过；前端全量936项、typecheck/lint/生产构建及三种宽度浏览器模拟API检查通过；最后定向检查与证据见[本轮验证](docs/verification/2026-10-08-output-history-and-preferences.md)。Windows原生构建/WebView2与用户i5目标机待验，版本仍0.2.3。见[ADR0036](docs/decisions/0036-desktop-results-and-preferences.md)及[OCR说明](docs/ocr-windows-cpu.md)。
+
+## 2026-10-08 统一推理性能系统（源码与Linux验证完成，Windows待验证）
+
+任务W02-PERF-1。用户要求从OCR扩展至所有推理。原生prepare/prefill/decode/同步输出回调计时随可靠终态传递，单actor保留最近200条内存历史，覆盖聊天、OCR、本机/LAN流式及非流式、实际生成短测。新增本机鉴权 `/runtime/performance` 与受ACL约束的 `performance_get`，实例绑定与有界校验；独立性能页按模型/状态/类型筛选，显示真实token速度、耗时与实际加载参数，支持复制CSV。失败/取消/超时不冒充成功测速；记录不含正文/图片/路径，服务退出清空。
+
+完整Rust596通过/10既有忽略，Python314通过/5平台跳过，Linux壳34通过，前端全量879及随后定向19项、fmt/clippy/typecheck/lint/生产构建通过。真实Qwen文本、IPC4 worker信用取消、GLM-OCR真实HTTP计时/取消/恢复均通过；浏览器1440/1024/390布局、筛选、剪贴板及停服隔离通过（模拟后端）。私有worker协议升4，shim4与公共HTTP1保持；版本仍0.2.3。本地交付不自动推送或创建tag，Windows新包与用户i5目标机为下一步。见[ADR0035](docs/decisions/0035-unified-inference-performance.md)、[验证记录](docs/verification/2026-10-08-inference-performance.md)和[使用说明](docs/inference-performance.md)。
+
+## 2026-10-08 可配置推理执行超时（源码与Linux检查完成，Windows待验证）
+
+任务W02-OCR-4。新增“设置 → 资源与校验 → 推理执行超时”，复用既有执行秒数，默认300、停服可保存1–86400，重启服务生效。桌面聊天/OCR通过同一认证连接读取运行有效配置，响应头等待与流式等待同时跟随配置，移除这两处固定750秒限制；旧TOML兼容、CAS、取消、不重放和部分输出保留保持。浏览器发现并修复新设置草稿恢复白名单遗漏，补中文超时指引。
+
+相关Rust258通过/2既有忽略、Linux壳34、前端868及最后preview定向18项、fmt/clippy/typecheck/lint/生产构建和独立审查通过；Chromium保存、启动应用、刷新恢复/冲突及1440/1024/390布局通过，后端为模拟。版本仍0.2.3，Windows原生新包和用户CPU长图仍待验。见[ADR0034](docs/decisions/0034-configurable-execution-timeout.md)、[验证记录](docs/verification/2026-10-08-configurable-execution-timeout.md)及[使用说明](docs/ocr-windows-cpu.md)。
+
+## 2026-10-07 版本0.2.3与tag（已完成；公开Release受阻）
+
+任务W05-VERSION-4。七版本文件一致性、锁定metadata及发行39项检查通过；`6309dedf6e15019a93f51ca24a27442850e7575d`与附注tag `v0.2.3`已原子推送，包含本轮全部修复。main仍1c3650c，未自动合并或移动旧tag。
+
+[正式Actions37638109341](https://github.com/Naza3/Nexa/actions/runs/37638109341)的五个构建/原生/安装器job全部成功，前端850项、壳33项及13安装生命周期通过；Release job启动前GitHub报Internal server error，整轮failure，两次rerun-failed均HTTP500。六个原始发行文件已独立验证；复用生产发布流程补发时附件上传又遇401，已保留带正确manifest marker的未公开空草稿，未修改旧Release。可先下载[已验证的CI发行资产](https://github.com/Naza3/Nexa/actions/runs/37638109341/artifacts/11492458105)。具体来源、摘要、错误与恢复条件见[版本验证记录](docs/verification/2026-10-07-release-version-tool.md#023-原生结果与发布阻塞)。
+
+## 2026-10-07 OCR 选图无预览（实现与原生构建已完成）
+
+任务W02-OCR-3。修复有效PNG/JPEG被空或错误File.type误拒；用户实机具体MIME仍未知。现按内容识别图片，预览旁显示文件名/准备/错误，统一“选择图片”按钮，正确处理同文件重选及旧异步结果。最终前端850项、lint/typecheck/生产构建、真实Chromium九组格式组合、file chooser、缩放及三尺寸布局通过；0.2.3 Windows桌面和整套产物验收通过。浏览器回复为模拟，用户Win10 WebView2及实际OCR质量仍独立待验。详见[验证记录](docs/verification/2026-10-07-ocr-image-preview.md)。
+
+## 2026-10-07 Windows CI 构建优化（原生验证已完成）
+
+任务W05-CI-PERF-1。npm/Cargo缓存、Release依赖复用、前端去重、桌面/Runtime并行与冷缓存metadata修复完成。843的[Actions37632857580](https://github.com/Naza3/Nexa/actions/runs/37632857580)整轮成功，等待29分02秒，相比旧成功基线36分56秒少7分54秒（约21.4%），是桌面缓存命中/Runtime冷构建的一次观测。0.2.3 tag实跑确认五个Cargo save跳过、两套npm只恢复、tag缓存仍0条；main当前无缓存，尚无实际tag命中main的证据。发布平台错误单列，不计入成功加速。见[ADR0033](docs/decisions/0033-parallel-windows-builds.md)与[验证记录](docs/verification/2026-10-07-ci-performance.md)。
+
 ## 2026-10-07 产品版本 0.2.2（已完成版本同步，构建待验证）
 
 任务 W05-VERSION-3。按用户要求，在包含 OCR 配对与布局修复的 `e5741ac` 基线上，使用一键工具同步七个版本文件至 `0.2.2`。版本检查、重复预览零修改、两个 workspace 的锁定离线 Cargo metadata、版本/发布测试39项（38通过/1平台跳过）及独立差异审查通过，第三方依赖保持。具体命令与证据见[版本更新记录](docs/verification/2026-10-07-release-version-tool.md#产品版本更新至022)。本任务只更新并推送开发分支，版本 tag 与正式发布由维护者操作。

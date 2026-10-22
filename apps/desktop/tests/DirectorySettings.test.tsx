@@ -247,7 +247,7 @@ describe("directory settings React flow", () => {
       libraryNext: vi.fn(async () => failed),
     });
     await scan(user);
-    await screen.findByText(failed.error.message);
+    await screen.findByText(/模型库或扫描文件数量达到安全上限/);
     expect(screen.getByText("坏模型 中文 <标签>.gguf")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(

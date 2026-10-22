@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "pi_desktop": {
+    "repository": "https://github.com/vastsa/PI-Desktop",
+    "ref": "v0.17.0"
+  },
+  "pi_ai": {
+    "package": "@earendil-works/pi-ai",
+    "version": "1.0.1",
+    "registry": "https://registry.npmjs.org",
+    "package_lock_sha256": "a1103caf278c4bf649a952d8a65e880e8155a70ae266caa822ec328fd34629dc"
+  },
+  "source_files": [
+    {
+      "file": "pi-ai.patch",
+      "url": "https://raw.githubusercontent.com/vastsa/PI-Desktop/v0.17.0/patches/@earendil-works__pi-ai@1.0.1.patch",
+      "sha256": "0c7a4701594d70c49699adfef275d7c1f997d1c55d103ab09f3377523d322981"
+    },
+    {
+      "file": "runtime.ts",
+      "url": "https://raw.githubusercontent.com/vastsa/PI-Desktop/v0.17.0/packages/agent-runtime/src/runtime.ts",
+      "sha256": "a18745b9eb3e4dfce61774ce87bea0d262158be1715d72f87e79aafc49c18440"
+    },
+    {
+      "file": "todo-tool.ts",
+      "url": "https://raw.githubusercontent.com/vastsa/PI-Desktop/v0.17.0/packages/agent-runtime/src/todo-tool.ts",
+      "sha256": "0e1c4120e45f126f3be43a8a86c610c061f1b87ba9f367e3895fd5815d37a0f5"
+    },
+    {
+      "file": "tool-schema.ts",
+      "url": "https://raw.githubusercontent.com/vastsa/PI-Desktop/v0.17.0/packages/agent-runtime/src/tool-schema.ts",
+      "sha256": "491855d1195defd350cf9749bfdf371752aeeadc4d58a0baf08a187fd2d7e2a7"
+    },
+    {
+      "file": "provider-binding.ts",
+      "url": "https://raw.githubusercontent.com/vastsa/PI-Desktop/v0.17.0/packages/agent-runtime/src/provider-binding.ts",
+      "sha256": "91fe09436a7ed3e2fb29cdb40ea71f68eac4a9bd9905f736fc8393d5669a4858"
+    },
+    {
+      "file": "pnpm-workspace.yaml",
+      "url": "https://raw.githubusercontent.com/vastsa/PI-Desktop/v0.17.0/pnpm-workspace.yaml",
+      "sha256": "76d0da1ce662f3edc00c5df5fbd6bc3db57d251887a3b086586849cede2b1012"
+    }
+  ],
+  "applied_patch_sha256": "b8c1b3aa54b7649346e1eb2fc225471b32e47a209bbda021704f26dd2647e603",
+  "scope": "Official serializer/parser and source-extracted tool schemas; isolated npm transitive lock, not complete PI Desktop/GUI reproduction.",
+  "patched_files_sha256": {
+    "dist/api/anthropic-messages.js": "3aeeac849a37bc463f3778c0514e2fa46ce3fcecff9ec882e0e9a60bbca787a7",
+    "dist/api/azure-openai-responses.js": "d33a91669b3e3d73156ae484cc57d894005b45e93067117398a631b90772b84d",
+    "dist/api/mistral-conversations.js": "e0472f9745b013d2ba4ac2ee2a3178703ea4ec92ce8624804759ad4d4ff45f27",
+    "dist/api/openai-codex-responses.js": "519c6dcac9c9f789767c6e1e6d891af1ab9ac42d12d021e9fd4dfe2a4956d3ed",
+    "dist/api/openai-completions.js": "c3c280fd7b17901de5533ecce2a78980130b8caee3f11f6568a11b9fe768aadf",
+    "dist/api/openai-responses-shared.js": "32d13a5547d880bd89e8f5ef4423c40ee0ea5db7f7cf385fac7bad755455c300",
+    "dist/api/openai-responses.js": "0c9eaf31390ef5f49cdcabc4955233ce1b44c3c7770c14874d735c1678acec52",
+    "dist/api/simple-options.js": "425972bdc2c7d81ee21e30a053b30698c1a517b1daa6f827af4ea5923e7ec05f",
+    "dist/auth/oauth/anthropic.js": "ec79757058212ea89291377352424d50c9abd5b282c32bf7c934caee783b860e",
+    "dist/index.d.ts": "784afe80eb76f7be8152312582bae6b27e83a70a8a1913724e210c65276e219c",
+    "dist/index.js": "4922847f26cf58ced74a7a64452002f3ae823dc836a2d184bc5a41875bb53441",
+    "dist/providers/data/deepseek.json": "fc59b7dd1608a017a160ffa6416f12ee4bfbc1c9962350913eb24b1d864c0f6a",
+    "dist/types.d.ts": "fa6a37c70fa9781e06f79546fd0c9139aa11ad4053e47591c83df58747f579ea",
+    "dist/utils/assistant-message-frame.d.ts": "d8fb8c443f89c66e8e1d14142bfe3e2b0870216d33386e23edceff9dbe3eb7b2",
+    "dist/utils/assistant-message-frame.js": "1fec2277edb1bad4761f41f3845a3786de6b8e071b89180bc7d8d8ca6c805ee2",
+    "dist/utils/estimate.d.ts": "f10a87f828cb1620de875508e72b651a92ac425a8b24d7c255bf768c8023cf6b",
+    "dist/utils/estimate.js": "941b4d28e823f11589577a64a97caff45f64678c85303ff154fd6cd2a4e4190a",
+    "dist/utils/hosted-search.d.ts": "d041d2178762482f54da2ec973fd299db986ca58f9dcef752a0ee4b5f6a052ee",
+    "dist/utils/hosted-search.js": "a60ef39bb031c0fbfdccfb143edf699492944cc011b29f8716d07f9d27b1bd3e",
+    "dist/utils/local-request-error.d.ts": "560e481c2a3742bb2e988c80e117ba01fbaa1fab20773e69434d4d8577fff935",
+    "dist/utils/local-request-error.js": "0d5deadd92c231f7826f7cc9a5af5370bc29b71b3362fd50ecee57c2a1b737c2",
+    "dist/utils/local-request-stream.d.ts": "b067f92a4056f4013a8a3097e2e73433056c93edbd911547bfc80bf75c7be454",
+    "dist/utils/local-request-stream.js": "59e76a76cde3cbd9fe12468171e0db7f09a9a6bb71c983b7319f2b1fd3f54b8a"
+  }
+}

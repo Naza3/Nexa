@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useConfigDraft } from "./configDraft";
 import { DraftConflict } from "./Configuration";
 import type { DesktopController, ViewState } from "./controller";
-import { DEFAULT_LAN_SETTINGS, lanBaseUrl, lanSettingsFromDraft, validateLanSettings } from "./lanApi";
+import { DEFAULT_LAN_SETTINGS, lanStartupMessage, lanBaseUrl, lanSettingsFromDraft, validateLanSettings } from "./lanApi";
 import { Modal } from "./Modal";
 import type { LanApiSettings as LanSettings } from "./types";
 
@@ -42,7 +42,7 @@ export function LanApiSettings({ state, controller }: { state: ViewState; contro
     : stopped ? "未运行（服务已停止）"
     : snapshot?.connection !== "connected" ? "状态待确认"
     : !actual ? "当前服务未报告局域网监听状态"
-    : "未运行";
+    : actual.startup_error ? "启动失败（本机服务可用）" : "未运行";
 
   function disable() {
     setForm({ source: configured, ...draftFields(configured), enabled: false });
@@ -112,6 +112,7 @@ export function LanApiSettings({ state, controller }: { state: ViewState; contro
       <div className="lan-status" aria-label="局域网 API 状态">
         <p>已保存配置：{configured.enabled ? `启用 · ${configured.listen}` : "关闭"}</p>
         <p>实际监听：{actualLabel}</p>
+        {snapshot?.connection === "connected" && actual?.startup_error && <p className="warning-text">{lanStartupMessage(actual.startup_error)}</p>}
       </div>
       {validation && <p role="alert" className="warning-text">{validation}</p>}
       <div className="save-row">

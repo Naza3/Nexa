@@ -148,3 +148,13 @@ describe("service lifecycle confirmation boundary", () => {
     expect(api.start).not.toHaveBeenCalled();
   });
 });
+
+it.each(["start", "stop"] as const)("marks %s activity as recovery if its final snapshot fails without replay", async (operation) => {
+  const api = makeApi({ snapshot: vi.fn().mockResolvedValueOnce(operation === "start" ? stopped() : snapshot()).mockRejectedValueOnce({ code: "connection_failed", message: "private" }) });
+  const controller = new DesktopController(api);
+  await controller.refresh();
+  if (operation === "start") await controller.start(false); else await controller.stop();
+  expect(controller.getSnapshot().activities.find((item) => item.kind === "service")?.status).toBe("recovery");
+  expect(controller.getSnapshot().snapshot?.connection).toBe("error");
+  expect(api[operation]).toHaveBeenCalledTimes(1);
+});

@@ -502,6 +502,7 @@ trait Destination: Send + 'static {
 }
 trait Publication: Send + 'static {
     fn publish(self) -> Result<bool>;
+    fn cleanup(self) -> bool;
 }
 impl Destination for ModelDownloadTarget {
     type Verified = VerifiedModelDownload;
@@ -524,16 +525,21 @@ impl Destination for ModelDownloadTarget {
     fn verify(self, spec: &DownloadSpec, control: &DownloadControl) -> Result<Self::Verified> {
         let destination = self
             .destination
-            .verify(spec.expected_size, spec.sha256, || {
+            .verify_with_cleanup(spec.expected_size, spec.sha256, || {
                 control.is_cancelled() || control.is_expired()
             })
-            .map_err(|error| match error.code {
-                runtime_types::ErrorCode::RequestCancelled => control_error(control)
-                    .unwrap_or_else(|| BridgeError::new("model_download_cancelled")),
-                runtime_types::ErrorCode::IntegrityFailure => {
-                    BridgeError::new("model_download_identity_mismatch")
-                }
-                _ => store_error(error),
+            .map_err(|(error, cleaned)| {
+                with_cleanup_outcome(
+                    match error.code {
+                        runtime_types::ErrorCode::RequestCancelled => control_error(control)
+                            .unwrap_or_else(|| BridgeError::new("model_download_cancelled")),
+                        runtime_types::ErrorCode::IntegrityFailure => {
+                            BridgeError::new("model_download_identity_mismatch")
+                        }
+                        _ => store_error(error),
+                    },
+                    cleaned,
+                )
             })?;
         Ok(VerifiedModelDownload {
             destination,
@@ -546,7 +552,12 @@ impl Destination for ModelDownloadTarget {
 }
 impl Publication for VerifiedModelDownload {
     fn publish(self) -> Result<bool> {
-        self.destination.publish().map_err(store_error)
+        self.destination
+            .publish_with_cleanup()
+            .map_err(|(error, cleaned)| with_cleanup_outcome(store_error(error), cleaned))
+    }
+    fn cleanup(self) -> bool {
+        self.destination.cleanup()
     }
 }
 trait Supervisor: Sync {
@@ -585,13 +596,16 @@ fn control_error(control: &DownloadControl) -> Option<BridgeError> {
         None
     }
 }
-fn cleanup_error(target: impl Destination, mut error: BridgeError) -> Result<bool> {
-    if !target.cleanup() {
+fn with_cleanup_outcome(mut error: BridgeError, cleaned: bool) -> BridgeError {
+    if !cleaned {
         error
             .message
             .push_str(" 临时文件清理未确认，请勿自动重试。");
     }
-    Err(error)
+    error
+}
+fn cleanup_error(target: impl Destination, error: BridgeError) -> Result<bool> {
+    Err(with_cleanup_outcome(error, target.cleanup()))
 }
 async fn run_download<T: Destination>(
     task: Arc<DownloadTask>,
@@ -690,8 +704,9 @@ async fn run_download<T: Destination>(
     let result = tokio::task::spawn_blocking(move || {
         let verified = target.verify(&spec, &verify_task.control)?;
         if !verify_task.control.begin_publish() {
-            return Err(control_error(&verify_task.control)
-                .unwrap_or_else(|| BridgeError::new("model_download_cancelled")));
+            let error = control_error(&verify_task.control)
+                .unwrap_or_else(|| BridgeError::new("model_download_cancelled"));
+            return Err(with_cleanup_outcome(error, verified.cleanup()));
         }
         verify_task.progress(DownloadProgress {
             phase: download_engine::DownloadPhase::Committing,
@@ -702,7 +717,9 @@ async fn run_download<T: Destination>(
         verified.publish()
     })
     .await
-    .unwrap_or_else(|_| Err(BridgeError::new("model_download_write_failed")));
+    // The worker may have panicked after the no-clobber link committed. A join
+    // failure cannot prove a write failure or authorize replay/deleting a result.
+    .unwrap_or_else(|_| Err(BridgeError::new("model_download_outcome_unknown")));
     // Binary/dependency pins outlive the sidecar, all drainers and verification.
     drop(sidecar);
     Some(result)
@@ -997,6 +1014,9 @@ mod tests {
         events: Vec<&'static str>,
         attempts: Vec<u8>,
         cancel_verification: bool,
+        cancel_after_verification: bool,
+        panic_after_publication: bool,
+        published: bool,
         late_cancel: bool,
         cleanup_warning: bool,
         observed_size: u64,
@@ -1041,6 +1061,9 @@ mod tests {
                 control.cancel();
                 return Err(BridgeError::new("model_download_cancelled"));
             }
+            if state.cancel_after_verification {
+                control.cancel();
+            }
             drop(state);
             Ok(FakePublication {
                 state: self.state,
@@ -1054,13 +1077,23 @@ mod tests {
         }
     }
     impl Publication for FakePublication {
+        fn cleanup(self) -> bool {
+            let mut state = self.state.lock().unwrap();
+            state.events.push("cleanup");
+            !state.cleanup_warning
+        }
         fn publish(self) -> Result<bool> {
             let mut state = self.state.lock().unwrap();
             state.events.push("publish");
             if state.late_cancel {
                 self.control.cancel();
             }
-            Ok(!state.cleanup_warning)
+            state.published = true;
+            let panic_after_publication = state.panic_after_publication;
+            let cleaned = !state.cleanup_warning;
+            drop(state);
+            assert!(!panic_after_publication, "injected post-publication panic");
+            Ok(cleaned)
         }
     }
     struct FakeSupervisor {
@@ -1220,6 +1253,54 @@ mod tests {
         assert_eq!(state.status, DownloadStatus::Completed);
         assert!(state.result.as_ref().unwrap().saved);
         assert!(state.result.as_ref().unwrap().cleanup_warning.is_some());
+    }
+    #[tokio::test]
+    async fn cancellation_after_verification_reports_cleanup_and_never_publishes() {
+        for cleaned in [false, true] {
+            let (task, spec, target, sidecar, supervisor, state) =
+                fake_fixture(vec![successful_transfer()]);
+            {
+                let mut state = state.lock().unwrap();
+                state.cancel_after_verification = true;
+                state.cleanup_warning = !cleaned;
+            }
+            let error = run_download(task, spec, target, sidecar, &supervisor)
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.code, "model_download_cancelled");
+            assert_eq!(error.message.contains("临时文件清理未确认"), !cleaned);
+            let state = state.lock().unwrap();
+            assert!(state.events.contains(&"cleanup"));
+            assert!(!state.events.contains(&"publish"));
+            assert_eq!(state.attempts, [1]);
+        }
+    }
+    #[tokio::test]
+    async fn post_publication_panic_is_unknown_without_replay_or_cleanup_of_saved_result() {
+        let (task, spec, target, sidecar, supervisor, state) =
+            fake_fixture(vec![successful_transfer()]);
+        state.lock().unwrap().panic_after_publication = true;
+        let error = run_download(task.clone(), spec, target, sidecar, &supervisor)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "model_download_outcome_unknown");
+        assert!(error.message.contains("自动重试") || error.message.contains("自动重放"));
+        task.finish(Err(error));
+        assert!(task.state.lock().unwrap().terminal);
+        let state = state.lock().unwrap();
+        assert!(state.published);
+        assert_eq!(state.attempts, [1]);
+        assert!(!state.events.contains(&"cleanup"));
+        assert_eq!(
+            state
+                .events
+                .iter()
+                .filter(|event| **event == "publish")
+                .count(),
+            1
+        );
     }
     #[tokio::test]
     async fn unconfirmed_writer_keeps_every_guard_and_never_claims_terminal() {

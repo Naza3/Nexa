@@ -1,6 +1,6 @@
 use crate::{
     BridgeError, ChatBatch, ChatEvent, ChatStartRequest, DesktopBridge, RequestHandle, Result,
-    Stopping, settings, sse::Decoder,
+    Stopping, sse::Decoder,
 };
 use http_body_util::BodyExt;
 use hyper::{HeaderMap, Method};
@@ -24,9 +24,10 @@ const STALL: Duration = Duration::from_secs(10);
 #[derive(Default)]
 pub(crate) struct ChatSlot {
     current: Option<Arc<Session>>,
-    previous: Option<(Uuid, ChatEvent)>,
+    previous: Option<ChatBatch>,
 }
 struct Queue {
+    runtime_instance_id: Option<Uuid>,
     events: VecDeque<ChatEvent>,
     bytes: usize,
     terminal: Option<ChatEvent>,
@@ -47,6 +48,7 @@ impl Session {
         Self {
             id,
             queue: Mutex::new(Queue {
+                runtime_instance_id: None,
                 events: VecDeque::new(),
                 bytes: 0,
                 terminal: None,
@@ -179,6 +181,7 @@ impl Session {
         }
         ChatBatch {
             request_id: self.id,
+            runtime_instance_id: q.runtime_instance_id,
             events,
             terminal,
         }
@@ -208,7 +211,11 @@ impl DesktopBridge {
         {
             return Err(BridgeError::new("invalid_request"));
         }
-        let history: usize = request.messages.iter().map(|m| m.content.len()).sum();
+        let history: usize = request
+            .messages
+            .iter()
+            .map(|m| m.content.as_ref().map_or(0, String::len))
+            .sum();
         if history >= HISTORY_BYTES
             || request.messages.len() >= 128
             || serde_json::to_vec(&request)
@@ -245,7 +252,12 @@ impl DesktopBridge {
             {
                 return Err(BridgeError::new("desktop_busy"));
             }
-            let previous = (current.id, q.terminal.clone().unwrap());
+            let previous = ChatBatch {
+                request_id: current.id,
+                runtime_instance_id: q.runtime_instance_id,
+                events: vec![q.terminal.clone().unwrap()],
+                terminal: true,
+            };
             drop(q);
             slot.previous = Some(previous);
         }
@@ -264,14 +276,12 @@ impl DesktopBridge {
             let slot = self.chat.lock().unwrap();
             if let Some(s) = slot.current.as_ref().filter(|s| s.id == request_id) {
                 s.clone()
-            } else if let Some((id, event)) =
-                slot.previous.as_ref().filter(|(id, _)| *id == request_id)
+            } else if let Some(batch) = slot
+                .previous
+                .as_ref()
+                .filter(|batch| batch.request_id == request_id)
             {
-                return Ok(ChatBatch {
-                    request_id: *id,
-                    events: vec![event.clone()],
-                    terminal: true,
-                });
+                return Ok(batch.clone());
             } else {
                 return Err(BridgeError::new("request_not_owned"));
             }
@@ -305,7 +315,7 @@ impl DesktopBridge {
         } else if !slot
             .previous
             .as_ref()
-            .is_some_and(|(id, _)| *id == request_id)
+            .is_some_and(|batch| batch.request_id == request_id)
         {
             return Err(BridgeError::new("request_not_owned"));
         }
@@ -374,9 +384,22 @@ impl DesktopBridge {
         remaining: usize,
     ) -> Result<ChatEvent> {
         let mut connection = tokio::select! {biased;_=session.cancelled()=>return Ok(ChatEvent::Cancelled),result=self.connect()=>result?};
+        // Capture provenance once, from the same proved connection used below.
+        // A later service restart must never relabel this request's terminal.
+        session.queue.lock().unwrap().runtime_instance_id = Some(connection.instance_id());
         if session.cancelled.load(Ordering::Acquire) {
             return Ok(ChatEvent::Cancelled);
         }
+        // Read effective budgets on the same proved connection that will submit
+        // the job. Saved but not restarted TOML must not change a live deadline.
+        let configuration = tokio::select! {biased;
+            _=session.cancelled()=>return Ok(ChatEvent::Cancelled),
+            result=connection.json(Method::GET,"/runtime/configuration",None)=>result.map_err(BridgeError::from)?
+        };
+        let configuration: runtime_api::configuration::ConfigurationSnapshot =
+            serde_json::from_value(configuration)
+                .map_err(|_| BridgeError::new("response_invalid"))?;
+        let (response_budget, stream_budget) = chat_wait_budgets(&configuration)?;
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-request-id",
@@ -386,7 +409,6 @@ impl DesktopBridge {
                 .parse()
                 .map_err(|_| BridgeError::new("invalid_request"))?,
         );
-        let verification = settings::external_verification_budget(&self.root, &model)?;
         let response = tokio::select! {biased;
             _=session.cancelled()=>return Ok(ChatEvent::Cancelled),
             result=async {
@@ -394,11 +416,7 @@ impl DesktopBridge {
                 // No await between this send boundary and polling the fixed
                 // request. An earlier cancel never dispatches the generation.
                 session.phase.store(1,Ordering::Release);
-                if let Some(budget) = verification {
-                    connection.request_with_verification(Method::POST,"/v1/chat/completions",RequestBody::fixed(body),headers,budget).await.map_err(BridgeError::from)
-                } else {
-                    connection.request(Method::POST,"/v1/chat/completions",RequestBody::fixed(body),headers).await.map_err(BridgeError::from)
-                }
+                connection.request_chat_with_timeout(RequestBody::fixed(body),headers,response_budget).await.map_err(BridgeError::from)
             }=>result?
         };
         if response.status() != 200 {
@@ -424,7 +442,9 @@ impl DesktopBridge {
         let mut body = response.into_body();
         let mut decoder = Decoder::new(session.id, model);
         let mut total = 0;
-        let deadline = Instant::now() + Duration::from_secs(750);
+        let deadline = Instant::now()
+            .checked_add(stream_budget)
+            .ok_or_else(|| BridgeError::new("response_invalid"))?;
         loop {
             if let Some(terminal) =
                 drain_events(session, &mut decoder, &mut total, remaining).await?
@@ -473,6 +493,29 @@ impl DesktopBridge {
     }
 }
 
+fn chat_wait_budgets(
+    configuration: &runtime_api::configuration::ConfigurationSnapshot,
+) -> Result<(Duration, Duration)> {
+    let invalid = || BridgeError::new("response_invalid");
+    let active = configuration
+        .runtime_effective
+        .as_ref()
+        .ok_or_else(invalid)?;
+    let execution = active.values.runtime.execution_timeout_seconds;
+    // The scheduler owns the actual execution deadline. Allow cancellation,
+    // worker cleanup and delivery of its terminal event before a client cutoff.
+    let stream_seconds = execution.checked_add(30).ok_or_else(invalid)?;
+    let response = Duration::from_secs(active.chat_response_timeout_seconds);
+    let stream = Duration::from_secs(stream_seconds);
+    if execution == 0
+        || response < stream
+        || Instant::now().checked_add(response).is_none()
+        || Instant::now().checked_add(stream).is_none()
+    {
+        return Err(invalid());
+    }
+    Ok((response, stream))
+}
 fn ocr_body(request: &crate::OcrStartRequest) -> Result<Vec<u8>> {
     runtime_types::ModelId::new(&request.model_id)
         .map_err(|_| BridgeError::new("invalid_request"))?;

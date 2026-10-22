@@ -1,0 +1,46 @@
+{
+  "model": "fixture",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Synthetic validation. Use the memory lookup only when requested."
+    },
+    {
+      "role": "user",
+      "content": "请查询 B7 的颜色和 fixture_tag。"
+    }
+  ],
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  },
+  "store": false,
+  "max_completion_tokens": 256,
+  "temperature": 0,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "lookup_test_color",
+        "description": "Read a synthetic in-memory table. No files, network or system operations.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "A1",
+                "B7",
+                "C9"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

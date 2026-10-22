@@ -1,6 +1,6 @@
 [package]
 name = "nexa-desktop"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.98"
 publish = false
@@ -18,10 +18,10 @@ uuid = { version = "=1.26.1", features = ["v4", "serde"] }
 [target.'cfg(windows)'.dependencies]
 desktop-bridge = { path = "../../../crates/desktop-bridge" }
 runtime-api = { path = "../../../crates/runtime-api" }
-tauri = { package = "tauri", version = "=2.12.1", features = [] }
+tauri = { package = "tauri", version = "=2.12.1", features = ["tray-icon"] }
 rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
 clipboard-win = "=5.4.1"
-windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_Registry"] }
 
 [build-dependencies]
 tauri-build = { version = "=2.7.1", features = [] }
@@ -33,3 +33,10 @@ tempfile = "=3.27.0"
 strip = "debuginfo"
 lto = "thin"
 codegen-units = 1
+
+# 桌面壳是独立 workspace，保持与根 workspace 一致。
+[lints.rust]
+unused_must_use = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"

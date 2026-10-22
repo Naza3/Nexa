@@ -1,10 +1,16 @@
+import { ErrorDetails } from "./ErrorDetails";
+import { lanStartupMessage } from "./lanApi";
+import { PerformanceSummary } from "./PerformanceSummary";
+import { WorkbenchNotice } from "./WorkbenchNotice";
+import { AutostartSettings } from "./AutostartSettings";
+import { PerformancePage } from "./PerformancePage";
 import { OcrPage } from "./OcrPage";
 import { followOnLoadAction } from "./modelLoad";
 import { ModelLoadControl } from "./ModelLoadControl";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ModelRemoveAction } from "./ModelRemoveAction";
 import { modelRemovalBlocker } from "./modelRemoval";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   byteLength,
@@ -29,7 +35,7 @@ import { OverviewPage, ApiPage, ActivityPage } from "./Workspaces";
 import { runtimeView } from "./runtimeView";
 import { useConfigDraft, ConfigDraftContext, createDraftStore, hasDirtyDrafts } from "./configDraft";
 import { preferencesOnly } from "./runtimeSettingsValues";
-import { IdleUnloadSettings, VerificationTimeoutSettings } from "./RuntimeSettings";
+import { ExecutionTimeoutSettings, IdleUnloadSettings, VerificationTimeoutSettings } from "./RuntimeSettings";
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -627,6 +633,7 @@ function ChatPage({
   );
   const canSend =
     ready &&
+    !state.closing &&
     !active &&
     !state.operation &&
     state.library_phase === "idle" &&
@@ -745,7 +752,8 @@ function ChatPage({
                       {message.notice}
                     </p>
                   )}
-                  {message.usage && (
+                  {message.performance && <PerformanceSummary value={message.performance} usage={message.usage} />}
+                  {message.usage && !message.performance && (
                     <p className="message-note">
                       输入 {message.usage.prompt_tokens} · 输出{" "}
                       {message.usage.completion_tokens} tokens
@@ -791,7 +799,7 @@ function ChatPage({
             ready ? "输入消息，开始本地对话…" : "加载模型后即可发送消息…"
           }
           rows={3}
-          disabled={active || !!state.operation}
+          disabled={active || !!state.operation || !state.workbench.hydrated || state.closing}
           onCompositionStart={() => {
             composing.current = true;
           }}
@@ -939,6 +947,13 @@ function SettingsPage({
         </div>
       </div>
       <DetailsGroup title="模型目录与维护" description={["missing", "unavailable", "unsupported", "stale"].includes(state.snapshot?.model_directory.state ?? "") ? "目录配置需检查" : "下载位置、手动扫描"} status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} initialOpen={!!returnToDownloads || !!state.directory_selection}><DirectorySettings state={state} controller={controller} /></DetailsGroup>
+      <section className="settings-card">
+        <div className="toggle-row"><div><h2>关闭到托盘</h2><p>启用后，点击标题栏关闭按钮只隐藏窗口，当前任务、运行服务和已加载模型继续保留。点击托盘图标可恢复窗口，托盘菜单“退出 Nexa”会按退出偏好清理并保存。</p></div>
+          <input className="switch" type="checkbox" role="switch" aria-label="关闭到托盘" checked={state.workbench.preferences.close_to_tray} disabled={!state.workbench.supported || !state.workbench.hydrated || state.closing} onChange={(event) => controller.setCloseToTray(event.target.checked)} />
+        </div>
+        <p className="small-note">{!state.workbench.supported ? "当前桌面版本不支持此偏好。" : !state.workbench.hydrated ? "正在读取工作区设置…" : state.workbench.error ? "关闭偏好尚未保存，请处理上方工作区保存提示。" : state.workbench.dirty || state.workbench.saving ? "正在自动保存，保存成功后生效。" : "已保存；默认关闭此选项。隐藏窗口不会阻止 Windows 睡眠或关机。"}</p>
+      </section>
+      <AutostartSettings api={controller.api} closing={state.closing} />
       {form.conflict && <div className="notice-band warning" role="alert"><div><strong>已保存配置发生变化</strong><p>保留了你的未保存草稿。请先重新读取新配置，再决定如何修改，避免覆盖其他窗口的更新。</p></div><button onClick={form.reset}>丢弃草稿并读取新配置</button></div>}
       {!state.snapshot?.initialized && state.snapshot?.connection === "stopped" && <section className="settings-card"><h2>先准备配置</h2><p>初始化本机配置与管理凭据，不启动服务、监听端口或扫描模型。</p><button disabled={!!state.operation} onClick={() => void controller.initialize()}>仅初始化配置</button></section>}
       {state.snapshot?.configuration && <><DetailsGroup title="运行默认值" description="全局加载参数" status={state.snapshot?.configuration?.pending_restart ? "待重启" : state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["global_defaults"]} initialOpen={state.snapshot.configuration.schema_version === 1}><GlobalConfiguration state={state} controller={controller} /></DetailsGroup><DetailsGroup title="请求参数" description="输出预算与采样" draftKeys={["request_defaults"]}><RequestDefaultsForm state={state} controller={controller} /></DetailsGroup></>}
@@ -1005,7 +1020,7 @@ function SettingsPage({
             <div>
               <h2>关闭窗口时同时退出运行服务</h2>
               <p>
-                默认关闭窗口会停止本窗口加载与生成，运行服务继续供其他客户端使用。
+                真正退出界面时，默认停止本窗口加载与生成，运行服务继续供其他客户端使用。关闭到托盘时不执行此退出策略。
               </p>
             </div>
             <input
@@ -1024,7 +1039,7 @@ function SettingsPage({
           </div>
           {draft.close_runtime_on_exit && (
             <p className="warning-text">
-              启用并保存后，关闭窗口会停止运行服务及所有客户端任务。
+              启用并保存后，真正退出界面会停止运行服务及所有客户端任务；关闭到托盘时不停止。
             </p>
           )}
         </section>
@@ -1046,7 +1061,7 @@ function SettingsPage({
           </button>
         </div>
       </form></DetailsGroup>}
-      <DetailsGroup title="资源与校验" description="空闲卸载、文件校验超时" status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["idle_policy", "verification_policy"]}><IdleUnloadSettings state={state} controller={controller} /><VerificationTimeoutSettings state={state} controller={controller} /></DetailsGroup>
+      <DetailsGroup title="资源与校验" description="空闲卸载、文件校验与推理超时" status={state.snapshot?.connection === "stopped" ? undefined : "修改前需停服"} draftKeys={["idle_policy", "verification_policy", "execution_policy"]}><IdleUnloadSettings state={state} controller={controller} /><VerificationTimeoutSettings state={state} controller={controller} /><ExecutionTimeoutSettings state={state} controller={controller} /></DetailsGroup>
 
     </>
   );
@@ -1058,7 +1073,7 @@ export default function App({
 }: {
   controller: DesktopController;
   preview?: boolean;
-  initialPage?: "ocr" | "overview" | "models" | "api" | "activity" | "chat" | "settings";
+  initialPage?: "performance" | "ocr" | "overview" | "models" | "api" | "activity" | "chat" | "settings";
 }) {
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -1085,9 +1100,20 @@ export default function App({
   }, [page]);
   const [configDrafts] = useState(createDraftStore);
   const [confirmClose, setConfirmClose] = useState(false);
+  const requestClose = useCallback(() => { if (hasDirtyDrafts(configDrafts)) setConfirmClose(true); else void controller.close(); }, [configDrafts, controller]);
+  useEffect(() => {
+    let alive = true;
+    const nativeClose = (event: Event) => {
+      if (!(event instanceof CustomEvent) || typeof event.detail?.id !== "string" || !controller.api.closeAcknowledge) return;
+      void controller.api.closeAcknowledge(event.detail.id).then((accepted) => { if (alive && accepted) requestClose(); }).catch(() => {});
+    };
+    window.addEventListener("nexa-close-requested", nativeClose);
+    return () => { alive = false; window.removeEventListener("nexa-close-requested", nativeClose); };
+  }, [controller, requestClose]);
   const [draftEpoch, setDraftEpoch] = useState(0);
   useSyncExternalStore(configDrafts.subscribe, configDrafts.getSnapshot);
-  const [draft, setDraft] = useState("");
+  const draft = state.workbench.preferences.chat.draft;
+  const setDraft = controller.setChatDraft;
   const [confirmAddStop, setConfirmAddStop] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmRecoveryStop, setConfirmRecoveryStop] = useState(false);
@@ -1096,7 +1122,7 @@ export default function App({
     const handler = (event: KeyboardEvent) => {
       const target = event.target;
       if (event.isComposing || target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable)) return;
-      if (event.altKey && ["1", "2", "3", "4", "5", "6"].includes(event.key)) {
+      if (event.altKey && ["1", "2", "3", "4", "5", "6", "7"].includes(event.key)) {
         event.preventDefault();
         setConfirmStop(false);
         setConfirmClose(false);
@@ -1105,7 +1131,7 @@ export default function App({
         setSettingsFromDownloads(false);
         if (event.key === "6") setOcrVisited(true);
         setPage(
-          (["overview", "models", "api", "activity", "settings", "ocr"] as const)[Number(event.key) - 1],
+          (["overview", "models", "api", "activity", "settings", "ocr", "performance"] as const)[Number(event.key) - 1],
         );
       }
     };
@@ -1117,6 +1143,7 @@ export default function App({
     { id: "models", title: "模型库", detail: "文件与运行档案", icon: "models" },
     { id: "api", title: "API 接入", detail: "连接你的应用", icon: "copy" },
     { id: "activity", title: "活动", detail: "任务与结果", icon: "refresh" },
+    { id: "performance", title: "性能", detail: "推理速度与耗时", icon: "refresh" },
     { id: "ocr", title: "图片 OCR", detail: "单页图片识别", icon: "models" },
   ] as const;
   const latestModelAttempt = Object.values(state.model_tests).sort((a, b) => b.id - a.id)[0];
@@ -1141,7 +1168,7 @@ export default function App({
               key={item.id}
               aria-current={page === item.id ? "page" : undefined}
               aria-label={item.title}
-              title={`${item.title}（Alt + ${item.id === "ocr" ? 6 : index + 1}）`}
+              title={`${item.title}（Alt + ${item.id === "ocr" ? 6 : item.id === "performance" ? 7 : index + 1}）`}
               className={`nav-item ${page === item.id ? "active" : ""}`}
               onClick={() => { setConfirmStop(false); setSettingsFromDownloads(false); setPage(item.id); if (item.id === "ocr") setOcrVisited(true); }}
             >
@@ -1163,11 +1190,11 @@ export default function App({
           <div className="sidebar-footer">
             <span>Windows · CPU</span>
             <button
-              title={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : "关闭窗口并保留服务"}
-              aria-label={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : "关闭窗口并保留服务"}
+              title={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : state.workbench.preferences.close_to_tray ? "退出 Nexa 并保留服务" : "关闭窗口并保留服务"}
+              aria-label={state.snapshot?.settings.close_runtime_on_exit ? "停止服务并退出窗口" : state.workbench.preferences.close_to_tray ? "退出 Nexa 并保留服务" : "关闭窗口并保留服务"}
               className="icon-button"
               disabled={!!state.operation && !state.testing_model && state.operation.kind !== "pick_models"}
-              onClick={() => { if (hasDirtyDrafts(configDrafts)) setConfirmClose(true); else void controller.close(); }}
+              onClick={requestClose}
             >
               <Icon name="power" size={16} />
             </button>
@@ -1192,6 +1219,17 @@ export default function App({
           }
         >
           <RuntimeBanner state={state} />
+          {state.snapshot?.connection === "connected" && state.snapshot.runtime?.lan_api?.enabled && !state.snapshot.runtime.lan_api.running && state.snapshot.runtime.lan_api.startup_error && (
+            <section className="notice-band warning" role="alert"><div>
+              <strong>局域网 API 启动失败，本机服务仍可用</strong>
+              <p>{lanStartupMessage(state.snapshot.runtime.lan_api.startup_error)}</p>
+              <p>局域网配置已保留，未自动更换地址或重试。停止服务会中断所有客户端任务并卸载模型。</p>
+              <button disabled={!!state.operation || state.ocr_batch_active || state.chat_phase !== "idle" || state.library_phase !== "idle" || state.download_phase !== "idle" || state.snapshot.runtime.stopping} onClick={() => setConfirmStop(true)}>停止服务以修正局域网设置</button>
+              <button onClick={() => setPage("api")}>查看局域网设置</button>
+            </div></section>
+          )}
+          <WorkbenchNotice state={state} controller={controller} />
+          {state.persistence_error && <div className="notice-band warning" role="status"><div><p>{state.persistence_error}</p><button onClick={() => void controller.flushOcrHistory()}>重试保存识别历史</button></div></div>}
           {state.activity_storage_warning && <div className="notice-band warning" role="alert"><p>{state.activity_storage_warning}</p></div>}
           {state.configuration_recovery_error && <section className="notice-band warning" role="alert"><div><strong>配置无法读取，服务状态尚未确认</strong><p>不会用默认值代替配置或启动新实例。可检查并停止当前本机实例；原生端仍会验证身份并确认清理，其他客户端可能受影响。</p><p>配置诊断码：{state.configuration_recovery_error.code}</p><button disabled={!!state.operation || state.chat_phase !== "idle" || state.library_phase !== "idle" || state.download_phase !== "idle"} onClick={() => setConfirmRecoveryStop(true)}>检查并停止本机服务</button></div></section>}
           {configDrafts.pending.size > 0 && <section className="notice-band warning" role="status"><div><strong>发现上次未保存草稿</strong><p>可恢复 {configDrafts.pending.size} 组非秘密配置草稿。请先选择恢复或丢弃，再编辑配置。它们不是已保存配置；恢复后会核对原版本，不会自动提交、加载或启动服务。</p><div className="workspace-actions"><button onClick={() => { configDrafts.restorePending(); setDraftEpoch((value) => value + 1); }}>恢复未保存草稿</button><button onClick={() => configDrafts.discardPending()}>丢弃上次草稿</button></div></div></section>}
@@ -1225,6 +1263,7 @@ export default function App({
                     </p>
                   )}
                 <span>{state.error.code}</span>
+                <ErrorDetails error={state.error} />
               </div>
               <button
                 className="icon-button"
@@ -1263,8 +1302,10 @@ export default function App({
               <button className="text-button" aria-label="收起操作结果" onClick={() => controller.dismissNotice(state.notice!)}>收起</button>
             </div>
           )}
-          <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0}>
+          {state.ocr_batch_active && page !== "ocr" && <div className="notice-band" role="status"><div><strong>OCR 图片队列正在处理</strong><p>本窗口的模型和生成操作暂时保留给图片队列。</p><button onClick={() => setPage("ocr")}>查看 OCR 队列</button></div></div>}
+          <fieldset ref={pageContent} className="workspace-pages" disabled={configDrafts.pending.size > 0 || state.closing}>
           {ocrVisited && <div hidden={page !== "ocr"}><OcrPage state={state} controller={controller} /></div>}
+          {page === "performance" && <PerformancePage api={controller.api} connection={state.snapshot?.connection} />}
           {page === "overview" && <OverviewPage state={state} controller={controller} goModels={() => setPage("models")} goApi={() => setPage("api")} goActivity={() => setPage("activity")} goChat={enterChat} />}
           {page === "api" && <ApiPage state={state} controller={controller} goChat={enterChat} />}
           {page === "activity" && <ActivityPage state={state} controller={controller} goChat={enterChat} />}

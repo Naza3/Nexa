@@ -19,3 +19,6 @@ tempfile.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.189"
+
+[lints]
+workspace = true

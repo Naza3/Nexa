@@ -183,6 +183,38 @@ async fn real_pair_import_load_image_http_cancel_and_recovery() {
         usage["prompt_tokens"],
         started.elapsed().as_millis()
     );
+    let snapshot: runtime_api::performance::PerformanceSnapshot = serde_json::from_value(
+        client
+            .json(Method::GET, "/runtime/performance", None)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(snapshot.is_valid());
+    assert_eq!(snapshot.instance_id, instance.instance_id);
+    let record = &snapshot.records[0];
+    assert_eq!(record.modality, runtime_types::PerformanceModality::Image);
+    assert_eq!(record.status, runtime_types::PerformanceStatus::Completed);
+    assert_eq!(
+        u64::from(record.usage.prompt_tokens),
+        usage["prompt_tokens"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u64::from(record.usage.completion_tokens),
+        usage["completion_tokens"].as_u64().unwrap()
+    );
+    let performance = record.performance.unwrap();
+    assert!(performance.timings.prepare_us > 0);
+    assert!(performance.timings.prefill_us > 0);
+    assert!(performance.timings.decode_us > 0);
+    assert_eq!(performance.load_options.context_size, 8192);
+    assert_eq!(performance.load_options.batch_size, 256);
+    assert_eq!(performance.load_options.threads, 4);
+    // Numeric evidence only; no OCR body or image is printed in diagnostics.
+    eprintln!(
+        "real OCR performance: {}",
+        serde_json::to_string(record).unwrap()
+    );
 
     // A separately authenticated control connection must cancel a pending
     // image request before its response headers without occupying its FIFO.
@@ -248,6 +280,22 @@ async fn real_pair_import_load_image_http_cancel_and_recovery() {
             .unwrap()
             .contains("INV-2026-1007")
     );
+    let snapshot: runtime_api::performance::PerformanceSnapshot = serde_json::from_value(
+        client
+            .json(Method::GET, "/runtime/performance", None)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(snapshot.is_valid());
+    assert_eq!(snapshot.records.len(), 3);
+    assert!(snapshot.records[0].performance.is_some());
+    assert_eq!(snapshot.records[1].request_id.to_string(), id.to_string());
+    assert_eq!(
+        snapshot.records[1].status,
+        runtime_types::PerformanceStatus::Cancelled
+    );
+    assert!(snapshot.records[1].performance.is_none());
     client
         .json(Method::POST, "/runtime/shutdown", None)
         .await

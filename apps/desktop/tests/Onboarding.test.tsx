@@ -56,7 +56,7 @@ describe("model onboarding interface", () => {
     expect(api.chatStart).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "停止生成" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" }));
-    expect(api.close).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
     await act(async () => testing.resolve(proof));
   });
   it("explains deferred registration without an automatic stop action", async () => {

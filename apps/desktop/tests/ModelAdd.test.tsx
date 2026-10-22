@@ -79,7 +79,7 @@ describe("adding models from native file selection", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加模型" })); fireEvent.click(await screen.findByRole("button", { name: "确认添加 3 个模型" }));
     await waitFor(() => expect(api.libraryNext).toHaveBeenCalledTimes(1)); fireEvent.click(screen.getByRole("button", { name: "取消添加" }));
     expect(api.libraryCancel).toHaveBeenCalledExactlyOnceWith("library-1"); expect(controller.getSnapshot().library_phase).toBe("stopping");
-    fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" })); expect(api.close).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "关闭窗口并保留服务" })); await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
     await act(async () => terminal.resolve({ ...partial, status: "cancelled", result: null, verified_files: 0, files: selection.files.map((file) => ({ ...file, status: "not_processed", error_code: "model_scan_cancelled" })) }));
     await waitFor(() => expect(controller.getSnapshot().library_phase).toBe("idle")); expect(screen.getByRole("heading", { name: "添加已取消" })).toBeInTheDocument();
   });

@@ -1,5 +1,7 @@
 # ADR0018：采用受控aria2伴随进程作为下载执行器
 
+2026-10-09更新：启动库存仅校验声明产品文件，未声明内容不再扫描或拒绝；以下旧GGUF/下载残留例外规则由[ADR0041](0041-declared-payload-startup-validation.md)替代。模型准入和下载执行安全边界保持。
+
 日期：2026-10-03。状态：选型已采纳，工作树集成进行中，尚未通过最终Windows/真实源/产品验收。主线基线为`8c82203c1ff2f73981575733bd81a88c6cfd4f8a`，已发送产品仍33f0e17；独立源码构建分支与产品集成分别验收。本文保留早期候选与隔离实验历史，最新集成范围见下节；原固定下载实现见[ADR0017](0017-model-discovery-and-catalog-download.md)，实际结果见[aria2验证记录](../verification/2026-10-03-aria2-download-engine.md)。
 
 ## 背景与当前取舍

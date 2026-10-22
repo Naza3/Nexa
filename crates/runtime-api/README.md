@@ -8,6 +8,7 @@ T04 纯 Rust 本机管理、文本与单图 OCR HTTP API；不链接 engine-host
 - 96KiB完整非流式上限；SSE与非流式共享core/IPC输出信用，不截断/落盘/重放
 - HTTP/Ctrl+C/启动失败统一ServiceShutdown，清理未确认保持错误
 - status/devices未知native指标为null/unavailable，不能将配置伪报实测
+- 本机 `GET /runtime/performance` 返回真实服务 instance_id 和 actor 最近 200 条推理终态；聊天/OCR/LAN 共用记录，LAN 不开放管理查询。详见 [ADR0035](../../docs/decisions/0035-unified-inference-performance.md)
 
 Config保留默认context4096；当前矩阵使用显式2048、threads2、batch128、cpu。此crate中的NoInference/fake仅用于契约测试。实际模型链路与Windows结果另行记录，不从单测推导模型可用性。
 
@@ -15,6 +16,8 @@ Config保留默认context4096；当前矩阵使用显式2048、threads2、batch1
 ## 外部模型库接入（T06）
 
 /runtime/models仍兼容旧游标请求，新增generation UUID；新客户端后续页传同一generation，变化返回model_list_changed。ModelSummary新增storage与availability_error；/runtime/status新增实际model_library身份和selected_model_display_name，不从磁盘新配置假装运行实例已切换。
+
+本机及LAN的`/v1/models`另提供已登记的`display_name`供客户端展示；ID、分页和原有模型筛选保持，重名不合并，也不接收显示名作为请求别名。PI Desktop添加列表和聊天选择器的区别见[模型名称说明](../../docs/model-display-names.md)。
 
 load和/v1/chat/completions的隐式首次load共用外部准备路径：独立300秒协作核验预算、storage permit、RegistryLease和可取消blocking任务。断流/关停取消准备但不提前释放lease；失败更新可用状态及列表generation。现有客户端750秒响应头/请求等待与native load deadline不增加。wait_shutdown仅在runtime/worker确认关闭后释放external source guard，所有错误原样保留。
 

@@ -97,6 +97,23 @@ struct Delta<'a> {
     role: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<[ToolDeltaDto<'a>; 1]>,
+}
+#[derive(Serialize)]
+struct ToolDeltaDto<'a> {
+    index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<&'a str>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
+    function: FunctionDeltaDto<'a>,
+}
+#[derive(Serialize)]
+struct FunctionDeltaDto<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    arguments: &'a str,
 }
 #[derive(Clone, Copy, Serialize)]
 struct UsageDto {
@@ -128,6 +145,7 @@ fn encode_chunk(
             delta: Delta {
                 role: role.then_some("assistant"),
                 content: text,
+                tool_calls: None,
             },
             finish_reason: finish,
         }]
@@ -145,6 +163,57 @@ fn encode_chunk(
     serde_json::to_writer(&mut bytes, &chunk).expect("serialize primitive response");
     bytes.extend_from_slice(b"\n\n");
     bytes
+}
+fn encode_tool_chunk(
+    metadata: &Metadata,
+    delta: &runtime_types::ToolCallDelta,
+) -> Result<Vec<u8>, ApiError> {
+    use runtime_types::ToolCallDelta;
+    delta.validate_piece().map_err(|_| ApiError::internal())?;
+    let tool = match delta {
+        ToolCallDelta::Start { index, id, name } => ToolDeltaDto {
+            index: *index,
+            id: Some(id),
+            kind: Some("function"),
+            function: FunctionDeltaDto {
+                name: Some(name),
+                arguments: "",
+            },
+        },
+        ToolCallDelta::Arguments { index, arguments } => ToolDeltaDto {
+            index: *index,
+            id: None,
+            kind: None,
+            function: FunctionDeltaDto {
+                name: None,
+                arguments,
+            },
+        },
+    };
+    let chunk = Chunk {
+        id: &metadata.id,
+        object: "chat.completion.chunk",
+        created: metadata.created,
+        model: &metadata.model,
+        choices: vec![Choice {
+            index: 0,
+            delta: Delta {
+                role: None,
+                content: None,
+                tool_calls: Some([tool]),
+            },
+            finish_reason: None,
+        }],
+        usage: None,
+    };
+    let mut bytes = Vec::with_capacity(delta.payload_bytes() * 6 + 1024);
+    bytes.extend_from_slice(b"data: ");
+    serde_json::to_writer(&mut bytes, &chunk).expect("serialize primitive tool delta");
+    bytes.extend_from_slice(b"\n\n");
+    if bytes.len() > MAX_ENCODED_DELTA + 1024 {
+        return Err(ApiError::internal());
+    }
+    Ok(bytes)
 }
 fn encode_error(error: &ApiError) -> Vec<u8> {
     let mut bytes = b"data: ".to_vec();
@@ -243,6 +312,21 @@ impl HttpBody for SseBody {
                                     owned(bytes, Some(event), None)
                                 }
                             }
+                            RequestEventKind::ToolCallDelta(delta) => {
+                                let encoded = if event.charged_bytes() < TRANSIT_CHARGE {
+                                    Err(ApiError::internal())
+                                } else {
+                                    encode_tool_chunk(&this.metadata, delta)
+                                };
+                                match encoded {
+                                    Ok(bytes) => owned(bytes, Some(event), None),
+                                    Err(error) => {
+                                        this.tail = Tail::Closed;
+                                        this.pump.disconnect.disconnect();
+                                        owned(encode_error(&error), Some(event), None)
+                                    }
+                                }
+                            }
                             RequestEventKind::Completed {
                                 usage,
                                 finish_reason,
@@ -331,54 +415,103 @@ fn append_json_content(out: &mut Vec<u8>, text: &str) -> bool {
     }
     true
 }
+/// Writes the one bounded response directly, retaining no second full text or
+/// argument aggregate. The validated engine emits content before tool headers.
 async fn nonstream(mut pump: EventPump, meta: Metadata) -> Result<Response, ApiError> {
     let prefix = json_prefix(&meta);
     let mut buffer: Option<Vec<u8>> = None;
     let mut retained = None;
+    let mut has_text = false;
+    let mut call_count = 0_u32;
     while let Some(event) = pump.next().await {
         if let Some(error) = event_error(&event.kind, true) {
             return Err(error);
         }
+        let payload = matches!(
+            &event.kind,
+            RequestEventKind::TextDelta(_) | RequestEventKind::ToolCallDelta(_)
+        );
+        if payload && event.charged_bytes() < TRANSIT_CHARGE {
+            return Err(ApiError::internal());
+        }
+        if payload && buffer.is_none() {
+            let mut out = Vec::with_capacity(MAX_NONSTREAM_RESPONSE_BYTES);
+            out.extend_from_slice(&prefix);
+            buffer = Some(out);
+        }
         match &event.kind {
             RequestEventKind::TextDelta(text) => {
-                if event.charged_bytes() < TRANSIT_CHARGE {
+                if call_count != 0 {
                     return Err(ApiError::internal());
                 }
-                let out = buffer.get_or_insert_with(|| {
-                    let mut b = Vec::with_capacity(MAX_NONSTREAM_RESPONSE_BYTES);
-                    b.extend_from_slice(&prefix);
-                    b
-                });
+                let out = buffer.as_mut().expect("payload buffer initialized");
                 if !append_json_content(out, text) {
                     pump.disconnect.disconnect();
                     return Err(ApiError::response_too_large());
                 }
-                // Escaping writes directly into the one capped final buffer;
-                // there is no full-response clone or per-delta escape allocation.
-                if retained.is_none() {
-                    retained = Some(
-                        event
-                            .retain_permit(RETAINED_CHARGE)
-                            .map_err(|_| ApiError::internal())?,
-                    );
+                has_text = true;
+            }
+            RequestEventKind::ToolCallDelta(delta) => {
+                use runtime_types::ToolCallDelta;
+                delta.validate_piece().map_err(|_| ApiError::internal())?;
+                let out = buffer.as_mut().expect("payload buffer initialized");
+                match delta {
+                    ToolCallDelta::Start { index, id, name } => {
+                        if *index != call_count {
+                            return Err(ApiError::internal());
+                        }
+                        // Header fields have their own small finite bounds. Check
+                        // before serialization, preserving room for the final tail.
+                        if out.len() + 1024 + SUFFIX_RESERVE > MAX_NONSTREAM_RESPONSE_BYTES {
+                            return Err(ApiError::response_too_large());
+                        }
+                        if call_count == 0 {
+                            if has_text {
+                                out.extend_from_slice(b"\",\"tool_calls\":[");
+                            } else {
+                                // Prefix ends in content:"; replace only that fixed
+                                // opening quote, never any model-generated content.
+                                out.pop();
+                                out.extend_from_slice(b"null,\"tool_calls\":[");
+                            }
+                        } else {
+                            out.extend_from_slice(b"\"}},");
+                        }
+                        out.extend_from_slice(b"{\"id\":");
+                        serde_json::to_writer(&mut *out, id).expect("serialize bounded ID");
+                        out.extend_from_slice(b",\"type\":\"function\",\"function\":{\"name\":");
+                        serde_json::to_writer(&mut *out, name).expect("serialize bounded name");
+                        out.extend_from_slice(b",\"arguments\":\"");
+                        call_count += 1;
+                    }
+                    ToolCallDelta::Arguments { index, arguments } => {
+                        if call_count == 0 || *index != call_count - 1 {
+                            return Err(ApiError::internal());
+                        }
+                        if !append_json_content(out, arguments) {
+                            pump.disconnect.disconnect();
+                            return Err(ApiError::response_too_large());
+                        }
+                    }
                 }
-                // Later events/120 KiB permits are consumed here; no per-token
-                // retention. At steady state 96+120+16=232 KiB, not unbounded.
             }
             RequestEventKind::Completed {
                 usage,
                 finish_reason,
                 ..
             } => {
+                if (*finish_reason == runtime_types::FinishReason::ToolCalls) != (call_count > 0) {
+                    return Err(ApiError::internal());
+                }
                 let mut out = buffer.unwrap_or(prefix);
+                let message_tail = if call_count == 0 { "\"}" } else { "\"}}]}" };
                 let suffix = format!(
-                    "\"}},\"finish_reason\":\"{}\"}}],\"usage\":{{\"prompt_tokens\":{},\"completion_tokens\":{},\"total_tokens\":{}}}}}",
+                    "{message_tail},\"finish_reason\":\"{}\"}}],\"usage\":{{\"prompt_tokens\":{},\"completion_tokens\":{},\"total_tokens\":{}}}}}",
                     finish_reason.as_str(),
                     usage.prompt_tokens,
                     usage.completion_tokens,
                     usage.total_tokens()
                 );
-                assert!(suffix.len() <= SUFFIX_RESERVE);
                 if out.len() + suffix.len() > MAX_NONSTREAM_RESPONSE_BYTES {
                     return Err(ApiError::response_too_large());
                 }
@@ -391,6 +524,13 @@ async fn nonstream(mut pump: EventPump, meta: Metadata) -> Result<Response, ApiE
                 return Ok(response);
             }
             _ => return Err(ApiError::internal()),
+        }
+        if payload && retained.is_none() {
+            retained = Some(
+                event
+                    .retain_permit(RETAINED_CHARGE)
+                    .map_err(|_| ApiError::internal())?,
+            );
         }
     }
     Err(ApiError::internal())
@@ -527,6 +667,7 @@ async fn chat_request(
             model: model.clone(),
             messages: validated.messages,
             options: validated.options,
+            tools: validated.tools,
         };
         let events = if loaded_only {
             state.submit_loaded(request).await?
@@ -536,7 +677,12 @@ async fn chat_request(
         (model, events)
     } else {
         state
-            .submit_current(validated.request_id, validated.messages, validated.options)
+            .submit_current_chat(
+                validated.request_id,
+                validated.messages,
+                validated.options,
+                validated.tools,
+            )
             .await?
     };
     let meta = Metadata {

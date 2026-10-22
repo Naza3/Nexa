@@ -22,8 +22,6 @@ pub const PACKAGE_ERROR_CODES: &[&str] = &[
     "package_file_hash_mismatch",
     "package_checksum_invalid",
     "package_checksum_mismatch",
-    "package_unlisted_file",
-    "package_external_model_header_invalid",
     "runtime_source_identity_mismatch",
     "package_validation_failed",
 ];
@@ -62,12 +60,6 @@ fn package_reason(code: &str) -> &'static str {
         "package_file_hash_mismatch" => "包内文件的大小或 SHA256 与清单不一致。",
         "package_checksum_invalid" => "SHA256SUMS 校验表格式无效。",
         "package_checksum_mismatch" => "SHA256SUMS 与包清单记录不一致。",
-        "package_unlisted_file" => {
-            "包目录中有未声明的文件或目录。程序根及 model、models 目录的直接普通 GGUF 可作为外置输入；其他附加文件或嵌套目录不在允许范围。"
-        }
-        "package_external_model_header_invalid" => {
-            "包内额外 .gguf 文件不含完整 GGUF 文件头，无法识别为外置模型输入。"
-        }
         "runtime_source_identity_mismatch" => "桌面与 runtime 清单的源码身份不一致。",
         _ => "包校验未能完成，原因尚未确定。",
     }
@@ -142,11 +134,11 @@ mod tests {
 
     #[test]
     fn report_preserves_failure_and_omits_unverified_identity() {
-        let failed = Err("package_unlisted_file");
+        let failed = Err("package_file_hash_mismatch");
         let value =
             serde_json::to_value(StartupDiagnostic::new(&failed, Some("131.0.2903.86"))).unwrap();
         assert_eq!(value["schema_version"], 2);
-        assert_eq!(value["package_error_code"], "package_unlisted_file");
+        assert_eq!(value["package_error_code"], "package_file_hash_mismatch");
         assert_eq!(value["package_verified"], false);
         assert!(value["project_commit"].is_null());
         assert!(value["project_dirty"].is_null());

@@ -182,12 +182,18 @@
           "type": "integer",
           "minimum": 30,
           "maximum": 7200
+        },
+        "execution_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Running/saved execution limit for prepare, image encoding, prefill and decode. Defaults to 300 when absent from legacy TOML. Unified runtime updates require 1..86400; snapshots preserve readable positive legacy values above 86400."
         }
       },
       "required": [
         "idle_unload_enabled",
         "idle_unload_seconds",
-        "model_verification_timeout_seconds"
+        "model_verification_timeout_seconds",
+        "execution_timeout_seconds"
       ],
       "additionalProperties": false
     },
@@ -416,11 +422,18 @@
                 },
                 "values": {
                   "$ref": "#/$defs/ConfigurationValues"
+                },
+                "chat_response_timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "readOnly": true,
+                  "description": "Active verification + queue + load + execution seconds + 30, using saturating u64 addition. Desktop chat response budget, not an editable setting."
                 }
               },
               "required": [
                 "revision",
-                "values"
+                "values",
+                "chat_response_timeout_seconds"
               ],
               "additionalProperties": false
             },
@@ -601,7 +614,19 @@
               "const": "runtime"
             },
             "runtime": {
-              "$ref": "#/$defs/RuntimePolicies"
+              "allOf": [
+                {
+                  "$ref": "#/$defs/RuntimePolicies"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "execution_timeout_seconds": {
+                      "maximum": 86400
+                    }
+                  }
+                }
+              ]
             }
           },
           "required": [

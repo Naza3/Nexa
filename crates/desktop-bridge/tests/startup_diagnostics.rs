@@ -77,3 +77,43 @@ async fn runtime_exit_zero_is_preserved_and_is_not_startup_success() {
         }
     );
 }
+
+fn shell_fixture(temp: &tempfile::TempDir, script: &[u8]) {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = temp.path().join("ai-runtime");
+    std::fs::write(&executable, script).unwrap();
+    std::fs::write(temp.path().join("ai-runtime-worker"), b"fixture").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[tokio::test]
+async fn child_exit_reports_only_exact_startup_reason_and_clears_between_attempts() {
+    let _gate = SPAWN_GATE.lock().await;
+    let (temp, _root, bridge) = initialized();
+    shell_fixture(
+        &temp,
+        b"#!/bin/sh\nprintf 'nexa-startup-v1:runtime_loopback_bind_failed\\n'\nexit 1\n",
+    );
+    let error = bridge.start(false).await.unwrap_err();
+    assert_eq!(error.code, "runtime_loopback_bind_failed");
+    assert_eq!(bridge.startup_diagnostics().process_exit_code, Some(1));
+    shell_fixture(&temp, b"#!/bin/sh\nprintf 'nexa-startup-v1:configuration_invalid /private/secret token=secret\\n'\nexit 1\n");
+    let error = bridge.start(false).await.unwrap_err();
+    assert_eq!(error.code, "runtime_start_failed");
+    assert!(!error.message.contains("secret"));
+    assert!(!error.message.contains("/private"));
+}
+
+#[tokio::test]
+async fn child_startup_channel_flood_is_drained_and_cannot_deadlock_startup() {
+    let _gate = SPAWN_GATE.lock().await;
+    let (temp, _root, bridge) = initialized();
+    shell_fixture(&temp, b"#!/bin/sh\nprintf 'nexa-startup-v1:configuration_invalid\\n'\ni=0\nwhile [ $i -lt 5000 ]; do printf 'token=private-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n'; i=$((i+1)); done\nexit 1\n");
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), bridge.start(false))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, "configuration_invalid");
+    assert!(!error.message.contains("private-secret"));
+    assert_eq!(bridge.startup_diagnostics().process_exit_code, Some(1));
+}

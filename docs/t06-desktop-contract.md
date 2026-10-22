@@ -48,7 +48,7 @@
 - `runtime_idle_save({ idle_unload_seconds })` → snapshot。前端单独提供“应用空闲卸载设置”动作；仅服务已停止且持实例锁时校验并原子更新runtime config，下次启动生效。运行中返回 `runtime_running`，不自动关停其他客户端、不伪称热更新。snapshot.settings中的idle值来自runtime config，其他UI偏好来自独立文件；两次显式动作各自只写一个文件，不承诺跨文件事务。
 - `token_copy()` → `{ copied:true }`，只由用户按钮触发。原生壳通过现有私有文件校验读取，直接写原生剪贴板；前端不收到 token，也没有剪贴板读取能力。按钮提示令牌会进入系统剪贴板。
 - `runtime_stop()` → `{ stopped:true }`，仅在真实 HTTP shutdown 成功且 `wait_stopped` 确认原实例锁/记录释放后返回。该操作会停止全部客户端任务，UI 在入口明确告知。
-- `desktop_close()` → void。与原生窗口关闭事件调用同一关闭状态机，不绕过本 UI 请求清理及关闭设置。
+- `desktop_close()` → void。前端先完成参数/结果保存再调用原生关闭状态机。原生窗口关闭先发送固定 `nexa-close-requested` CustomEvent（仅native UUID）；`desktop_close_ack({id})` 返回是否为当前有效请求，确认后前端走相同草稿确认及保存流程。5秒未确认则nonce过期，提供原生重试/保留/明确丢弃未保存内容后关闭，不默默跳过保存。
 
 状态刷新最多 1Hz且不重叠；动作后可刷新一次，不周期读取日志。前端界面重绘/文本批处理最多约30Hz。UI 工位定义上述 TS DTO，bridge 工位对应 Rust serde DTO；共同使用本文字段，不因 camelCase 自动转换假设造成偏差。
 
@@ -75,12 +75,12 @@
 ## 7. 首包与验证门槛
 
 - 私有开发 `desktop-windows` ZIP：Tauri EXE/嵌入前端 + `runtime/`下完整匹配T05产品包及其manifest/许可；额外桌面依赖按实际PE闭包补齐。模型仍外部导入，不复制用户数据/token；UI与runtime大小分开统计。
-- 发行 ZIP 继续严格无模型、文件集合与 manifest/SHA256SUMS 一致。用户解压后的程序根目录，以及固定`model/`、`models/`目录允许直接普通`.gguf`输入，扩展名大小写不敏感、只读四字节GGUF头、保持symlink/reparse拒绝；不hash整个输入、不计产品清单或体积、不自动导入。两个固定目录可为空，不允许未知文件或嵌套目录；runtime/licenses等其他位置、未声明EXE/DLL/脚本继续严格拒绝，全部声明文件hash/来源校验不变。本轮仅新增root/model/models直接子级严格UUID命名的下载.part例外，普通文件≤16GiB、至多64项；只允许惰性残留，不执行/自动删除，任意.part/链接/其他层级继续拒绝。原生选择其他包内目录时立即明确拒绝，不等重启；选包内允许目录时在pick/apply/重扫前复用layout校验，以拒绝UI打开后新增的不合法文件。重扫validator使用bridge持实例锁时确定的实际目录/索引，不能从display_path读取授权。包外任意受支持目录不属于产品库存。包校验不读取用户配置决定豁免，四字节识别不代替注册/加载的完整核验。混合坏文件诊断验收使用包外授权目录，不为本轮partial功能放宽包内preflight。
+- 发行ZIP仍严格匹配manifest/SHA256SUMS且不包含用户模型。启动及包内目录pick/apply/rescan仅验证声明产品文件；任意未声明文件、目录和惰性下载残留不扫描、不拒绝、不自动导入或执行。固定可执行文件必须声明且hash匹配，声明路径及祖先继续拒绝symlink/reparse；模型扫描、目录选择位置和bridge授权边界保持。详见[ADR0041](decisions/0041-declared-payload-startup-validation.md)。
 - 启动包校验保留固定错误码到原生中文提示与 `--diagnose` schema 2；不回显用户绝对路径或任意错误文本。CI wrapper 与 evidence stager 对成功/失败报告执行同一闭合字段/错误码白名单，非零退出的合法失败报告也保存。
 - 本轮用已安装的Evergreen WebView2，不自动下载、安装或改变系统权限。缺失时在WebView建立前给原生可读错误及微软官方安装入口；不能只做网页内错误（网页根本无法启动）。检测实际版本并纳入验证证据，Windows 10或装有Edge都不等于WebView2一定存在。
 - 不新增fixed WebView2；微软当前文档说明Win10非打包Win32使用fixed v120+涉及AppContainer目录ACL要求，不适合本轮未经批准的系统权限变化。
 - 自动验证：根回归；bridge假服务恶意proof/redirect/丢帧/大帧/取消竞态/慢消费者/终态一次；Linux真实模型import→load→流→cancel→再次生成→unload→stop；Windows相同宿主链及实际Tauri构建/PE闭包/中文空格路径。
-- 既有 Windows 桌面解压验收步骤另用实际 EXE 检查：同级真实 GGUF 输入允许；未声明 DLL 与改动 manifest 均拒绝；只清理测试独占创建的输入，恢复清单原字节后重新严格核验产品 payload。此项不建立窗口、不替代独立原生UI验收。
+- 既有Windows解压验收用实际EXE检查GGUF及未声明DLL允许、改动manifest仍拒绝；仅清理独占测试输入并恢复严格payload校验。MSI/NSIS生命周期另诊断已安装EXE，覆盖安装器额外文件。两者都不替代原生GUI、数据配置与目标机验收。
 - Windows关闭语义须用真实子进程验证：默认关UI后必须证明同实例API仍可调用；同时退出后实例锁/记录释放、worker回收。正常关闭自身UI与外部宿主终止整个Job/会话分开，不以启动探针代替完整生命周期证据。关闭中重复点击、连接既有runtime、异协议/proof失败、端口占用、取消在started前后均覆盖。bridge harness不能冒充已验证原生窗口事件；壳若暂不能自动驱动，明确保留Windows 10独立手工操作验收。
 - 前端单测/浏览器检查三页、键盘/中文输入、无模型/忙碌/失败/清空/重复点击/切页；mock只证明UI。T06完成仍需Windows UI实际导入、真实聊天、停止和关闭两种语义，不用截图代替生成。
 
@@ -99,3 +99,25 @@
 ## 单图 OCR 增量（ADR0032）
 
 见 [单图决策](decisions/0032-local-single-image-ocr.md)和[使用说明](ocr-windows-cpu.md)。新增四个精确ACL命令 `ocr_start`、`ocr_save_markdown`、`models_pair_pick`、`models_pair_import`。本地选择双文件发放一次性token，受管理复制导入，原单文件零复制保持。OCR显式加载本次参数，单图预览/可选缩放、流式原文/安全Markdown、复制与原生保存；与聊天共用一个ChatSlot、chat_next/chat_cancel及关窗清理。不把加载成功、旧文本凭据或上限截断输出显示为OCR质量验证。
+
+## 统一性能页（ADR0035）
+
+新增本机受ACL约束的只读 `performance_get`，经同一已证明连接请求 `/runtime/performance` 并校验instance UUID、200条上限及数字/状态边界；旧服务404映射performance_unsupported。独立性能页涵盖各推理入口的终态记录，可见时每3秒刷新，按模型/状态/文本图片筛选，详情显示实际参数与阶段耗时，复制CSV保留原始单位。查询错误不改变聊天/OCR结果；防止重叠查询和旧连接结果覆盖，服务退出清空。无正文/图片持久化，现有ChatEvent及SSE不变。详细口径见 [ADR0035](decisions/0035-unified-inference-performance.md) 和 [使用说明](inference-performance.md)。
+
+## 输出摘要、OCR归档与TOML工作区（ADR0036）
+
+桌面ChatBatch新增可缺省 `runtime_instance_id`，来自生成请求同一已验证连接；ChatEvent与公共SSE不变。终态后查询一次性能，只附加唯一且实例/请求/模型/类型/状态/输出上限匹配的记录，成功还核对usage与finish_reason。摘要位于原文下方，复制与另存不含指标；缺测、查询失败、过期结果不使推理失败。
+
+新增精确ACL命令 `ocr_history_list()`、`ocr_history_get({id})`、`ocr_history_save({mode,...})`、`ocr_history_delete({id})`。保存非空终态原文及元数据，最多100条、单条256KiB、编码文件32MiB；独立私有JSON归档不是性能日志。create与update_performance严格分开：补指标不能改正文或重建删除的条目。重启可浏览、复制/另存和删除，原图不保存。
+
+`workbench_get()` 返回 `{revision,preferences}`，`workbench_save({expected_revision,preferences})` 按原文件revision执行CAS，保存到 `%LOCALAPPDATA%/Nexa/workbench-preferences.toml`。OCR模型选择、加载参数/每模型base与draft、提示词、输出上限、缩放/视图及聊天未发送草稿自动记忆；正式模型档案仍归config.toml。先读取后保存，损坏/冲突保留现有文件及输入，禁止静默默认值回写。格式、限额、恢复优先级与关闭顺序见[ADR0036](decisions/0036-desktop-results-and-preferences.md)。
+
+关闭准备期间阻止新工作区编辑/新推理，先取消并消费当前OCR终态、登记已有正文，再等待工作区及结果写入后调用desktop_close。原生桥的独立持久化许可覆盖实际后台磁盘写入；读写采用同一文件锁及私有原子替换。保存失败或任务终态未确认保留窗口，不将未保存显示为已保存。
+
+## 顺序图片队列（ADR0037）
+
+桌面文件输入支持多选，最多20张、每张4MiB、合计80MiB，按FileList导入顺序而非文件名排序；独立条目ID支持重名，开始前可上下移动和移除。单图原有操作保持。开始后冻结顺序及模型/提示词/token/缩放参数，每次只准备并发送一张，成功终态正文保存后推进；性能补存仍旁路关联各自请求。没有新增原生命令或公共多图API。
+
+controller以唯一token持有本窗口的批量占位，覆盖图片准备、图间和保存空隙，阻止冲突操作；只读状态与关闭清理保持。提交前先等待先前poll结束，再读取新快照，不能拿终态前的generating缓存误判下一张。外部并发仍由原actor治理，前端检查不构成跨客户端锁。
+
+失败/停止/断流暂停，未知终态保留原任务和占位；恢复沿用原ID，显式继续只处理待开始项。单图重新识别使用新条目ID隔离旧指标回包。跨页继续，关窗先停止后续调度再保存部分正文；File/待运行队列不持久化，完成结果按ADR0036独立归档。边界及验证见[ADR0037](decisions/0037-sequential-image-ocr-queue.md)。

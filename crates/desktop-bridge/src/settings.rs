@@ -27,7 +27,7 @@ pub(crate) fn read_bounded(path: &Path, maximum: usize) -> Result<Vec<u8>> {
 pub(crate) fn config(root: &Path) -> Result<Config> {
     runtime_api::configuration::read(root)
         .map(|document| document.config)
-        .map_err(|e| BridgeError::new(e.code))
+        .map_err(BridgeError::from)
 }
 /// Uninitialized model-library operations retain the historical default, while
 /// malformed or unreadable existing configuration must never silently downgrade.
@@ -66,7 +66,7 @@ pub(crate) fn preferences(root: &Path) -> Result<DesktopPreferences> {
     if root.join("config.toml").exists() && config(root)?.schema_version == 2 {
         let config = config(root)?;
         let ui = runtime_api::configuration::ui_preferences_get(root)
-            .map_err(|e| BridgeError::new(e.code))?
+            .map_err(BridgeError::from)?
             .preferences;
         return Ok(DesktopPreferences {
             context_size: config.inference.context_size,
@@ -102,8 +102,8 @@ pub(crate) fn validate(settings: &DesktopPreferences) -> Result<()> {
 }
 pub(crate) fn save_preferences(root: &Path, preferences: &DesktopPreferences) -> Result<()> {
     validate(preferences)?;
-    let _lock = runtime_api::configuration::ConfigurationLock::acquire(root)
-        .map_err(|e| BridgeError::new(e.code))?;
+    let _lock =
+        runtime_api::configuration::ConfigurationLock::acquire(root).map_err(BridgeError::from)?;
     if root.join("config.toml").exists() && config(root)?.schema_version == 2 {
         return Err(BridgeError::new("configuration_revision_required"));
     }
@@ -120,19 +120,38 @@ pub(crate) fn atomic_replace(target: &Path, bytes: &[u8]) -> Result<()> {
             .ok_or_else(|| BridgeError::new("unsafe_file"))?,
     )
     .map_err(|_| BridgeError::new("unsafe_file"))?;
-    runtime_api::token::atomic_replace_private(target, bytes).map_err(|e| {
-        BridgeError::new(if e.to_string() == "configuration_durability_unconfirmed" {
+    runtime_api::token::atomic_replace_private(target, bytes).map_err(publication_error)
+}
+fn publication_error(source: io::Error) -> BridgeError {
+    use runtime_api::token::PrivateFileError;
+    BridgeError::new(
+        if matches!(
+            PrivateFileError::from_io(&source),
+            Some(PrivateFileError::PublishedDurabilityUnconfirmed { .. })
+        ) {
             "settings_durability_unconfirmed"
         } else {
             "settings_write_failed"
-        })
-    })
+        },
+    )
 }
 
 #[cfg(test)]
 mod policy_tests {
     use super::*;
     use std::time::Duration;
+    #[test]
+    fn publication_state_requires_typed_error_not_display_text() {
+        let published = publication_error(io::Error::other(
+            runtime_api::token::PrivateFileError::PublishedDurabilityUnconfirmed {
+                source: io::Error::other("private_sentinel_path"),
+            },
+        ));
+        assert_eq!(published.code, "settings_durability_unconfirmed");
+        assert!(!format!("{published:?} {published}").contains("private_sentinel"));
+        let spoof = publication_error(io::Error::other("configuration_durability_unconfirmed"));
+        assert_eq!(spoof.code, "settings_write_failed");
+    }
     fn string(bytes: &mut Vec<u8>, value: &str) {
         bytes.extend((value.len() as u64).to_le_bytes());
         bytes.extend(value.as_bytes());

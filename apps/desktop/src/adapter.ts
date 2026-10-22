@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { DesktopApi, SafeError } from "./types";
+import { presentError } from "./errorPresentation";
 import { preferencesOnly } from "./runtimeSettingsValues";
 
 export class DesktopError extends Error {
@@ -10,21 +11,7 @@ export class DesktopError extends Error {
   }
 }
 export function safeError(error: unknown): SafeError {
-  if (
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    "message" in error &&
-    typeof error.code === "string" &&
-    /^[a-z0-9_]{1,96}$/.test(error.code) &&
-    typeof error.message === "string"
-  ) {
-    return { code: error.code, message: error.message.slice(0, 500) };
-  }
-  return {
-    code: "desktop_unavailable",
-    message: "无法完成桌面操作，请检查运行服务后重试。未自动重放请求。",
-  };
+  return presentError(error, error instanceof DesktopError);
 }
 async function call<T>(command: string, request?: unknown): Promise<T> {
   if (!isTauri())
@@ -43,6 +30,16 @@ async function call<T>(command: string, request?: unknown): Promise<T> {
   }
 }
 export const nativeApi: DesktopApi = {
+  closeAcknowledge: (id) => call("desktop_close_ack", { id }),
+  workbenchGet: () => call("workbench_get"),
+  autostartGet: () => call("autostart_get"),
+  autostartSet: (enabled) => call("autostart_set", { enabled }),
+  workbenchSave: (request) => call("workbench_save", request),
+  ocrHistoryList: () => call("ocr_history_list"),
+  ocrHistoryGet: (id) => call("ocr_history_get", { id }),
+  ocrHistorySave: (request) => call("ocr_history_save", request),
+  ocrHistoryDelete: (id) => call("ocr_history_delete", { id }),
+  performanceGet: () => call("performance_get"),
   initialize: () => call("runtime_initialize"),
   configurationGet: () => call("configuration_get"),
   configurationModelGet: (model_id) => call("configuration_model_get", { model_id }),

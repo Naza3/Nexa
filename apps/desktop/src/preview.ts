@@ -2,7 +2,7 @@
 import { DEFAULT_SETTINGS, wait } from "./controller";
 import { DesktopError } from "./adapter";
 import { DEFAULT_LAN_SETTINGS, validateLanSettings } from "./lanApi";
-import { preferencesOnly, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
+import { preferencesOnly, validateExecutionSeconds, validateIdleSeconds, validateVerificationSeconds } from "./runtimeSettingsValues";
 import type {
   ChatEvent,
   DesktopApi,
@@ -13,6 +13,7 @@ import type {
   Snapshot,
   DirectoryIdentity,
   LibraryOperation,
+  PerformanceSnapshot,
 } from "./types";
 export function createPreviewApi(): DesktopApi {
   const scenario = new URLSearchParams(window.location.search).get("scenario");
@@ -40,7 +41,7 @@ export function createPreviewApi(): DesktopApi {
     lan_api: { ...DEFAULT_LAN_SETTINGS },
     initialized: scenario !== "initial",
     connection:
-      scenario === "initial" || scenario === "stopped"
+      scenario === "initial" || scenario === "stopped" || scenario === "runtime-settings"
         ? "stopped"
         : scenario === "error"
           ? "error"
@@ -50,6 +51,16 @@ export function createPreviewApi(): DesktopApi {
     model_directory: { configured: null, effective: null, state: "default" },
     runtime,
   };
+  if (scenario === "runtime-settings") snapshot.configuration = {
+    schema_version: 2, revision: `sha256:${"0".repeat(64)}`, saved: {
+      global_defaults: { context_size: 2048, threads: 2, batch_size: 128 },
+      request_defaults: { max_output_tokens: 768, temperature: 0.8, top_p: 0.95 },
+      runtime: { execution_timeout_seconds: 300, idle_unload_enabled: true, idle_unload_seconds: 300, model_verification_timeout_seconds: 300 },
+      local_api: { listen: "127.0.0.1:18181" }, lan_api: { ...DEFAULT_LAN_SETTINGS }, model_profiles: [],
+    }, runtime_effective: null, pending_restart: false,
+    migration: { state: "not_needed", preferences_revision: null, differences: [], backup_available: false },
+  };
+  let configurationVersion = 0;
   let models: ModelSummary[] =
     scenario === "empty" || scenario === "initial"
       ? []
@@ -121,6 +132,7 @@ export function createPreviewApi(): DesktopApi {
   }
   let loadTask: { progress: ModelLoadOperation; options: LoadOptions; step: number; cancel: boolean } | null = null;
   return {
+    performanceGet: async () => scenario === "performance" ? structuredClone(PREVIEW_PERFORMANCE) : { instance_id: "preview-empty", capacity: 200, records: [] },
     loadModelStart: async (operation_id, model_id, options) => {
       if (loadTask && !loadTask.progress.terminal) throw new DesktopError("runtime_busy", "预览加载仍在进行。");
       loadTask = { progress: { operation_id, model_id, phase: "preparing", status: "running", terminal: false,
@@ -170,6 +182,10 @@ export function createPreviewApi(): DesktopApi {
         throw new DesktopError("initialization_required", "请先初始化。");
       snapshot.initialized = true;
       snapshot.connection = "connected";
+      if (snapshot.configuration) {
+        snapshot.configuration.runtime_effective = { chat_response_timeout_seconds: 120 + 300 + 30 + snapshot.configuration.saved.runtime.model_verification_timeout_seconds + snapshot.configuration.saved.runtime.execution_timeout_seconds, revision: snapshot.configuration.revision, values: structuredClone(snapshot.configuration.saved) };
+        snapshot.configuration.pending_restart = false;
+      }
       runtime.lan_api = { enabled: !!snapshot.lan_api?.enabled, listen: snapshot.lan_api?.listen ?? null, running: !!snapshot.lan_api?.enabled };
       snapshot.runtime = runtime;
       snapshot.model_directory.effective = snapshot.model_directory.configured;
@@ -361,6 +377,19 @@ export function createPreviewApi(): DesktopApi {
       cancel = true;
       return { request_id, status: "stopping" };
     },
+    configurationSave: async (request) => {
+      const configuration = snapshot.configuration;
+      if (!configuration) throw new DesktopError("configuration_unavailable", "请使用 runtime-settings 预览场景。");
+      if (snapshot.connection !== "stopped") throw new DesktopError("runtime_running", "请先停止运行服务。");
+      if (request.expected_revision !== configuration.revision) throw new DesktopError("configuration_conflict", "配置版本已变化。");
+      if (request.update.kind !== "runtime") throw new DesktopError("preview_only", "此场景仅模拟运行策略保存。");
+      const policy = request.update.runtime;
+      const validation = validateExecutionSeconds(policy.execution_timeout_seconds) || validateIdleSeconds(policy.idle_unload_seconds) || validateVerificationSeconds(policy.model_verification_timeout_seconds);
+      if (validation) throw new DesktopError("invalid_settings", validation);
+      configuration.saved.runtime = structuredClone(policy);
+      configuration.revision = `sha256:${(++configurationVersion).toString(16).padStart(64, "0")}`;
+      return structuredClone(configuration);
+    },
     saveSettings: async (settings) => {
       snapshot.settings = { ...snapshot.settings, ...preferencesOnly(settings) };
       return clone();
@@ -428,3 +457,16 @@ export function createPreviewApi(): DesktopApi {
     },
   };
 }
+
+/** Synthetic layout fixtures, never measurements or normal preview inference history. */
+export const PREVIEW_PERFORMANCE: PerformanceSnapshot = {
+  instance_id: "模拟数据-preview-performance", capacity: 200,
+  records: Array.from({ length: 6 }, (_, index) => ({
+    sequence: 6 - index, request_id: `模拟请求-${6 - index}`, model_id: index % 2 ? "模拟-Qwen3-0.6B" : "模拟-GLM-OCR",
+    modality: index % 2 ? "text" : "image", status: index === 4 ? "failed" : index === 5 ? "cancelled" : "completed",
+    accepted_at_unix_ms: 1791446400000 - index * 60000, max_output_tokens: 256,
+    usage: { prompt_tokens: 1200, completion_tokens: 256 }, timings: { queue_ms: 15, load_ms: 0, execution_ms: 5200 },
+    performance: index >= 4 ? null : { timings: { prepare_us: 10000, prefill_us: 2000000, decode_us: 3000000, output_callback_us: 20000 }, load_options: { context_size: 8192, threads: 4, batch_size: 256 } },
+    error_code: index === 4 ? "inference_failed" : index === 5 ? "cancelled" : null, finish_reason: index >= 4 ? null : index === 0 ? "length" : "stop",
+  })),
+};

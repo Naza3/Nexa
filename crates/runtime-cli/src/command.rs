@@ -1,6 +1,7 @@
 use crate::{
     client::VerifiedConnection,
     instance::{Discovery, InstanceLock, wait_stopped},
+    startup_error::StartupError,
 };
 use hyper::Method;
 use model_store::{ImportCancellation, ImportRequest, ModelSource, ModelStore};
@@ -385,12 +386,14 @@ pub async fn execute(options: Options) -> Result<()> {
     };
     print(value)
 }
-/// The callback is the OS binder in production; unit tests inject a failed
-/// second bind without exposing any non-loopback socket or weakening validation.
-async fn bind_api_listeners<F, Fut>(
-    config: &Config,
-    mut bind: F,
-) -> Result<(tokio::net::TcpListener, Option<tokio::net::TcpListener>)>
+struct BoundApiListeners {
+    local: tokio::net::TcpListener,
+    lan: Option<tokio::net::TcpListener>,
+    lan_startup_error: Option<runtime_api::lan::LanStartupError>,
+}
+/// Only LAN socket binding may degrade; validation and loopback failures remain fatal.
+/// Tests inject bind results without opening a non-loopback test service.
+async fn bind_api_listeners<F, Fut>(config: &Config, mut bind: F) -> Result<BoundApiListeners>
 where
     F: FnMut(std::net::SocketAddr) -> Fut,
     Fut: std::future::Future<Output = io::Result<tokio::net::TcpListener>>,
@@ -398,26 +401,32 @@ where
     config.validate()?;
     let local = bind(config.api.listen)
         .await
-        .map_err(|_| "cannot bind configured loopback endpoint")?;
+        .map_err(StartupError::LoopbackBind)?;
+    let mut lan_startup_error = None;
     let lan = if config.lan_api.enabled {
         let address = config
             .lan_api
             .listen
             .ok_or("missing LAN listener address")?;
-        Some(
-            bind(address)
-                .await
-                .map_err(|_| "cannot bind configured LAN endpoint; no service was started")?,
-        )
+        match bind(address).await {
+            Ok(listener) => Some(listener),
+            Err(error) => {
+                lan_startup_error = Some(runtime_api::lan::LanStartupError::from_io(&error));
+                None
+            }
+        }
     } else {
         None
     };
-    Ok((local, lan))
+    Ok(BoundApiListeners {
+        local,
+        lan,
+        lan_startup_error,
+    })
 }
 async fn serve(root: &Path) -> Result<()> {
     let _ = require_initialized(root)?;
-    let lock =
-        InstanceLock::try_acquire(root)?.ok_or("another instance owns this data directory")?;
+    let lock = InstanceLock::try_acquire(root)?.ok_or(StartupError::InstanceBusy)?;
     // A settings writer may have changed LAN enablement before lock acquisition.
     // Only this lock-protected snapshot may authorize any network binding.
     let config = require_initialized(root)?;
@@ -432,13 +441,17 @@ async fn serve(root: &Path) -> Result<()> {
             "ai-runtime-worker"
         });
     if !fs::symlink_metadata(&worker)
-        .map_err(|_| "packaged worker is missing beside ai-runtime")?
+        .map_err(StartupError::WorkerMissing)?
         .file_type()
         .is_file()
     {
-        return Err("packaged worker must be a regular file beside ai-runtime".into());
+        return Err(StartupError::WorkerNotRegular.into());
     }
-    let (listener, lan_listener) = bind_api_listeners(&config, |address| async move {
+    let BoundApiListeners {
+        local: listener,
+        lan: lan_listener,
+        lan_startup_error,
+    } = bind_api_listeners(&config, |address| async move {
         tokio::net::TcpListener::bind(address).await
     })
     .await?;
@@ -447,7 +460,7 @@ async fn serve(root: &Path) -> Result<()> {
     let lan = if let Some(listener) = lan_listener {
         let lan_token = init_private_lan_token(root)?;
         if lan_token.matches_authorization(token.bearer_header_value().as_bytes()) {
-            return Err("LAN and management credentials must be independent".into());
+            return Err(StartupError::CredentialsNotIndependent.into());
         }
         let security = Arc::new(LanSecurityContext::new(lan_token, &config.lan_api)?);
         Some((listener, security, config.lan_api.clone()))
@@ -462,7 +475,7 @@ async fn serve(root: &Path) -> Result<()> {
             listen,
             config.api.trusted_origins.clone(),
         )
-        .map_err(|_| "invalid server security configuration")?,
+        .map_err(StartupError::SecurityConfiguration)?,
     );
     // Install Ctrl+C before potentially long startup hashing. If interrupted,
     // finish the owned startup I/O before releasing the instance lock.
@@ -476,7 +489,8 @@ async fn serve(root: &Path) -> Result<()> {
         move |id: &ModelId| resolver.resolve(id),
         host,
     )?;
-    let state = ApiState::new(runtime, store.clone(), config, Some(diagnostics));
+    let mut state = ApiState::new(runtime, store.clone(), config, Some(diagnostics));
+    state.lan_startup_error = lan_startup_error;
     let shutdown = state.shutdown.clone();
     if let Err(error) = state.initialize_registry().await {
         shutdown.begin();
@@ -564,7 +578,111 @@ mod tests {
 mod lan_start_tests {
     use super::*;
     #[tokio::test]
-    async fn second_bind_failure_drops_first_and_disabled_lan_never_calls_second_binder() {
+    async fn bind_failures_are_typed_without_retries_or_changed_addresses() {
+        use runtime_api::lan::LanStartupError;
+        for (kind, expected) in [
+            (
+                io::ErrorKind::AddrNotAvailable,
+                LanStartupError::AddressUnavailable,
+            ),
+            (io::ErrorKind::AddrInUse, LanStartupError::PortInUse),
+            (
+                io::ErrorKind::PermissionDenied,
+                LanStartupError::PermissionDenied,
+            ),
+            (io::ErrorKind::Other, LanStartupError::BindFailed),
+        ] {
+            let mut config = Config::default();
+            config.api.listen = "127.0.0.1:0".parse().unwrap();
+            config.lan_api = runtime_api::LanApiConfig {
+                enabled: true,
+                listen: Some("192.168.10.2:18081".parse().unwrap()),
+                allowed_cidrs: vec!["192.168.10.3/32".into()],
+            };
+            let original = config.to_toml().unwrap();
+            let mut attempted = Vec::new();
+            let result = bind_api_listeners(&config, |address| {
+                attempted.push(address);
+                async move {
+                    if address.ip().is_loopback() {
+                        tokio::net::TcpListener::bind(address).await
+                    } else {
+                        Err(io::Error::new(kind, "untrusted OS detail"))
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                attempted,
+                vec![config.api.listen, config.lan_api.listen.unwrap()]
+            );
+            assert_eq!(result.lan_startup_error, Some(expected));
+            assert!(result.lan.is_none());
+            let client = tokio::net::TcpStream::connect(result.local.local_addr().unwrap())
+                .await
+                .unwrap();
+            assert!(result.local.accept().await.is_ok());
+            drop(client);
+            assert_eq!(config.to_toml().unwrap(), original);
+        }
+    }
+    #[tokio::test]
+    async fn successful_explicit_attempt_has_no_stale_startup_error() {
+        let mut config = Config::default();
+        config.api.listen = "127.0.0.1:0".parse().unwrap();
+        config.lan_api = runtime_api::LanApiConfig {
+            enabled: true,
+            listen: Some("192.168.10.2:18081".parse().unwrap()),
+            allowed_cidrs: vec!["192.168.10.3/32".into()],
+        };
+        let mut attempted = Vec::new();
+        // Synthetic binder only: no test opens a non-loopback socket.
+        let result = bind_api_listeners(&config, |address| {
+            attempted.push(address);
+            async { tokio::net::TcpListener::bind("127.0.0.1:0").await }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            attempted,
+            vec![config.api.listen, config.lan_api.listen.unwrap()]
+        );
+        assert!(result.lan.is_some());
+        assert!(result.lan_startup_error.is_none());
+    }
+    #[tokio::test]
+    async fn invalid_configuration_and_loopback_bind_still_fail_closed() {
+        let mut config = Config::default();
+        config.lan_api.enabled = true;
+        assert!(
+            bind_api_listeners(&config, |_| async {
+                panic!("must validate before binding")
+            })
+            .await
+            .is_err()
+        );
+        config.lan_api.enabled = false;
+        let mut calls = 0;
+        let error = bind_api_listeners(&config, |_| {
+            calls += 1;
+            async { Err(io::Error::from(io::ErrorKind::AddrInUse)) }
+        })
+        .await
+        .err()
+        .expect("loopback binding must fail closed");
+        assert_eq!(calls, 1);
+        assert!(matches!(
+            error.downcast_ref::<StartupError>(),
+            Some(StartupError::LoopbackBind(source)) if source.kind() == io::ErrorKind::AddrInUse
+        ));
+        assert_eq!(
+            crate::startup_error::report_line(error.as_ref()),
+            b"nexa-startup-v1:runtime_loopback_bind_failed\n"
+        );
+    }
+    #[tokio::test]
+    async fn second_bind_failure_keeps_local_and_disabled_lan_never_calls_second_binder() {
         let mut config = Config::default();
         config.api.listen = "127.0.0.1:0".parse().unwrap();
         config.lan_api = runtime_api::LanApiConfig {
@@ -589,18 +707,31 @@ mod lan_start_tests {
             }
         })
         .await;
-        assert!(result.is_err());
+        let result = result.unwrap();
+        assert!(result.lan.is_none());
+        assert_eq!(
+            result.lan_startup_error,
+            Some(runtime_api::lan::LanStartupError::AddressUnavailable)
+        );
         let address = bound.lock().unwrap().unwrap();
+        assert!(tokio::net::TcpListener::bind(address).await.is_err());
+        assert!(config.lan_api.enabled);
+        drop(result);
         let rebound = tokio::net::TcpListener::bind(address).await.unwrap();
         drop(rebound);
         config.lan_api.enabled = false;
-        let (local, lan) = bind_api_listeners(&config, |address| async move {
+        let BoundApiListeners {
+            local,
+            lan,
+            lan_startup_error,
+        } = bind_api_listeners(&config, |address| async move {
             assert!(address.ip().is_loopback());
             tokio::net::TcpListener::bind(address).await
         })
         .await
         .unwrap();
         assert!(lan.is_none());
+        assert!(lan_startup_error.is_none());
         drop(local);
     }
 }

@@ -37,7 +37,9 @@ export interface LanAddressDiscovery {
   status: "available" | "empty" | "unsupported";
   addresses: LanAddress[];
 }
+export type LanStartupError = "address_unavailable" | "port_in_use" | "permission_denied" | "bind_failed";
 export interface LanApiStatus {
+  startup_error?: LanStartupError | null;
   enabled: boolean;
   listen: string | null;
   running: boolean;
@@ -223,6 +225,8 @@ export type ChatEvent =
   | ({ type: "failed" } & SafeError);
 export interface ChatBatch {
   request_id: string;
+  /** Identity of the service that owned this request; absent on older bridges. */
+  runtime_instance_id?: string | null;
   events: ChatEvent[];
   terminal: boolean;
 }
@@ -280,7 +284,50 @@ export interface ModelLoadOperation {
   error: SafeError | null;
 }
 export interface OcrRequest { model_id: string; image_data_url: string; prompt: string; max_output_tokens: number }
+export interface PerformanceRecord {
+  sequence: number;
+  request_id: string;
+  model_id: string;
+  modality: "text" | "image";
+  status: "completed" | "cancelled" | "failed";
+  accepted_at_unix_ms: number;
+  max_output_tokens: number;
+  usage: { prompt_tokens: number; completion_tokens: number };
+  timings: { queue_ms: number; load_ms: number; execution_ms: number };
+  performance: null | {
+    timings: { prepare_us: number; prefill_us: number; decode_us: number; output_callback_us: number };
+    load_options: LoadOptions;
+  };
+  error_code: string | null;
+  finish_reason: "stop" | "length" | null;
+}
+export interface PerformanceSnapshot { instance_id: string; capacity: number; records: PerformanceRecord[] }
+export interface OcrHistorySaveRequest {
+  mode: "create" | "update_performance";
+  id: string;
+  image_name: string;
+  model_id: string;
+  status: PerformanceRecord["status"];
+  finish_reason: "stop" | "length" | null;
+  error_code: string | null;
+  markdown: string;
+  incomplete: boolean;
+  performance: { instance_id: string; record: PerformanceRecord } | null;
+}
+export type OcrHistoryEntry = Omit<OcrHistorySaveRequest, "mode"> & { first_saved_at_unix_ms: number };
+export type OcrHistorySummary = Omit<OcrHistoryEntry, "markdown" | "performance"> & { markdown_bytes: number };
+export interface OcrHistoryList { capacity: 100; entries: OcrHistorySummary[] }
 export interface DesktopApi {
+  autostartGet?(): Promise<AutostartSnapshot>;
+  autostartSet?(enabled: boolean): Promise<AutostartSnapshot>;
+  closeAcknowledge?(id: string): Promise<boolean>;
+  workbenchGet?(): Promise<WorkbenchPreferencesSnapshot>;
+  workbenchSave?(request: { expected_revision: string; preferences: WorkbenchPreferences }): Promise<WorkbenchPreferencesSnapshot>;
+  ocrHistoryList?(): Promise<OcrHistoryList>;
+  ocrHistoryGet?(id: string): Promise<OcrHistoryEntry>;
+  ocrHistorySave?(request: OcrHistorySaveRequest): Promise<OcrHistoryList>;
+  ocrHistoryDelete?(id: string): Promise<OcrHistoryList>;
+  performanceGet?(): Promise<PerformanceSnapshot>;
   ocrStart?(request: OcrRequest): Promise<{ request_id: string }>;
   saveOcrMarkdown?(text: string): Promise<{ saved: boolean }>;
   pickModelPair?(): Promise<ModelFileSelection | null>;
@@ -344,7 +391,7 @@ export interface DesktopApi {
 export interface LoadDefaults { context_size: number; threads: number | null; batch_size: number }
 export interface LoadOverrides { context_size: number | null; threads: number | null; batch_size: number | null }
 export interface RequestDefaults { max_output_tokens: number; temperature: number; top_p: number }
-export interface RuntimePolicies { idle_unload_enabled: boolean; idle_unload_seconds: number; model_verification_timeout_seconds: number }
+export interface RuntimePolicies { execution_timeout_seconds: number; idle_unload_enabled: boolean; idle_unload_seconds: number; model_verification_timeout_seconds: number }
 export interface ConfigurationValues {
   global_defaults: LoadDefaults;
   request_defaults: RequestDefaults;
@@ -357,7 +404,7 @@ export interface ConfigurationSnapshot {
   schema_version: 1 | 2;
   revision: string;
   saved: ConfigurationValues;
-  runtime_effective: { revision: string; values: ConfigurationValues } | null;
+  runtime_effective: { revision: string; values: ConfigurationValues; chat_response_timeout_seconds: number } | null;
   pending_restart: boolean;
   migration: {
     state: "not_needed" | "legacy_compatible" | "required" | "complete";
@@ -388,3 +435,10 @@ export interface ConfigurationSaveRequest { expected_revision: string; update: C
 export interface ConfigurationMigrateRequest { expected_revision: string; expected_preferences_revision: string | null; choice: "api" | "desktop" | "custom"; custom: { global_defaults: LoadDefaults; request_defaults: RequestDefaults } | null }
 export interface UiPreferences { close_runtime_on_exit: boolean; download_source: DownloadSource }
 export interface UiPreferencesSnapshot { revision: string; preferences: UiPreferences }
+export interface WorkbenchPreferences {
+  close_to_tray: boolean;
+  ocr: { model_id: string | null; context_size: number; threads: number; batch_size: number; max_output_tokens: number; prompt: string; image_edge: 0 | 1600 | 2048; markdown: boolean; model_drafts: Record<string, { base: LoadOptions; draft: LoadOptions }> };
+  chat: { draft: string };
+}
+export interface WorkbenchPreferencesSnapshot { revision: string; preferences: WorkbenchPreferences }
+export interface AutostartSnapshot { registered: boolean; current_executable: boolean }

@@ -123,7 +123,7 @@ context_limit按模型metadata和131072既有硬限约束；历史验证context2
 
 仅写自有`.nexa-download-<UUID>.part`，全量实际size/SHA256匹配后原子no-clobber发布；已有同名文件或竞争新目标不覆盖。成功saved=true/registered=false，用户须再扫描；失败/取消清理只针对本任务实际持有对象。发布后清理未确认仍承认saved并警告，不谎称回滚。普通扫描忽略非GGUF.part但计目录条目，源保护和模型结构检查不变。
 
-包内仅root/model/models直接子级的严格UUID.part普通文件≤16GiB、至多64项获惰性残留例外，不执行或自动删除，不放宽未知EXE/DLL/reparse与manifest/hash。完整网络/设置回退/任务上限见[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)，结果见[本轮记录](verification/2026-10-03-model-catalog-download.md)。
+按[ADR0041](decisions/0041-declared-payload-startup-validation.md)，包启动校验不再扫描或拒绝任何未声明文件、目录和下载残留；不执行或自动删除。声明产品文件及祖先的reparse防护、必需文件和manifest/hash保持，下载操作自身的边界不变。完整网络/设置回退/任务上限见[ADR0017](decisions/0017-model-discovery-and-catalog-download.md)，结果见[本轮记录](verification/2026-10-03-model-catalog-download.md)。
 
 ## 9. 受控错误与验收
 

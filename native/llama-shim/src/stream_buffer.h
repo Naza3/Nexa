@@ -41,15 +41,36 @@ class air_stream_buffer {
   std::string pending;
   std::vector<std::string> stops;
   bool did_stop = false;
+  size_t pending_limit = 0;
+  size_t pending_storage_limit = 0;
+
+  void check_capacity() const {
+    if (pending_limit && pending.capacity() >= pending_storage_limit)
+      throw failure(11, "tool stream capacity exceeds budget");
+  }
 
 public:
-  explicit air_stream_buffer(std::vector<std::string> s)
-      : stops(std::move(s)) {}
+  explicit air_stream_buffer(std::vector<std::string> s, size_t byte_limit = 0,
+                             size_t storage_limit = 0)
+      : stops(std::move(s)), pending_limit(byte_limit), pending_storage_limit(storage_limit) {
+    if (pending_limit) {
+      pending.reserve(pending_limit);
+      check_capacity();
+    }
+  }
   bool stopped() const { return did_stop; }
+  size_t retained_capacity() const { return pending.capacity(); }
+  void release() {
+    std::string().swap(pending);
+    std::vector<std::string>().swap(stops);
+  }
   void push(const std::string &piece) {
     if (piece.size() > 1048576)
       throw failure(6, "token piece exceeds byte limit");
+    if (pending_limit && piece.size() > pending_limit - pending.size())
+      throw failure(11, "tool stream byte limit exceeded");
     pending += piece;
+    check_capacity();
   }
   template <class Emit> void flush(bool final, Emit emit) {
     size_t ready = pending.size();

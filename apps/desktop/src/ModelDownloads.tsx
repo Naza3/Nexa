@@ -1,3 +1,4 @@
+import { presentError } from "./errorPresentation";
 import { followOnLoadAction, followOnLoadLabel } from "./modelLoad";
 import { useEffect, useState } from "react";
 import type { DesktopController, ViewState } from "./controller";
@@ -6,19 +7,11 @@ import { LocalValidationFeedback } from "./ModelTestFeedback";
 import { DetailsGroup } from "./DetailsGroup";
 
 const sourceName = (source: DownloadSource) => source === "modelscope" ? "ModelScope" : "Hugging Face";
-const fallbackDownloadMessage = "下载未完成，请提供诊断码和当前进度以便排查。";
 function DownloadError({ error }: { error: unknown }) {
-  // The bridge produces controlled messages, never raw network error strings.
-  // Also fail closed for malformed display data without rendering objects or HTML.
-  const value = error && typeof error === "object" ? error as Record<string, unknown> : {};
-  const code = typeof value.code === "string" && /^[a-z0-9_]{1,80}$/.test(value.code) ? value.code : "invalid_download_error";
-  const message = typeof value.message === "string" && value.message.trim() &&
-    new TextEncoder().encode(value.message).byteLength <= 500 &&
-    !Array.from(value.message).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) &&
-    !/[<>\\]|:\/\/|www\.|\b(?:bearer|authorization|cookie|token|password|secret|signature|credential)\b/i.test(value.message)
-    ? value.message : fallbackDownloadMessage;
+  const { code, message } = presentError(error && typeof error === "object" && "code" in error && typeof error.code === "string" && error.code.length <= 80 ? error : null, false, "invalid_download_error");
   return <><p>{message}</p><p>诊断码：{code}</p></>;
 }
+
 function displayDirectory(path: unknown) {
   return typeof path === "string" && path.trim() && path.length <= 32768 && !path.includes("\0") ? path : "路径信息不可用";
 }
@@ -31,13 +24,14 @@ function size(bytes: number) {
 export function DownloadProgress({ state, controller }: { state: ViewState; controller: DesktopController }) {
   const task = state.download;
   const active = state.download_phase !== "idle";
+  const unconfirmed = task?.error?.code === "model_download_outcome_unknown" || task?.error?.code === "model_download_cleanup_unconfirmed" || (typeof task?.error?.message === "string" && task.error.message.endsWith("临时文件清理未确认，请勿自动重试。"));
   const saved = task?.phase === "registering" || task?.phase === "testing";
   if (!task && !active) return null;
   const phase = {
     connecting: "连接下载源", downloading: "下载文件", verifying: "校验文件", committing: "保存文件", registering: "文件已保存 · 正在登记", testing: `文件已登记 · ${followOnLoadLabel(task ?? {})}`, finished: "已结束",
   } as const;
   const status = active ? state.download_phase === "recovery" ? "下载状态待确认" : state.download_phase === "stopping" ? saved ? "正在取消后续步骤，已保存文件保留" : "正在取消下载" : task ? phase[task.phase] : "正在提交下载" :
-    task?.status === "completed" ? task.result?.registered ? "文件已保存并登记" : "文件已保存，尚未登记" : task?.status === "cancelled" ? "下载已取消" : "下载失败";
+    task?.error?.code === "model_download_outcome_unknown" ? "下载结果待确认" : task?.status === "completed" ? task.result?.registered ? "文件已保存并登记" : "文件已保存，尚未登记" : task?.status === "cancelled" ? "下载已取消" : "下载失败";
   return <section className="library-progress download-progress" aria-label="模型下载进度">
     <div role="status"><strong>{status}</strong>
       {task && <>
@@ -53,13 +47,13 @@ export function DownloadProgress({ state, controller }: { state: ViewState; cont
         {task.result?.registration_error && <div className="registration-error"><strong>自动登记未完成，已保存文件仍保留</strong><DownloadError error={task.result.registration_error} /></div>}
         {task.result?.local_validation && <div className="download-validation"><LocalValidationFeedback value={task.result.local_validation} /><p className="small-note">仅证明此文件与当前引擎、设备、加载参数的加载及短文本生成；不证明回答质量、长上下文或工具调用能力。</p></div>}
         {task.status === "completed" && state.snapshot?.model_directory.configured?.directory_id !== task.directory_id && <p>下载目录已变化，已保存文件仍在原下载位置。可使用“添加模型”选择该文件登记。</p>}
-        {task.result?.cleanup_warning && <p className="warning-text">文件已保存，部分下载文件清理未确认，请勿重复下载。{task.result.cleanup_warning}</p>}
+        {task.result?.cleanup_warning && <p className="warning-text">文件已保存，部分下载文件清理未确认，请勿重复下载。</p>}
       </>}
     </div>
     {state.download_phase === "recovery" ? <button onClick={() => void controller.recoverDownload()}>重新确认下载状态</button> : active ?
       <button disabled={state.download_phase === "stopping"} onClick={() => void controller.cancelDownload()}>{state.download_phase === "stopping" ? "正在取消…" : followOnLoadAction(task, saved ? "取消后续步骤" : "取消下载")}</button> :
       task?.status === "completed" ? !task.result?.registered && <button disabled={state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.pickModels()}>选择已保存文件以登记</button> :
-        task && <button disabled={state.snapshot?.connection !== "stopped" || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.startDownload(task.catalog_id, state.download_auto_test)}>重新下载</button>}
+        task && (unconfirmed ? <p role="status">请先核对原下载目录与文件，再决定是否重新添加模型；下载结果核对前不提供重复下载。</p> : <button disabled={state.snapshot?.connection !== "stopped" || state.library_phase !== "idle" || !!state.operation} onClick={() => void controller.startDownload(task.catalog_id, state.download_auto_test)}>重新下载</button>)}
     {!active && task?.terminal && <button onClick={() => controller.dismissDownloadResult(task)}>关闭下载结果</button>}
   </section>;
 }

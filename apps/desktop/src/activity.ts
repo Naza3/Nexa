@@ -1,3 +1,4 @@
+import { presentError } from "./errorPresentation";
 import { modelLoadLabel } from "./modelLoad";
 import type { ViewState, ModelTestAttempt } from "./controller";
 import type { DownloadOperation, LibraryOperation, SafeError } from "./types";
@@ -16,6 +17,7 @@ export interface Activity {
   library_kind?: ViewState["library_kind"];
 }
 export function recordActivity(records: Activity[], record: Activity): Activity[] {
+  if (record.error) record = { ...record, error: presentError(record.error) };
   const existing = records.find((item) => item.id === record.id);
   if (existing && JSON.stringify({ ...existing, updated_at: 0 }) === JSON.stringify({ ...record, updated_at: 0 })) return records;
   const updated = [record, ...records.filter((item) => item.id !== record.id)];

@@ -8,19 +8,28 @@ mod error;
 mod lan_addresses;
 mod library;
 mod loading;
+mod ocr_history;
 mod onboarding;
+mod performance;
 mod settings;
 mod sse;
+mod startup;
 mod unregister;
+mod workbench;
 pub use dto::*;
 pub use error::{BridgeError, Result};
 use hyper::Method;
 pub use model_store::library::selected::{SelectedFile, validate_selection};
+pub use ocr_history::{
+    OcrHistoryEntry, OcrHistoryList, OcrHistoryPerformance, OcrHistorySaveMode,
+    OcrHistorySaveRequest, OcrHistorySummary,
+};
 use runtime_api::Config;
 pub use runtime_api::configuration::{
     ConfigurationMigrateRequest, ConfigurationSaveRequest, ConfigurationSnapshot,
     ModelConfiguration, UiPreferencesSaveRequest, UiPreferencesSnapshot,
 };
+pub use runtime_api::performance::PerformanceSnapshot;
 use runtime_cli::{
     client::VerifiedConnection,
     instance::{Discovery, InstanceLock, wait_stopped},
@@ -38,6 +47,10 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Mutex as AsyncMutex;
+pub use workbench::{
+    ChatWorkbenchPreferences, OcrLoadDraft, OcrWorkbenchPreferences, WorkbenchPreferences,
+    WorkbenchPreferencesSaveRequest, WorkbenchPreferencesSnapshot,
+};
 
 /// Native-only numeric observations for the last accepted start attempt.
 /// These are not part of any invoke command or frontend DTO.
@@ -52,6 +65,8 @@ pub struct DesktopBridge {
     root: PathBuf,
     executable: PathBuf,
     work: std::sync::Arc<AsyncMutex<()>>,
+    // Independent from inference/model operations; close waits for accepted writes.
+    persistence: std::sync::Arc<AsyncMutex<()>>,
     snapshot_gate: AsyncMutex<()>,
     close_gate: AsyncMutex<()>,
     closing: AtomicBool,
@@ -88,6 +103,7 @@ impl DesktopBridge {
             root: data_dir,
             executable: runtime_executable,
             work: std::sync::Arc::new(AsyncMutex::new(())),
+            persistence: std::sync::Arc::new(AsyncMutex::new(())),
             snapshot_gate: AsyncMutex::new(()),
             close_gate: AsyncMutex::new(()),
             closing: AtomicBool::new(false),
@@ -295,8 +311,7 @@ impl DesktopBridge {
             if lock.has_discovery() {
                 return Err(BridgeError::new("runtime_stop_unconfirmed"));
             }
-            runtime_api::configuration::initialize(&self.root)
-                .map_err(|e| BridgeError::new(e.code))?;
+            runtime_api::configuration::initialize(&self.root).map_err(BridgeError::from)?;
         }
         settings::require_initialized(&self.root)?;
         let lock = InstanceLock::try_acquire(&self.root)
@@ -316,8 +331,9 @@ impl DesktopBridge {
             .arg("--data-dir")
             .arg(&self.root)
             .arg("serve")
+            .env(runtime_cli::DESKTOP_STARTUP_REPORT_ENV, "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null());
         command.current_dir(
             self.executable
@@ -334,6 +350,16 @@ impl DesktopBridge {
             self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
             BridgeError::spawn(&error)
         })?;
+        let capture = child
+            .stdout
+            .take()
+            .and_then(|pipe| match startup::Capture::start(pipe) {
+                Ok(capture) => Some(capture),
+                Err(error) => {
+                    self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
+                    None
+                }
+            });
         let started = tokio::time::Instant::now();
         let result = loop {
             if let Err(error) = self.check_start_cancelled(onboarding) {
@@ -344,15 +370,24 @@ impl DesktopBridge {
             {
                 break Ok(snapshot);
             }
-            if let Some(status) = child.try_wait().map_err(|error| {
-                self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
-                BridgeError::new("runtime_start_failed")
-            })? {
+            let status = match child.try_wait() {
+                Ok(status) => status,
+                Err(error) => {
+                    self.startup_diagnostics.lock().unwrap().os_error = error.raw_os_error();
+                    // Still hand our child to the reaper below; observation
+                    // failure must not abandon ownership via an early `?`.
+                    break Err(BridgeError::new("runtime_start_failed"));
+                }
+            };
+            if let Some(status) = status {
                 self.startup_diagnostics.lock().unwrap().process_exit_code = status.code();
                 // A competing start may have won. Discover/prove once, never replay.
                 break match self.snapshot_inner().await {
                     Ok(s) if matches!(s.connection, ConnectionState::Connected) => Ok(s),
-                    _ => Err(BridgeError::new("runtime_start_failed")),
+                    _ => Err(match capture {
+                        Some(capture) => capture.exited().await,
+                        None => BridgeError::new("runtime_start_failed"),
+                    }),
                 };
             }
             if started.elapsed() >= Duration::from_secs(30) {
@@ -632,12 +667,11 @@ impl DesktopBridge {
             return Err(BridgeError::new("runtime_stop_unconfirmed"));
         }
         settings::require_initialized(&self.root)?;
-        runtime_api::configuration::legacy_update(&self.root, update).map_err(|e| {
-            BridgeError::new(if e.code == "configuration_invalid" {
-                "settings_invalid"
-            } else {
-                e.code
-            })
+        runtime_api::configuration::legacy_update(&self.root, update).map_err(|mut e| {
+            if e.code == "configuration_invalid" {
+                e.code = "settings_invalid";
+            }
+            BridgeError::from(e)
         })?;
         drop(lock);
         self.snapshot_inner().await
@@ -665,7 +699,7 @@ impl DesktopBridge {
             .validate()
             .map_err(|_| BridgeError::new("lan_settings_invalid"))?;
         runtime_api::configuration::legacy_update(&self.root, |config| config.lan_api = lan_api)
-            .map_err(|e| BridgeError::new(e.code))?;
+            .map_err(BridgeError::from)?;
         drop(lock);
         self.snapshot_inner().await
     }
@@ -751,6 +785,11 @@ impl DesktopBridge {
         self.closing.store(true, Ordering::Release);
         self.close_signal.notify_waiters();
         let result = async {
+            drop(
+                tokio::time::timeout(Duration::from_secs(10), self.persistence.lock())
+                    .await
+                    .map_err(|_| BridgeError::new("persistence_busy"))?,
+            );
             self.close_download().await?;
             self.close_chat().await?;
             self.close_library().await?;

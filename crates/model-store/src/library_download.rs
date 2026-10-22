@@ -336,8 +336,33 @@ impl SidecarDownloadFile {
         self,
         expected_size: u64,
         expected_sha256: [u8; 32],
-        mut cancelled: impl FnMut() -> bool,
+        cancelled: impl FnMut() -> bool,
     ) -> Result<VerifiedSidecarFile> {
+        self.verify_with_cleanup(expected_size, expected_sha256, cancelled)
+            .map_err(|(error, _)| error)
+    }
+    /// Preserve the primary error and whether this operation's temporary files
+    /// were safely removed. The caller must not infer cleanup from a failed hash.
+    pub fn verify_with_cleanup(
+        self,
+        expected_size: u64,
+        expected_sha256: [u8; 32],
+        cancelled: impl FnMut() -> bool,
+    ) -> std::result::Result<VerifiedSidecarFile, (runtime_types::RuntimeError, bool)> {
+        match self.verify_file(expected_size, expected_sha256, cancelled) {
+            Ok(file) => Ok(VerifiedSidecarFile {
+                file,
+                transaction: self,
+            }),
+            Err(error) => Err((error, self.cleanup())),
+        }
+    }
+    fn verify_file(
+        &self,
+        expected_size: u64,
+        expected_sha256: [u8; 32],
+        mut cancelled: impl FnMut() -> bool,
+    ) -> Result<File> {
         self.stopped()?;
         if !(4..=MAX_MODEL_BYTES).contains(&expected_size) {
             return Err(library_error(ErrorCode::InvalidArgument));
@@ -372,10 +397,7 @@ impl SidecarDownloadFile {
             return Err(library_error(ErrorCode::RequestCancelled));
         }
         file.sync_all().map_err(file_error)?;
-        Ok(VerifiedSidecarFile {
-            file,
-            transaction: self,
-        })
+        Ok(file)
     }
     /// Active writers are never cleaned. False also means unknown objects or
     /// unconfirmed cleanup; no recursive deletion or reparse traversal occurs.
@@ -401,15 +423,32 @@ impl Drop for SidecarDownloadFile {
 }
 impl VerifiedSidecarFile {
     pub fn publish(self) -> Result<bool> {
+        self.publish_with_cleanup().map_err(|(error, _)| error)
+    }
+    pub fn cleanup(self) -> bool {
+        drop(self.file);
+        self.transaction.cleanup()
+    }
+    /// A successful publication is authoritative even when subsequent cleanup
+    /// or directory durability cannot be confirmed. Never remove the destination.
+    pub fn publish_with_cleanup(
+        self,
+    ) -> std::result::Result<bool, (runtime_types::RuntimeError, bool)> {
         let resources = self.transaction.resources.as_ref().unwrap();
-        resources.check_part()?;
-        fs::hard_link(&resources.part_path, &resources.destination).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                library_error(ErrorCode::AlreadyExists)
-            } else {
-                file_error(error)
-            }
-        })?;
+        let publish = || -> Result<()> {
+            resources.check_part()?;
+            fs::hard_link(&resources.part_path, &resources.destination).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    library_error(ErrorCode::AlreadyExists)
+                } else {
+                    file_error(error)
+                }
+            })?;
+            Ok(())
+        };
+        if let Err(error) = publish() {
+            return Err((error, self.cleanup()));
+        }
         // Publication is now authoritative. All remaining failures are warnings.
         #[cfg(unix)]
         let durable = resources
@@ -421,8 +460,7 @@ impl VerifiedSidecarFile {
             .is_ok();
         #[cfg(not(unix))]
         let durable = true;
-        drop(self.file);
-        Ok(self.transaction.cleanup() && durable)
+        Ok(self.cleanup() && durable)
     }
 }
 impl SidecarResources {
@@ -880,6 +918,56 @@ mod tests {
                 assert!(!paths.directory.exists());
             }
             assert!(!root.path().join(LIBRARY_FILE).exists());
+        }
+    }
+    #[test]
+    fn sidecar_failures_report_cleanup_without_deleting_unknown_or_existing_files() {
+        for mode in ["hash", "cancel", "existing"] {
+            for unknown in [false, true] {
+                let (_root, library, mut transaction, paths) = sidecar_fixture();
+                let bytes = b"GGUF verified bytes";
+                fs::write(&paths.payload, bytes).unwrap();
+                let unrelated = paths.directory.join("preserve");
+                if unknown {
+                    fs::write(&unrelated, b"unrelated").unwrap();
+                }
+                transaction.confirm_writer_stopped();
+                let result = transaction.verify_with_cleanup(
+                    bytes.len() as u64,
+                    if mode == "hash" {
+                        [0; 32]
+                    } else {
+                        fixture_hash(bytes)
+                    },
+                    || mode == "cancel",
+                );
+                let destination = library.directory.as_ref().unwrap().join("sidecar.gguf");
+                let (error, cleaned) = if mode == "existing" {
+                    fs::write(&destination, b"other operation").unwrap();
+                    result.ok().unwrap().publish_with_cleanup().unwrap_err()
+                } else {
+                    result.err().unwrap()
+                };
+                assert_eq!(
+                    error.code,
+                    match mode {
+                        "hash" => ErrorCode::IntegrityFailure,
+                        "cancel" => ErrorCode::RequestCancelled,
+                        _ => ErrorCode::AlreadyExists,
+                    }
+                );
+                assert_eq!(cleaned, !unknown);
+                assert!(!paths.payload.exists());
+                assert_eq!(paths.directory.exists(), unknown);
+                if unknown {
+                    assert_eq!(fs::read(unrelated).unwrap(), b"unrelated");
+                }
+                if mode == "existing" {
+                    assert_eq!(fs::read(destination).unwrap(), b"other operation");
+                } else {
+                    assert!(!destination.exists());
+                }
+            }
         }
     }
     #[test]

@@ -15,7 +15,7 @@ export function validDraftValue(key: string, value: unknown): boolean {
   if (key === "ui_preferences") return ui(value);
   if (key === "legacy_preferences") return shape(value, ["context_size", "threads", "batch_size", "max_output_tokens", "close_runtime_on_exit", "download_source"]) && load({ context_size: value.context_size, threads: value.threads, batch_size: value.batch_size }) && number(value.max_output_tokens) && ui({ close_runtime_on_exit: value.close_runtime_on_exit, download_source: value.download_source });
   if (key === "idle_policy") return shape(value, ["enabled", "seconds"]) && typeof value.enabled === "boolean" && number(value.seconds);
-  if (key === "verification_policy") return number(value);
+  if (key === "verification_policy" || key === "execution_policy") return number(value);
   if (key === "local_api") return shape(value, ["listen"]) && typeof value.listen === "string" && /^[0-9.[\]:]{0,64}$/.test(value.listen);
   if (key === "lan_api") return shape(value, ["enabled", "host", "port", "clients"]) && typeof value.enabled === "boolean" && typeof value.host === "string" && /^[0-9.]{0,64}$/.test(value.host) && typeof value.port === "string" && /^\d{0,5}$/.test(value.port) && typeof value.clients === "string" && value.clients.length <= 512 && /^[0-9./\s]*$/.test(value.clients);
   if (/^model_profile:[a-zA-Z0-9_.-]{1,128}$/.test(key)) return load(value);
@@ -23,7 +23,7 @@ export function validDraftValue(key: string, value: unknown): boolean {
   return false;
 }
 function revive(key: string, value: unknown): unknown {
-  if (key === "verification_policy") return value === null ? Number.NaN : value;
+  if (key === "verification_policy" || key === "execution_policy") return value === null ? Number.NaN : value;
   if (!object(value)) return value;
   if (key === "global_defaults") return { global_defaults: revive("global_load", value.global_defaults) };
   const nullable = key.startsWith("model_profile:") ? ["context_size", "threads", "batch_size"] : key === "global_load" ? ["threads"] : [];

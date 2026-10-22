@@ -246,8 +246,10 @@ mod tests {
         let mut c = Config::from_toml("[runtime]\nidle_unload_seconds=120").unwrap();
         assert!(c.runtime.idle_unload_enabled);
         assert_eq!(c.runtime.idle_unload_seconds, 120);
+        assert_eq!(c.runtime.execution_timeout_seconds, 300);
         assert_eq!(c.runtime.model_verification_timeout_seconds, 300);
         c.runtime.idle_unload_enabled = false;
+        c.runtime.execution_timeout_seconds = 86400;
         c.runtime.model_verification_timeout_seconds = 7200;
         let saved = Config::from_toml(&c.to_toml().unwrap()).unwrap();
         assert!(!saved.runtime_config().idle_unload_enabled);
@@ -262,7 +264,7 @@ mod tests {
         );
         assert_eq!(
             saved.runtime_config().execution_timeout,
-            Duration::from_secs(300)
+            Duration::from_secs(86400)
         );
     }
     #[test]
@@ -278,6 +280,14 @@ mod tests {
             let text = format!("[runtime]\nidle_unload_enabled={enabled}\nidle_unload_seconds=0");
             assert!(Config::from_toml(&text).is_err());
         }
+        // The bounded unified editor must not invalidate existing manual TOML.
+        for seconds in [1, 86400, 86401, i64::MAX as u64] {
+            assert!(
+                Config::from_toml(&format!("[runtime]\nexecution_timeout_seconds={seconds}"))
+                    .is_ok()
+            );
+        }
+        assert!(Config::from_toml("[runtime]\nexecution_timeout_seconds=0").is_err());
         for seconds in [30, 300, 7200] {
             assert!(
                 Config::from_toml(&format!(

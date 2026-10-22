@@ -33,6 +33,9 @@ pub struct SecurityContext {
     trusted_origins: Vec<String>,
 }
 impl SecurityContext {
+    pub(crate) fn instance_id(&self) -> uuid::Uuid {
+        self.instance_id
+    }
     pub fn new(
         token: SecretToken,
         instance_id: uuid::Uuid,

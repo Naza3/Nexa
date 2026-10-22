@@ -17,11 +17,13 @@ hyper.workspace = true
 http-body-util.workspace = true
 uuid.workspace = true
 sha2.workspace = true
+toml.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 hyper-util.workspace = true
 bytes.workspace = true
@@ -33,3 +35,6 @@ path = "src/bin/harness.rs"
 [[bin]]
 name = "nexa-catalog-download-verify"
 path = "src/bin/catalog_download_verify.rs"
+
+[lints]
+workspace = true

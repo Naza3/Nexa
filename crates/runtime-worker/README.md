@@ -4,7 +4,7 @@
 
 ## 接口与边界
 
-- 父进程首先发送 `Hello`：非空 UUID session、operation=0、request/seq=null。worker 读取实际 `llama_adapter::build_info()`，核验私有protocol=3、shim行为身份=4（公共protocol仍1、C ABI布局v2）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc` 后回复
+- 父进程首先发送 `Hello`：非空 UUID session、operation=0、request/seq=null。worker 读取实际 `llama_adapter::build_info()`，核验私有protocol=4、shim行为身份=4（公共protocol仍1、C ABI布局v2）、llama commit=`2149c00f4442dc59302e134a02e4c99d5f7ed9fc` 后回复
 - 之后 `Load` / `Generate` / `Unload` 的 operation ID 非零且严格递增，只有一个执行中的操作。Generate 的 envelope request ID 必须匹配请求内部 ID；Load/Unload 为 null
 - `Cancel` / `Credit` 使用对应 operation/request；`Shutdown` 使用 operation=0 且 request/seq=null。未知字段/帧、错误方向、版本/session/请求身份不符、重复操作、未握手命令、超限和截断帧导致安全取消并退出
 - Cancel 在控制线程直接设置独立 native 取消标志并唤醒条件变量。它不会排入原生 mailbox，也不会等待生成或 stdout writer

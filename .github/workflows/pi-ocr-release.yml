@@ -1,0 +1,237 @@
+name: Upload verified PI OCR plugin to draft release
+
+on:
+  push:
+    branches: ['codex/pi-ocr-publish']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-ocr-v0.1.0-release-upload
+  cancel-in-progress: false
+
+env:
+  SOURCE_COMMIT: '93cdf6d4493570714f744cd7c246ccc908a4a8d3'
+  PI_COMMIT: '779e16d9c3ca2e966a7ae3db9dd0707243a2831f'
+  PLUGIN_TAG: 'pi-ocr-v0.1.0'
+  PACKAGE_NAME: 'io.github.naza3.nexa-ocr-0.1.0.piplug'
+  PACKAGE_SHA256: '12f170a11169b41b5762a0c1f5ac767f01725a3d426bc901012e5823bb3f0f8b'
+
+jobs:
+  build:
+    if: github.repository == 'Naza3/Nexa' && github.ref == 'refs/heads/codex/pi-ocr-publish'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the already published source tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/pi-ocr-v0.1.0
+          path: source
+          persist-credentials: false
+      - name: Verify the fixed source and independent plugin version
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_COMMIT"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('source')
+          manifest = json.loads((root / 'integrations/pi-desktop-ocr/manifest.json').read_text())
+          assert manifest['id'] == 'io.github.naza3.nexa-ocr'
+          assert manifest['version'] == '0.1.0'
+          assert json.loads((root / 'apps/desktop/package.json').read_text())['version'] == '0.2.3'
+          assert json.loads((root / 'apps/desktop/src-tauri/tauri.conf.json').read_text())['version'] == '0.2.3'
+          PY
+      - name: Check out the fixed official PI SDK and devkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: vastsa/PI-Desktop
+          ref: 779e16d9c3ca2e966a7ae3db9dd0707243a2831f
+          path: pi-reference
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /packages/plugin-sdk/
+            /packages/plugin-devkit/
+            /tsconfig.base.json
+      - name: Set up the tested Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - name: Build only the official SDK and devkit
+        run: |
+          test "$(git -C pi-reference rev-parse HEAD)" = "$PI_COMMIT"
+          compiler="$RUNNER_TEMP/pi-ocr-compiler"
+          mkdir -p "$compiler"
+          npm install --prefix "$compiler" --ignore-scripts --no-audit --no-fund --save-exact typescript@5.9.3 @types/node@24.10.1
+          python3 - <<'PY'
+          import io, json, os, subprocess, tarfile
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'pi-ocr-devkit'
+          compiler = Path(os.environ['RUNNER_TEMP']) / 'pi-ocr-compiler'
+          root.mkdir()
+          archive = subprocess.check_output([
+              'git', '-C', 'pi-reference', 'archive', os.environ['PI_COMMIT'],
+              'packages/plugin-sdk', 'packages/plugin-devkit', 'tsconfig.base.json',
+          ])
+          with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+              source.extractall(root, filter='data')
+          (root / 'node_modules/@pi-desktop').mkdir(parents=True)
+          (root / 'node_modules/@types').mkdir(parents=True)
+          (root / 'node_modules/@pi-desktop/plugin-sdk').symlink_to('../../packages/plugin-sdk')
+          (root / 'node_modules/@types/node').symlink_to(compiler / 'node_modules/@types/node')
+          (root / 'node_modules/undici-types').symlink_to(compiler / 'node_modules/undici-types')
+          # Compile the unmodified production sources without SDK test dependencies.
+          config_path = root / 'packages/plugin-sdk/tsconfig.json'
+          config = json.loads(config_path.read_text())
+          config['exclude'] = ['src/**/*.test.ts']
+          config_path.write_text(json.dumps(config) + '\n')
+          for package in ['plugin-sdk', 'plugin-devkit']:
+              subprocess.run([
+                  'node', str(compiler / 'node_modules/typescript/bin/tsc'),
+                  '-p', str(root / 'packages' / package / 'tsconfig.json'),
+              ], check=True)
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f"PI_PLUGIN_DEVKIT_CLI={root / 'packages/plugin-devkit/dist/cli.js'}\n")
+          PY
+      - name: Test, build, check and pack the plugin from its lockfile
+        working-directory: source/integrations/pi-desktop-ocr
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm run pack
+          npm run check
+      - name: Verify exact bytes against the already tested delivery package
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+          dist = Path('source/integrations/pi-desktop-ocr/dist')
+          name = os.environ['PACKAGE_NAME']
+          expected = os.environ['PACKAGE_SHA256']
+          package = dist / name
+          assert hashlib.sha256(package.read_bytes()).hexdigest() == expected, 'Package differs from the tested delivery'
+          assert package.stat().st_size == 334150
+          assert (dist / (name + '.sha256')).read_text() == f'{expected}  {name}\n'
+          identities = {
+              'main.cjs': '6e99d1b41986f302e98f74c588e617c8c3c69733399b08e734661cc64fb095df',
+              'renderer/app.js': '804c58baddf69e596a60519a6c26a35952ec36d1b0dca65f3250211c11f293ec',
+              'renderer/index.html': 'c34ab06291c6e5100ca0df36665d6867f4c11e57348fa4a1c8f0b6ea02419ebb',
+              'renderer/style.css': 'efce96434bc1554ef5fad515588f397ae38bd57ed8530207854c4b836ce30c60',
+          }
+          with zipfile.ZipFile(package) as archive:
+              assert archive.testzip() is None
+              assert len(archive.namelist()) == len(set(archive.namelist())) == 14
+              for path, digest in identities.items():
+                  assert hashlib.sha256(archive.read(path)).hexdigest() == digest, path
+              manifest = json.loads(archive.read('manifest.json'))
+              assert manifest['id'] == 'io.github.naza3.nexa-ocr' and manifest['version'] == '0.1.0'
+          print(f'Verified {name}: {expected}, 14 files, identical executable and renderer')
+          PY
+          git -C source diff --exit-code
+      - name: Transfer only the verified release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          archive: true
+          name: verified-pi-ocr-0.1.0
+          path: |
+            source/integrations/pi-desktop-ocr/dist/io.github.naza3.nexa-ocr-0.1.0.piplug
+            source/integrations/pi-desktop-ocr/dist/io.github.naza3.nexa-ocr-0.1.0.piplug.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  upload-draft:
+    needs: build
+    if: github.repository == 'Naza3/Nexa' && github.ref == 'refs/heads/codex/pi-ocr-publish'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download the verified assets from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-pi-ocr-0.1.0
+          path: release-assets
+          digest-mismatch: error
+      - name: Upload missing assets without replacing or publishing the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: Naza3/Nexa
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          repo = 'Naza3/Nexa'
+          tag = os.environ['PLUGIN_TAG']
+          commit = os.environ['SOURCE_COMMIT']
+          name = os.environ['PACKAGE_NAME']
+          root = Path('release-assets')
+          names = [name, name + '.sha256']
+          assert {path.name for path in root.iterdir()} == set(names)
+          expected = {item: {
+              'size': (root / item).stat().st_size,
+              'digest': 'sha256:' + hashlib.sha256((root / item).read_bytes()).hexdigest(),
+          } for item in names}
+          assert expected[name]['digest'] == 'sha256:' + os.environ['PACKAGE_SHA256']
+          assert expected[name]['size'] == 334150
+          assert (root / (name + '.sha256')).read_text() == f"{os.environ['PACKAGE_SHA256']}  {name}\n"
+
+          def api(path):
+              return json.loads(subprocess.check_output([
+                  'gh', 'api', '-H', 'X-GitHub-Api-Version: 2022-11-28',
+                  f'repos/{repo}/{path}',
+              ], text=True))
+
+          def verify_tag():
+              obj = api(f'git/ref/tags/{tag}')['object']
+              for _ in range(4):
+                  if obj['type'] == 'commit':
+                      assert obj['sha'] == commit, 'Release source tag moved'
+                      return
+                  assert obj['type'] == 'tag', 'Unexpected tag object'
+                  obj = api('git/tags/' + obj['sha'])['object']
+              raise AssertionError('Too many annotated tag indirections')
+
+          def inspect_draft():
+              verify_tag()
+              # GET by tag excludes this draft; bind to the already reviewed ID.
+              release = api('releases/406423946')
+              assert release['id'] == 406423946 and release['name'] == 'Nexa OCR for PI Desktop 0.1.0', 'Unexpected draft identity'
+              assert release['tag_name'] == tag and release['draft'] and release['prerelease'], 'Expected an existing prerelease draft'
+              assert release['target_commitish'] == commit, 'Unexpected release target'
+              assets = release['assets']
+              assert len({asset['name'] for asset in assets}) == len(assets), 'Duplicate asset names'
+              assert {asset['name'] for asset in assets} <= set(names), 'Unexpected existing asset'
+              for asset in assets:
+                  item = expected[asset['name']]
+                  assert asset['state'] == 'uploaded' and asset['size'] == item['size'] and asset.get('digest') == item['digest'], 'Refuse replacing an existing asset'
+              return release
+
+          release = inspect_draft()
+          for item in names:
+              if item in {asset['name'] for asset in release['assets']}:
+                  continue
+              subprocess.run([
+                  'gh', 'release', 'upload', tag, str(root / item), '--repo', repo,
+              ], check=True)
+              release = inspect_draft()
+          assert {asset['name'] for asset in release['assets']} == set(names)
+          # Publishing stays a separate reviewed API action after download verification.
+          assert release['draft']
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"Verified plugin assets uploaded to draft release `{tag}`.\n\n")
+              summary.write(f"Source: `{commit}`\n\nSHA256: `{os.environ['PACKAGE_SHA256']}`\n\n")
+              summary.write('The release is still a draft; this workflow does not publish it.\n')
+          print(json.dumps({'release_id': release['id'], 'tag': tag, 'draft': release['draft'], 'assets': [
+              {'name': asset['name'], 'size': asset['size'], 'digest': asset['digest']}
+              for asset in release['assets']
+          ]}, indent=2))
+          PY

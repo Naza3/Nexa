@@ -130,3 +130,20 @@ describe("window-owned unsaved configuration drafts", () => {
     fireEvent.click(screen.getByRole("button", { name: /返回模型库/ })); await openModelDetails(model.display_name); fireEvent.click(screen.getByText("运行档案与当前参数")); expect(await screen.findByRole("spinbutton", { name: /模型线程数/ })).toHaveValue(3); expect(api.configurationSave).not.toHaveBeenCalled();
   });
 });
+
+it("ends a failed profile read and offers a pending manual reread without loading or saving", async () => {
+  const next = deferred<ModelConfiguration>();
+  const get = vi.fn().mockRejectedValueOnce({ code: "configuration_unavailable", message: "private" }).mockReturnValueOnce(next.promise);
+  const { api } = await setup(configuredSnapshot(), { configurationModelGet: get }, "models");
+  fireEvent.click(screen.getByText("运行档案与当前参数"));
+  const retry = await screen.findByRole("button", { name: "重新读取模型档案" });
+  expect(screen.queryByText("正在读取后端解析结果…")).not.toBeInTheDocument();
+  fireEvent.click(retry); fireEvent.click(retry);
+  expect(screen.getByRole("button", { name: "正在重新读取档案…" })).toBeDisabled();
+  expect(get).toHaveBeenCalledTimes(2);
+  await act(async () => next.resolve(modelConfiguration()));
+  expect(await screen.findByRole("spinbutton", { name: /模型上下文长度/ })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "重新读取模型档案" })).not.toBeInTheDocument();
+  expect(api.configurationSave).not.toHaveBeenCalled();
+  expect(api.loadModel).not.toHaveBeenCalled();
+});

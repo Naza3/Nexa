@@ -8,6 +8,7 @@ use std::{
 };
 fn request(model: ModelId, text: &str, max_tokens: u32) -> GenerationRequest {
     GenerationRequest {
+        tools: runtime_types::ToolConfig::default(),
         request_id: RequestId::new(),
         model,
         messages: vec![Message::new(Role::User, text)],

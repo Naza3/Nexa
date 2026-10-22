@@ -20,6 +20,27 @@ use std::{
     time::Duration,
 };
 
+/// Safe, bounded startup diagnostics; raw OS messages and credentials never cross the API.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LanStartupError {
+    AddressUnavailable,
+    PortInUse,
+    PermissionDenied,
+    #[serde(other)]
+    BindFailed,
+}
+impl LanStartupError {
+    pub fn from_io(error: &std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::AddrNotAvailable => Self::AddressUnavailable,
+            std::io::ErrorKind::AddrInUse => Self::PortInUse,
+            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
+            _ => Self::BindFailed,
+        }
+    }
+}
+
 pub const MAX_ALLOWED_CIDRS: usize = 16;
 pub const BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
 

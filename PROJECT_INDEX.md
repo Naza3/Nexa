@@ -1,5 +1,14 @@
 # Nexa 项目索引
 
+- [OpenAI工具调用兼容](docs/tool-calling.md) / [ADR0044](docs/decisions/0044-openai-tool-calling-compatibility.md)：通用协议、原模板适配、校验后流式与客户端执行边界
+- [Rust 错误处理开发规范](docs/rust-error-handling.md)：具名错误、source、公开诊断、结果状态及审查/测试门槛
+- [安装验收启动顺序修复](docs/verification/2026-10-09-installer-startup-order.md)：fresh discovery后再认证status，保留实例锁与全部安装门槛
+
+- [模型发现显示名 ADR0043](docs/decisions/0043-model-discovery-display-name.md) / [名称与PI边界](docs/model-display-names.md) / [联合验证](docs/verification/2026-10-09-model-display-names.md)：本机/LAN新增display_name；PI聊天仍需别名或使用ID
+
+- [错误诊断与显式恢复](docs/error-handling-and-recovery.md) / [联合验证](docs/verification/2026-10-09-error-handling.md)：启动、配置、下载、模型/推理UI及安装检查；未确认结果不自动重试
+- [LAN绑定恢复 ADR0042](docs/decisions/0042-lan-bind-startup-recovery.md)：可选LAN绑定失败保留认证回环，typed原因与明确停服修复
+
 本文件只负责定位，不将计划写成实现。动态状态见 [PROJECT_STATE.md](PROJECT_STATE.md)，当前范围见 [ADR0014](docs/decisions/0014-windows-desktop-cpu-runtime.md)。
 
 ## 当前文档
@@ -27,6 +36,15 @@
 
 - [模型移除 ADR0030](docs/decisions/0030-nondestructive-model-unregistration.md)：仅取消登记、文件保留、schema3原子可见性及在线/离线互斥
 - [聊天 Markdown ADR0031](docs/decisions/0031-safe-chat-markdown.md)：安全GFM显示、原文保持与离线链接/图片边界
+- [统一推理超时 ADR0034](docs/decisions/0034-configurable-execution-timeout.md)：单项执行超时、桌面有效配置预算、停服保存与重启生效
+
+- [统一性能 ADR0035](docs/decisions/0035-unified-inference-performance.md) / [使用说明](docs/inference-performance.md)：全推理阶段计时、本机性能接口、内存历史与桌面比较页
+
+- [桌面持久化 ADR0036](docs/decisions/0036-desktop-results-and-preferences.md) / [验证记录](docs/verification/2026-10-08-output-history-and-preferences.md)：输出性能摘要、最近100条OCR结果、TOML参数/提示词恢复与关闭保存
+
+- [顺序OCR队列 ADR0037](docs/decisions/0037-sequential-image-ocr-queue.md) / [验证记录](docs/verification/2026-10-08-sequential-ocr.md)：按导入顺序、逐图准备与串行生成、停止/恢复及每图历史
+
+- [启动声明文件校验 ADR0041](docs/decisions/0041-declared-payload-startup-validation.md) / [验证记录](docs/verification/2026-10-09-declared-payload-validation.md)：移除未声明内容拒绝，保留必需文件完整性，并诊断实际MSI/NSIS安装布局
 
 ## 实际 Windows 工程
 
@@ -48,6 +66,9 @@
 | `.github/workflows/native-windows.yml` | 授权开发分支Windows CPU真实构建/模型/包回归 |
 
 - [Actions Node24 升级验证](docs/verification/2026-10-07-actions-node24.md)：四个自有工作流的官方固定版本、归档/缓存兼容性与验证边界
+- [并行构建 ADR0033](docs/decisions/0033-parallel-windows-builds.md) / [CI 优化验证](docs/verification/2026-10-07-ci-performance.md)：缓存、Release 依赖复用、桌面/Runtime 并行及同 run 产物校验
+- [推送前Windows交叉构建验证](docs/verification/2026-10-08-windows-cross-gate.md)：Windows专属Clippy修复、先本地编译再推送的顺序与环境证据
+- [OCR 选图预览修复](docs/verification/2026-10-07-ocr-image-preview.md)：依据图片内容识别格式、准备反馈、重选与异步结果隔离
 
 根 workspace、桌面壳 workspace 与相关 Windows/Linux 开发验证是当前工程入口。`.codex/agents/`是开发代理配置，不是产品运行依赖；上游 llama.cpp 的跨平台源码保持完整。
 
@@ -91,6 +112,8 @@
 
 ## 可选调用层与后续验证
 
+- [PI Desktop OCR 插件](integrations/pi-desktop-ocr/README.md) / [ADR0038](docs/decisions/0038-pi-desktop-ocr-plugin.md) / [验证记录](docs/verification/2026-10-08-pi-desktop-ocr-plugin.md)：独立安装包、Nexa 本机认证、自动加载、顺序 OCR、性能摘要和 TOML 历史；Windows 宿主完整安装待验。
+
 [Telegram摘要方案](docs/telegram-summary.md)是可选参考，不是runtime发布前置；源码规划路径未创建，不自动导入Telegram SDK、账号、数据库或定时任务。
 
 当前源码树不保留项目自有移动工程、专用设计和研究报告。删除范围与开发验证见[桌面清理记录](docs/verification/2026-10-05-desktop-only-cleanup.md)，历史内容可由 Git 追溯。
@@ -131,3 +154,7 @@
 - [Windows CPU OCR使用说明](docs/ocr-windows-cpu.md)：双文件下载、显式加载、图片/Markdown及i5-8400参数建议
 - [单图OCR开发验证](docs/verification/2026-10-07-local-ocr.md)：Linux真实模型/HTTP及文本回归，Windows与目标机另验
 - [OCR 配对与布局修复](docs/verification/2026-10-07-ocr-pair-and-layout.md)：Windows 选择路径、导入反馈/列表刷新及沿用全局风格的页面布局
+
+- [Tauri 安装器 ADR0039](docs/decisions/0039-tauri-windows-installers.md)：标准 WiX MSI/NSIS、旧包迁移、同版本覆盖及原生生命周期验证
+- [托盘与开机启动 ADR0040](docs/decisions/0040-desktop-tray-and-autostart.md) / [使用说明](docs/desktop-startup.md)：独立默认关闭的设置、TOML 偏好、当前用户启动登记及安全退出
+- [Tauri/托盘/启动验证](docs/verification/2026-10-08-tauri-installers-and-startup.md)：本地回归、NSIS载荷一致性、Windows交叉构建及原生待验边界
